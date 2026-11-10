@@ -1,0 +1,12 @@
+#!/bin/sh
+# 커밋 제목이 "접두사(범위): 요약" 형식인지 검사한다.
+first=$(head -n 1 "$1")
+case "$first" in
+  Merge\ *|Revert\ *|fixup!\ *|squash!\ *) exit 0 ;;
+esac
+if ! printf '%s' "$first" | grep -Eq '^(feat|fix|docs|refactor|test|chore|ci|perf)(\([a-z0-9-]+\))?!?: .+'; then
+  echo "커밋 제목 형식이 맞지 않아요: $first" >&2
+  echo "형식: 접두사(범위): 요약   예) feat(runner): 세션 이어 가기 추가" >&2
+  echo "접두사: feat fix docs refactor test chore ci perf" >&2
+  exit 1
+fi
