@@ -32,6 +32,7 @@
 - `main`에는 PR을 열지 않는다. 릴리즈나 데모 때만 빨리 감기로 올린다: `git push origin dev:main`. 빨리 감기가 안 되면 멈추고 사람에게 알린다.
 - `main`에 올린 커밋에 `vX.Y.Z` 태그를 찍는다. feat는 Y, fix는 Z, 깨지는 변경(`!`)은 X를 올린다. 1.0 전에는 깨지는 변경도 Y를 올린다.
 - 릴리즈는 `gh release create vX.Y.Z --generate-notes`로 만든다. 노트는 PR의 `type:*` 라벨로 묶인다(`.github/release.yml`).
+- 이슈에는 `type:*`, `area:*`, `stage:*` 라벨과 마일스톤을 붙인다. 사람 없이 에이전트가 바로 할 수 있는 이슈에만 `ready-for-agent`를 함께 붙인다.
 - 이슈 하나에 세션 하나. 이슈가 끝나면 `/clear`, 중간에 길어지면 `/handoff`.
 
 ## Agent skills

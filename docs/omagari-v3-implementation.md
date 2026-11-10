@@ -80,7 +80,7 @@ Sources: [Claude Code 비대화 실행](https://code.claude.com/docs/en/headless
 ## 4. 에이전트 연결
 
 - **파일이 기본**: 결정은 레포 안 마크다운이라 어떤 에이전트든 평소처럼 읽는다
-- **행동은 CLI**: `omagari record`(사실 기록), `omagari status`(상황 보기). CLI는 Omagari API를 감싼 것이다
+- **행동은 CLI**: `omagari status`(상황 보기), `omagari status set`(상태 한 줄 쓰기). CLI는 Omagari API를 감싼 것이다
 - **타이밍은 훅**: 세션 시작이나 편집 직전에 근처 작업과 관련 결정을 보여 준다. 러너가 주변 상황을 미리 받아 두고, 훅은 지난번에 보여 준 것과 달라졌을 때만 넣는다. 고칠 때마다 서버를 부르거나 같은 알림을 다시 넣지 않는다. 쉬는 세션 깨우기는 벤더별 방식을 쓴다
 - **API**: HTTP 요청만 보낼 수 있으면 셸 없이도 붙는다
 - **MCP는 선택**: 인증된 HTTP 요청을 못 보내는 채팅 앱용 얇은 래퍼
