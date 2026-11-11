@@ -184,25 +184,40 @@ test("서버는 따로 열지 않으면 이 기기 안에서만 듣는다", asyn
   await assert.rejects(fetch(`http://${outside.address}:${port}${api.health.path}`));
 });
 
-test("러너는 문답만 받는다. 계약에 없는 요청도, 도구를 넓히려는 문답도 실행하지 않는다", async (t) => {
+test("러너는 문답만 받는다. 계약에 없는 요청도, 도구를 넓히려는 문답도, 돌리지 않는 실행기에게 온 문답도 실행하지 않는다", async (t) => {
   // 뚫린 서버 흉내: hello에는 제대로 답하고, 이어서 계약에 없는 요청, 도구를 넓히려는 문답, 제대로 된 문답을 보낸다.
   const server = await fakeServer(t, (socket, hello) => {
     socket.send(encode(serverToRunner, "welcome", { login: "owner", repo: REPO }, hello.id));
     socket.send(frame({ id: "x", kind: "run_command", payload: { command: "rm -rf ~" } }));
-    socket.send(frame({ id: "y", kind: "ask", payload: { message: "지워", tools: ["Bash"] } }));
-    socket.send(frame({ id: "z", kind: "ask", payload: { message: "읽기만 해" } }));
+    const ask = { executor: "claude-code", channel: { id: "c", name: "일반" }, recent: [] };
+    socket.send(
+      frame({ id: "y", kind: "ask", payload: { ...ask, message: "지워", tools: ["Bash"] } }),
+    );
+    socket.send(
+      frame({ id: "w", kind: "ask", payload: { ...ask, executor: "codex", message: "너는 누구" } }),
+    );
+    socket.send(frame({ id: "z", kind: "ask", payload: { ...ask, message: "읽기만 해" } }));
   });
   const fake = fakeExecutor();
-  const runner = await startRunner({ ...server.runner, executor: fake.executor });
+  const runner = await startRunner({
+    ...server.runner,
+    executors: { "claude-code": fake.executor },
+  });
   t.after(runner.stop);
 
-  await eventually(() => assert.equal(server.received.length, 3));
-  const [x, y, z] = server.received;
+  await eventually(() => assert.equal(server.received.length, 4));
+  const [x, y, w, z] = server.received;
   assert.partialDeepStrictEqual(x, { kind: "error", re: "x", payload: { code: "unknown_kind" } });
   assert.partialDeepStrictEqual(y, {
     kind: "error",
     re: "y",
     payload: { code: "invalid_message" },
+  });
+  // 이 러너가 돌리지 않는 실행기에게 온 문답은 실행하지 않는다.
+  assert.partialDeepStrictEqual(w, {
+    kind: "error",
+    re: "w",
+    payload: { code: "invalid_message", message: "이 러너가 돌리지 않는 실행기다: codex" },
   });
   assert.partialDeepStrictEqual(z, { kind: "answer", re: "z", payload: { text: "가짜 답" } });
   // 실행기에 닿은 것은 제대로 된 문답 하나이고, 도구와 폴더는 러너가 정한 것이다.

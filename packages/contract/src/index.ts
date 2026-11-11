@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 6;
+export const CONTRACT_VERSION = 7;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -151,6 +151,73 @@ export type MemberView = z.infer<typeof MemberView>;
 /** 멤버 목록 전부, 이름 순. `api.members`의 답이고, 실시간 연결의 `members`로도 온다. */
 export const Members = z.strictObject({ members: z.array(MemberView) });
 
+/** 채팅 채널. 1단계의 채널은 채팅 채널뿐이고(포럼 채널은 없다), 워크스페이스의 멤버 모두가 읽고 쓴다. */
+export const Channel = z.strictObject({ id: z.string(), name: z.string() });
+export type Channel = z.infer<typeof Channel>;
+
+/** 채널 이름의 길이 상한. 앞뒤 공백은 떼고, 줄바꿈과 겹친 공백은 공백 하나로 접는다. */
+export const MAX_CHANNEL_NAME_CHARS = 80;
+/** 메시지 하나의 길이 상한. 앞뒤 공백은 뗀다. */
+export const MAX_MESSAGE_CHARS = 4000;
+/** 지난 대화를 한 번에 읽는 수. */
+export const HISTORY_PAGE = 50;
+
+/**
+ * 채널에 쌓인 것 하나. `id`는 워크스페이스 전체에서 늘어나기만 하는 번호라 채널 안의 순서이자,
+ * 실시간 연결이 다시 붙을 때 이어 받을 자리(`webToServer.hello`의 `after`)다.
+ * 지금은 사람이 쓴 글(`text`)뿐이다. 채널에 올린 문답(#22)은 `kind`를 하나 더해 같은 줄에 선다.
+ */
+export const ChannelMessage = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("text"),
+    id: z.number(),
+    channel: z.string(),
+    login: z.string(),
+    /** 쓴 사람의 GitHub 프로필 이름. 비워 두었으면 `login`과 같다. */
+    name: z.string(),
+    /** 쓴 그대로의 글. HTML이 들어 있어도 서버는 바꾸지 않고, 웹은 글자로만 보인다. */
+    text: z.string(),
+    at: z.string(),
+  }),
+]);
+export type ChannelMessage = z.infer<typeof ChannelMessage>;
+
+/**
+ * 문답의 답이 본 코드: 러너가 그 턴을 시작할 때 등록한 폴더에 체크아웃되어 있던 것(1단계 질문 A12).
+ * `dirty`면 커밋하지 않은 변경(추적하지 않는 새 파일 포함)도 함께 본 답이라 "커밋 + 작업 중 변경"으로 보인다.
+ */
+export const Source = z.strictObject({
+  /** 브랜치. 브랜치가 아니면(detached HEAD) null이다. */
+  branch: z.string().nullable(),
+  commit: z.string(),
+  dirty: z.boolean(),
+});
+export type Source = z.infer<typeof Source>;
+
+/** 채널 세션의 첫 턴에 넘기는 채널 대화의 최대 수. 그 뒤의 턴은 지난 턴 이후의 것만 넘긴다(구현 3장). */
+export const CHANNEL_CONTEXT = 50;
+
+/**
+ * 문답 하나: 질문과 그 답. 지금은 DM(비공개, 묻는 사람만 본다)뿐이다. 공개 범위는 `@호출`과 채널에 올리기(#22)가 더한다.
+ * `answer`는 답을 기다리는 중(`pending`, 줄을 선 것 포함), 답함, 또는 답하지 못함(`turn_timeout`은 끊긴 답)이다.
+ */
+export const Qa = z.strictObject({
+  /** 워크스페이스 전체에서 늘어나기만 하는 번호. 채널 안의 순서다. */
+  id: z.number(),
+  channel: z.string(),
+  /** 물은 에이전트. 묻는 사람의 에이전트 가운데 하나다. */
+  executor: ExecutorId,
+  question: z.string(),
+  /** 물은 시각 */
+  at: z.string(),
+  answer: z.discriminatedUnion("state", [
+    z.strictObject({ state: z.literal("pending") }),
+    z.strictObject({ state: z.literal("answered"), text: z.string(), source: Source }),
+    z.strictObject({ state: z.literal("failed"), error: ContractError }),
+  ]),
+});
+export type Qa = z.infer<typeof Qa>;
+
 /** 러너가 서버에 보내는 것. 이후의 이슈는 자기 메시지를 여기에 더한다. */
 export const runnerToServer = {
   /**
@@ -169,7 +236,7 @@ export const runnerToServer = {
    */
   observation: z.strictObject({ works: z.array(Work) }),
   /** `ask`(`re`)에 러너 세션이 답했다. 답하지 못했으면 `error`를 `re`를 붙여 보낸다. */
-  answer: z.strictObject({ text: z.string() }),
+  answer: z.strictObject({ text: z.string(), source: Source }),
   error: ContractError,
 } satisfies Payloads;
 
@@ -178,10 +245,17 @@ export const serverToRunner = {
   /** hello를 받아들였다. 러너는 이 멤버의 에이전트로, 이 레포에 짝지어졌다. */
   welcome: z.strictObject({ login: z.string(), repo: z.string() }),
   /**
-   * 문답. 러너가 받는 요청은 이것뿐이다. 메시지만 오고, 도구·폴더·세션은 러너가 정한다.
-   * 러너는 한 번에 한 턴만 돌리고 나머지는 온 순서대로 줄 세운다.
+   * 문답. 러너가 받는 요청은 이것뿐이다. 물을 에이전트(`executor`), 채널, 질문, 채널 대화만 오고 도구·폴더·세션은 러너가 정한다.
+   * 러너는 채널과 실행기마다 채널 세션 하나를 잇고(ADR-0015), 한 번에 한 턴만 돌리고 나머지는 온 순서대로 줄 세운다.
+   * `recent`는 그 채널의 최근 대화(오래된 것부터 `CHANNEL_CONTEXT`개까지)다. 러너는 그 채널 세션의 지난 턴 뒤의 것만
+   * 지시가 아닌 데이터로 감싸 넘긴다. 질문은 그 에이전트의 주인이 쓴 것이다.
    */
-  ask: z.strictObject({ message: z.string().min(1) }),
+  ask: z.strictObject({
+    executor: ExecutorId,
+    channel: Channel,
+    message: z.string().min(1),
+    recent: z.array(ChannelMessage).max(CHANNEL_CONTEXT),
+  }),
   /**
    * 지금 상황: 워크스페이스의 작업 전부(받는 러너의 멤버 것도 포함). `api.works`와 같은 것이다.
    * welcome 바로 뒤에 보내고, 그 뒤로는 달라질 때마다 다시 보낸다. 러너는 받아 두고 훅에 내준다(ADR-0005).
@@ -292,7 +366,8 @@ export type NearbyWork = z.infer<typeof NearbyWork>;
 
 /** CLI와 훅이 러너에 보내는 것. 러너는 문답과 지금 상황 묻기만 받는다. */
 export const cliToRunner = {
-  ask: serverToRunner.ask,
+  /** 터미널에서 묻는다(`omagari runner ask`). 채널 세션과 따로 터미널 세션 하나를 잇는다. */
+  ask: z.strictObject({ message: z.string().min(1) }),
   /** 지금 상황을 묻는다. 러너는 서버를 부르지 않고 받아 둔 것으로 바로 답한다. 문답의 줄에 서지 않는다. */
   situation: z.strictObject({ executor: ExecutorId }),
   /**
@@ -337,37 +412,6 @@ export type Route = {
 };
 export type BodyOf<R extends Route> = R["body"] extends z.ZodType ? z.output<R["body"]> : undefined;
 export type ReplyOf<R extends Route> = z.input<R["response"]>;
-
-/** 채팅 채널. 1단계의 채널은 채팅 채널뿐이고(포럼 채널은 없다), 워크스페이스의 멤버 모두가 읽고 쓴다. */
-export const Channel = z.strictObject({ id: z.string(), name: z.string() });
-export type Channel = z.infer<typeof Channel>;
-
-/** 채널 이름의 길이 상한. 앞뒤 공백은 떼고, 줄바꿈과 겹친 공백은 공백 하나로 접는다. */
-export const MAX_CHANNEL_NAME_CHARS = 80;
-/** 메시지 하나의 길이 상한. 앞뒤 공백은 뗀다. */
-export const MAX_MESSAGE_CHARS = 4000;
-/** 지난 대화를 한 번에 읽는 수. */
-export const HISTORY_PAGE = 50;
-
-/**
- * 채널에 쌓인 것 하나. `id`는 워크스페이스 전체에서 늘어나기만 하는 번호라 채널 안의 순서이자,
- * 실시간 연결이 다시 붙을 때 이어 받을 자리(`webToServer.hello`의 `after`)다.
- * 지금은 사람이 쓴 글(`text`)뿐이다. 채널에 올린 문답(#21)은 `kind`를 하나 더해 같은 줄에 선다.
- */
-export const ChannelMessage = z.discriminatedUnion("kind", [
-  z.strictObject({
-    kind: z.literal("text"),
-    id: z.number(),
-    channel: z.string(),
-    login: z.string(),
-    /** 쓴 사람의 GitHub 프로필 이름. 비워 두었으면 `login`과 같다. */
-    name: z.string(),
-    /** 쓴 그대로의 글. HTML이 들어 있어도 서버는 바꾸지 않고, 웹은 글자로만 보인다. */
-    text: z.string(),
-    at: z.string(),
-  }),
-]);
-export type ChannelMessage = z.infer<typeof ChannelMessage>;
 
 /** 웹이 쓰는 API. 이후의 이슈는 자기 경로를 여기에 더한다. */
 export const api = {
@@ -450,14 +494,30 @@ export const api = {
     response: z.strictObject({ text: z.string(), at: z.string() }),
   },
   /**
-   * `agent`(멤버의 로그인)의 에이전트에게 묻고 러너 세션의 답을 기다린다. 에이전트는 주인만 부른다(`forbidden`).
-   * 러너가 꺼져 있으면 쌓아 두지 않고 바로 `runner_offline`, 한 턴이 10분을 넘으면 `turn_timeout`이다.
+   * 채널 안에서 `agent`(멤버의 로그인)의 `executor` 에이전트에게 DM으로 묻는다. 에이전트는 주인만 부른다(`forbidden`).
+   * 답을 기다리지 않고 답을 기다리는 문답을 돌려준다. 답은 실시간 연결의 `qa`로 묻는 사람에게만 온다.
+   * 그 에이전트의 러너가 꺼져 있으면 쌓아 두지 않고 바로 `runner_offline`이다. 없는 채널이면 `not_found`.
    */
   ask: {
     method: "POST",
     path: "/api/ask",
-    body: z.strictObject({ agent: z.string(), message: z.string().min(1) }),
-    response: z.strictObject({ answer: z.string() }),
+    body: z.strictObject({
+      agent: z.string(),
+      executor: ExecutorId,
+      channel: z.string(),
+      message: z.string().trim().min(1).max(MAX_MESSAGE_CHARS),
+    }),
+    response: z.strictObject({ qa: Qa }),
+  },
+  /**
+   * 채널 안의 내 DM 문답. 최근 `HISTORY_PAGE`개를 오래된 것부터 준다. 다른 멤버의 DM은 오지 않는다.
+   * 읽기지만 채널을 본문에 실으려고 POST다. 없는 채널이면 `not_found`.
+   */
+  dms: {
+    method: "POST",
+    path: "/api/dms",
+    body: z.strictObject({ channel: z.string() }),
+    response: z.strictObject({ qas: z.array(Qa) }),
   },
   /** 채팅 채널 전부, 이름 순서. 멤버만 본다. */
   channels: {
@@ -528,6 +588,8 @@ export const serverToWeb = {
   channel: Channel,
   /** 멤버 목록 전부(`api.members`와 같다). 붙을 때마다 welcome 뒤에 한 번, 그 뒤로는 달라질 때마다 보낸다. */
   members: Members,
+  /** 내 문답이 생겼거나 답이 왔다(`api.ask`, `api.dms`의 것과 같다). 묻는 사람의 연결에만 간다. 끊긴 사이의 것은 다시 보내지 않으니, 다시 붙으면 `api.dms`를 읽는다. */
+  qa: Qa,
   error: ContractError,
 } satisfies Payloads;
 

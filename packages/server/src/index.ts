@@ -6,11 +6,13 @@ import { DatabaseSync } from "node:sqlite";
 import { serve, upgradeWebSocket } from "@hono/node-server";
 import {
   api,
+  CHANNEL_CONTEXT,
   type ChannelMessage,
   CONTRACT_VERSION,
   type ContractError,
   ContractFailure,
   decode,
+  EXECUTOR_NAMES,
   type ExecutorId,
   encode,
   HISTORY_PAGE,
@@ -18,6 +20,7 @@ import {
   MAX_FRAME_BYTES,
   type MemberView,
   type ObservedFile,
+  type Qa,
   RUNNER_SOCKET,
   runnerToServer,
   type ShareLevel,
@@ -68,6 +71,25 @@ type MessageRow = {
   at: number;
   name: string | null;
 };
+/** 문답을 읽는다. 뒤에 WHERE와 ORDER BY를 붙여 쓴다. */
+const QAS = "SELECT id, channel, executor, question, at, answer FROM qas";
+type QaRow = {
+  id: number;
+  channel: string;
+  executor: ExecutorId;
+  question: string;
+  at: number;
+  answer: string | null;
+};
+const qaView = (row: QaRow): Qa => ({
+  id: row.id,
+  channel: row.channel,
+  executor: row.executor,
+  question: row.question,
+  at: new Date(row.at).toISOString(),
+  answer: row.answer === null ? { state: "pending" } : JSON.parse(row.answer),
+});
+
 const messageView = (row: MessageRow): ChannelMessage => ({
   kind: "text",
   id: row.id,
@@ -149,6 +171,24 @@ export async function startServer(options: {
     at INTEGER NOT NULL
   ) STRICT`);
   db.exec("CREATE INDEX IF NOT EXISTS messages_by_channel ON messages (channel, id)");
+  // 문답. 지금은 DM뿐이라 묻는 사람(`login`)만 본다. `answer`는 계약의 Qa.answer(JSON)이고, 답을 기다리는 동안 NULL이다.
+  db.exec(`CREATE TABLE IF NOT EXISTS qas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel TEXT NOT NULL REFERENCES channels (id),
+    login TEXT NOT NULL,
+    executor TEXT NOT NULL,
+    question TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    answer TEXT
+  ) STRICT`);
+  db.exec("CREATE INDEX IF NOT EXISTS qas_by_asker ON qas (login, channel, id)");
+  // 서버가 막 떴으니 러너에 보낸 문답의 답은 오지 않는다. 기다리는 채로 남지 않게 실패로 둔다.
+  db.prepare("UPDATE qas SET answer = ? WHERE answer IS NULL").run(
+    JSON.stringify({
+      state: "failed",
+      error: { code: "runner_offline", message: "서버가 다시 떠서 답을 받지 못했다" },
+    }),
+  );
   // 서버가 막 떴으니 아무 러너도 붙어 있지 않다. 이미 떨어져 있던 멤버는 떨어진 시각을 그대로 둔다.
   db.prepare(
     `INSERT OR IGNORE INTO offline (login, since)
@@ -199,17 +239,34 @@ export async function startServer(options: {
   >();
   /** hello를 마친 러너의 연결과 그 러너가 돌리는 실행기. */
   const runners = new Map<WSContext, { login: string; hash: string; executors: ExecutorId[] }>();
-  /** hello를 마친 웹의 실시간 연결과 그 세션의 해시. 세션이 끝나면 닫는다. */
-  const watchers = new Map<WSContext, string>();
+  /** hello를 마친 웹의 실시간 연결과 그 세션의 해시, 멤버. 세션이 끝나면 닫는다. */
+  const watchers = new Map<WSContext, { hash: string; login: string }>();
   /** 붙어 있는 웹 모두에 보낸다. 멤버가 아니게 된 세션의 연결은 이미 닫혔다. */
   const broadcast = (frame: string) => {
     for (const socket of watchers.keys()) if (socket.readyState === 1) socket.send(frame); // OPEN
   };
-  /** 러너에 보내고 답을 기다리는 문답. 키는 보낸 `ask`의 id다. 서버가 꺼지면 잃는다. */
+  /** `login`의 웹 연결에만 보낸다. 비공개인 DM은 이것으로만 나간다. */
+  const sendTo = (login: string, frame: string) => {
+    for (const [socket, watcher] of watchers) {
+      if (watcher.login === login && socket.readyState === 1) socket.send(frame); // OPEN
+    }
+  };
+  /** 러너에 보내고 답을 기다리는 문답. 키는 보낸 `ask`의 id다. 서버가 꺼지면 잃고, 다시 뜰 때 실패로 둔다. */
   const asks = new Map<
     string,
-    { socket: WSContext; login: string } & PromiseWithResolvers<string>
+    { socket: WSContext; login: string; executor: ExecutorId; qa: number }
   >();
+  /** 기다리던 문답에 답이나 실패를 적고, 묻는 사람에게 보내고, 답하는 중을 거둔다. */
+  const settle = (id: string, answer: Exclude<Qa["answer"], { state: "pending" }>) => {
+    const ask = asks.get(id);
+    // 서버가 꺼지는 중이면 DB가 먼저 닫힐 수 있다. 남은 문답은 다시 뜰 때 실패로 둔다.
+    if (!ask || stopped) return;
+    asks.delete(id);
+    db.prepare("UPDATE qas SET answer = ? WHERE id = ?").run(JSON.stringify(answer), ask.qa);
+    const row = db.prepare(`${QAS} WHERE id = ?`).get(ask.qa) as QaRow;
+    sendTo(ask.login, encode(serverToWeb, "qa", qaView(row)));
+    shareMembers();
+  };
 
   /** 멤버들이 보는 작업 전부. 웹과 러너가 같은 것을 본다. */
   const worksView = (): WorkView[] => {
@@ -264,13 +321,14 @@ export async function startServer(options: {
       login: string;
       executor: ExecutorId;
     }[];
-    // ponytail: 문답은 아직 실행기를 고르지 않아(#9) 그 러너의 에이전트가 모두 답하는 중이 된다. 문답에 실행기가 붙으면 그 에이전트만이다.
-    const busy = new Set([...asks.values()].map((ask) => ask.socket));
     const state = (login: string, executor: ExecutorId) => {
       const sockets = [...runners]
         .filter(([, runner]) => runner.login === login && runner.executors.includes(executor))
         .map(([socket]) => socket);
-      if (sockets.some((socket) => busy.has(socket))) return "answering" as const;
+      const busy = [...asks.values()].some(
+        (ask) => ask.executor === executor && sockets.includes(ask.socket),
+      );
+      if (busy) return "answering" as const;
       return sockets.length > 0 ? ("online" as const) : ("offline" as const);
     };
     const byLogin = Map.groupBy(works, (work) => work.login);
@@ -339,7 +397,8 @@ export async function startServer(options: {
   const endSession = (sessionHash: string, error: ContractError) => {
     db.prepare("DELETE FROM sessions WHERE hash = ?").run(sessionHash);
     for (const [socket, runner] of runners) if (runner.hash === sessionHash) refuse(socket, error);
-    for (const [socket, watcher] of watchers) if (watcher === sessionHash) refuse(socket, error);
+    for (const [socket, watcher] of watchers)
+      if (watcher.hash === sessionHash) refuse(socket, error);
     shareSituation(); // 세션이 하나도 남지 않은 멤버의 작업은 보이지 않는다
   };
 
@@ -456,36 +515,60 @@ export async function startServer(options: {
     return { text, at: new Date(at).toISOString() };
   });
 
-  // ponytail: 답이 올 때까지 HTTP 요청을 붙들고 있다. 줄을 서면 10분을 넘을 수 있고, 그 전에
-  // 부른 쪽이 끊을 수 있다(Node의 fetch는 답 머리를 5분까지 기다린다, 프록시도 끊는다).
-  // 웹이 실시간으로 받는 길(#20)이 생기면 문답을 저장하고 답을 그 길로 보낸다(#21).
-  mount(app, api.ask, async ({ agent, message }, c) => {
+  mount(app, api.ask, ({ agent, executor, channel, message }, c) => {
     if (agent !== c.get("login")) {
       throw new ContractFailure({
         code: "forbidden",
         message: `${agent}의 에이전트는 ${agent}만 부를 수 있다`,
       });
     }
-    // 같은 멤버의 러너가 여럿이면 마지막에 붙은 것이 답한다.
-    const socket = [...runners].findLast(([, runner]) => runner.login === agent)?.[0];
-    if (!socket) {
+    mustExist(channel);
+    // 같은 멤버의 러너가 여럿이면 그 실행기를 돌리는 것 가운데 마지막에 붙은 것이 답한다.
+    const found = [...runners].findLast(
+      ([, runner]) => runner.login === agent && runner.executors.includes(executor),
+    );
+    if (!found) {
       throw new ContractFailure({
         code: "runner_offline",
-        message: `${agent}의 러너가 꺼져 있다. 문답은 쌓아 두지 않는다`,
+        message: `${agent}의 ${EXECUTOR_NAMES[executor]} 러너가 꺼져 있다. 문답은 쌓아 두지 않는다`,
       });
     }
-    const frame = encode(serverToRunner, "ask", { message });
+    const [socket] = found;
+    const { lastInsertRowid } = db
+      .prepare("INSERT INTO qas (channel, login, executor, question, at) VALUES (?, ?, ?, ?, ?)")
+      .run(channel, agent, executor, message, Date.now());
+    const qa = qaView(db.prepare(`${QAS} WHERE id = ?`).get(lastInsertRowid) as QaRow);
+    const recent = (
+      db
+        .prepare(`${MESSAGES} WHERE m.channel = ? ORDER BY m.id DESC LIMIT ?`)
+        .all(channel, CHANNEL_CONTEXT) as MessageRow[]
+    )
+      .reverse()
+      .map(messageView);
+    const { name } = db.prepare("SELECT name FROM channels WHERE id = ?").get(channel) as {
+      name: string;
+    };
+    const frame = encode(serverToRunner, "ask", {
+      executor,
+      channel: { id: channel, name },
+      message,
+      recent,
+    });
     const { id } = JSON.parse(frame) as { id: string };
-    const ask = { socket, login: agent, ...Promise.withResolvers<string>() };
-    asks.set(id, ask);
+    asks.set(id, { socket, login: agent, executor, qa: qa.id });
+    socket.send(frame);
+    sendTo(agent, encode(serverToWeb, "qa", qa)); // 같은 멤버의 다른 화면에도
     shareMembers(); // 답하는 중
-    try {
-      socket.send(frame);
-      return { answer: await ask.promise };
-    } finally {
-      asks.delete(id);
-      if (!stopped) shareMembers();
-    }
+    return { qa };
+  });
+
+  mount(app, api.dms, ({ channel }, c) => {
+    mustExist(channel);
+    const rows = db
+      .prepare(`${QAS} WHERE login = ? AND channel = ? ORDER BY id DESC LIMIT ?`)
+      .all(c.get("login") as string, channel, HISTORY_PAGE) as QaRow[];
+    // ponytail: 최근 50개만 준다. 더 오래된 DM을 다시 볼 일이 생기면 history처럼 `before`로 넘겨 읽는다.
+    return { qas: rows.reverse().map(qaView) };
   });
 
   mount(app, api.channels, () => ({
@@ -563,7 +646,7 @@ export async function startServer(options: {
             .all(payload.after) as MessageRow[];
           for (const row of missed) socket.send(encode(serverToWeb, "message", messageView(row)));
         }
-        watchers.set(socket, hash(payload.session));
+        watchers.set(socket, { hash: hash(payload.session), login });
         shareMembers(socket);
       },
       onClose(_, socket) {
@@ -622,14 +705,14 @@ export async function startServer(options: {
           shareSituation();
         } else {
           // 문답의 답이나 실패. 그 문답을 보낸 연결에서 온 것만 받는다.
-          const ask = message.re === undefined ? undefined : asks.get(message.re);
-          if (ask?.socket !== socket) {
+          const re = message.re ?? "";
+          if (asks.get(re)?.socket !== socket) {
             if (message.kind === "error")
               console.warn("러너가 서버의 메시지를 거절했다:", message.payload);
           } else if (message.kind === "answer") {
-            ask.resolve(message.payload.text);
+            settle(re, { state: "answered", ...message.payload });
           } else if (message.kind === "error") {
-            ask.reject(new ContractFailure(message.payload));
+            settle(re, { state: "failed", error: message.payload });
           }
         }
       },
@@ -644,15 +727,16 @@ export async function startServer(options: {
           );
           shareSituation();
         }
-        // 떨어진 러너의 답은 오지 않는다. 기다리던 문답을 실패로 돌려준다.
-        for (const ask of asks.values()) {
+        // 떨어진 러너의 답은 오지 않는다. 기다리던 문답을 실패로 둔다.
+        for (const [id, ask] of asks) {
           if (ask.socket !== socket) continue;
-          ask.reject(
-            new ContractFailure({
+          settle(id, {
+            state: "failed",
+            error: {
               code: "runner_offline",
               message: `${ask.login}의 러너가 답하기 전에 떨어졌다`,
-            }),
-          );
+            },
+          });
         }
       },
     })),

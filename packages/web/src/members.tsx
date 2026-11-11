@@ -1,6 +1,6 @@
 import { ago, EXECUTOR_NAMES, type ExecutorId, type MemberView } from "@omagari/contract";
 import { ChevronRight, Clock } from "lucide-react";
-import { useEffect, useId, useReducer, useState } from "react";
+import { type ComponentProps, useEffect, useId, useReducer, useState } from "react";
 import { Avatar } from "./workspace.tsx";
 
 /** 에이전트 표시에 쓰는 실행기 약자(DESIGN.md 에이전트 표시). */
@@ -67,7 +67,13 @@ function MemberRow({ member, me }: { member: Member; me: boolean }) {
   const count = member.works.length;
   const away = offline(member);
   // 둘째 줄: 상태 메시지(#39) · 작업 N개. 상태 메시지가 없으면 그 자리에 접속 상태를 쓰고, 둘 다 없으면 작업 수만 쓴다.
-  const status = [away && "오프라인", count > 0 ? `작업 ${count}개` : "작업 없음"]
+  // 에이전트가 문답에 답하는 동안은 작업 수 앞에 "답하는 중"이 붙는다(PRD 17). 에이전트가 여럿이면 어느 것인지 쓴다.
+  const answering = member.agents
+    .filter((agent) => agent.state === "answering")
+    .map((agent) =>
+      member.agents.length > 1 ? `${EXECUTOR_NAMES[agent.executor]} 답하는 중` : "답하는 중",
+    );
+  const status = [away && "오프라인", ...answering, count > 0 ? `작업 ${count}개` : "작업 없음"]
     .filter(Boolean)
     .join(" · ");
   const head = (
@@ -143,18 +149,18 @@ function WorkItem({ member, work }: { member: Member; work: Work }) {
 /** 에이전트 표시: 실행기 약자와, 러너가 붙어 있는지의 점(붙어 있으면 초록 원, 아니면 빈 고리). */
 function AgentMark({ name, agent }: { name: string; agent: Agent }) {
   const label = `${name}의 ${EXECUTOR_NAMES[agent.executor]}, ${STATES[agent.state]}`;
-  return (
-    <span
-      className="agent-mark"
-      role="img"
-      aria-label={label}
-      title={label}
-      data-state={agent.state}
-    >
-      {MARKS[agent.executor]}
-    </span>
-  );
+  return <Mark agent={agent} role="img" aria-label={label} title={label} />;
 }
+
+/** 에이전트 표시의 모양만. 이름이 바로 옆에 보이는 곳에서는 `aria-hidden`으로 쓴다. */
+export const Mark = ({
+  agent,
+  ...rest
+}: { agent: Pick<Agent, "executor" | "state"> } & ComponentProps<"span">) => (
+  <span className="agent-mark" data-state={agent.state} {...rest}>
+    {MARKS[agent.executor]}
+  </span>
+);
 
 /** "3분 전"이 흐르도록 1분마다 다시 그린다. */
 function useMinuteTick() {
