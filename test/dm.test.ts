@@ -51,10 +51,9 @@ test("DM의 문답은 묻는 사람에게만 보인다. 다른 멤버의 API와 
     theirs.received.filter((m) => m.kind === "qa"),
     [],
   );
-  assert.deepEqual(
-    (await call(alice, api.history, { channel })).messages.map(said),
-    ["저도 궁금해요"],
-  );
+  assert.deepEqual((await call(alice, api.history, { channel })).messages.map(said), [
+    "저도 궁금해요",
+  ]);
   assert.doesNotMatch(JSON.stringify(theirs.received), /결제는 어디서 하나|payment\.ts에서/);
 });
 

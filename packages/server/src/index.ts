@@ -26,8 +26,8 @@ import {
   type ShareLevel,
   type StatusLine,
   serverToRunner,
-  type Visibility,
   serverToWeb,
+  type Visibility,
   type Work,
   type WorkView,
   webToServer,
@@ -611,9 +611,7 @@ export async function startServer(options: {
   mount(app, api.postQa, ({ qa }, c) => {
     const login = c.get("login") as string;
     // 남의 문답은 있어도 없는 것으로 답한다. 비공개 DM이 있다는 것도 새지 않는다.
-    const row = db.prepare(`${QAS} WHERE id = ? AND login = ?`).get(qa, login) as
-      | QaRow
-      | undefined;
+    const row = db.prepare(`${QAS} WHERE id = ? AND login = ?`).get(qa, login) as QaRow | undefined;
     if (!row) throw new ContractFailure({ code: "not_found", message: `없는 문답이다: ${qa}` });
     if (row.visibility === "public") {
       throw new ContractFailure({ code: "conflict", message: "이미 채널에 올린 문답이다" });

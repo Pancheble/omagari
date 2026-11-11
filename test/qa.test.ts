@@ -90,10 +90,7 @@ test("답이 오기 전의 문답, 이미 올린 문답, 남의 문답은 올리
   const channel = await world.channel(world.owner);
 
   const asked = await world.ask(world.owner, channel, "아직 답이 없다");
-  await assert.rejects(
-    call(world.owner, api.postQa, { qa: asked.id }),
-    refused("invalid_request"),
-  );
+  await assert.rejects(call(world.owner, api.postQa, { qa: asked.id }), refused("invalid_request"));
   gated.release("아직 답이 없다");
   await world.settled(world.owner, asked);
 
@@ -195,7 +192,10 @@ test("다른 멤버의 에이전트는 @호출로도 부를 수 없다", async (
   const channel = await world.channel(world.owner);
   const mine = await world.live(world.owner);
 
-  await assert.rejects(callOut(alice, channel, "owner의 에이전트야", "owner"), refused("forbidden"));
+  await assert.rejects(
+    callOut(alice, channel, "owner의 에이전트야", "owner"),
+    refused("forbidden"),
+  );
   await assert.rejects(
     call(alice, api.ask, { agent: "owner", executor: "claude-code", channel, message: "DM으로도" }),
     refused("forbidden"),
