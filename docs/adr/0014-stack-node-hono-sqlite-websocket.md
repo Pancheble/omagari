@@ -13,6 +13,8 @@ ADR-0013이 계약 이슈로 미뤄 둔 네 가지를 정한다(이슈 #5). 고�
 
 뒤집기 쉬운 기본값도 함께 둔다: npm workspaces, 계약 정의는 Zod(타입과 런타임 검증이 한 정의에서 나온다), 테스트는 내장 `node:test`, 포맷과 린트는 Biome.
 
+테스트 러너의 예외는 하나다(2026-11-11, 이슈 #18): 화면 부품을 따로 테스트해야 하게 되면 Vitest를 `packages/web`에만 넣는다. 그 전에는 넣지 않는다. Node는 타입만 지우고 실행하므로 JSX가 든 `.tsx`를 돌리지 못하고(Node 24.19에서 확인), 웹은 이미 Vite를 써서 Vitest가 그 설정을 그대로 쓴다. 넣을 때는 루트 `npm test`의 `node --test` 범위(`packages/*/src/**/*.test.ts`)가 web의 Vitest 테스트를 집지 않게 범위나 파일 이름을 나눈다.
+
 ## Considered Options
 
 - **Bun**: TypeScript, SQLite, WebSocket 서버, 테스트가 내장이고 단일 실행 파일로 묶여 기기에 깔기 쉽다. 러너가 기대는 `child_process`와 파일 감시가 Node 호환 계층 위에 있어, 불확실한 곳에 불확실한 것을 더한다.
