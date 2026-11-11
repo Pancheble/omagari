@@ -283,7 +283,12 @@ export async function startWorld(
     await cleanup();
     throw error;
   });
-  const cliEnv = () => ({ OMAGARI_SERVER: server.url, XDG_CONFIG_HOME: join(data, "config") });
+  // CLI가 깔거나 읽는 Claude Code의 사용자 설정도 임시 폴더에 둔다. 테스트가 이 기기의 ~/.claude를 건드리지 않는다.
+  const cliEnv = () => ({
+    OMAGARI_SERVER: server.url,
+    XDG_CONFIG_HOME: join(data, "config"),
+    CLAUDE_CONFIG_DIR: join(data, "claude"),
+  });
 
   return {
     repo,
@@ -296,6 +301,8 @@ export async function startWorld(
     login,
     /** CLI가 세션을 남기는 폴더. */
     config: join(data, "config"),
+    /** 이 기기의 Claude Code 사용자 설정 폴더(`~/.claude` 자리). `omagari install`이 여기에 깐다. */
+    claude: join(data, "claude"),
     /** 이 기기의 CLI가 `as`로 로그인해 둔 것처럼 세션을 남긴다. CLI로 로그인하는 흐름은 login.test가 본다. */
     async signInCli(as: { session: string }) {
       await mkdir(join(data, "config", "omagari"), { recursive: true });
@@ -355,9 +362,12 @@ export async function startWorld(
     /** 끝나지 않는 `omagari <args>`(러너)를 `cwd`에서 띄운다. */
     launchCliIn: (cwd: string, ...args: string[]) =>
       launch(process.execPath, [CLI, ...args], { cwd, env: cliEnv() }),
-    /** 훅 실행 파일에 에이전트가 주는 입력(JSON)을 넣어 돌린다. */
+    /** 에이전트가 하듯 설정에 적힌 훅 명령 한 줄을 `sh -c`로 `cwd`에서 돌리고 입력(JSON)을 넣는다. */
+    shell: (command: string, stdin: string, cwd = repo.folder) =>
+      run("sh", ["-c", command], { cwd, stdin }),
+    /** Claude Code에 깔린 훅 실행 파일에 에이전트가 주는 입력(JSON)을 넣어 돌린다. */
     hook: (stdin: string, options: { keepStdinOpen?: boolean } = {}) =>
-      run(process.execPath, [HOOK], { cwd: repo.folder, stdin, ...options }),
+      run(process.execPath, [HOOK, "claude-code"], { cwd: repo.folder, stdin, ...options }),
     async stop() {
       await runner.stop();
       if (!serverDown) await server.stop();
