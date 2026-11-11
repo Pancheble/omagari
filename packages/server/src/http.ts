@@ -1,12 +1,29 @@
-import type { BodyOf, ContractError, ReplyOf, Route } from "@omagari/contract";
+import {
+  type BodyOf,
+  type ContractError,
+  MAX_MESSAGE_BYTES,
+  type ReplyOf,
+  type Route,
+} from "@omagari/contract";
 import { type Context, Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 
-const fail = (c: Context, status: 400 | 404 | 500, code: ContractError["code"], message: string) =>
-  c.json({ error: { code, message } }, status);
+const fail = (
+  c: Context,
+  status: 400 | 404 | 413 | 500,
+  code: ContractError["code"],
+  message: string,
+) => c.json({ error: { code, message } }, status);
 
 /** 오류를 계약의 오류 형식으로 내는 빈 앱. */
 export function createApp(): Hono {
   const app = new Hono();
+  app.use(
+    bodyLimit({
+      maxSize: MAX_MESSAGE_BYTES,
+      onError: (c) => fail(c, 413, "invalid_request", `본문이 ${MAX_MESSAGE_BYTES}바이트를 넘는다`),
+    }),
+  );
   app.notFound((c) => fail(c, 404, "not_found", `없는 경로다: ${c.req.method} ${c.req.path}`));
   app.onError((error, c) => {
     console.error(error);
