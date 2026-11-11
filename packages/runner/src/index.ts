@@ -38,6 +38,8 @@ export type Executor = (input: {
   tools: string[];
   /** 작업 폴더 */
   folder: string;
+  /** 턴이 시간 상한을 넘으면 abort된다. 실행기는 띄운 것을 끈다. */
+  signal: AbortSignal;
 }) => Promise<{ answer: string; session: string }>;
 
 /** 관측을 다시 읽는 주기. Room의 기준 커밋 확인 주기(3초)에서 시작한다. */
@@ -45,6 +47,8 @@ const OBSERVE_MS = 3000;
 
 /** 러너 세션에 허용하는 도구. 파일을 쓰거나 명령을 실행하는 도구는 넣지 않는다(ADR-0003). */
 const READ_ONLY_TOOLS = ["Read", "Grep", "Glob"];
+/** 한 턴의 시간 상한. 넘으면 끊는다. Room의 러너와 같은 10분이다(1단계 질문 A11). */
+const TURN_TIMEOUT_MS = 10 * 60_000;
 
 /**
  * Claude Code 실행기. `claude -p`로 띄우고 `--resume`으로 잇는다.
@@ -52,7 +56,7 @@ const READ_ONLY_TOOLS = ["Read", "Grep", "Glob"];
  * 그래서 `--tools`로 쓸 수 있는 도구 자체를 줄이고, `--tools`가 손대지 않는 MCP 도구는 따로 뺀다(ADR-0003).
  * 메시지는 플래그로 읽히지 않게 표준 입력으로 넘긴다.
  */
-export const claudeCode: Executor = async ({ message, resume, tools, folder }) => {
+export const claudeCode: Executor = async ({ message, resume, tools, folder, signal }) => {
   const run = execFileAsync(
     "claude",
     [
@@ -62,7 +66,7 @@ export const claudeCode: Executor = async ({ message, resume, tools, folder }) =
       "--disallowedTools=mcp__*",
       ...(resume ? [`--resume=${resume}`] : []),
     ],
-    { cwd: folder, maxBuffer: 64 * 1024 * 1024 },
+    { cwd: folder, maxBuffer: 64 * 1024 * 1024, signal },
   );
   run.child.stdin?.end(message);
   // 실행 중의 실패도 결과를 stdout에 JSON으로 내고 0이 아닌 코드로 끝난다(Claude Code 비대화 실행 문서).
@@ -146,6 +150,8 @@ export async function startRunner(options: {
   welcomeTimeoutMs?: number;
   /** 관측을 다시 읽는 주기. */
   observeMs?: number;
+  /** 한 턴의 시간 상한. 기본 10분. */
+  turnTimeoutMs?: number;
 }) {
   const { folder, repos, remotes } = await readRepo(options.folder);
   const paths = await runnerPaths(folder);
@@ -187,6 +193,11 @@ export async function startRunner(options: {
       const { message } = decoded;
       if (message.kind === "welcome") {
         welcomed.resolve(message.payload);
+      } else if (message.kind === "ask") {
+        // 답은 문답이 온 연결로 보낸다. 그사이 끊겼으면 서버는 이미 실패로 돌려줬고, 보낸 것은 버려진다.
+        void reply(message.payload.message).then(({ kind, payload }) =>
+          current.send(encode(runnerToServer, kind, payload, message.id)),
+        );
       } else {
         // 거절의 이유. welcome 전이면 던지고, 뒤면 1008로 닫힐 때 `ended`로 낸다.
         refusal = new ContractFailure(message.payload);
@@ -227,11 +238,13 @@ export async function startRunner(options: {
     }
   }
 
-  // ponytail: 터미널의 대화 하나만 잇고, 러너가 다시 켜지면 새 세션으로 시작한다. 채널마다의 세션은 #21이 넣는다.
-  // ponytail: 턴을 줄 세우지 않고 시간 제한도 없다. 한 번에 한 턴과 10분 끊기는 #9가 넣는다.
+  // ponytail: 러너 세션은 하나라 터미널과 서버의 문답이 같이 잇고, 러너가 다시 켜지면 새 세션으로 시작한다. 채널마다의 세션은 #21이 넣는다.
   let session: string | undefined;
+  /** 턴의 줄. 터미널에서 온 것도 서버에서 온 것도 온 순서대로 한 번에 하나씩 돈다. */
+  let queue: Promise<unknown> = Promise.resolve();
+  const turnTimeoutMs = options.turnTimeoutMs ?? TURN_TIMEOUT_MS;
 
-  /** 러너 세션의 한 턴. 성공이든 실패든 실행 기록을 남긴다. */
+  /** 러너 세션의 한 턴. 시간 상한을 넘으면 끊는다. 성공이든 실패든 실행 기록을 남긴다. */
   async function turn(message: string) {
     const record: RunRecord = {
       at: new Date().toISOString(),
@@ -239,12 +252,24 @@ export async function startRunner(options: {
       message,
       tools: READ_ONLY_TOOLS,
     };
+    const signal = AbortSignal.timeout(turnTimeoutMs);
+    // 실행기가 signal을 따르지 않아도 줄은 상한에서 다음 턴으로 넘어간다.
+    const cut = new Promise<never>((_, reject) => {
+      signal.onabort = () => reject(signal.reason);
+    });
     try {
-      const result = await executor({ message, resume: session, tools: READ_ONLY_TOOLS, folder });
+      const result = await Promise.race([
+        executor({ message, resume: session, tools: READ_ONLY_TOOLS, folder, signal }),
+        cut,
+      ]);
       if (!result.answer.trim()) throw new Error("실행기가 답 없이 끝났다");
       record.session = session = result.session;
       return result.answer;
     } catch (error) {
+      if (signal.aborted) {
+        record.error = `한 턴이 ${turnTimeoutMs / 60_000}분을 넘어 끊었다`;
+        throw new ContractFailure({ code: "turn_timeout", message: record.error });
+      }
       record.error = error instanceof Error ? error.message : String(error);
       throw new ContractFailure({ code: "executor_failed", message: record.error });
     } finally {
@@ -252,29 +277,32 @@ export async function startRunner(options: {
     }
   }
 
-  async function reply(frame: string) {
+  /** 줄을 서서 한 턴을 돌리고, 답이나 오류를 보낼 꼴로 돌려준다. 던지지 않는다. */
+  function reply(message: string) {
+    const replied = queue
+      .then(() => turn(message))
+      .then(
+        (text) => ({ kind: "answer" as const, payload: { text } }),
+        (error) => {
+          const failure =
+            error instanceof ContractFailure
+              ? error
+              : new ContractFailure({ code: "internal", message: String(error) });
+          return {
+            kind: "error" as const,
+            payload: { code: failure.code, message: failure.message },
+          };
+        },
+      );
+    queue = replied;
+    return replied;
+  }
+
+  async function replyToCli(frame: string) {
     const decoded = decode(cliToRunner, frame);
     if ("error" in decoded) return encode(runnerToCli, "error", decoded.error, decoded.re);
-    const { message } = decoded;
-    try {
-      return encode(
-        runnerToCli,
-        "answer",
-        { text: await turn(message.payload.message) },
-        message.id,
-      );
-    } catch (error) {
-      const failure =
-        error instanceof ContractFailure
-          ? error
-          : new ContractFailure({ code: "internal", message: String(error) });
-      return encode(
-        runnerToCli,
-        "error",
-        { code: failure.code, message: failure.message },
-        message.id,
-      );
-    }
+    const { kind, payload } = await reply(decoded.message.payload.message);
+    return encode(runnerToCli, kind, payload, decoded.message.id);
   }
 
   // 같은 레포(워크트리 포함)에 러너는 하나다. 소켓에 누가 답하면 이미 켜진 러너가 있다.
@@ -291,7 +319,7 @@ export async function startRunner(options: {
   const local = createServer({ allowHalfOpen: true }, (connection) => {
     connection.on("error", () => {}); // CLI가 먼저 끊어도 러너는 돈다
     text(connection)
-      .then(reply)
+      .then(replyToCli)
       .then(
         (answer) => connection.end(answer),
         () => connection.destroy(),

@@ -174,11 +174,14 @@ type ExecutorInput = Parameters<Executor>[0];
  * 가짜 에이전트 실행기. 받은 입력과 옵션을 `calls`에 적고 `answer`가 정한 답을 낸다.
  * 이어 갈 세션이 없으면 `session-<몇 번째 부름>`으로 새 세션을 띄운다.
  */
-export function fakeExecutor(answer: (input: ExecutorInput) => string = () => "가짜 답") {
+export function fakeExecutor(
+  answer: (input: ExecutorInput) => string | Promise<string> = () => "가짜 답",
+) {
   const calls: ExecutorInput[] = [];
   const executor: Executor = async (input) => {
     calls.push(input);
-    return { answer: answer(input), session: input.resume ?? `session-${calls.length}` };
+    const session = input.resume ?? `session-${calls.length}`;
+    return { answer: await answer(input), session };
   };
   return { executor, calls };
 }
@@ -188,7 +191,12 @@ export function fakeExecutor(answer: (input: ExecutorInput) => string = () => "�
  * 가짜 실행기를 넘기지 않으면 늘 실패하는 것이 꽂힌다.
  */
 export async function startWorld(
-  options: { executor?: Executor; recheckMs?: number; heartbeatMs?: number } = {},
+  options: {
+    executor?: Executor;
+    recheckMs?: number;
+    heartbeatMs?: number;
+    turnTimeoutMs?: number;
+  } = {},
 ) {
   const repo = await tempRepo();
   const data = await mkdtemp(join(tmpdir(), "omagari-server-")); // 서버의 DB와 CLI의 설정
@@ -229,6 +237,7 @@ export async function startWorld(
     session: owner.session,
     // 넘긴 가짜가 없으면 실제 실행기 대신 늘 실패하는 것을 꽂는다.
     executor: options.executor ?? (() => Promise.reject(new Error("가짜 실행기를 넘기지 않았다"))),
+    turnTimeoutMs: options.turnTimeoutMs,
   }).catch(async (error) => {
     await server.stop();
     await cleanup();

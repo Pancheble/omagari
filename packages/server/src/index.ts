@@ -86,6 +86,11 @@ export async function startServer(options: {
   >();
   /** hello를 마친 러너의 연결. */
   const runners = new Map<WSContext, { login: string; hash: string }>();
+  /** 러너에 보내고 답을 기다리는 문답. 키는 보낸 `ask`의 id다. 서버가 꺼지면 잃는다. */
+  const asks = new Map<
+    string,
+    { socket: WSContext; login: string } & PromiseWithResolvers<string>
+  >();
 
   const refuse = (socket: WSContext, error: ContractError, re?: string) => {
     socket.send(encode(serverToRunner, "error", error, re));
@@ -170,13 +175,18 @@ export async function startServer(options: {
 
   mount(app, api.members, () => {
     const online = new Set([...runners.values()].map((runner) => runner.login));
+    const answering = new Set([...asks.values()].map((ask) => ask.login));
     const rows = db.prepare("SELECT DISTINCT login FROM sessions ORDER BY login").all() as {
       login: string;
     }[];
     return {
       members: rows.map(({ login }) => ({
         login,
-        agent: online.has(login) ? ("online" as const) : ("offline" as const),
+        agent: answering.has(login)
+          ? ("answering" as const)
+          : online.has(login)
+            ? ("online" as const)
+            : ("offline" as const),
       })),
     };
   });
@@ -190,6 +200,36 @@ export async function startServer(options: {
       )
       .all() as { login: string; branch: string; base: string; files: string }[];
     return { works: rows.map((row) => ({ ...row, files: JSON.parse(row.files) })) };
+  });
+
+  // ponytail: 답이 올 때까지 HTTP 요청을 붙들고 있다. 줄을 서면 10분을 넘을 수 있고, 그 전에
+  // 부른 쪽이 끊을 수 있다(Node의 fetch는 답 머리를 5분까지 기다린다, 프록시도 끊는다).
+  // 웹이 실시간으로 받는 길(#20)이 생기면 문답을 저장하고 답을 그 길로 보낸다(#21).
+  mount(app, api.ask, async ({ agent, message }, c) => {
+    if (agent !== c.get("login")) {
+      throw new ContractFailure({
+        code: "forbidden",
+        message: `${agent}의 에이전트는 ${agent}만 부를 수 있다`,
+      });
+    }
+    // 같은 멤버의 러너가 여럿이면 마지막에 붙은 것이 답한다.
+    const socket = [...runners].findLast(([, runner]) => runner.login === agent)?.[0];
+    if (!socket) {
+      throw new ContractFailure({
+        code: "runner_offline",
+        message: `${agent}의 러너가 꺼져 있다. 문답은 쌓아 두지 않는다`,
+      });
+    }
+    const frame = encode(serverToRunner, "ask", { message });
+    const { id } = JSON.parse(frame) as { id: string };
+    const ask = { socket, login: agent, ...Promise.withResolvers<string>() };
+    asks.set(id, ask);
+    try {
+      socket.send(frame);
+      return { answer: await ask.promise };
+    } finally {
+      asks.delete(id);
+    }
   });
 
   app.get(
@@ -234,11 +274,30 @@ export async function startServer(options: {
         } else if (message.kind === "observation") {
           replaceWorks(runner.login, message.payload.works);
         } else {
-          console.warn("러너가 서버의 메시지를 거절했다:", message.payload);
+          // 문답의 답이나 실패. 그 문답을 보낸 연결에서 온 것만 받는다.
+          const ask = message.re === undefined ? undefined : asks.get(message.re);
+          if (ask?.socket !== socket) {
+            if (message.kind === "error")
+              console.warn("러너가 서버의 메시지를 거절했다:", message.payload);
+          } else if (message.kind === "answer") {
+            ask.resolve(message.payload.text);
+          } else if (message.kind === "error") {
+            ask.reject(new ContractFailure(message.payload));
+          }
         }
       },
       onClose(_, socket) {
         runners.delete(socket);
+        // 떨어진 러너의 답은 오지 않는다. 기다리던 문답을 실패로 돌려준다.
+        for (const ask of asks.values()) {
+          if (ask.socket !== socket) continue;
+          ask.reject(
+            new ContractFailure({
+              code: "runner_offline",
+              message: `${ask.login}의 러너가 답하기 전에 떨어졌다`,
+            }),
+          );
+        }
       },
     })),
   );
