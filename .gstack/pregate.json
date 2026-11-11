@@ -1,0 +1,17 @@
+{
+  "$schema": "https://github.com/garrytan/gstack/docs/pregate.md#pregate-v1",
+  "runner": "node --test --test-timeout=30000 {files}",
+  "dependencies": {
+    "packages/contract/**": ["packages/server/src/http.test.ts", "test/contract.test.ts"],
+    "packages/server/**": ["packages/server/src/http.test.ts", "test/contract.test.ts"],
+    "packages/runner/**": ["test/contract.test.ts"],
+    "packages/cli/**": ["test/contract.test.ts"],
+    "packages/hooks/**": ["test/contract.test.ts"],
+    "package.json": ["packages/server/src/http.test.ts", "test/contract.test.ts"],
+    "package-lock.json": ["packages/server/src/http.test.ts", "test/contract.test.ts"],
+    "tsconfig.json": [],
+    "biome.json": [],
+    ".github/workflows/**": [],
+    ".gstack/**": []
+  }
+}
