@@ -9,7 +9,7 @@ import { devNull, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import type { ExecutorId, Message, Qa, ShareLevel } from "@omagari/contract";
+import type { ChannelMessage, ExecutorId, Message, Qa, ShareLevel } from "@omagari/contract";
 import {
   api,
   call,
@@ -84,6 +84,9 @@ function launch(file: string, args: string[], options: { cwd: string; env?: obje
     },
   };
 }
+
+/** 채널에 선 것 하나를 글로: 사람이 쓴 글은 그대로, 공개된 문답은 "문답: <질문>"이다. */
+export const said = (m: ChannelMessage) => (m.kind === "text" ? m.text : `문답: ${m.qa.question}`);
 
 /** `check`가 던지지 않을 때까지 되풀이한다. 기다려야 보이는 것(연결, 재확인)을 확인할 때 쓴다. */
 export async function eventually<T>(check: () => T | Promise<T>, timeoutMs = 10_000): Promise<T> {

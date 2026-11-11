@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { api, call } from "@omagari/contract";
-import { eventually, fakeExecutor, gatedExecutor, startWorld, writer } from "./harness.ts";
+import { eventually, fakeExecutor, gatedExecutor, said, startWorld, writer } from "./harness.ts";
 
 /** 실행기가 받은 글에서 데이터로 감싼 채널 대화의 메시지들(보낸 사람, 글)과, 감싼 것 뒤의 질문. */
 function unwrap(message: string) {
@@ -52,7 +52,7 @@ test("DM의 문답은 묻는 사람에게만 보인다. 다른 멤버의 API와 
     [],
   );
   assert.deepEqual(
-    (await call(alice, api.history, { channel })).messages.map((m) => m.text),
+    (await call(alice, api.history, { channel })).messages.map(said),
     ["저도 궁금해요"],
   );
   assert.doesNotMatch(JSON.stringify(theirs.received), /결제는 어디서 하나|payment\.ts에서/);

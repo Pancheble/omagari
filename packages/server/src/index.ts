@@ -26,6 +26,7 @@ import {
   type ShareLevel,
   type StatusLine,
   serverToRunner,
+  type Visibility,
   serverToWeb,
   type Work,
   type WorkView,
@@ -60,26 +61,17 @@ function filesLine(files: ObservedFile[]) {
 const hash = (session: string) => createHash("sha256").update(session).digest("hex");
 const bearer = (authorization?: string) => authorization?.match(/^Bearer (\S+)$/)?.[1];
 
-/** 메시지를 쓴 사람의 이름과 함께 읽는다. 뒤에 WHERE와 ORDER BY를 붙여 쓴다. */
-const MESSAGES = `SELECT m.id, m.channel, m.login, m.text, m.at, p.name FROM messages m
-  LEFT JOIN people p ON p.login = m.login`;
-type MessageRow = {
-  id: number;
-  channel: string;
-  login: string;
-  text: string;
-  at: number;
-  name: string | null;
-};
 /** 문답을 읽는다. 뒤에 WHERE와 ORDER BY를 붙여 쓴다. */
-const QAS = "SELECT id, channel, executor, question, at, answer FROM qas";
+const QAS = "SELECT id, channel, login, executor, question, at, answer, visibility FROM qas";
 type QaRow = {
   id: number;
   channel: string;
+  login: string;
   executor: ExecutorId;
   question: string;
   at: number;
   answer: string | null;
+  visibility: Visibility;
 };
 const qaView = (row: QaRow): Qa => ({
   id: row.id,
@@ -87,18 +79,37 @@ const qaView = (row: QaRow): Qa => ({
   executor: row.executor,
   question: row.question,
   at: new Date(row.at).toISOString(),
+  visibility: row.visibility,
   answer: row.answer === null ? { state: "pending" } : JSON.parse(row.answer),
 });
 
-const messageView = (row: MessageRow): ChannelMessage => ({
-  kind: "text",
-  id: row.id,
-  channel: row.channel,
-  login: row.login,
-  name: row.name ?? row.login,
-  text: row.text,
-  at: new Date(row.at).toISOString(),
-});
+/** 메시지를 쓴 사람의 이름과, 공개된 문답이면 그 문답과 함께 읽는다. 뒤에 WHERE와 ORDER BY를 붙여 쓴다. */
+const MESSAGES = `SELECT m.id, m.channel, m.login, m.text, m.at, p.name,
+  q.id AS qa, q.executor, q.question, q.at AS asked, q.answer, q.visibility FROM messages m
+  LEFT JOIN people p ON p.login = m.login
+  LEFT JOIN qas q ON q.id = m.qa`;
+type MessageRow = {
+  id: number;
+  channel: string;
+  login: string;
+  text: string | null;
+  at: number;
+  name: string | null;
+  qa: number | null;
+  asked: number;
+} & Pick<QaRow, "executor" | "question" | "answer" | "visibility">;
+
+const messageView = (row: MessageRow): ChannelMessage => {
+  const common = {
+    id: row.id,
+    channel: row.channel,
+    login: row.login,
+    name: row.name ?? row.login,
+    at: new Date(row.at).toISOString(),
+  };
+  if (row.qa === null) return { kind: "text", ...common, text: row.text ?? "" };
+  return { kind: "qa", ...common, qa: qaView({ ...row, id: row.qa, at: row.asked }) };
+};
 
 export async function startServer(options: {
   /** 워크스페이스의 레포 `owner/name`. 서버 하나에 워크스페이스 하나, 레포 하나다(ADR-0012). */
@@ -163,15 +174,19 @@ export async function startServer(options: {
   ) STRICT`);
   // 채널의 메시지. `id`는 워크스페이스 전체에서 늘어나기만 한다(AUTOINCREMENT라 지워도 다시 쓰지 않는다).
   // 웹이 다시 붙을 때 이 번호 뒤의 것을 이어 받는다. `at`은 쓴 시각(ms)이다.
+  // 사람이 쓴 글이면 `text`, 공개된 문답이면 `qa`(문답 번호) 가운데 하나만 있다. 문답의 `login`은 그 에이전트의 주인이다.
   db.exec(`CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     channel TEXT NOT NULL REFERENCES channels (id),
     login TEXT NOT NULL,
-    text TEXT NOT NULL,
-    at INTEGER NOT NULL
+    text TEXT,
+    qa INTEGER UNIQUE REFERENCES qas (id),
+    at INTEGER NOT NULL,
+    CHECK ((text IS NULL) != (qa IS NULL))
   ) STRICT`);
   db.exec("CREATE INDEX IF NOT EXISTS messages_by_channel ON messages (channel, id)");
-  // 문답. 지금은 DM뿐이라 묻는 사람(`login`)만 본다. `answer`는 계약의 Qa.answer(JSON)이고, 답을 기다리는 동안 NULL이다.
+  // 문답. 묻는 사람(`login`)이 그 에이전트의 주인이다. 비공개면 그 사람만 보고, 공개면 messages에 한 줄이 서서 모두가 본다.
+  // `answer`는 계약의 Qa.answer(JSON)이고, 답을 기다리는 동안 NULL이다. `settled`는 답이나 실패를 적은 시각(ms)이다.
   db.exec(`CREATE TABLE IF NOT EXISTS qas (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     channel TEXT NOT NULL REFERENCES channels (id),
@@ -179,15 +194,18 @@ export async function startServer(options: {
     executor TEXT NOT NULL,
     question TEXT NOT NULL,
     at INTEGER NOT NULL,
-    answer TEXT
+    visibility TEXT NOT NULL CHECK (visibility IN ('private', 'public')),
+    answer TEXT,
+    settled INTEGER
   ) STRICT`);
   db.exec("CREATE INDEX IF NOT EXISTS qas_by_asker ON qas (login, channel, id)");
   // 서버가 막 떴으니 러너에 보낸 문답의 답은 오지 않는다. 기다리는 채로 남지 않게 실패로 둔다.
-  db.prepare("UPDATE qas SET answer = ? WHERE answer IS NULL").run(
+  db.prepare("UPDATE qas SET answer = ?, settled = ? WHERE answer IS NULL").run(
     JSON.stringify({
       state: "failed",
       error: { code: "runner_offline", message: "서버가 다시 떠서 답을 받지 못했다" },
     }),
+    Date.now(),
   );
   // 서버가 막 떴으니 아무 러너도 붙어 있지 않다. 이미 떨어져 있던 멤버는 떨어진 시각을 그대로 둔다.
   db.prepare(
@@ -256,15 +274,32 @@ export async function startServer(options: {
     string,
     { socket: WSContext; login: string; executor: ExecutorId; qa: number }
   >();
-  /** 기다리던 문답에 답이나 실패를 적고, 묻는 사람에게 보내고, 답하는 중을 거둔다. */
+  /**
+   * 문답이 생기거나 바뀌었다. 묻는 사람의 연결에 보내고, 공개된 문답이면 채널에 선 줄을 모두에게 다시 보낸다.
+   * 채널에 선 줄이 있으면 돌려준다.
+   */
+  const shareQa = (id: number) => {
+    const asked = db.prepare(`${QAS} WHERE id = ?`).get(id) as QaRow;
+    const qa = qaView(asked);
+    const row = db.prepare(`${MESSAGES} WHERE m.qa = ?`).get(id) as MessageRow | undefined;
+    sendTo(asked.login, encode(serverToWeb, "qa", qa));
+    if (!row) return { qa };
+    const message = messageView(row);
+    broadcast(encode(serverToWeb, "message", message));
+    return { qa, message };
+  };
+  /** 기다리던 문답에 답이나 실패를 적고, 보이는 사람에게 보내고, 답하는 중을 거둔다. */
   const settle = (id: string, answer: Exclude<Qa["answer"], { state: "pending" }>) => {
     const ask = asks.get(id);
     // 서버가 꺼지는 중이면 DB가 먼저 닫힐 수 있다. 남은 문답은 다시 뜰 때 실패로 둔다.
     if (!ask || stopped) return;
     asks.delete(id);
-    db.prepare("UPDATE qas SET answer = ? WHERE id = ?").run(JSON.stringify(answer), ask.qa);
-    const row = db.prepare(`${QAS} WHERE id = ?`).get(ask.qa) as QaRow;
-    sendTo(ask.login, encode(serverToWeb, "qa", qaView(row)));
+    db.prepare("UPDATE qas SET answer = ?, settled = ? WHERE id = ?").run(
+      JSON.stringify(answer),
+      Date.now(),
+      ask.qa,
+    );
+    shareQa(ask.qa);
     shareMembers();
   };
 
@@ -515,7 +550,7 @@ export async function startServer(options: {
     return { text, at: new Date(at).toISOString() };
   });
 
-  mount(app, api.ask, ({ agent, executor, channel, message }, c) => {
+  mount(app, api.ask, ({ agent, executor, channel, message, visibility }, c) => {
     if (agent !== c.get("login")) {
       throw new ContractFailure({
         code: "forbidden",
@@ -534,10 +569,7 @@ export async function startServer(options: {
       });
     }
     const [socket] = found;
-    const { lastInsertRowid } = db
-      .prepare("INSERT INTO qas (channel, login, executor, question, at) VALUES (?, ?, ?, ?, ?)")
-      .run(channel, agent, executor, message, Date.now());
-    const qa = qaView(db.prepare(`${QAS} WHERE id = ?`).get(lastInsertRowid) as QaRow);
+    // 채널 대화는 이 문답이 채널에 서기 전에 읽는다. `@호출`의 질문이 데이터로 한 번 더 들어가지 않는다.
     const recent = (
       db
         .prepare(`${MESSAGES} WHERE m.channel = ? ORDER BY m.id DESC LIMIT ?`)
@@ -548,18 +580,60 @@ export async function startServer(options: {
     const { name } = db.prepare("SELECT name FROM channels WHERE id = ?").get(channel) as {
       name: string;
     };
+    const at = Date.now();
+    const { lastInsertRowid } = db
+      .prepare(
+        "INSERT INTO qas (channel, login, executor, question, at, visibility) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .run(channel, agent, executor, message, at, visibility);
+    const id = Number(lastInsertRowid);
+    if (visibility === "public") {
+      db.prepare("INSERT INTO messages (channel, login, qa, at) VALUES (?, ?, ?, ?)").run(
+        channel,
+        agent,
+        id,
+        at,
+      );
+    }
     const frame = encode(serverToRunner, "ask", {
       executor,
       channel: { id: channel, name },
       message,
       recent,
     });
-    const { id } = JSON.parse(frame) as { id: string };
-    asks.set(id, { socket, login: agent, executor, qa: qa.id });
+    asks.set((JSON.parse(frame) as { id: string }).id, { socket, login: agent, executor, qa: id });
     socket.send(frame);
-    sendTo(agent, encode(serverToWeb, "qa", qa)); // 같은 멤버의 다른 화면에도
+    const shared = shareQa(id); // 같은 멤버의 다른 화면에도, `@호출`이면 채널의 모두에게
     shareMembers(); // 답하는 중
-    return { qa };
+    return shared;
+  });
+
+  mount(app, api.postQa, ({ qa }, c) => {
+    const login = c.get("login") as string;
+    // 남의 문답은 있어도 없는 것으로 답한다. 비공개 DM이 있다는 것도 새지 않는다.
+    const row = db.prepare(`${QAS} WHERE id = ? AND login = ?`).get(qa, login) as
+      | QaRow
+      | undefined;
+    if (!row) throw new ContractFailure({ code: "not_found", message: `없는 문답이다: ${qa}` });
+    if (row.visibility === "public") {
+      throw new ContractFailure({ code: "conflict", message: "이미 채널에 올린 문답이다" });
+    }
+    if (qaView(row).answer.state !== "answered") {
+      throw new ContractFailure({
+        code: "invalid_request",
+        message: "답이 온 문답만 채널에 올린다. 질문과 답이 함께 올라간다",
+      });
+    }
+    db.exec("BEGIN");
+    db.prepare("UPDATE qas SET visibility = 'public' WHERE id = ?").run(qa);
+    db.prepare("INSERT INTO messages (channel, login, qa, at) VALUES (?, ?, ?, ?)").run(
+      row.channel,
+      login,
+      qa,
+      Date.now(),
+    );
+    db.exec("COMMIT");
+    return { message: shareQa(qa).message as ChannelMessage };
   });
 
   mount(app, api.dms, ({ channel }, c) => {
@@ -641,9 +715,13 @@ export async function startServer(options: {
         };
         socket.send(encode(serverToWeb, "welcome", { seq }, id));
         if (payload.after !== undefined) {
+          // 끊긴 사이에 답이 온 공개 문답도 다시 보낸다. `after`를 받은 뒤에 끊겼으니 그 메시지가 선 뒤에 답이 온 것이면 넉넉히 덮는다.
           const missed = db
-            .prepare(`${MESSAGES} WHERE m.id > ? ORDER BY m.id`)
-            .all(payload.after) as MessageRow[];
+            .prepare(
+              `${MESSAGES} WHERE m.id > ? OR q.settled >= (SELECT at FROM messages WHERE id = ?)
+               ORDER BY m.id`,
+            )
+            .all(payload.after, payload.after) as MessageRow[];
           for (const row of missed) socket.send(encode(serverToWeb, "message", messageView(row)));
         }
         watchers.set(socket, { hash: hash(payload.session), login });
