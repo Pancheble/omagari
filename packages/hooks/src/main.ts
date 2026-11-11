@@ -2,13 +2,15 @@
 // 훅은 어떤 경우에도 도구 호출도 세션 시작도 막지 않는다. 글만 넣고, 늘 0으로 끝난다.
 // 서버는 부르지 않는다. 같은 기기의 러너가 서버에서 받아 둔 상황만 읽는다(구현 4장).
 // 세션 시작 훅(SessionStart)은 팀의 지금 상황을, 편집 전 훅(PreToolUse)은 고치려는 파일의 근처 작업을 넣는다.
+// 실행기마다 `omagari install`이 깔고, 첫 인자로 그 실행기를 받는다(`omagari-hook claude-code`, ADR-0015).
+// 이 기기의 모든 레포에서 돌므로, 러너를 켠 적 없는 레포에서는 아무것도 하지 않는다(ADR-0016).
 import { execFile } from "node:child_process";
-import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { text } from "node:stream/consumers";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
-import { ago, type NearbyWork, type WorkView } from "@omagari/contract";
+import { ago, ExecutorId, type NearbyWork, type WorkView } from "@omagari/contract";
 import { callRunner, runnerPaths } from "@omagari/runner";
 
 /** 넣는 글의 상한. Claude Code는 넘으면 파일로 돌리고 앞 2,000자만 보인다(ADR-0005). */
@@ -21,8 +23,8 @@ const SITUATION_MS = 2000;
 const SAME_FILES_SHOWN = 5;
 /** 근처 작업 하나에 적는 줄 범위의 수. 나머지는 개수만 적는다. */
 const RANGES_SHOWN = 10;
-/** 이 훅의 실행기(ADR-0015). Codex(#16)는 자기 것을 보낸다. */
-const EXECUTOR = "claude-code";
+/** 이 훅을 부른 실행기. 러너에 보내는 요청에 싣는다. 모르는 실행기면 아무것도 넣지 않는다. */
+const executor = ExecutorId.safeParse(process.argv[2]).data;
 /** 편집 전 훅이 걸리는 도구와 그 입력에서 파일 경로가 든 키. 셸 명령에는 걸지 않는다(1단계 질문 A6). */
 const EDIT_TOOLS: Record<string, string> = {
   Edit: "file_path",
@@ -54,19 +56,23 @@ const session =
     : undefined;
 // 읽지 못한 입력이나 다른 훅은 글을 넣지 않는다. 실패는 모두 삼킨다.
 const result: { name: string; context?: string; remember?: () => Promise<void> } | undefined =
-  event?.hook_event_name === "SessionStart"
-    ? {
-        name: "SessionStart",
-        context: await Promise.race([
-          sessionStart().catch((error) => notConfirmed("팀의 지금 상황", reasonOf(error))),
-          sleep(SITUATION_MS).then(() =>
-            notConfirmed("팀의 지금 상황", `러너가 ${SITUATION_MS / 1000}초 안에 답하지 않았다`),
-          ),
-        ]),
-      }
-    : event?.hook_event_name === "PreToolUse"
-      ? { name: "PreToolUse", ...(await preEdit(event).catch(() => undefined)) }
-      : undefined;
+  executor === undefined
+    ? undefined
+    : event?.hook_event_name === "SessionStart"
+      ? {
+          name: "SessionStart",
+          context: await Promise.race([
+            sessionStart(executor).catch((error) =>
+              notConfirmed("팀의 지금 상황", reasonOf(error)),
+            ),
+            sleep(SITUATION_MS).then(() =>
+              notConfirmed("팀의 지금 상황", `러너가 ${SITUATION_MS / 1000}초 안에 답하지 않았다`),
+            ),
+          ]),
+        }
+      : event?.hook_event_name === "PreToolUse"
+        ? { name: "PreToolUse", ...(await preEdit(event, executor).catch(() => undefined)) }
+        : undefined;
 const output = result?.context
   ? JSON.stringify({
       hookSpecificOutput: { hookEventName: result.name, additionalContext: result.context },
@@ -78,6 +84,19 @@ process.stdout.write(output, async (error) => {
   if (!error) await result?.remember?.().catch(() => {});
   process.exit(0);
 });
+
+/**
+ * 이 기기에서 Omagari 러너를 켠 적이 있는 레포의 러너 자리. 러너는 켤 때 `<git-common-dir>/omagari`를 만든다.
+ * Git 레포가 아니거나 러너를 켠 적이 없으면 Omagari를 쓰지 않는 곳이라, 확인하지 못했다고도 하지 않고 기억도 남기지 않는다.
+ */
+async function omagariPaths() {
+  const paths = await runnerPaths(cwd).catch(() => undefined);
+  if (!paths) return;
+  return access(dirname(paths.hooks)).then(
+    () => paths,
+    () => undefined,
+  );
+}
 
 function reasonOf(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -118,11 +137,11 @@ function workLine(work: WorkView & { line: NonNullable<WorkView["line"]> }, same
 
 /**
  * 세션 시작 훅이 넣는 글(ADR-0005). 다른 멤버의 작업마다 한 줄이고, 내 작업과 같은 파일을 건드리는 작업이 먼저 온다.
- * 다른 멤버의 작업이 없으면 넣지 않는다. Git 레포가 아니면 Omagari의 폴더가 아니라 넣지 않는다.
+ * 다른 멤버의 작업이 없으면 넣지 않는다. 러너를 켠 적 없는 레포면 Omagari의 폴더가 아니라 넣지 않는다.
  * 세션이 비워지거나(clear) 컴팩트되어 다시 시작하면, 대화에서 사라졌을 편집 전 훅의 기억을 지운다.
  */
-async function sessionStart() {
-  const paths = await runnerPaths(cwd).catch(() => undefined);
+async function sessionStart(executor: ExecutorId) {
+  const paths = await omagariPaths();
   if (!paths) return;
   if (session && (event?.source === "clear" || event?.source === "compact")) {
     await rm(join(paths.hooks, `${session}.json`), { force: true });
@@ -130,7 +149,7 @@ async function sessionStart() {
   const branch = await promisify(execFile)("git", ["-C", cwd, "symbolic-ref", "--short", "HEAD"])
     .then(({ stdout }) => stdout.trim())
     .catch(() => undefined);
-  const reply = await callRunner(cwd, "situation", {});
+  const reply = await callRunner(cwd, "situation", { executor });
   if (reply.kind !== "situation") throw new Error(`러너가 묻지 않은 것으로 답했다: ${reply.kind}`);
   const { login, works, disconnectedAt, mine } = reply.payload;
 
@@ -223,14 +242,14 @@ type Memory = {
  * 그래야 메인 대화의 다음 편집에서 다시 들어간다(1단계 질문 A5).
  * 러너에 닿지 않으면 세션에 한 번만 그렇다고 넣는다.
  */
-async function preEdit(event: HookEvent) {
+async function preEdit(event: HookEvent, executor: ExecutorId) {
   const key = typeof event.tool_name === "string" ? EDIT_TOOLS[event.tool_name] : undefined;
   const target =
     key && typeof event.tool_input === "object" && event.tool_input !== null
       ? (event.tool_input as Record<string, unknown>)[key]
       : undefined;
   if (!session || typeof target !== "string" || !target) return;
-  const paths = await runnerPaths(cwd).catch(() => undefined);
+  const paths = await omagariPaths();
   if (!paths) return;
   // 관측의 경로는 작업 폴더의 최상위에서 본 것이다. 레포 밖의 파일은 Omagari가 볼 것이 아니다.
   const top = (
@@ -253,7 +272,7 @@ async function preEdit(event: HookEvent) {
   const before = JSON.stringify(memory);
   let context: string | undefined;
   const reply = await Promise.race([
-    callRunner(cwd, "nearby", { path, executor: EXECUTOR }),
+    callRunner(cwd, "nearby", { path, executor }),
     sleep(SITUATION_MS).then(() => {
       throw new Error(`러너가 ${SITUATION_MS / 1000}초 안에 답하지 않았다`);
     }),
