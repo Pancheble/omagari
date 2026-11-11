@@ -35,12 +35,14 @@
 
 ## Git과 GitHub 규칙
 
-- 브랜치는 `dev`(기본, 작업이 모이는 곳)와 `main`(릴리즈와 데모) 두 갈래다.
+- 브랜치는 `dev`(기본, 작업이 모이는 곳)와 `main`(릴리즈한 판. 멤버와 서버가 받아 쓴다) 두 갈래다(ADR-0019).
 - 작업 브랜치는 `dev`에서 따고, PR은 `dev`로 연다. 머지는 스쿼시만 한다.
 - 커밋과 PR 제목은 `접두사(범위): 요약` 형식이다. 접두사는 feat, fix, docs, refactor, test, chore, ci, perf. 커밋은 `.githooks/commit-msg`가, PR 제목은 "PR 제목 검사" 워크플로가 검사한다.
-- `main`에는 PR을 열지 않는다. 릴리즈나 데모 때만 빨리 감기로 올린다: `git push origin dev:main`. 빨리 감기가 안 되면 멈추고 사람에게 알린다.
-- `main`에 올린 커밋에 `vX.Y.Z` 태그를 찍는다. feat는 Y, fix는 Z, 깨지는 변경(`!`)은 X를 올린다. 1.0 전에는 깨지는 변경도 Y를 올린다.
-- 릴리즈는 `gh release create vX.Y.Z --generate-notes`로 만든다. 노트는 PR의 `type:*` 라벨로 묶인다(`.github/release.yml`).
+- 릴리즈는 손으로 한다(ADR-0019). 멤버나 서버가 받아야 할 feat나 fix가 `dev`에 쌓였을 때 하고, 문서·테스트·CI만 바뀌었으면 하지 않는다.
+  1. `main`에는 PR을 열지 않는다. 빨리 감기로 올린다: `git push origin dev:main`. 빨리 감기가 안 되면 멈추고 사람에게 알린다.
+  2. 그 커밋에 `vX.Y.Z` 태그를 찍는다. feat는 Y, fix는 Z, 깨지는 변경(`!`)은 X를 올린다. 1.0 전에는 깨지는 변경도 Y를 올린다.
+  3. `gh release create vX.Y.Z --generate-notes`로 노트를 만든다. 노트는 PR의 `type:*` 라벨로 묶인다(`.github/release.yml`). 지난 릴리즈 뒤로 `CONTRACT_VERSION`이 바뀌었으면 노트 맨 위에 "러너도 업데이트해야 해요"를 적는다.
+- 버전은 git 태그다. package.json의 `version`은 `0.0.0`으로 두고 올리지 않는다.
 - 이슈에는 `type:*`, `area:*`, `stage:*` 라벨과 마일스톤을 붙인다. 사람 없이 에이전트가 바로 할 수 있는 이슈에만 `ready-for-agent`를 함께 붙인다.
 - 이슈 하나에 세션 하나. 이슈가 끝나면 `/clear`, 중간에 길어지면 `/handoff`.
 
