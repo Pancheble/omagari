@@ -50,13 +50,18 @@ test("자리 비움과 방해 금지는 고른 시간이 지나면 온라인으�
   await world.live(alice);
   const watching = await world.live(world.owner);
   const seen = () => watching.members().find((member) => member.login === "alice")?.presence;
+  /** 실시간 연결로 받아 온 alice의 접속 상태 전부. 느린 기기에서 짧은 시간이 받기 전에 끝나도 지나간 것을 본다. */
+  const history = () =>
+    watching.received.flatMap((m) =>
+      m.kind === "members" ? [m.payload.members.find((x) => x.login === "alice")?.presence] : [],
+    );
   await eventually(() => assert.equal(seen(), "online"));
 
   const before = Date.now();
   const { until } = await call(alice, api.setPresence, { presence: "away", duration: "15m" });
   const at = Date.parse(until ?? "");
   assert.ok(at >= before + expiry && at <= Date.now() + expiry, `돌아올 시각: ${until}`);
-  await eventually(() => assert.equal(seen(), "away"));
+  await eventually(() => assert.ok(history().includes("away")));
   await eventually(() => assert.equal(seen(), "online"), expiry + 10_000);
   assert.equal((await memberOf(world.owner, "alice"))?.presence, "online");
 
@@ -96,7 +101,7 @@ test("오프라인으로 보이기를 고르면 다른 멤버의 API와 실시�
   await call(alice, api.setStatusMessage, { message: "회의 중" });
   await call(bob, api.setStatusMessage, { message: "회의 중" });
 
-  await call(alice, api.setPresence, { presence: "invisible", duration: "1h" });
+  await call(alice, api.setPresence, { presence: "invisible" });
   await eventually(() => assert.equal(seen()?.presence, "offline"));
   // 창을 열어 둔 alice와 창이 없는 bob은 아이디 말고는 같다. 고른 것이나 돌아올 시각은 어디에도 없다.
   const strip = ({ login: _, name: __, ...rest }: { login: string; name: string }) => rest;
@@ -108,6 +113,8 @@ test("오프라인으로 보이기를 고르면 다른 멤버의 API와 실시�
   // 고른 사람 자신에게도 오프라인으로 보인다.
   assert.equal((await memberOf(alice, "alice"))?.presence, "offline");
 
+  // 시간을 정해 고르면 그 시간이 지나 돌아온다.
+  await call(alice, api.setPresence, { presence: "invisible", duration: "1h" });
   await eventually(() => assert.equal(seen()?.presence, "online"), expiry + 10_000);
 });
 
