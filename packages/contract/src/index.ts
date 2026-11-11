@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 1;
+export const CONTRACT_VERSION = 2;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -12,6 +12,8 @@ export const ContractError = z.strictObject({
     "unknown_kind", // 계약에 없는 종류다
     "version_mismatch", // 계약의 버전이 다르다
     "invalid_request", // HTTP 요청의 본문이 계약과 다르다
+    "unauthorized", // 로그인하지 않았거나 세션이 끝났다
+    "forbidden", // 멤버가 아니거나, 워크스페이스의 레포가 아닌 폴더다
     "not_found",
     "internal",
   ]),
@@ -42,17 +44,22 @@ type Payloads = Record<string, z.ZodType>;
 
 /** 러너가 서버에 보내는 것. 이후의 이슈는 자기 메시지를 여기에 더한다. */
 export const runnerToServer = {
-  hello: z.strictObject({}),
+  /** 붙자마자 보낸다. `repos`는 러너 폴더의 GitHub 원격이 가리키는 레포(`owner/name`)들이다. */
+  hello: z.strictObject({ session: z.string(), repos: z.array(z.string()) }),
   error: ContractError,
 } satisfies Payloads;
 
 /** 서버가 러너에 보내는 것. 러너는 여기 있는 종류만 받는다. */
 export const serverToRunner = {
-  welcome: z.strictObject({}),
+  /** hello를 받아들였다. 러너는 이 멤버의 에이전트로, 이 레포에 짝지어졌다. */
+  welcome: z.strictObject({ login: z.string(), repo: z.string() }),
   error: ContractError,
 } satisfies Payloads;
 
-/** 러너가 붙는 WebSocket 경로. */
+/**
+ * 러너가 붙는 WebSocket 경로. 서버는 hello를 거절하면 `error`를 보낸 뒤 1008로 닫는다.
+ * 1008로 닫힌 러너는 다시 붙지 않는다. 그 밖의 이유로 끊기면 다시 붙는다.
+ */
 export const RUNNER_SOCKET = "/api/runner";
 
 /** 프레임 하나, HTTP 본문 하나의 상한. 서버는 넘는 것을 읽지 않는다. 더 큰 것이 필요한 이슈가 알고 올린다. */
@@ -125,6 +132,8 @@ export function decode<P extends Payloads>(
 export type Route = {
   method: "GET" | "POST";
   path: string;
+  /** 로그인 없이 부를 수 있다. 없으면 멤버의 세션(`Authorization: Bearer`)이 있어야 한다. */
+  public?: true;
   body?: z.ZodType;
   response: z.ZodType;
 };
@@ -136,22 +145,58 @@ export const api = {
   health: {
     method: "GET",
     path: "/api/health",
-    response: z.strictObject({ contract: z.number(), runners: z.number() }),
+    public: true,
+    response: z.strictObject({ contract: z.number() }),
+  },
+  /** GitHub 기기 인증을 연다. 사람은 `verificationUri`에서 `userCode`를 넣고, 부른 쪽은 `loginPoll`로 기다린다. */
+  login: {
+    method: "POST",
+    path: "/api/login",
+    public: true,
+    response: z.strictObject({
+      device: z.string(),
+      userCode: z.string(),
+      verificationUri: z.string(),
+      intervalMs: z.number(),
+    }),
+  },
+  /**
+   * 기기 인증이 끝났는지 본다. 끝났고 그 레포에 push 권한이 있으면 세션을 준다(ADR-0011).
+   * GitHub 토큰은 서버에만 남는다. push 권한이 없으면 `forbidden`이다.
+   */
+  loginPoll: {
+    method: "POST",
+    path: "/api/login/poll",
+    public: true,
+    body: z.strictObject({ device: z.string() }),
+    response: z.union([
+      z.strictObject({ pending: z.literal(true) }),
+      z.strictObject({ session: z.string(), login: z.string() }),
+    ]),
+  },
+  /** 워크스페이스의 멤버와 그 사람의 에이전트. 에이전트는 러너가 서버에 붙어 있으면 online이다. */
+  members: {
+    method: "GET",
+    path: "/api/members",
+    response: z.strictObject({
+      members: z.array(z.strictObject({ login: z.string(), agent: z.enum(["online", "offline"]) })),
+    }),
   },
 } satisfies Record<string, Route>;
 
 /** API 하나를 부른다. 웹, CLI, 테스트가 같이 쓴다. 오류 답은 `ContractFailure`로 던진다. */
 export async function call<R extends Route>(
-  base: string,
+  server: { url: string; session?: string },
   route: R,
   ...[body]: R["body"] extends z.ZodType ? [z.input<R["body"]>] : []
 ): Promise<z.output<R["response"]>> {
-  const response = await fetch(new URL(route.path, base), {
+  const headers: Record<string, string> = {};
+  if (server.session) headers.authorization = `Bearer ${server.session}`;
+  if (route.body) headers["content-type"] = "application/json";
+  const response = await fetch(new URL(route.path, server.url), {
     method: route.method,
-    ...(route.body && {
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    }),
+    headers,
+    ...(route.body && { body: JSON.stringify(body) }),
   });
   const json: unknown = await response.json().catch(() => undefined);
   if (!response.ok) {

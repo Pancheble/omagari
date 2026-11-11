@@ -15,7 +15,7 @@ import {
 } from "@omagari/contract";
 import { startRunner } from "@omagari/runner";
 import { type WebSocket as ServerSocket, WebSocketServer } from "ws";
-import { startWorld, tempRepo } from "./harness.ts";
+import { REPO, startWorld, tempRepo } from "./harness.ts";
 
 const frame = (fields: object) => JSON.stringify({ v: CONTRACT_VERSION, payload: {}, ...fields });
 const tooBig = "x".repeat(MAX_MESSAGE_BYTES + 1);
@@ -63,6 +63,7 @@ async function fakeServer(
     runner: {
       serverUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
       folder: repo.folder,
+      session: "세션",
     },
     /** hello 다음에 러너가 보낸 첫 메시지. */
     received: received.promise,
@@ -76,10 +77,8 @@ test("실제 서버와 실제 러너가 임시 Git 레포 위에서 붙어 메�
   t.after(world.stop);
 
   assert.equal(await world.repo.git("rev-list", "--count", "HEAD"), "1");
-  assert.deepEqual(await call(world.server.url, api.health), {
-    contract: CONTRACT_VERSION,
-    runners: 1,
-  });
+  assert.deepEqual(await call(world.server, api.health), { contract: CONTRACT_VERSION });
+  assert.deepEqual(await world.agents(world.owner), { owner: "online" });
 });
 
 test("서버는 계약에 없는 종류, 내용, 키를 받지 않는다", async (t) => {
@@ -111,7 +110,7 @@ test("서버는 계약에 없는 종류, 내용, 키를 받지 않는다", async
   );
 
   // 받지 않은 메시지를 보낸 연결은 러너로 치지 않는다. 붙어 있는 것은 world의 러너 하나다.
-  assert.equal((await call(world.server.url, api.health)).runners, 1);
+  assert.deepEqual(await world.agents(world.owner), { owner: "online" });
 });
 
 test("서버는 계약 버전이 다른 메시지에 오류를 보내고 연결을 끊는다", async (t) => {
@@ -135,7 +134,7 @@ test("서버는 상한을 넘는 프레임과 본문을 읽지 않는다", async
   socket.send(frame({ id: "a", kind: "hello", payload: { junk: tooBig } }));
   const [{ code }] = await once(socket, "close");
   assert.equal(code, 1009); // 메시지가 너무 크다
-  assert.equal((await call(world.server.url, api.health)).runners, 1);
+  assert.deepEqual(await world.agents(world.owner), { owner: "online" });
 
   const response = await fetch(world.server.url + api.health.path, {
     method: "POST",
@@ -149,8 +148,25 @@ test("서버는 없는 경로에 계약의 오류 형식으로 답한다", async
   const world = await startWorld();
   t.after(world.stop);
 
-  await assert.rejects(call(world.server.url, { ...api.health, path: "/api/nowhere" }), {
+  await assert.rejects(call(world.server, { ...api.health, path: "/api/nowhere" }), {
     code: "not_found",
+  });
+});
+
+test("계약의 경로는 계약대로의 본문만 받는다", async (t) => {
+  const world = await startWorld();
+  t.after(world.stop);
+
+  await assert.rejects(call(world.server, api.loginPoll, { device: 1 } as never), {
+    code: "invalid_request",
+  });
+  await assert.rejects(
+    call(world.server, api.loginPoll, { device: "x", junk: "계약에 없는 키" } as never),
+    { code: "invalid_request" },
+  );
+  // 계약대로의 본문은 처리기까지 간다. 모르는 기기 인증이라 거절된다.
+  await assert.rejects(call(world.server, api.loginPoll, { device: "x" }), {
+    code: "unauthorized",
   });
 });
 
@@ -169,7 +185,7 @@ test("서버는 따로 열지 않으면 이 기기 안에서만 듣는다", asyn
 test("러너는 계약에 없는 종류의 메시지를 받지 않는다", async (t) => {
   // 뚫린 서버 흉내: hello에는 제대로 답하고, 이어서 계약에 없는 요청을 보낸다.
   const server = await fakeServer(t, (socket, hello) => {
-    socket.send(encode(serverToRunner, "welcome", {}, hello.id));
+    socket.send(encode(serverToRunner, "welcome", { login: "owner", repo: REPO }, hello.id));
     socket.send(frame({ id: "x", kind: "run_command", payload: { command: "rm -rf ~" } }));
   });
   const runner = await startRunner(server.runner);
@@ -218,7 +234,7 @@ test("CLI와 훅은 실행 파일의 입출력으로 조작한다", async (t) =>
   const world = await startWorld();
   t.after(world.stop);
 
-  const version = await world.cli("--version");
+  const version = await world.cli(["--version"]);
   assert.equal(version.code, 0);
   assert.match(version.stdout, new RegExp(`contract ${CONTRACT_VERSION}\\b`));
 
