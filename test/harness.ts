@@ -36,6 +36,9 @@ function run(
         else resolve({ code: child.exitCode, stdout, stderr });
       },
     );
+    // 입력을 읽지 않고 먼저 끝나는 실행 파일(git 등)에 쓰면 EPIPE가 난다. 그것은 실패가 아니다.
+    // 듣는 곳이 없으면 잡히지 않은 예외가 되어, 그때 돌던 테스트를 실패시키고 그 테스트의 정리를 건너뛴다.
+    child.stdin?.on("error", () => {});
     if (options.keepStdinOpen) child.stdin?.write(options.stdin ?? "");
     else child.stdin?.end(options.stdin ?? "");
   });
