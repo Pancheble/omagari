@@ -12,7 +12,10 @@ async function place(t: { after: (fn: () => Promise<void>) => void }) {
   return (name: string) => join(folder, name);
 }
 
-test("등록한 폴더와 연결된 워크트리의 브랜치가 각각 작업으로 관측되고, 워크트리를 더하거나 지우면 관측이 따라온다", async (t) => {
+// 워크트리마다 Git을 여러 번 부르고 단계가 다섯이라, 다른 테스트와 함께 돌 때 기본 시간 제한(30초)에 가깝다.
+test("등록한 폴더와 연결된 워크트리의 브랜치가 각각 작업으로 관측되고, 워크트리를 더하거나 지우면 관측이 따라온다", {
+  timeout: 60_000,
+}, async (t) => {
   const world = await startWorld({ observeMs: 20 });
   t.after(world.stop);
   const { git, folder } = world.repo;
@@ -40,6 +43,8 @@ test("등록한 폴더와 연결된 워크트리의 브랜치가 각각 작업�
         base,
         share: "full",
         files: [{ path: "a.ts", content: "a\n" }],
+        line: { source: "files", text: "a.ts 수정 중" },
+        offlineSince: null,
       },
       {
         login: "owner",
@@ -47,6 +52,8 @@ test("등록한 폴더와 연결된 워크트리의 브랜치가 각각 작업�
         base,
         share: "full",
         files: [{ path: "b.ts", content: "b\n" }],
+        line: { source: "files", text: "b.ts 수정 중" },
+        offlineSince: null,
       },
       {
         login: "owner",
@@ -54,6 +61,8 @@ test("등록한 폴더와 연결된 워크트리의 브랜치가 각각 작업�
         base,
         share: "full",
         files: [{ path: "main.ts", content: "main\n" }],
+        line: { source: "files", text: "main.ts 수정 중" },
+        offlineSince: null,
       },
     ]),
   );

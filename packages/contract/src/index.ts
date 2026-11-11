@@ -79,6 +79,21 @@ export const Work = z.strictObject({
 });
 export type Work = z.infer<typeof Work>;
 
+/**
+ * 작업마다 이름 옆에 보이는 "~하는 중" 한 줄(ADR-0010). 서버가 이 순서로 고른다:
+ * 에이전트가 쓴 줄(`at`은 쓴 시각) → 초안 PR 제목 → 고치는 파일("payment.ts 외 3개 수정 중") → 바뀐 것이 없으면 없음(null).
+ * 순서의 맨 앞인 오프라인은 작업의 `offlineSince`로 따로 온다. 그때 이 줄은 그 시각 기준으로 남은 것이다.
+ */
+export const StatusLine = z.discriminatedUnion("source", [
+  z.strictObject({ source: z.literal("agent"), text: z.string(), at: z.string() }),
+  z.strictObject({ source: z.literal("pull"), text: z.string() }),
+  z.strictObject({ source: z.literal("files"), text: z.string() }),
+]);
+export type StatusLine = z.infer<typeof StatusLine>;
+
+/** 에이전트가 쓰는 상태 한 줄의 길이 상한. 줄바꿈과 겹친 공백은 공백 하나로 접는다. */
+export const MAX_STATUS_CHARS = 200;
+
 /** 러너가 서버에 보내는 것. 이후의 이슈는 자기 메시지를 여기에 더한다. */
 export const runnerToServer = {
   /** 붙자마자 보낸다. `repos`는 러너 폴더의 GitHub 원격이 가리키는 레포(`owner/name`)들이다. */
@@ -257,13 +272,39 @@ export const api = {
       ),
     }),
   },
-  /** 멤버들의 작업과 그 관측. 바뀐 파일과 그 내용까지 온다. 멤버만 본다. */
+  /**
+   * 멤버들의 작업과 그 관측, 상태 한 줄. 바뀐 파일과 그 내용까지 온다. 멤버만 본다.
+   * 러너가 떨어진 멤버의 작업은 `offlineSince`(떨어진 시각) 기준으로 남고, 7일이 지나면 지워진다.
+   */
   works: {
     method: "GET",
     path: "/api/works",
     response: z.strictObject({
-      works: z.array(z.strictObject({ login: z.string(), ...Work.shape })),
+      works: z.array(
+        z.strictObject({
+          login: z.string(),
+          ...Work.shape,
+          line: StatusLine.nullable(),
+          offlineSince: z.string().nullable(),
+        }),
+      ),
     }),
+  },
+  /**
+   * 내 작업(`branch`)의 상태 한 줄을 쓴다. 같은 작업에 다시 쓰면 나중에 쓴 것이 남는다.
+   * 그 브랜치가 머지되거나, 관측된 변경이 있다가 0이 되면 지워진다(ADR-0010).
+   */
+  setStatus: {
+    method: "POST",
+    path: "/api/status",
+    body: z.strictObject({
+      branch: z.string().min(1),
+      text: z
+        .string()
+        .transform((text) => text.replace(/\s+/g, " ").trim())
+        .pipe(z.string().min(1).max(MAX_STATUS_CHARS)),
+    }),
+    response: z.strictObject({ text: z.string(), at: z.string() }),
   },
   /**
    * `agent`(멤버의 로그인)의 에이전트에게 묻고 러너 세션의 답을 기다린다. 에이전트는 주인만 부른다(`forbidden`).

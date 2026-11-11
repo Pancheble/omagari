@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
+import { basename } from "node:path/posix";
 import { DatabaseSync } from "node:sqlite";
 import { serve, upgradeWebSocket } from "@hono/node-server";
 import {
@@ -11,9 +12,11 @@ import {
   decode,
   encode,
   MAX_FRAME_BYTES,
+  type ObservedFile,
   RUNNER_SOCKET,
   runnerToServer,
   type ShareLevel,
+  type StatusLine,
   serverToRunner,
   type Work,
 } from "@omagari/contract";
@@ -22,7 +25,7 @@ import { type WebSocket, WebSocketServer } from "ws";
 import type { GitHub } from "./github.ts";
 import { createApp, mount } from "./http.ts";
 
-export { type GitHub, realGitHub } from "./github.ts";
+export { type GitHub, type Pull, realGitHub } from "./github.ts";
 
 /** push 권한을 다시 확인하는 주기. Room의 10분에서 시작한다(ADR-0011). */
 const RECHECK_MS = 10 * 60_000;
@@ -30,6 +33,18 @@ const RECHECK_MS = 10 * 60_000;
 const HEARTBEAT_MS = 30_000;
 /** 끝나지 않은 기기 인증을 들고 있는 수의 상한. 로그인 없이 부르는 경로라 GitHub에 무한히 묻지 않는다. */
 const MAX_PENDING_LOGINS = 100;
+/** 작업마다의 초안 PR 제목과 머지 여부를 GitHub에서 다시 읽는 주기. 오래된 오프라인 멤버도 이 주기에 지운다. */
+const FOLLOW_MS = 60_000;
+/** 오프라인인 멤버의 관측과 상태 한 줄을 남겨 두는 시간. Room의 7일이다(1단계 질문 A10). */
+const FORGET_MS = 7 * 24 * 60 * 60_000;
+
+/** 에이전트가 쓴 줄이 없을 때 보이는 고치는 파일의 줄. 바뀐 것이 없으면 없다. */
+function filesLine(files: ObservedFile[]) {
+  const [first] = files;
+  if (!first) return null;
+  const others = files.length > 1 ? ` 외 ${files.length - 1}개` : "";
+  return `${basename(first.path)}${others} 수정 중`;
+}
 
 const hash = (session: string) => createHash("sha256").update(session).digest("hex");
 
@@ -44,6 +59,8 @@ export async function startServer(options: {
   hostname?: string;
   recheckMs?: number;
   heartbeatMs?: number;
+  followMs?: number;
+  forgetMs?: number;
 }) {
   const { repo, github } = options;
   const hostname = options.hostname ?? "127.0.0.1";
@@ -63,19 +80,55 @@ export async function startServer(options: {
     files TEXT NOT NULL,
     PRIMARY KEY (login, branch)
   ) STRICT`);
-  /** 멤버의 작업을 러너가 지금 보는 것으로 바꾼다. */
+  // 작업마다 에이전트가 쓴 상태 한 줄. `at`은 쓴 시각(ms)이다. 관측이 없는 브랜치에도 쓸 수 있고, 관측되면 보인다.
+  db.exec(`CREATE TABLE IF NOT EXISTS lines (
+    login TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    text TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    PRIMARY KEY (login, branch)
+  ) STRICT`);
+  // 러너가 떨어진 멤버와 떨어진 시각(ms). 러너가 붙으면 지운다.
+  db.exec(`CREATE TABLE IF NOT EXISTS offline (
+    login TEXT PRIMARY KEY,
+    since INTEGER NOT NULL
+  ) STRICT`);
+  // 서버가 막 떴으니 아무 러너도 붙어 있지 않다. 이미 떨어져 있던 멤버는 떨어진 시각을 그대로 둔다.
+  db.prepare(
+    `INSERT OR IGNORE INTO offline (login, since)
+     SELECT login, ? FROM works UNION SELECT login, ? FROM lines`,
+  ).run(Date.now(), Date.now());
+
+  /**
+   * 멤버의 작업을 러너가 지금 보는 것으로 바꾼다.
+   * 관측된 변경이 있다가 0이 된 작업은 에이전트가 쓴 줄을 지운다. 처음부터 0이던 작업의 줄은 남긴다(ADR-0010).
+   */
   // ponytail: 멤버 하나에 러너 하나로 본다. 한 멤버가 기기 둘에서 러너를 켜면 나중에 보낸 쪽이 덮는다. 그때는 러너마다 나눈다.
   const replaceWorks = (login: string, works: Work[]) => {
     db.exec("BEGIN");
+    const changed = new Set(
+      (
+        db
+          .prepare("SELECT branch FROM works WHERE login = ? AND json_array_length(files) > 0")
+          .all(login) as { branch: string }[]
+      ).map((row) => row.branch),
+    );
     db.prepare("DELETE FROM works WHERE login = ?").run(login);
     const insert = db.prepare(
       "INSERT OR REPLACE INTO works (login, branch, base, share, files) VALUES (?, ?, ?, ?, ?)",
     );
+    const clear = db.prepare("DELETE FROM lines WHERE login = ? AND branch = ?");
     for (const work of works) {
       insert.run(login, work.branch, work.base, work.share, JSON.stringify(work.files));
+      // intent의 빈 files는 바뀐 것이 0이 된 것이 아니라 보내지 않은 것이다. 수준을 낮춰도 쓴 줄은 남는다.
+      if (work.share !== "intent" && work.files.length === 0 && changed.has(work.branch)) {
+        clear.run(login, work.branch);
+      }
     }
     db.exec("COMMIT");
   };
+  /** 브랜치마다 열린 초안 PR의 제목. GitHub에서 `followMs`마다 다시 읽는다. 서버가 꺼지면 잃고 다음 주기에 다시 읽는다. */
+  let drafts = new Map<string, string>();
   const sessionLogin = (session: string) =>
     (
       db.prepare("SELECT login FROM sessions WHERE hash = ?").get(hash(session)) as
@@ -199,11 +252,50 @@ export async function startServer(options: {
     // 워크스페이스에서 빠진 사람(세션이 없는 사람)의 작업은 보이지 않는다.
     const rows = db
       .prepare(
-        `SELECT login, branch, base, share, files FROM works
-         WHERE login IN (SELECT login FROM sessions) ORDER BY login, branch`,
+        `SELECT w.login, w.branch, w.base, w.share, w.files, l.text, l.at, o.since FROM works w
+         LEFT JOIN lines l ON l.login = w.login AND l.branch = w.branch
+         LEFT JOIN offline o ON o.login = w.login
+         WHERE w.login IN (SELECT login FROM sessions) ORDER BY w.login, w.branch`,
       )
-      .all() as { login: string; branch: string; base: string; share: ShareLevel; files: string }[];
-    return { works: rows.map((row) => ({ ...row, files: JSON.parse(row.files) })) };
+      .all() as {
+      login: string;
+      branch: string;
+      base: string;
+      share: ShareLevel;
+      files: string;
+      text: string | null;
+      at: number | null;
+      since: number | null;
+    }[];
+    return {
+      works: rows.map(({ login, branch, base, share, text, at, since, ...row }) => {
+        const files: ObservedFile[] = JSON.parse(row.files);
+        const draft = drafts.get(branch);
+        const changes = filesLine(files);
+        // 고르는 순서: 에이전트가 쓴 줄 → 초안 PR 제목 → 고치는 파일 → 없음. 오프라인은 offlineSince로 따로 간다.
+        const line: StatusLine | null =
+          text !== null && at !== null
+            ? { source: "agent", text, at: new Date(at).toISOString() }
+            : draft !== undefined
+              ? { source: "pull", text: draft }
+              : changes !== null
+                ? { source: "files", text: changes }
+                : null;
+        const offlineSince = since === null ? null : new Date(since).toISOString();
+        return { login, branch, base, share, files, line, offlineSince };
+      }),
+    };
+  });
+
+  mount(app, api.setStatus, ({ branch, text }, c) => {
+    const at = Date.now();
+    db.prepare("INSERT OR REPLACE INTO lines (login, branch, text, at) VALUES (?, ?, ?, ?)").run(
+      c.get("login") as string,
+      branch,
+      text,
+      at,
+    );
+    return { text, at: new Date(at).toISOString() };
   });
 
   // ponytail: 답이 올 때까지 HTTP 요청을 붙들고 있다. 줄을 서면 10분을 넘을 수 있고, 그 전에
@@ -268,6 +360,7 @@ export async function startServer(options: {
             );
           }
           runners.set(socket, { login, hash: hash(session) });
+          db.prepare("DELETE FROM offline WHERE login = ?").run(login);
           socket.send(encode(serverToRunner, "welcome", { login, repo }, message.id));
           return;
         }
@@ -291,7 +384,15 @@ export async function startServer(options: {
         }
       },
       onClose(_, socket) {
+        const runner = runners.get(socket);
         runners.delete(socket);
+        // 그 멤버의 러너가 다 떨어졌으면 오프라인이다. 마지막 관측과 상태 한 줄은 이 시각 기준으로 남는다.
+        if (runner && !stopped && ![...runners.values()].some((r) => r.login === runner.login)) {
+          db.prepare("INSERT OR REPLACE INTO offline (login, since) VALUES (?, ?)").run(
+            runner.login,
+            Date.now(),
+          );
+        }
         // 떨어진 러너의 답은 오지 않는다. 기다리던 문답을 실패로 돌려준다.
         for (const ask of asks.values()) {
           if (ask.socket !== socket) continue;
@@ -351,6 +452,54 @@ export async function startServer(options: {
     }
   }, options.recheckMs ?? RECHECK_MS);
 
+  // 오프라인 7일이 지난 멤버의 관측과 상태 한 줄을 지우고, 작업마다의 초안 PR 제목과 머지 여부를 GitHub에서 읽는다.
+  // 머지되면 그 브랜치에서 머지 전에 쓴 줄을 지운다. 머지 뒤에 같은 브랜치에 새로 쓴 줄은 남는다.
+  // ponytail: 주기마다 브랜치 하나에 GitHub 요청 하나다. 작업이 많아져 요청 한도가 걱정되면 GitHub 앱의 웹훅으로 바꾼다.
+  let following = false;
+  const follow = setInterval(async () => {
+    if (following) return;
+    following = true;
+    try {
+      const forgotten = "SELECT login FROM offline WHERE since < ?";
+      const cutoff = Date.now() - (options.forgetMs ?? FORGET_MS);
+      db.exec("BEGIN");
+      db.prepare(`DELETE FROM works WHERE login IN (${forgotten})`).run(cutoff);
+      db.prepare(`DELETE FROM lines WHERE login IN (${forgotten})`).run(cutoff);
+      db.prepare("DELETE FROM offline WHERE since < ?").run(cutoff);
+      db.exec("COMMIT");
+
+      const branches = db
+        .prepare(
+          `SELECT w.branch, MAX(s.github_token) AS token FROM works w
+           JOIN sessions s ON s.login = w.login GROUP BY w.branch`,
+        )
+        .all() as { branch: string; token: string }[];
+      const next = new Map<string, string>();
+      for (const { branch, token } of branches) {
+        const pulls = await github.pulls(token, repo, branch);
+        if (stopped) return;
+        if (!pulls) {
+          // GitHub이 답하지 못하면 지난번 것을 둔다.
+          const known = drafts.get(branch);
+          if (known !== undefined) next.set(branch, known);
+          continue;
+        }
+        const draft = pulls.find((pull) => pull.open && pull.draft);
+        if (draft) next.set(branch, draft.title);
+        const merged = Math.max(
+          ...pulls.map((pull) => Date.parse(pull.mergedAt ?? "")).filter(Number.isFinite),
+        );
+        if (merged > 0)
+          db.prepare("DELETE FROM lines WHERE branch = ? AND at < ?").run(branch, merged);
+      }
+      drafts = next;
+    } catch (error) {
+      console.error("상태 한 줄을 따라가지 못했다:", error);
+    } finally {
+      following = false;
+    }
+  }, options.followMs ?? FOLLOW_MS);
+
   const server = serve({
     fetch: app.fetch,
     port: options.port ?? 0,
@@ -365,6 +514,7 @@ export async function startServer(options: {
       stopped = true;
       clearInterval(heartbeat);
       clearInterval(recheck);
+      clearInterval(follow);
       for (const socket of sockets.clients) socket.terminate();
       server.close();
       await once(server, "close");

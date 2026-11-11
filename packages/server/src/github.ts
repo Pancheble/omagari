@@ -1,6 +1,6 @@
 /**
  * 서버의 바깥 경계: GitHub. 테스트는 여기에 가짜를 꽂는다.
- * 지금은 로그인(기기 인증)과 push 권한까지다. 초안 PR 제목과 머지 여부는 그것을 쓰는 이슈가 더한다.
+ * 로그인(기기 인증), push 권한, 그리고 브랜치마다의 PR(초안 PR 제목과 머지 여부)까지다.
  */
 export type GitHub = {
   /** 기기 인증을 연다. `deviceCode`는 서버만 들고, 사람에게는 `userCode`를 보인다. */
@@ -19,10 +19,22 @@ export type GitHub = {
   login(token: string): Promise<string>;
   /** 토큰 주인이 `owner/name`에 push할 수 있나. GitHub이 답하지 못하면 `undefined`다. */
   canPush(token: string, repo: string): Promise<boolean | undefined>;
+  /** `owner/name`에서 `branch`를 head로 하는 PR들(닫힌 것 포함). GitHub이 답하지 못하면 `undefined`다. */
+  pulls(token: string, repo: string, branch: string): Promise<Pull[] | undefined>;
+};
+
+export type Pull = {
+  title: string;
+  draft: boolean;
+  open: boolean;
+  /** 머지된 시각(ISO). 머지되지 않았으면 없다. */
+  mergedAt?: string;
 };
 
 // 기기 인증: https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow
 // push 권한: GET /repos/{owner}/{repo}의 `permissions.push`(Room과 같은 방법).
+// 브랜치의 PR: GET /repos/{owner}/{repo}/pulls?state=all&head={owner}:{branch}
+// (https://docs.github.com/en/rest/pulls/pulls#list-pull-requests). 멤버는 push 권한이 있어 같은 레포에 브랜치를 올린다.
 export function realGitHub(clientId: string): GitHub {
   const post = async (url: string, body: object) => {
     const response = await fetch(url, {
@@ -81,6 +93,22 @@ export function realGitHub(clientId: string): GitHub {
       if (!response?.ok) return undefined;
       const push = (await response.json()).permissions?.push;
       return typeof push === "boolean" ? push : undefined;
+    },
+    async pulls(token, repo, branch) {
+      const head = encodeURIComponent(`${repo.split("/")[0]}:${branch}`);
+      const response = await get(
+        `/repos/${repo}/pulls?state=all&head=${head}&per_page=100`,
+        token,
+      ).catch(() => undefined);
+      if (!response?.ok) return undefined;
+      const pulls: { title: string; draft?: boolean; state: string; merged_at: string | null }[] =
+        await response.json();
+      return pulls.map((pull) => ({
+        title: pull.title,
+        draft: pull.draft === true,
+        open: pull.state === "open",
+        mergedAt: pull.merged_at ?? undefined,
+      }));
     },
   };
 }
