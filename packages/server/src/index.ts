@@ -19,6 +19,7 @@ import {
   type StatusLine,
   serverToRunner,
   type Work,
+  type WorkView,
 } from "@omagari/contract";
 import type { WSContext } from "hono/ws";
 import { type WebSocket, WebSocketServer } from "ws";
@@ -149,6 +150,64 @@ export async function startServer(options: {
     { socket: WSContext; login: string } & PromiseWithResolvers<string>
   >();
 
+  /** 멤버들이 보는 작업 전부. 웹과 러너가 같은 것을 본다. */
+  const worksView = (): WorkView[] => {
+    // 워크스페이스에서 빠진 사람(세션이 없는 사람)의 작업은 보이지 않는다.
+    const rows = db
+      .prepare(
+        `SELECT w.login, w.branch, w.base, w.share, w.files, l.text, l.at, o.since FROM works w
+         LEFT JOIN lines l ON l.login = w.login AND l.branch = w.branch
+         LEFT JOIN offline o ON o.login = w.login
+         WHERE w.login IN (SELECT login FROM sessions) ORDER BY w.login, w.branch`,
+      )
+      .all() as {
+      login: string;
+      branch: string;
+      base: string;
+      share: ShareLevel;
+      files: string;
+      text: string | null;
+      at: number | null;
+      since: number | null;
+    }[];
+    return rows.map(({ login, branch, base, share, text, at, since, ...row }) => {
+      const files: ObservedFile[] = JSON.parse(row.files);
+      const draft = drafts.get(branch);
+      const changes = filesLine(files);
+      // 고르는 순서: 에이전트가 쓴 줄 → 초안 PR 제목 → 고치는 파일 → 없음. 오프라인은 offlineSince로 따로 간다.
+      const line: StatusLine | null =
+        text !== null && at !== null
+          ? { source: "agent", text, at: new Date(at).toISOString() }
+          : draft !== undefined
+            ? { source: "pull", text: draft }
+            : changes !== null
+              ? { source: "files", text: changes }
+              : null;
+      const offlineSince = since === null ? null : new Date(since).toISOString();
+      return { login, branch, base, share, files, line, offlineSince };
+    });
+  };
+
+  /** 러너에 마지막으로 보낸 상황. 같은 것을 다시 보내지 않는다. */
+  let sent: string | undefined;
+  /**
+   * 상황(작업 전부)이 달라졌으면 붙어 있는 러너 모두에게 보낸다. 그대로면 `to`(막 붙은 러너)에게만 보낸다.
+   * 상황을 바꾸는 곳(관측, 상태 한 줄, 오프라인, 멤버 자격, GitHub 따라가기)마다 부른다.
+   * 닫히는 중인 연결(내보낸 멤버의 러너)에는 보내지 않는다.
+   */
+  // ponytail: 달라질 때마다 작업 전부(내용 포함)를 러너마다 보낸다. 멤버와 큰 작업이 많아지면 작업마다의 차이만 보낸다.
+  const shareSituation = (to?: WSContext) => {
+    const works = worksView();
+    const json = JSON.stringify(works);
+    const targets = (json !== sent ? [...runners.keys()] : to ? [to] : []).filter(
+      (socket) => socket.readyState === 1, // OPEN
+    );
+    sent = json;
+    if (targets.length === 0) return;
+    const frame = encode(serverToRunner, "situation", { works });
+    for (const socket of targets) socket.send(frame);
+  };
+
   const refuse = (socket: WSContext, error: ContractError, re?: string) => {
     socket.send(encode(serverToRunner, "error", error, re));
     socket.close(1008, error.code);
@@ -227,6 +286,7 @@ export async function startServer(options: {
       login,
       polled.token,
     );
+    shareSituation(); // 빠졌다 돌아온 멤버의 작업이 다시 보인다
     return { session, login };
   });
 
@@ -248,44 +308,7 @@ export async function startServer(options: {
     };
   });
 
-  mount(app, api.works, () => {
-    // 워크스페이스에서 빠진 사람(세션이 없는 사람)의 작업은 보이지 않는다.
-    const rows = db
-      .prepare(
-        `SELECT w.login, w.branch, w.base, w.share, w.files, l.text, l.at, o.since FROM works w
-         LEFT JOIN lines l ON l.login = w.login AND l.branch = w.branch
-         LEFT JOIN offline o ON o.login = w.login
-         WHERE w.login IN (SELECT login FROM sessions) ORDER BY w.login, w.branch`,
-      )
-      .all() as {
-      login: string;
-      branch: string;
-      base: string;
-      share: ShareLevel;
-      files: string;
-      text: string | null;
-      at: number | null;
-      since: number | null;
-    }[];
-    return {
-      works: rows.map(({ login, branch, base, share, text, at, since, ...row }) => {
-        const files: ObservedFile[] = JSON.parse(row.files);
-        const draft = drafts.get(branch);
-        const changes = filesLine(files);
-        // 고르는 순서: 에이전트가 쓴 줄 → 초안 PR 제목 → 고치는 파일 → 없음. 오프라인은 offlineSince로 따로 간다.
-        const line: StatusLine | null =
-          text !== null && at !== null
-            ? { source: "agent", text, at: new Date(at).toISOString() }
-            : draft !== undefined
-              ? { source: "pull", text: draft }
-              : changes !== null
-                ? { source: "files", text: changes }
-                : null;
-        const offlineSince = since === null ? null : new Date(since).toISOString();
-        return { login, branch, base, share, files, line, offlineSince };
-      }),
-    };
-  });
+  mount(app, api.works, () => ({ works: worksView() }));
 
   mount(app, api.setStatus, ({ branch, text }, c) => {
     const at = Date.now();
@@ -295,6 +318,7 @@ export async function startServer(options: {
       text,
       at,
     );
+    shareSituation();
     return { text, at: new Date(at).toISOString() };
   });
 
@@ -362,6 +386,7 @@ export async function startServer(options: {
           runners.set(socket, { login, hash: hash(session) });
           db.prepare("DELETE FROM offline WHERE login = ?").run(login);
           socket.send(encode(serverToRunner, "welcome", { login, repo }, message.id));
+          shareSituation(socket);
           return;
         }
         const runner = runners.get(socket);
@@ -370,6 +395,7 @@ export async function startServer(options: {
           refuse(socket, { code: "unauthorized", message: "hello를 먼저 보내라" }, message.id);
         } else if (message.kind === "observation") {
           replaceWorks(runner.login, message.payload.works);
+          shareSituation();
         } else {
           // 문답의 답이나 실패. 그 문답을 보낸 연결에서 온 것만 받는다.
           const ask = message.re === undefined ? undefined : asks.get(message.re);
@@ -392,6 +418,7 @@ export async function startServer(options: {
             runner.login,
             Date.now(),
           );
+          shareSituation();
         }
         // 떨어진 러너의 답은 오지 않는다. 기다리던 문답을 실패로 돌려준다.
         for (const ask of asks.values()) {
@@ -444,6 +471,7 @@ export async function startServer(options: {
             message: `${row.login}는 이제 ${repo}에 push 권한이 없어 워크스페이스에서 빠졌다`,
           });
         }
+        shareSituation();
       }
     } catch (error) {
       console.error("push 권한을 다시 확인하지 못했다:", error);
@@ -493,6 +521,7 @@ export async function startServer(options: {
           db.prepare("DELETE FROM lines WHERE branch = ? AND at < ?").run(branch, merged);
       }
       drafts = next;
+      shareSituation();
     } catch (error) {
       console.error("상태 한 줄을 따라가지 못했다:", error);
     } finally {

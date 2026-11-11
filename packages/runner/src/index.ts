@@ -19,6 +19,8 @@ import {
   runnerToServer,
   type ShareLevel,
   serverToRunner,
+  type Work,
+  type WorkView,
 } from "@omagari/contract";
 import { observe } from "./observe.ts";
 
@@ -115,6 +117,28 @@ export async function runnerPaths(folder: string) {
   };
 }
 
+/**
+ * 같은 기기에서 `folder`의 레포에 짝지어진 러너에 요청 하나를 보내고 답 하나를 받는다. CLI와 훅이 쓴다.
+ * 러너가 꺼져 있으면 던지고, 러너가 답하지 못했으면 그 오류를 `ContractFailure`로 던진다.
+ */
+export async function callRunner<K extends keyof typeof cliToRunner & string>(
+  folder: string,
+  kind: K,
+  payload: Parameters<typeof encode<typeof cliToRunner, K>>[2],
+) {
+  const { socket } = await runnerPaths(folder);
+  const connection = connectLocal(socket);
+  connection.end(encode(cliToRunner, kind, payload));
+  const frame = await text(connection).catch(() => {
+    throw new Error(`러너가 꺼져 있다: ${socket}`);
+  });
+  const decoded = decode(runnerToCli, frame);
+  if ("error" in decoded) throw new Error(`러너의 답을 읽지 못했다: ${decoded.error.message}`);
+  const { message } = decoded;
+  if (message.kind === "error") throw new ContractFailure(message.payload);
+  return message;
+}
+
 /** GitHub 원격 URL에서 `owner/name`을 읽는다: https, ssh, scp 꼴(git@github.com:owner/name). */
 const GITHUB_REMOTE = /(?:@|\/\/)github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/i;
 
@@ -170,6 +194,12 @@ export async function startRunner(options: {
   let socket: WebSocket | undefined;
   /** welcome을 받은 연결. 관측은 여기로만 보낸다. */
   let live: WebSocket | undefined;
+  /** welcome이 알려 준 이 러너의 멤버. */
+  let login: string | undefined;
+  /** 서버에서 받아 둔 지금 상황. 훅이 서버 대신 이것을 읽는다. 끊기면 지우지 않고 끊긴 시각을 단다. */
+  let situation: { works: WorkView[]; disconnectedAt: string | null } | undefined;
+  /** 마지막으로 관측한 내 작업. 공유 수준과 상관없이 바뀐 파일의 경로가 있다. */
+  let mine: Work[] = [];
 
   async function connect() {
     const current = new WebSocket(url);
@@ -197,7 +227,10 @@ export async function startRunner(options: {
       }
       const { message } = decoded;
       if (message.kind === "welcome") {
+        login = message.payload.login;
         welcomed.resolve(message.payload);
+      } else if (message.kind === "situation") {
+        situation = { works: message.payload.works, disconnectedAt: null };
       } else if (message.kind === "ask") {
         // 답은 문답이 온 연결로 보낸다. 그사이 끊겼으면 서버는 이미 실패로 돌려줬고, 보낸 것은 버려진다.
         void reply(message.payload.message).then(({ kind, payload }) =>
@@ -218,6 +251,7 @@ export async function startRunner(options: {
       live = current;
       current.addEventListener("close", ({ code }) => {
         if (live === current) live = undefined;
+        if (situation) situation.disconnectedAt ??= new Date().toISOString();
         if (code === 1008) end(refusal ?? new Error("서버가 러너를 거절했다"));
         else void reconnect();
       });
@@ -306,8 +340,22 @@ export async function startRunner(options: {
   async function replyToCli(frame: string) {
     const decoded = decode(cliToRunner, frame);
     if ("error" in decoded) return encode(runnerToCli, "error", decoded.error, decoded.re);
-    const { kind, payload } = await reply(decoded.message.payload.message);
-    return encode(runnerToCli, kind, payload, decoded.message.id);
+    const { message } = decoded;
+    if (message.kind === "situation") {
+      // 문답의 줄에 서지 않고 받아 둔 것으로 바로 답한다. 서버는 부르지 않는다.
+      // ponytail: 받아 둔 것을 내용까지 통째로 준다. 편집마다 부르는 훅(#14)에 무거우면 요청에 경로를 받아 거른다.
+      if (!situation || !login) {
+        return encode(
+          runnerToCli,
+          "error",
+          { code: "runner_offline", message: "러너가 아직 서버에서 상황을 받지 못했다" },
+          message.id,
+        );
+      }
+      return encode(runnerToCli, "situation", { login, ...situation, mine }, message.id);
+    }
+    const { kind, payload } = await reply(message.payload.message);
+    return encode(runnerToCli, kind, payload, message.id);
   }
 
   // 같은 레포(워크트리 포함)에 러너는 하나다. 소켓에 누가 답하면 이미 켜진 러너가 있다.
@@ -365,8 +413,10 @@ export async function startRunner(options: {
       let problems: string[];
       try {
         const observed = await observe(folder, remote, options.share ?? "full");
-        const { works } = observed;
+        mine = observed.works;
         problems = observed.problems;
+        // intent는 바뀐 파일의 경로도 내보내지 않는다. 경로는 이 기기의 훅만 쓴다.
+        const works = mine.map((work) => (work.share === "intent" ? { ...work, files: [] } : work));
         const json = JSON.stringify(works);
         if (live && (live !== sent.to || json !== sent.works)) {
           const frame = encode(runnerToServer, "observation", { works });
