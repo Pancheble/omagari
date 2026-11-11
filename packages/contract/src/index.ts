@@ -318,9 +318,35 @@ export const serverToRunner = {
 
 /**
  * 러너가 붙는 WebSocket 경로. 서버는 hello를 거절하면 `error`를 보낸 뒤 1008로 닫는다.
+ * 계약 버전이 달라 거절할 때의 `error`는 `VersionMismatch` 꼴이다.
  * 1008로 닫힌 러너는 다시 붙지 않는다. 그 밖의 이유로 끊기면 다시 붙는다.
  */
 export const RUNNER_SOCKET = "/api/runner";
+
+/**
+ * 계약 버전이 달라 거절할 때 서버가 보내는 `error`(봉투의 `v`는 서버의 계약 버전이다). ADR-0019.
+ * 계약 버전이 다른 러너가 읽으므로 `CONTRACT_VERSION`을 올려도 이 꼴은 바꾸지 않는다. 키는 더하기만 하고,
+ * 더한 키를 앞의 러너가 읽을 수 있게 이것만은 모르는 키를 받는다.
+ * `version`은 서버의 버전(`git describe --tags`), `contract`는 서버의 계약 버전이다.
+ */
+export const VersionMismatch = z.object({
+  kind: z.literal("error"),
+  payload: z.object({
+    code: z.literal("version_mismatch"),
+    message: z.string(),
+    version: z.string(),
+    contract: z.number(),
+  }),
+});
+
+/** `VersionMismatch` 프레임을 만든다. `encode`는 이 계약의 `error`(모르는 키가 없다)만 만들어 따로 둔다. */
+export function encodeVersionMismatch(message: string, version: string, re?: string) {
+  const refusal: z.infer<typeof VersionMismatch> = {
+    kind: "error",
+    payload: { code: "version_mismatch", message, version, contract: CONTRACT_VERSION },
+  };
+  return JSON.stringify({ v: CONTRACT_VERSION, id: crypto.randomUUID(), re, ...refusal });
+}
 
 /** HTTP 본문 하나의 상한. 서버는 넘는 것을 읽지 않는다. 더 큰 것이 필요한 이슈가 알고 올린다. */
 export const MAX_MESSAGE_BYTES = 1024 * 1024;

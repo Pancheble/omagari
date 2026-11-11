@@ -11,6 +11,8 @@ import { promisify } from "node:util";
 import {
   type Channel,
   type ChannelMessage,
+  CONTRACT_VERSION,
+  type ContractError,
   ContractFailure,
   cliToRunner,
   decode,
@@ -24,9 +26,11 @@ import {
   type ShareLevel,
   type Source,
   serverToRunner,
+  VersionMismatch,
   type Work,
   type WorkView,
 } from "@omagari/contract";
+import { checkoutVersion } from "@omagari/contract/version";
 import { nearby } from "./nearby.ts";
 import { observe } from "./observe.ts";
 
@@ -292,6 +296,22 @@ export async function readRepo(folder: string) {
 }
 
 /**
+ * 서버가 계약 버전이 달라 거절했으면(`VersionMismatch`) 할 일을 담은 오류. ADR-0019.
+ * 서버의 계약이 더 새로우면 이 기기를, 더 오래됐으면 서버를 올린다. 그 꼴이 아닌 프레임이면 없다.
+ */
+function versionAdvice(frame: unknown): ContractError | undefined {
+  const refusal = VersionMismatch.safeParse(JSON.parse(String(frame)));
+  if (!refusal.success) return undefined;
+  const server = refusal.data.payload;
+  const versions = `서버는 ${server.version}, 이 기기는 ${checkoutVersion()}이에요.`;
+  const todo =
+    server.contract > CONTRACT_VERSION
+      ? "`main`을 받고(`git pull`, `npm ci`) 러너를 다시 켜세요"
+      : "서버가 더 오래됐어요. 서버를 올려야 해요(서버를 띄운 사람에게 알리세요)";
+  return { code: "version_mismatch", message: `${versions} ${todo}` };
+}
+
+/**
  * 러너를 켠다. 폴더의 레포를 읽고, 서버에 붙어 hello에 welcome을 받으면 돌아온다.
  * 못 받으면 연결을 닫고 던진다. 켜진 뒤 끊기면 다시 붙고, 서버가 거절하면(1008) 멈춘다.
  */
@@ -359,7 +379,7 @@ export async function startRunner(options: {
       if ("error" in decoded) {
         current.send(encode(runnerToServer, "error", decoded.error, decoded.re));
         if (decoded.error.code === "version_mismatch") {
-          welcomed.reject(new ContractFailure(decoded.error));
+          welcomed.reject(new ContractFailure(versionAdvice(data) ?? decoded.error));
           // 내장 WebSocket의 close()는 코드 1000과 3000~4999만 받는다. 코드 없이 닫는다.
           current.close();
         }
