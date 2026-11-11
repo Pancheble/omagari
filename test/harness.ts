@@ -1,6 +1,7 @@
 // 테스트 경계의 틀. 실제 서버와 실제 러너를 임시 Git 레포 위에 띄운다.
 // 조작과 확인은 서버 API(`call`)와 CLI·훅 실행 파일의 입출력으로만 한다.
 // 가짜는 바깥 두 곳에만 꽂는다: GitHub(서버), 에이전트 실행기(러너).
+import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
@@ -8,8 +9,16 @@ import { devNull, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import type { ShareLevel } from "@omagari/contract";
-import { api, call } from "@omagari/contract";
+import type { Message, ShareLevel } from "@omagari/contract";
+import {
+  api,
+  call,
+  decode,
+  encode,
+  LIVE_SOCKET,
+  serverToWeb,
+  webToServer,
+} from "@omagari/contract";
 import { type Executor, startRunner } from "@omagari/runner";
 import { type GitHub, type Pull, startServer } from "@omagari/server";
 
@@ -321,6 +330,39 @@ export async function startWorld(
       ),
     /** 멤버 `as`의 눈으로 본 작업마다의 관측. */
     works: async (as: { url: string; session: string }) => (await call(as, api.works)).works,
+    /**
+     * 웹이 하듯 `as`의 세션으로 실시간 연결을 열고 hello를 보낸다. 서버가 처음 보낸 것(welcome이나 거절)을 받으면 돌려준다.
+     * `after`를 주면 그 번호 뒤의 메시지를 이어 받는다. 받은 것은 모두 `received`에 쌓인다.
+     */
+    async live(as: { session: string }, after?: number) {
+      const url = new URL(LIVE_SOCKET, server.url);
+      url.protocol = "ws:";
+      const socket = new WebSocket(url);
+      const received: Message<typeof serverToWeb>[] = [];
+      const closed = Promise.withResolvers<number>();
+      socket.addEventListener("open", () =>
+        socket.send(encode(webToServer, "hello", { session: as.session, after })),
+      );
+      socket.addEventListener("message", ({ data }) => {
+        const decoded = decode(serverToWeb, data);
+        if ("error" in decoded)
+          throw new Error(`계약과 다른 것을 받았다: ${decoded.error.message}`);
+        received.push(decoded.message);
+      });
+      socket.addEventListener("close", ({ code }) => closed.resolve(code));
+      await eventually(() => assert(received.length > 0 || socket.readyState === WebSocket.CLOSED));
+      return {
+        received,
+        /** 받은 채널 메시지만, 받은 순서대로. */
+        messages: () => received.flatMap((m) => (m.kind === "message" ? [m.payload] : [])),
+        /** 닫힌 코드. 서버가 거절하면 1008이다. */
+        closed: closed.promise,
+        close() {
+          socket.close();
+          return closed.promise;
+        },
+      };
+    },
     /** 서버만 끈다. 러너들은 켜진 채 다시 붙으려 한다. `restartServer`로 다시 띄운다. */
     async stopServer() {
       serverDown = true;
