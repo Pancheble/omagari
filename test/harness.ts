@@ -9,7 +9,7 @@ import { devNull, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import type { Message, ShareLevel } from "@omagari/contract";
+import type { ExecutorId, Message, Qa, ShareLevel } from "@omagari/contract";
 import {
   api,
   call,
@@ -228,13 +228,40 @@ export function fakeExecutor(
   return { executor, calls };
 }
 
+/** 문답마다 `release(message)`로 풀어 줄 때까지 답하지 않는 가짜 실행기. 동시에 돈 턴의 최대 수를 센다. */
+export function gatedExecutor() {
+  const gates = new Map<string, PromiseWithResolvers<string>>();
+  const gate = (message: string) => {
+    if (!gates.has(message)) gates.set(message, Promise.withResolvers());
+    return gates.get(message) as PromiseWithResolvers<string>;
+  };
+  let running = 0;
+  let most = 0;
+  const fake = fakeExecutor(async ({ message }) => {
+    most = Math.max(most, ++running);
+    try {
+      return await gate(message).promise;
+    } finally {
+      running--;
+    }
+  });
+  return {
+    ...fake,
+    release: (message: string) => gate(message).resolve(`답: ${message}`),
+    most: () => most,
+  };
+}
+
 /**
  * 서버 하나, 레포 하나, 그 레포에 push 권한이 있는 `owner`와 owner의 러너 하나.
  * 가짜 실행기를 넘기지 않으면 늘 실패하는 것이 꽂힌다.
  */
 export async function startWorld(
   options: {
+    /** owner 러너의 Claude Code 실행기 */
     executor?: Executor;
+    /** owner 러너의 실행기들. 주면 `executor` 대신 이것을 쓴다. */
+    executors?: Partial<Record<ExecutorId, Executor>>;
     recheckMs?: number;
     heartbeatMs?: number;
     turnTimeoutMs?: number;
@@ -286,7 +313,10 @@ export async function startWorld(
     folder: repo.folder,
     session: owner.session,
     // 넘긴 가짜가 없으면 실제 실행기 대신 늘 실패하는 것을 꽂는다.
-    executor: options.executor ?? (() => Promise.reject(new Error("가짜 실행기를 넘기지 않았다"))),
+    executors: options.executors ?? {
+      "claude-code":
+        options.executor ?? (() => Promise.reject(new Error("가짜 실행기를 넘기지 않았다"))),
+    },
     turnTimeoutMs: options.turnTimeoutMs,
     observeMs: options.observeMs,
     share: options.share,
@@ -334,6 +364,24 @@ export async function startWorld(
           member.agents.find((agent) => agent.state !== "offline")?.state ?? "offline",
         ]),
       ),
+    /** `as`가 채팅 채널을 만들고 그 id를 돌려준다. */
+    channel: async (as: { url: string; session: string }, name = "일반") =>
+      (await call(as, api.createChannel, { name })).channel.id,
+    /** `as`가 채널에서 자기 에이전트(기본은 Claude Code)에게 DM으로 묻는다. 답을 기다리는 문답이 돌아온다. */
+    ask: async (
+      as: { url: string; session: string; login: string },
+      channel: string,
+      message: string,
+      executor: ExecutorId = "claude-code",
+    ) => (await call(as, api.ask, { agent: as.login, executor, channel, message })).qa,
+    /** `as`의 DM에서 문답 `qa`에 답이 오거나 실패할 때까지 기다리고 그 문답을 돌려준다. */
+    settled: (as: { url: string; session: string }, qa: Qa, timeoutMs?: number) =>
+      eventually(async () => {
+        const { qas } = await call(as, api.dms, { channel: qa.channel });
+        const found = qas.find((other) => other.id === qa.id);
+        assert.ok(found && found.answer.state !== "pending", "아직 답을 기다린다");
+        return found;
+      }, timeoutMs),
     /** 멤버 `as`의 눈으로 본 작업마다의 관측. */
     works: async (as: { url: string; session: string }) => (await call(as, api.works)).works,
     /**

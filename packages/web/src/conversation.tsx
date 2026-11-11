@@ -38,9 +38,9 @@ function dayLabel(iso: string) {
   });
 }
 
-const timeOf = (iso: string) =>
+export const timeOf = (iso: string) =>
   new Date(iso).toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit" });
-const fullTime = (iso: string) =>
+export const fullTime = (iso: string) =>
   new Date(iso).toLocaleString("ko-KR", { dateStyle: "long", timeStyle: "short" });
 
 /** 채널 머리 띠의 왼쪽: `# 채널 이름`과 멤버 수. 채널의 멤버는 워크스페이스의 멤버 모두다. */
@@ -78,21 +78,6 @@ export function Conversation({
   const [text, setText] = useState("");
   const [failed, setFailed] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
-  const area = useRef<HTMLTextAreaElement>(null);
-
-  // 입력 칸은 줄이 늘면 커진다. 최대 높이(CSS)를 넘으면 칸 안에서 스크롤한다.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 글이 바뀔 때마다 높이를 다시 잰다
-  useLayoutEffect(() => {
-    const element = area.current;
-    if (!element) return;
-    element.style.height = "auto";
-    element.style.height = `${element.scrollHeight}px`;
-  }, [text]);
-
-  // 채널을 열면 바로 쓸 수 있게 입력 칸에 초점을 둔다. 터치 화면에서는 자판이 갑자기 올라오지 않게 초점을 옮기지 않는다.
-  useEffect(() => {
-    if (matchMedia("(pointer: fine)").matches) area.current?.focus();
-  }, []);
 
   const send = async () => {
     const message = text.trim();
@@ -106,14 +91,6 @@ export function Conversation({
       setFailed(true);
       setText((now) => now || message);
     }
-  };
-
-  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    // 한글을 조합하는 중의 Enter는 글자를 끝내는 것이다. Safari는 그때 isComposing 없이 229를 낸다.
-    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
-    if (event.key !== "Enter" || event.shiftKey) return;
-    event.preventDefault();
-    void send();
   };
 
   return (
@@ -176,29 +153,76 @@ export function Conversation({
         </div>
       )}
       {channel && (
-        <form
-          className="composer"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void send();
-          }}
-        >
-          <textarea
-            ref={area}
-            rows={1}
-            value={text}
-            onChange={(event) => setText(event.target.value)}
-            onKeyDown={onKeyDown}
-            maxLength={MAX_MESSAGE_CHARS}
-            placeholder={`#${channel.name}에 메시지 보내기`}
-            aria-label={`#${channel.name}에 메시지 보내기`}
-          />
-          <button type="submit" className="send-button" aria-label="보내기" disabled={!text.trim()}>
-            <ArrowUp size={18} aria-hidden />
-          </button>
-        </form>
+        <Composer
+          label={`#${channel.name}에 메시지 보내기`}
+          value={text}
+          onChange={setText}
+          onSubmit={() => void send()}
+        />
       )}
     </>
+  );
+}
+
+/**
+ * 입력 칸(app-composer). 줄이 늘면 커지고 최대 높이(CSS)를 넘으면 칸 안에서 스크롤한다. Enter는 보내기, Shift+Enter는 줄바꿈.
+ * 열리면 바로 쓸 수 있게 초점을 둔다. 터치 화면에서는 자판이 갑자기 올라오지 않게 초점을 옮기지 않는다.
+ */
+export function Composer({
+  label,
+  value,
+  onChange,
+  onSubmit,
+}: {
+  label: string;
+  value: string;
+  onChange: (text: string) => void;
+  onSubmit: () => void;
+}) {
+  const area = useRef<HTMLTextAreaElement>(null);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 글이 바뀔 때마다 높이를 다시 잰다
+  useLayoutEffect(() => {
+    const element = area.current;
+    if (!element) return;
+    element.style.height = "auto";
+    element.style.height = `${element.scrollHeight}px`;
+  }, [value]);
+
+  useEffect(() => {
+    if (matchMedia("(pointer: fine)").matches) area.current?.focus();
+  }, []);
+
+  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    // 한글을 조합하는 중의 Enter는 글자를 끝내는 것이다. Safari는 그때 isComposing 없이 229를 낸다.
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+    if (event.key !== "Enter" || event.shiftKey) return;
+    event.preventDefault();
+    onSubmit();
+  };
+
+  return (
+    <form
+      className="composer"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSubmit();
+      }}
+    >
+      <textarea
+        ref={area}
+        rows={1}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={onKeyDown}
+        maxLength={MAX_MESSAGE_CHARS}
+        placeholder={label}
+        aria-label={label}
+      />
+      <button type="submit" className="send-button" aria-label="보내기" disabled={!value.trim()}>
+        <ArrowUp size={18} aria-hidden />
+      </button>
+    </form>
   );
 }
 
@@ -228,7 +252,7 @@ function Message({ message, grouped }: { message: ChannelMessage; grouped: boole
   );
 }
 
-const SkeletonRow = () => (
+export const SkeletonRow = () => (
   <div className="skeleton-row" aria-hidden>
     <span className="bone circle" />
     <span className="bones">
