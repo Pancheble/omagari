@@ -19,7 +19,7 @@ PRD(#3)는 "훅과 스킬은 명령 하나로 깐다. 방법은 이슈에서 정
 ## Consequences
 
 - 훅 파일과 Node의 절대 경로를 쓰므로 레포를 옮기거나 Node를 바꾸면 `omagari install`을 다시 돌려야 한다.
-- 스킬이 부르는 `omagari`는 PATH에 있어야 한다. 러너, CLI, 훅을 기기에 배포하는 방식(ADR-0014)과 함께 정한다.
+- 스킬이 부르는 `omagari`는 PATH에 있어야 한다. 러너, CLI, 훅을 기기에 배포하는 방식(ADR-0014)과 함께 정한다. 1단계는 레포를 클론해 `main`에서 돌린다(2026-11-12, ADR-0019).
 - 깐 것을 지우는 명령은 아직 없다. 사용자 설정에서 `hooks/src/main.ts' claude-code`(Codex는 `' codex`)로 끝나는 훅과 `skills/omagari-status`를 지우면 된다.
 - Codex(2026-11-11, 이슈 #16)는 `$CODEX_HOME`(기본 `~/.codex`)의 `hooks.json`에 두 훅을, `skills/omagari-status/`에 같은 스킬을 둔다. `hooks.json`은 Claude Code의 설정과 같은 꼴이라 같은 병합을 쓴다. matcher는 정규식이고, 편집 전 훅은 Codex의 파일 편집 도구 `apply_patch`에만 건다(`^apply_patch$`). 훅은 패치의 파일 머리 줄(`*** Add/Update/Delete File:`, `*** Move to:`)에서 고칠 파일을 모두 읽는다([Codex hooks](https://learn.chatgpt.com/docs/hooks)). 스킬 자리는 Codex의 skill-installer가 까는 `$CODEX_HOME/skills`를 따랐다. 문서의 사용자 자리 `~/.agents/skills`도 Codex가 읽는다([Codex skills](https://learn.chatgpt.com/docs/build-skills)).
 - Codex는 사용자가 `/hooks`에서 훅을 신뢰해야 돌린다. 신뢰는 훅의 해시에 걸려 Node나 레포를 옮겨 다시 깔면 다시 신뢰해야 한다. `omagari install`이 그렇게 알린다.
