@@ -13,6 +13,7 @@ import type {
   ChannelMessage,
   ExecutorId,
   Message,
+  ModelPick,
   PresenceDuration,
   Qa,
   ShareLevel,
@@ -33,6 +34,13 @@ const executable = (path: string) => fileURLToPath(new URL(path, import.meta.url
 const CLI = executable("../packages/cli/src/main.ts");
 const HOOK = executable("../packages/hooks/src/main.ts");
 const FAKE_CODEX = executable("./fake-codex.ts");
+const FAKE_CLAUDE = executable("./fake-claude.ts");
+
+/** `bin` 폴더에 `name` 명령을 둔다. 부르면 가짜 CLI 스크립트(`script`)가 돈다. */
+const shim = (bin: string, name: string, script: string) =>
+  writeFile(join(bin, name), `#!/bin/sh\nexec '${process.execPath}' '${script}' "$@"\n`, {
+    mode: 0o755,
+  });
 
 // 러너와 CLI가 부르는 Git도 기기의 Git 설정(전역 gitignore 등)을 읽지 않는다.
 process.env.GIT_CONFIG_GLOBAL = devNull;
@@ -267,20 +275,21 @@ export function gatedExecutor() {
 }
 
 /**
- * 가짜 Codex CLI(`test/fake-codex.ts`)를 이 테스트 파일의 PATH 맨 앞에 둔다. 테스트 파일마다 프로세스가 따로라 다른 파일은 모른다.
- * 러너의 실제 `codex` 실행기와 CLI가 띄운 러너가 이것을 부른다. `calls()`는 `codex exec`가 받은 인자, 입력, 작업 폴더다.
+ * 가짜 CLI(`script`)를 `name` 명령으로 이 테스트 파일의 PATH 맨 앞에 둔다. 테스트 파일마다 프로세스가 따로라 다른 파일은 모른다.
+ * 가짜는 한 턴마다 받은 인자, 입력, 작업 폴더를 `callsEnv`가 가리키는 파일에 적는다. `calls()`가 그것이다.
  */
-export async function fakeCodex(t: { after: (fn: () => Promise<void>) => void }) {
-  const bin = await realpath(await mkdtemp(join(tmpdir(), "omagari-codex-")));
+async function fakeCli(
+  t: { after: (fn: () => Promise<void>) => void },
+  name: string,
+  script: string,
+  callsEnv: string,
+) {
+  const bin = await realpath(await mkdtemp(join(tmpdir(), `omagari-${name}-`)));
   t.after(() => rm(bin, { recursive: true, force: true }));
-  await writeFile(
-    join(bin, "codex"),
-    `#!/bin/sh\nexec '${process.execPath}' '${FAKE_CODEX}' "$@"\n`,
-    { mode: 0o755 },
-  );
+  await shim(bin, name, script);
   const calls = join(bin, "calls.jsonl");
   process.env.PATH = `${bin}${delimiter}${process.env.PATH}`;
-  process.env.FAKE_CODEX_CALLS = calls;
+  process.env[callsEnv] = calls;
   return {
     calls: async (): Promise<{ args: string[]; input: string; cwd: string }[]> =>
       (await readFile(calls, "utf8").catch(() => ""))
@@ -289,6 +298,20 @@ export async function fakeCodex(t: { after: (fn: () => Promise<void>) => void })
         .map((line) => JSON.parse(line)),
   };
 }
+
+/**
+ * 가짜 Codex CLI(`test/fake-codex.ts`)를 PATH 맨 앞에 둔다. 러너의 실제 `codex` 실행기와 CLI가 띄운 러너가 이것을 부른다.
+ * `calls()`는 `codex exec`가 받은 인자, 입력, 작업 폴더다.
+ */
+export const fakeCodex = (t: { after: (fn: () => Promise<void>) => void }) =>
+  fakeCli(t, "codex", FAKE_CODEX, "FAKE_CODEX_CALLS");
+
+/**
+ * 가짜 Claude Code CLI(`test/fake-claude.ts`)를 PATH 맨 앞에 둔다. 러너의 실제 `claudeCode` 실행기가 이것을 부른다.
+ * `calls()`는 한 턴(`claude -p`)이 받은 인자, 입력, 작업 폴더다. 고를 거리를 묻는 것은 적지 않는다.
+ */
+export const fakeClaude = (t: { after: (fn: () => Promise<void>) => void }) =>
+  fakeCli(t, "claude", FAKE_CLAUDE, "FAKE_CLAUDE_CALLS");
 
 /**
  * 서버 하나, 레포 하나, 그 레포에 push 권한이 있는 `owner`와 owner의 러너 하나.
@@ -365,7 +388,12 @@ export async function startWorld(
   });
   // CLI가 깔거나 읽는 Claude Code와 Codex의 사용자 설정도 임시 폴더에 둔다. 테스트가 이 기기의 ~/.claude, ~/.codex를 건드리지 않는다.
   // CLI로 켠 러너도 이 Codex 설정을 읽어, 로그인이 없으니 Codex를 붙이지 않는다.
+  // CLI로 켠 러너는 실제 Claude Code 실행기를 쓰고 켤 때 고를 거리를 묻는다. 이 기기의 claude 대신 가짜를 부르게 PATH 앞에 둔다.
+  const bin = join(data, "bin");
+  await mkdir(bin);
+  await shim(bin, "claude", FAKE_CLAUDE);
   const cliEnv = () => ({
+    PATH: `${bin}${delimiter}${process.env.PATH}`,
     OMAGARI_SERVER: server.url,
     XDG_CONFIG_HOME: join(data, "config"),
     CLAUDE_CONFIG_DIR: join(data, "claude"),
@@ -409,13 +437,17 @@ export async function startWorld(
     /** `as`가 채팅 채널을 만들고 그 id를 돌려준다. */
     channel: async (as: { url: string; session: string }, name = "일반") =>
       (await call(as, api.createChannel, { name })).channel.id,
-    /** `as`가 채널에서 자기 에이전트(기본은 Claude Code)에게 DM으로 묻는다. 답을 기다리는 문답이 돌아온다. */
+    /**
+     * `as`가 채널에서 자기 에이전트(기본은 Claude Code)에게 DM으로 묻는다. 답을 기다리는 문답이 돌아온다.
+     * `pick`은 고른 모델과 effort다. 주지 않으면 "기본"이다.
+     */
     ask: async (
       as: { url: string; session: string; login: string },
       channel: string,
       message: string,
       executor: ExecutorId = "claude-code",
-    ) => (await call(as, api.ask, { agent: as.login, executor, channel, message })).qa,
+      pick: ModelPick = {},
+    ) => (await call(as, api.ask, { agent: as.login, executor, channel, message, ...pick })).qa,
     /** `as`의 DM에서 문답 `qa`에 답이 오거나 실패할 때까지 기다리고 그 문답을 돌려준다. */
     settled: (as: { url: string; session: string }, qa: Qa, timeoutMs?: number) =>
       eventually(async () => {

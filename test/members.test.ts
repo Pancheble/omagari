@@ -3,6 +3,9 @@ import { test } from "node:test";
 import { api, call } from "@omagari/contract";
 import { eventually, fakeExecutor, place, startWorld, writer } from "./harness.ts";
 
+/** 고를 거리를 알리지 않는 실행기(가짜)의 것. 고를 거리는 model.test가 본다. */
+const none = { models: [], efforts: [] };
+
 test("멤버 목록에 사람마다 이름과 실행기마다의 에이전트, 작업마다 상태 한 줄이 보이고, 러너가 떨어지면 에이전트는 오프라인, 작업은 떨어진 시각 기준으로 남는다", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
@@ -56,7 +59,7 @@ test("멤버 목록에 사람마다 이름과 실행기마다의 에이전트, �
     name: "김지은",
     presence: "offline",
     message: null,
-    agents: [{ executor: "claude-code", state: "online" }],
+    agents: [{ executor: "claude-code", state: "online", choices: none }],
     offlineSince: null,
     works: [
       {
@@ -80,7 +83,7 @@ test("멤버 목록에 사람마다 이름과 실행기마다의 에이전트, �
     return view;
   });
   assert.ok(Date.parse(offline?.offlineSince as string) >= stopped);
-  assert.deepEqual(offline?.agents, [{ executor: "claude-code", state: "offline" }]);
+  assert.deepEqual(offline?.agents, [{ executor: "claude-code", state: "offline", choices: none }]);
   assert.deepEqual(
     offline?.works.map((work) => [work.branch, work.line?.text]),
     [
@@ -92,7 +95,9 @@ test("멤버 목록에 사람마다 이름과 실행기마다의 에이전트, �
   // 서버가 다시 떠도 에이전트는 오프라인으로 남는다.
   await world.restartServer();
   await eventually(async () =>
-    assert.deepEqual((await aliceOf())?.agents, [{ executor: "claude-code", state: "offline" }]),
+    assert.deepEqual((await aliceOf())?.agents, [
+      { executor: "claude-code", state: "offline", choices: none },
+    ]),
   );
 });
 
@@ -109,7 +114,9 @@ test("웹은 실시간 연결에서 멤버 목록을 바로 받고, 작업과 �
   const live = await world.live(alice);
   const owner = () => live.members().find((member) => member.login === "owner");
   await eventually(() =>
-    assert.deepEqual(owner()?.agents, [{ executor: "claude-code", state: "online" }]),
+    assert.deepEqual(owner()?.agents, [
+      { executor: "claude-code", state: "online", choices: none },
+    ]),
   );
 
   await world.repo.git("switch", "--create", "payment");

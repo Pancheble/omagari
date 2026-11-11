@@ -234,6 +234,7 @@ export function Composer({
   before,
   menu,
   textarea,
+  tools,
 }: {
   label: string;
   value: string;
@@ -247,6 +248,8 @@ export function Composer({
   menu?: ReactNode;
   /** 입력 칸에 더할 속성. `onKeyDown`은 먼저 불리고, 막으면(preventDefault) 보내기와 줄바꿈을 하지 않는다. */
   textarea?: ComponentProps<"textarea">;
+  /** 글 아래 줄 왼쪽에 둘 것(DM의 모델·effort 칩). 있으면 입력 칸이 두 줄이 되고 보내기 버튼은 아래 줄 오른쪽 끝에 선다. */
+  tools?: ReactNode;
 }) {
   const own = useRef<HTMLTextAreaElement>(null);
   const area = given ?? own;
@@ -276,7 +279,7 @@ export function Composer({
 
   return (
     <form
-      className="composer"
+      className={tools ? "composer stacked" : "composer"}
       onSubmit={(event) => {
         event.preventDefault();
         onSubmit();
@@ -295,6 +298,7 @@ export function Composer({
         placeholder={label}
         aria-label={label}
       />
+      {tools && <div className="composer-tools">{tools}</div>}
       <button type="submit" className="send-button" aria-label="보내기" disabled={!value.trim()}>
         <ArrowUp size={18} aria-hidden />
       </button>

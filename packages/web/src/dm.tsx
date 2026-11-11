@@ -1,10 +1,12 @@
 import {
   type Channel,
   type ChannelMessage,
+  type Choices,
   ContractFailure,
   EXECUTOR_NAMES,
   type ExecutorId,
   type MemberView,
+  type ModelPick,
   type Qa,
 } from "@omagari/contract";
 import { ChevronDown } from "lucide-react";
@@ -18,6 +20,61 @@ import { RightPanel } from "./workspace.tsx";
 type Agent = MemberView["agents"][number];
 /** 채널 하나의 내 DM: 불러온 문답(오래된 것부터), 불러오는 중, 또는 불러오지 못함. */
 export type Dm = Qa[] | "loading" | "error";
+/** 에이전트마다 기억해 둔 모델과 effort. */
+export type Picks = Partial<Record<ExecutorId, ModelPick>>;
+
+/**
+ * 기억해 둔 값 가운데 지금 고를 거리에 있는 것만 남긴다. 없어진 모델이나, 고른 모델(없으면 "기본")에 없는 effort는 "기본"으로 본다.
+ * 입력 칸의 칩과 보내는 질문이 같은 것을 쓴다.
+ */
+export function chosen(choices: Choices | undefined, pick: ModelPick | undefined): ModelPick {
+  const model = choices?.models.find((m) => m.id === pick?.model);
+  const efforts = (model ?? choices)?.efforts ?? [];
+  const effort = efforts.find((e) => e === pick?.effort);
+  return { ...(model && { model: model.id }), ...(effort && { effort }) };
+}
+
+/**
+ * 버튼 하나와 그 메뉴(WAI-ARIA menu)의 여닫기. 열리면 고른 줄에 초점을 두고, 바깥을 누르거나 Tab으로 나가면 닫힌다.
+ * 위아래 화살표로 줄을 옮기고, Esc는 메뉴만 닫고 버튼으로 돌아간다. DM 칸 머리와 입력 칸의 칩이 쓴다.
+ */
+function useMenu() {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLDivElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    wrap.current?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus();
+    const outside = (event: PointerEvent) => {
+      if (!wrap.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", outside);
+    return () => document.removeEventListener("pointerdown", outside);
+  }, [open]);
+  const close = () => {
+    setOpen(false);
+    button.current?.focus();
+  };
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (!open) return;
+    const items = [
+      ...(wrap.current?.querySelectorAll<HTMLElement>('[role="menuitemradio"]') ?? []),
+    ];
+    const at = items.indexOf(document.activeElement as HTMLElement);
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      items[(at + step + items.length) % items.length]?.focus();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation(); // 시트(dialog)는 닫지 않는다
+      close();
+    } else if (event.key === "Tab") {
+      setOpen(false);
+    }
+  };
+  return { open, setOpen, close, wrap, button, onKeyDown };
+}
 
 /**
  * 오른쪽 칸의 DM(DESIGN.md "DM 칸"): 머리에 고른 에이전트, 그 에이전트와의 문답, 입력 칸.
@@ -30,6 +87,8 @@ export function DmPanel({
   channel,
   agents,
   dm,
+  picks,
+  onPick,
   onAsk,
   onPost,
   onReload,
@@ -41,6 +100,9 @@ export function DmPanel({
   /** 내 에이전트 전부. 꺼진 것도 온다. */
   agents: Agent[];
   dm?: Dm;
+  /** 에이전트마다 기억해 둔 모델과 effort. 고른 값으로 묻는 것은 `onAsk`를 부른 쪽이 한다. */
+  picks: Picks;
+  onPick: (executor: ExecutorId, pick: ModelPick) => void;
   onAsk: (executor: ExecutorId, question: string) => Promise<void>;
   /** 문답을 채널에 올린다. 질문과 답이 함께 올라간다. */
   onPost: (qa: Qa) => Promise<void>;
@@ -137,6 +199,15 @@ export function DmPanel({
           value={text}
           onChange={setText}
           onSubmit={() => send(selected.executor)}
+          tools={
+            selected.choices.models.length + selected.choices.efforts.length > 0 && (
+              <Chips
+                choices={selected.choices}
+                pick={chosen(selected.choices, picks[selected.executor])}
+                onPick={(pick) => onPick(selected.executor, pick)}
+              />
+            )
+          }
         />
       ) : (
         <div className={qas.length > 0 ? "empty no-agent" : "empty"}>
@@ -163,22 +234,10 @@ function DmHead({
   selected?: Agent;
   onPick: (executor: ExecutorId) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const wrap = useRef<HTMLDivElement>(null);
-  const button = useRef<HTMLButtonElement>(null);
+  const { open, setOpen, close, wrap, button, onKeyDown } = useMenu();
   const menu = useId();
   const many = connected.length > 1;
 
-  // 메뉴 바깥을 누르면 닫힌다. 열리면 고른 줄에 초점을 둔다.
-  useEffect(() => {
-    if (!open) return;
-    wrap.current?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus();
-    const outside = (event: PointerEvent) => {
-      if (!wrap.current?.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener("pointerdown", outside);
-    return () => document.removeEventListener("pointerdown", outside);
-  }, [open]);
   // 고를 것이 하나 이하로 줄면 메뉴를 닫는다.
   if (open && !many) setOpen(false);
 
@@ -198,27 +257,6 @@ function DmHead({
     </>
   );
   if (!many) return <div className="dm-head">{face}</div>;
-
-  // 메뉴(WAI-ARIA menu): 위아래 화살표로 줄을 옮기고, Esc는 메뉴만 닫고 머리로 돌아간다. Tab으로 나가면 닫힌다.
-  const onKeyDown = (event: KeyboardEvent) => {
-    if (!open) return;
-    const items = [
-      ...(wrap.current?.querySelectorAll<HTMLElement>('[role="menuitemradio"]') ?? []),
-    ];
-    const at = items.indexOf(document.activeElement as HTMLElement);
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault();
-      const step = event.key === "ArrowDown" ? 1 : -1;
-      items[(at + step + items.length) % items.length]?.focus();
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation(); // 시트(dialog)는 닫지 않는다
-      setOpen(false);
-      button.current?.focus();
-    } else if (event.key === "Tab") {
-      setOpen(false);
-    }
-  };
 
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: 안에 든 메뉴와 버튼의 키를 한곳에서 받는다
@@ -247,8 +285,7 @@ function DmHead({
               tabIndex={-1}
               onClick={() => {
                 onPick(agent.executor);
-                setOpen(false);
-                button.current?.focus();
+                close();
               }}
             >
               <Mark agent={agent} aria-hidden />
@@ -256,6 +293,106 @@ function DmHead({
               <span className={agent.state === "answering" ? "agent-state busy" : "agent-state"}>
                 {agent.state === "answering" ? "답하는 중…" : "쉬는 중"}
               </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * DM 입력 칸 아래 줄의 모델 칩과 effort 칩(DESIGN.md "모델과 effort", app-composer-chip). 고를 거리는 그 에이전트의 실행기가 알린 것뿐이다.
+ * 모델을 알리지 않았으면 모델 칩이, 고른 모델(없으면 "기본")의 effort를 알리지 않았으면 effort 칩이 없다.
+ */
+function Chips({
+  choices,
+  pick,
+  onPick,
+}: {
+  choices: Choices;
+  /** 지금 고를 거리에 맞춘 고른 값 */
+  pick: ModelPick;
+  onPick: (pick: ModelPick) => void;
+}) {
+  const model = choices.models.find((m) => m.id === pick.model);
+  const efforts = (model ?? choices).efforts;
+  return (
+    <>
+      {choices.models.length > 0 && (
+        <ChoiceChip
+          name="모델"
+          face={model?.name ?? "기본 모델"}
+          options={choices.models.map((m) => ({ value: m.id, label: m.name }))}
+          value={pick.model}
+          // effort는 그대로 둔다. 새 모델에 없는 값이면 "기본"으로 보이고, 있는 모델로 돌아오면 다시 쓰인다.
+          onPick={(id) => onPick({ ...pick, model: id })}
+        />
+      )}
+      {efforts.length > 0 && (
+        <ChoiceChip
+          name="effort"
+          face={`effort ${pick.effort ?? "기본"}`}
+          options={efforts.map((e) => ({ value: e, label: e }))}
+          value={pick.effort}
+          onPick={(effort) => onPick({ ...pick, effort })}
+        />
+      )}
+    </>
+  );
+}
+
+/** 칩 하나와 그 위에 열리는 메뉴. 맨 위 줄은 "기본"(실행기 자기 설정)이다. */
+function ChoiceChip({
+  name,
+  face,
+  options,
+  value,
+  onPick,
+}: {
+  name: string;
+  face: string;
+  options: { value: string; label: string }[];
+  /** 고른 것. 없으면 "기본"이다. */
+  value?: string;
+  onPick: (value: string | undefined) => void;
+}) {
+  const { open, setOpen, close, wrap, button, onKeyDown } = useMenu();
+  const menu = useId();
+  const rows = [{ value: undefined, label: "기본" }, ...options];
+  return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: 안에 든 메뉴와 버튼의 키를 한곳에서 받는다
+    <div className="chip-picker" ref={wrap} onKeyDown={onKeyDown}>
+      <button
+        ref={button}
+        type="button"
+        className="composer-chip"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? menu : undefined}
+        aria-label={`${name}: ${rows.find((row) => row.value === value)?.label ?? "기본"}`}
+        onClick={() => setOpen(!open)}
+      >
+        {face}
+        <ChevronDown size={12} aria-hidden />
+      </button>
+      {open && (
+        <div className="menu chip-menu" id={menu} role="menu" aria-label={name}>
+          {rows.map((row) => (
+            <button
+              key={row.value ?? ""}
+              type="button"
+              role="menuitemradio"
+              aria-checked={row.value === value}
+              className="menu-item"
+              tabIndex={-1}
+              onClick={() => {
+                onPick(row.value);
+                close();
+              }}
+            >
+              <span>{row.label}</span>
+              {row.value === undefined && <span className="menu-note">설정값</span>}
             </button>
           ))}
         </div>
@@ -339,7 +476,7 @@ function QaCard({
   onFold,
 }: {
   qa: Qa;
-  agent?: Agent;
+  agent?: Pick<Agent, "executor" | "state">;
   posted?: QaMessage;
   onRetry?: () => void;
   onPost?: () => Promise<void>;
@@ -427,6 +564,11 @@ function QaCard({
                 {answer.source.branch ?? "브랜치 아님"} · {answer.source.commit.slice(0, 7)}
               </span>
               {answer.source.dirty && <span className="badge warning">작업 중 변경 포함</span>}
+              {answer.model && (
+                <span className="badge outline" title="답한 모델">
+                  {answer.effort ? `${answer.model} · ${answer.effort}` : answer.model}
+                </span>
+              )}
             </>
           )}
           {canPost && (
