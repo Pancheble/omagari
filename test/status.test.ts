@@ -4,8 +4,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { api, call } from "@omagari/contract";
-import { startRunner } from "@omagari/runner";
-import { eventually, startWorld, tempRepo } from "./harness.ts";
+import { eventually, startWorld } from "./harness.ts";
 
 /** 관측과 GitHub 읽기를 짧게 돈다. 기본값(3초, 1분)이면 단계마다 오래 기다린다. */
 const FAST = { observeMs: 50, followMs: 50 };
@@ -26,29 +25,6 @@ const write = async (folder: string, path: string, content = `${path}\n`) => {
   await mkdir(dirname(join(folder, path)), { recursive: true });
   await writeFile(join(folder, path), content);
 };
-
-/** 멤버의 레포 폴더 하나와 그 폴더에서 켠 러너. 멤버마다 기기가 따로다. */
-async function desk(world: World, member: Member) {
-  const repo = await tempRepo();
-  const options = {
-    serverUrl: world.server.url,
-    folder: repo.folder,
-    session: member.session,
-    observeMs: 50,
-  };
-  let runner = await startRunner(options);
-  return {
-    ...repo,
-    stop: () => runner.stop(),
-    async start() {
-      runner = await startRunner(options);
-    },
-    async remove() {
-      await runner.stop();
-      await repo.remove();
-    },
-  };
-}
 
 test("omagari status set으로 쓴 줄이 쓴 시각과 함께 그 작업의 상태 한 줄로 보이고, 같은 브랜치에 다시 쓰면 나중 것이 남는다", async (t) => {
   const world = await startWorld(FAST);
@@ -214,7 +190,7 @@ test("omagari status로 멤버, 작업, 상태 한 줄, 바뀐 파일을 본다.
   await rm(join(folder, "gone.ts"));
   await world.cli("status", "set", "결제 붙이는 중");
 
-  const desk_ = await desk(world, alice);
+  const desk_ = await world.desk(alice);
   t.after(desk_.remove);
   await desk_.git("switch", "--create", "refund");
   await write(desk_.folder, "refund.ts");
@@ -249,7 +225,7 @@ test("오프라인이 되면 마지막 관측과 상태 한 줄이 떨어진 시
   t.after(world.stop);
   world.github.grant("alice");
   const alice = await world.login("alice");
-  const desk_ = await desk(world, alice);
+  const desk_ = await world.desk(alice);
   t.after(desk_.remove);
   await desk_.git("switch", "--create", "refund");
   await write(desk_.folder, "refund.ts");
@@ -286,7 +262,7 @@ test("7일 동안 오프라인이면 그 멤버의 관측과 상태 한 줄이 �
   t.after(world.stop);
   world.github.grant("alice");
   const alice = await world.login("alice");
-  const desk_ = await desk(world, alice);
+  const desk_ = await world.desk(alice);
   t.after(desk_.remove);
   await desk_.git("switch", "--create", "refund");
   await write(desk_.folder, "refund.ts");

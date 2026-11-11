@@ -1,24 +1,13 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { connect } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { text } from "node:stream/consumers";
 import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs, promisify } from "node:util";
+import { ago, api, CONTRACT_VERSION, ContractFailure, call, ShareLevel } from "@omagari/contract";
 import {
-  api,
-  CONTRACT_VERSION,
-  ContractFailure,
-  call,
-  cliToRunner,
-  decode,
-  encode,
-  runnerToCli,
-  ShareLevel,
-} from "@omagari/contract";
-import {
+  callRunner,
   observationNotice,
   type RunRecord,
   readRepo,
@@ -152,16 +141,11 @@ async function runner(chosen: string | undefined) {
 
 /** 이 폴더의 레포에 짝지어진 러너에 묻고 답을 돌려준다. */
 async function ask(message: string) {
-  const { socket } = await runnerPaths(process.cwd());
-  const connection = connect(socket);
-  connection.end(encode(cliToRunner, "ask", { message }));
-  const frame = await text(connection).catch(() => {
-    throw new Error(`러너가 꺼져 있다: ${socket}`);
+  const reply = await callRunner(process.cwd(), "ask", { message }).catch((error) => {
+    if (error instanceof ContractFailure) throw new Error(`러너가 답하지 못했다: ${error.message}`);
+    throw error;
   });
-  const decoded = decode(runnerToCli, frame);
-  if ("error" in decoded) throw new Error(`러너의 답을 읽지 못했다: ${decoded.error.message}`);
-  const { message: reply } = decoded;
-  if (reply.kind === "error") throw new Error(`러너가 답하지 못했다: ${reply.payload.message}`);
+  if (reply.kind !== "answer") throw new Error(`러너가 묻지 않은 것으로 답했다: ${reply.kind}`);
   return reply.payload.text;
 }
 
@@ -184,15 +168,6 @@ async function member() {
   const session = (await readSessions())[server];
   if (!session) throw new Error("로그인하지 않았다. 레포 폴더에서 omagari runner를 먼저 켜라");
   return { url: server, session };
-}
-
-/** "3분 전"처럼 지금에서 거슬러 센 시간. */
-function ago(iso: string) {
-  const minutes = Math.floor((Date.now() - Date.parse(iso)) / 60_000);
-  if (minutes < 1) return "방금 전";
-  if (minutes < 60) return `${minutes}분 전`;
-  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)}시간 전`;
-  return `${Math.floor(minutes / (24 * 60))}일 전`;
 }
 
 /** 멤버마다 에이전트와 작업을, 작업마다 상태 한 줄과 바뀐 파일을 보인다. */
