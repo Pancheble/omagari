@@ -3,14 +3,14 @@
 // 가짜는 바깥 두 곳에만 꽂는다: GitHub(서버), 에이전트 실행기(러너).
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { api, call } from "@omagari/contract";
 import { type Executor, startRunner } from "@omagari/runner";
-import { type GitHub, startServer } from "@omagari/server";
+import { type GitHub, type Pull, startServer } from "@omagari/server";
 
 const executable = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 const CLI = executable("../packages/cli/src/main.ts");
@@ -119,9 +119,11 @@ export async function tempRepo(repo = REPO) {
 /**
  * 가짜 GitHub. 기기 인증은 사람이 코드를 넣는 대신 `approve`로 끝내고,
  * push 권한은 `grant`와 `revoke`로 준다. 내준 GitHub 토큰은 `tokens`에 남는다.
+ * 브랜치의 PR은 `openPull`로 열고, 돌려받은 PR을 고치거나 `merge`해 바꾼다.
  */
 export function fakeGitHub() {
   const pushers = new Set<string>();
+  const pulls: (Pull & { branch: string })[] = [];
   const devices = new Map<string, { userCode: string; login?: string }>();
   const tokens = new Map<string, string>();
   const github: GitHub = {
@@ -153,6 +155,10 @@ export function fakeGitHub() {
     async canPush(token, repo) {
       return repo === REPO && pushers.has(tokens.get(token) ?? "");
     },
+    async pulls(token, repo, branch) {
+      if (repo !== REPO || !tokens.has(token)) return undefined;
+      return pulls.filter((pull) => pull.branch === branch).map(({ branch: _, ...pull }) => pull);
+    },
   };
   return {
     github,
@@ -165,6 +171,16 @@ export function fakeGitHub() {
     },
     grant: (login: string) => pushers.add(login),
     revoke: (login: string) => pushers.delete(login),
+    /** `branch`를 head로 하는 PR을 연다. 기본은 초안이다. */
+    openPull(branch: string, title: string, draft = true) {
+      const pull = { branch, title, draft, open: true };
+      pulls.push(pull);
+      return pull;
+    },
+    /** 열린 PR을 머지한다. */
+    merge(pull: Pull) {
+      Object.assign(pull, { open: false, mergedAt: new Date().toISOString() });
+    },
   };
 }
 
@@ -196,6 +212,9 @@ export async function startWorld(
     recheckMs?: number;
     heartbeatMs?: number;
     turnTimeoutMs?: number;
+    observeMs?: number;
+    followMs?: number;
+    forgetMs?: number;
   } = {},
 ) {
   const repo = await tempRepo();
@@ -208,6 +227,8 @@ export async function startWorld(
     database: join(data, "omagari.db"),
     recheckMs: options.recheckMs,
     heartbeatMs: options.heartbeatMs,
+    followMs: options.followMs,
+    forgetMs: options.forgetMs,
   };
   let server = await startServer(serverOptions).catch(async (error) => {
     await cleanup();
@@ -238,6 +259,7 @@ export async function startWorld(
     // 넘긴 가짜가 없으면 실제 실행기 대신 늘 실패하는 것을 꽂는다.
     executor: options.executor ?? (() => Promise.reject(new Error("가짜 실행기를 넘기지 않았다"))),
     turnTimeoutMs: options.turnTimeoutMs,
+    observeMs: options.observeMs,
   }).catch(async (error) => {
     await server.stop();
     await cleanup();
@@ -256,6 +278,14 @@ export async function startWorld(
     login,
     /** CLI가 세션을 남기는 폴더. */
     config: join(data, "config"),
+    /** 이 기기의 CLI가 `as`로 로그인해 둔 것처럼 세션을 남긴다. CLI로 로그인하는 흐름은 login.test가 본다. */
+    async signInCli(as: { session: string }) {
+      await mkdir(join(data, "config", "omagari"), { recursive: true });
+      await writeFile(
+        join(data, "config", "omagari", "sessions.json"),
+        JSON.stringify({ [server.url]: as.session }),
+      );
+    },
     /** 멤버 `as`의 눈으로 본 멤버마다의 에이전트 상태. */
     agents: async (as: { url: string; session: string }) =>
       Object.fromEntries(

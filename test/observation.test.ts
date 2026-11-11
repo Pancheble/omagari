@@ -59,6 +59,8 @@ test("커밋한 것, 커밋하지 않은 것, 추적하지 않는 새 파일이 
           { path: "src/new.ts", content: "new\n" },
           { path: "staged.ts", content: "staged\n" },
         ],
+        line: { source: "files", text: "committed.ts 외 5개 수정 중" },
+        offlineSince: null,
       },
     ]),
   );
@@ -103,6 +105,8 @@ test("기준 커밋은 기본 브랜치(원격 추적)와 갈라진 지점이다
           { path: "local.ts", content: "local\n" },
           { path: "mine.ts", content: "mine\n" },
         ],
+        line: { source: "files", text: "local.ts 외 1개 수정 중" },
+        offlineSince: null,
       },
     ]),
   );
@@ -136,6 +140,8 @@ test("gitignore된 파일과 .env, .env.*는 추적되더라도 올라가지 않
           { path: ".env.example", content: "TOKEN=\n" },
           { path: ".gitignore", content: "secret.txt\nbuild/\n" },
         ],
+        line: { source: "files", text: ".env.example 외 1개 수정 중" },
+        offlineSince: null,
       },
     ]),
   );
@@ -288,6 +294,8 @@ test("러너를 켤 때 로그인하기 전에 무엇이 서버로 나가는지 
           branch: "main",
           base: await desk.git("rev-parse", "origin/main"),
           files: [{ path: "hello.ts", content: "hello\n" }],
+          line: { source: "files", text: "hello.ts 수정 중" },
+          offlineSince: null,
         },
       ],
     ),

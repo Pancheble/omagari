@@ -1,10 +1,12 @@
 #!/usr/bin/env node
+import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { text } from "node:stream/consumers";
 import { setTimeout as sleep } from "node:timers/promises";
+import { promisify } from "node:util";
 import {
   api,
   CONTRACT_VERSION,
@@ -29,6 +31,8 @@ const USAGE = `사용법:
   omagari runner                레포 폴더에서 러너를 켠다. 처음이면 GitHub 기기 인증으로 로그인한다
   omagari runner ask <메시지>   이 레포의 러너 세션에 묻는다. 다음 질문은 같은 세션으로 이어진다
   omagari runner log            러너가 실행한 것을 본다
+  omagari status                지금 상황을 본다: 멤버, 작업, 상태 한 줄, 바뀐 파일
+  omagari status set <한 줄>    지금 브랜치의 작업에 상태 한 줄을 쓴다
 
 서버는 OMAGARI_SERVER로 준다(기본 http://127.0.0.1:3000).`;
 
@@ -40,7 +44,7 @@ const sessionsFile = join(
   "sessions.json",
 );
 
-// 명령은 그것을 만드는 이슈가 더한다: status(#12), 훅과 스킬 깔기(#15).
+// 명령은 그것을 만드는 이슈가 더한다: 훅과 스킬 깔기(#15).
 const [command, sub, ...rest] = process.argv.slice(2);
 try {
   if (command === "--version") {
@@ -51,6 +55,10 @@ try {
     console.log(await ask(rest.join(" ")));
   } else if (command === "runner" && sub === "log") {
     await log();
+  } else if (command === "status" && sub === undefined) {
+    await status();
+  } else if (command === "status" && sub === "set" && rest.length > 0) {
+    await setStatus(rest.join(" "));
   } else {
     console.error(USAGE);
     process.exitCode = 1;
@@ -133,4 +141,59 @@ async function log() {
       `${run.at}  세션 ${run.session ?? "(새 세션)"}  도구 ${run.tools.join(",")}  받은 것 ${JSON.stringify(run.message)}  ${outcome}`,
     );
   }
+}
+
+/** 남겨 둔 세션으로 서버를 부를 상대. 로그인은 러너를 켤 때 한다. */
+async function member() {
+  const session = (await readSessions())[server];
+  if (!session) throw new Error("로그인하지 않았다. 레포 폴더에서 omagari runner를 먼저 켜라");
+  return { url: server, session };
+}
+
+/** "3분 전"처럼 지금에서 거슬러 센 시간. */
+function ago(iso: string) {
+  const minutes = Math.floor((Date.now() - Date.parse(iso)) / 60_000);
+  if (minutes < 1) return "방금 전";
+  if (minutes < 60) return `${minutes}분 전`;
+  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)}시간 전`;
+  return `${Math.floor(minutes / (24 * 60))}일 전`;
+}
+
+/** 멤버마다 에이전트와 작업을, 작업마다 상태 한 줄과 바뀐 파일을 보인다. */
+async function status() {
+  const AGENT = { online: "온라인", answering: "답하는 중", offline: "오프라인" } as const;
+  const as = await member();
+  const [{ members }, { works }] = await Promise.all([call(as, api.members), call(as, api.works)]);
+  for (const { login, agent } of members) {
+    const own = works.filter((work) => work.login === login);
+    const since = own[0]?.offlineSince;
+    console.log(`${login} · 에이전트 ${AGENT[agent]}${since ? ` · ${ago(since)} 기준` : ""}`);
+    if (own.length === 0) console.log("  작업 없음");
+    for (const { branch, line, files } of own) {
+      const shown =
+        line === null
+          ? "바뀐 것 없음"
+          : line.source === "agent"
+            ? `${line.text} (${ago(line.at)})`
+            : line.source === "pull"
+              ? `${line.text} (초안 PR)`
+              : line.text;
+      console.log(`  ${branch}: ${shown}`);
+      for (const file of files) {
+        const note = "deleted" in file ? " (지움)" : "omitted" in file ? " (경로만)" : "";
+        console.log(`    ${file.path}${note}`);
+      }
+    }
+  }
+}
+
+/** 이 폴더에 체크아웃된 브랜치의 작업에 상태 한 줄을 쓴다. */
+async function setStatus(text: string) {
+  const branch = await promisify(execFile)("git", ["symbolic-ref", "--quiet", "--short", "HEAD"])
+    .then(({ stdout }) => stdout.trim())
+    .catch(() => {
+      throw new Error("브랜치에 있지 않다. 작업의 브랜치를 체크아웃한 폴더에서 써라");
+    });
+  const written = await call(await member(), api.setStatus, { branch, text });
+  console.log(`${branch}의 상태 한 줄을 썼다: ${written.text}`);
 }
