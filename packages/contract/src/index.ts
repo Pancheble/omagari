@@ -560,6 +560,28 @@ export const api = {
     }),
     response: z.strictObject({ message: ChannelMessage }),
   },
+  /**
+   * 지난 `days`일(오늘 포함) 날마다 들어온 멤버 수와 문답 수. 오래된 날부터 오고, 아무 일 없던 날은 0이다(ADR-0018).
+   * 날은 `timeZone`(서울)의 자정으로 자른다. 들어온 멤버는 그날 웹을 열었거나 채널에서 읽고 쓴 멤버다.
+   * 문답은 그날 서버가 받은 DM과 `@호출`이다. 수만 오고, 누가 무엇을 물었는지는 오지 않는다.
+   * 읽기지만 날 수를 본문에 실으려고 POST다.
+   */
+  metrics: {
+    method: "POST",
+    path: "/api/metrics",
+    body: z.strictObject({ days: z.number().int().min(1).max(366).default(14) }),
+    response: z.strictObject({
+      timeZone: z.string(),
+      days: z.array(
+        z.strictObject({
+          /** 그 시간대의 날짜 YYYY-MM-DD */
+          day: z.string(),
+          members: z.number(),
+          qas: z.number(),
+        }),
+      ),
+    }),
+  },
 } satisfies Record<string, Route>;
 
 // --- 웹의 실시간 연결 ---
