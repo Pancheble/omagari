@@ -179,13 +179,17 @@ export async function startServer(options: {
     since INTEGER NOT NULL
   ) STRICT`);
   // 사람마다 스스로 고른 접속 상태와 상태 메시지. `presence`는 계약의 ChosenPresence, `until`은 고른 것이 끝나는 시각(ms)이고
-  // NULL이면 직접 바꿀 때까지다. `message`가 빈 글이면 상태 메시지가 없다. 들어와 있는지(웹 창)는 여기 두지 않는다.
+  // NULL이면 직접 바꿀 때까지다. `message`와 `emoji`(글 앞의 이모지 한 칸)가 빈 글이면 없다. 들어와 있는지(웹 창)는 여기 두지 않는다.
   db.exec(`CREATE TABLE IF NOT EXISTS profiles (
     login TEXT PRIMARY KEY,
     presence TEXT NOT NULL,
     until INTEGER,
-    message TEXT NOT NULL
+    message TEXT NOT NULL,
+    emoji TEXT NOT NULL DEFAULT ''
   ) STRICT`);
+  // v0.1.0의 표에는 `emoji`가 없다.
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('profiles') WHERE name = 'emoji'").get())
+    db.exec("ALTER TABLE profiles ADD COLUMN emoji TEXT NOT NULL DEFAULT ''");
   // 채팅 채널. 이름은 대소문자를 가리지 않고 하나뿐이다.
   db.exec(`CREATE TABLE IF NOT EXISTS channels (
     id TEXT PRIMARY KEY,
@@ -380,7 +384,7 @@ export async function startServer(options: {
   const membersView = (works: WorkView[]): MemberView[] => {
     const people = db
       .prepare(
-        `SELECT s.login, COALESCE(p.name, s.login) AS name, o.since, f.presence, f.until, f.message
+        `SELECT s.login, COALESCE(p.name, s.login) AS name, o.since, f.presence, f.until, f.message, f.emoji
          FROM (SELECT DISTINCT login FROM sessions) s
          LEFT JOIN people p ON p.login = s.login
          LEFT JOIN offline o ON o.login = s.login
@@ -394,6 +398,7 @@ export async function startServer(options: {
       presence: ChosenPresence | null;
       until: number | null;
       message: string | null;
+      emoji: string | null;
     }[];
     const open = new Set([...watchers.values()].map((watcher) => watcher.login));
     const now = Date.now();
@@ -429,6 +434,7 @@ export async function startServer(options: {
         name,
         presence: presenceOf(login, profile.presence, profile.until),
         message: profile.message || null,
+        emoji: profile.emoji || null,
         agents,
         offlineSince: since === null ? null : new Date(since).toISOString(),
         works: (byLogin.get(login) ?? []).map(({ branch, line }) => ({ branch, executor, line })),
@@ -641,13 +647,13 @@ export async function startServer(options: {
     return { until: until === null ? null : new Date(until).toISOString() };
   });
 
-  mount(app, api.setStatusMessage, ({ message }, c) => {
+  mount(app, api.setStatusMessage, ({ message, emoji }, c) => {
     db.prepare(
-      `INSERT INTO profiles (login, presence, until, message) VALUES (?, 'online', NULL, ?)
-       ON CONFLICT (login) DO UPDATE SET message = excluded.message`,
-    ).run(c.get("login") as string, message);
+      `INSERT INTO profiles (login, presence, until, message, emoji) VALUES (?, 'online', NULL, ?, ?)
+       ON CONFLICT (login) DO UPDATE SET message = excluded.message, emoji = excluded.emoji`,
+    ).run(c.get("login") as string, message, emoji ?? "");
     shareMembers();
-    return { message: message || null };
+    return { message: message || null, emoji };
   });
 
   mount(app, api.ask, ({ agent, executor, channel, message, visibility }, c) => {
