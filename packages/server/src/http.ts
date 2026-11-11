@@ -21,6 +21,7 @@ const STATUS = {
   forbidden: 403,
   not_found: 404,
   internal: 500,
+  executor_failed: 500,
 } as const satisfies Record<ContractError["code"], number>;
 
 const fail = (

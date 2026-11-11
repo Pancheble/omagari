@@ -15,7 +15,7 @@ import {
 } from "@omagari/contract";
 import { startRunner } from "@omagari/runner";
 import { WebSocket } from "ws";
-import { eventually, REPO, startWorld, tempRepo } from "./harness.ts";
+import { eventually, fakeExecutor, REPO, startWorld, tempRepo } from "./harness.ts";
 
 test("push 권한이 있는 계정은 로그인하면 초대 없이 멤버가 된다", async (t) => {
   const world = await startWorld();
@@ -38,12 +38,10 @@ test("push 권한이 없는 계정은 워크스페이스의 어떤 것도 읽지
   await assert.rejects(call({ url: world.server.url, session: "made-up-session" }, api.members), {
     code: "unauthorized",
   });
+  const desk = await tempRepo(); // 남이 레포를 받은 폴더
+  t.after(desk.remove);
   await assert.rejects(
-    startRunner({
-      serverUrl: world.server.url,
-      folder: world.repo.folder,
-      session: "made-up-session",
-    }),
+    startRunner({ serverUrl: world.server.url, folder: desk.folder, session: "made-up-session" }),
     { code: "unauthorized" },
   );
   assert.deepEqual(await world.agents(world.owner), { owner: "online" });
@@ -68,12 +66,14 @@ test("레포 폴더에서 명령 하나로 로그인하고 러너를 켠다. 러
   const world = await startWorld();
   t.after(world.stop);
   world.github.grant("alice");
+  const desk = await tempRepo(); // alice가 레포를 받은 폴더
+  t.after(desk.remove);
 
-  const runner = world.launchCli(["runner"]);
+  const runner = world.launchCliIn(desk.folder, "runner");
   t.after(() => runner.stop("SIGKILL"));
   const [, code] = await runner.output(/코드 (\S+)/);
   world.github.approve(code, "alice"); // 사람이 브라우저에서 코드를 넣었다
-  await runner.output(new RegExp(`러너가 켜졌다: alice의 에이전트, ${REPO} ↔ .+`));
+  await runner.output(new RegExp(`러너가 켜졌다: alice의 에이전트, ${REPO} ↔ ${desk.folder}`));
   assert.equal((await world.agents(world.owner)).alice, "online");
 
   // 떨어지면 오프라인이다.
@@ -93,7 +93,7 @@ test("레포 폴더에서 명령 하나로 로그인하고 러너를 켠다. 러
   }
 
   // 다시 켜면 남겨 둔 세션으로 붙는다. 다시 로그인하지 않는다.
-  const again = world.launchCli(["runner"]);
+  const again = world.launchCliIn(desk.folder, "runner");
   t.after(() => again.stop("SIGKILL"));
   await again.output(/러너가 켜졌다: alice/);
   assert.doesNotMatch((await again.stop()).stdout, /GitHub 로그인/);
@@ -105,7 +105,7 @@ test("Git 레포가 아닌 폴더에서는 로그인하기 전에 이유를 말�
   const folder = await mkdtemp(join(tmpdir(), "omagari-not-git-"));
   t.after(() => rm(folder, { recursive: true, force: true }));
 
-  const result = await world.cli(["runner"], { cwd: folder });
+  const result = await world.cliIn(folder, "runner");
   assert.equal(result.code, 1);
   assert.match(result.stderr, /Git 레포가 아닌 폴더다/);
   assert.doesNotMatch(result.stdout, /GitHub 로그인/);
@@ -118,7 +118,7 @@ test("워크스페이스의 레포가 아닌 폴더에서는 이유를 말하고
   const other = await tempRepo("someone/elsewhere");
   t.after(other.remove);
 
-  const runner = world.launchCli(["runner"], { cwd: other.folder });
+  const runner = world.launchCliIn(other.folder, "runner");
   t.after(() => runner.stop("SIGKILL"));
   const [, code] = await runner.output(/코드 (\S+)/);
   world.github.approve(code, "alice");
@@ -126,6 +126,22 @@ test("워크스페이스의 레포가 아닌 폴더에서는 이유를 말하고
   assert.equal(result.code, 1);
   assert.match(result.stderr, new RegExp(`이 폴더는 ${REPO}의 폴더가 아니다`));
   assert.equal((await world.agents(world.owner)).alice, "offline");
+});
+
+test("같은 레포에 러너를 하나 더 켜면 이유를 말하고 켜지지 않는다. 먼저 켠 러너는 그대로 답한다", async (t) => {
+  const world = await startWorld({ executor: fakeExecutor().executor });
+  t.after(world.stop);
+
+  await assert.rejects(
+    startRunner({
+      serverUrl: world.server.url,
+      folder: world.repo.folder,
+      session: world.owner.session,
+    }),
+    /이 레포의 러너가 이미 켜져 있다/,
+  );
+  assert.equal((await world.cli("runner", "ask", "아직 있나?")).stdout, "가짜 답\n");
+  assert.deepEqual(await world.agents(world.owner), { owner: "online" });
 });
 
 test("답하지 않는 러너 연결은 끊겨 그 에이전트가 오프라인이 된다", async (t) => {

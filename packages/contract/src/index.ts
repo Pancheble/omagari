@@ -16,6 +16,7 @@ export const ContractError = z.strictObject({
     "forbidden", // 멤버가 아니거나, 워크스페이스의 레포가 아닌 폴더다
     "not_found",
     "internal",
+    "executor_failed", // 에이전트 실행기가 실패했거나 답 없이 끝났다
   ]),
   message: z.string(),
 });
@@ -126,6 +127,20 @@ export function decode<P extends Payloads>(
   }
   return { message: { v, id, re, kind, payload: payload.data } as Message<P> };
 }
+
+// --- CLI와 러너 사이(같은 기기) ---
+// 봉투, `encode`, `decode`는 러너와 서버 사이의 것을 그대로 쓴다.
+
+/** CLI가 러너에 보내는 것. 러너는 문답만 받는다. */
+export const cliToRunner = {
+  ask: z.strictObject({ message: z.string().min(1) }),
+} satisfies Payloads;
+
+/** 러너가 CLI에 보내는 것. */
+export const runnerToCli = {
+  answer: z.strictObject({ text: z.string() }),
+  error: ContractError,
+} satisfies Payloads;
 
 // --- 웹이 쓰는 API ---
 

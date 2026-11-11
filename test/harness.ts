@@ -3,7 +3,7 @@
 // 가짜는 바깥 두 곳에만 꽂는다: GitHub(서버), 에이전트 실행기(러너).
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -83,7 +83,8 @@ export async function eventually<T>(check: () => T | Promise<T>, timeoutMs = 10_
 
 /** 커밋 하나가 있는 실제 Git 레포를 임시 폴더에 만든다. origin은 `repo`(GitHub)를 가리킨다. 기기의 Git 설정은 읽지 않는다. */
 export async function tempRepo(repo = REPO) {
-  const folder = await mkdtemp(join(tmpdir(), "omagari-"));
+  // macOS의 임시 폴더는 심볼릭 링크다. Git이 내는 최상위 폴더와 같게 실제 경로로 둔다.
+  const folder = await realpath(await mkdtemp(join(tmpdir(), "omagari-")));
   const env = {
     GIT_CONFIG_GLOBAL: devNull,
     GIT_CONFIG_NOSYSTEM: "1",
@@ -155,9 +156,24 @@ export function fakeGitHub() {
   };
 }
 
+type ExecutorInput = Parameters<Executor>[0];
+
+/**
+ * 가짜 에이전트 실행기. 받은 입력과 옵션을 `calls`에 적고 `answer`가 정한 답을 낸다.
+ * 이어 갈 세션이 없으면 `session-<몇 번째 부름>`으로 새 세션을 띄운다.
+ */
+export function fakeExecutor(answer: (input: ExecutorInput) => string = () => "가짜 답") {
+  const calls: ExecutorInput[] = [];
+  const executor: Executor = async (input) => {
+    calls.push(input);
+    return { answer: answer(input), session: input.resume ?? `session-${calls.length}` };
+  };
+  return { executor, calls };
+}
+
 /**
  * 서버 하나, 레포 하나, 그 레포에 push 권한이 있는 `owner`와 owner의 러너 하나.
- * 가짜 실행기를 넘기지 않으면 빈 것이 꽂힌다.
+ * 가짜 실행기를 넘기지 않으면 늘 실패하는 것이 꽂힌다.
  */
 export async function startWorld(
   options: { executor?: Executor; recheckMs?: number; heartbeatMs?: number } = {},
@@ -199,7 +215,8 @@ export async function startWorld(
     serverUrl: server.url,
     folder: repo.folder,
     session: owner.session,
-    executor: options.executor,
+    // 넘긴 가짜가 없으면 실제 실행기 대신 늘 실패하는 것을 꽂는다.
+    executor: options.executor ?? (() => Promise.reject(new Error("가짜 실행기를 넘기지 않았다"))),
   }).catch(async (error) => {
     await server.stop();
     await cleanup();
@@ -229,17 +246,20 @@ export async function startWorld(
       await server.stop();
       server = await startServer({ ...serverOptions, port: Number(port) });
     },
-    /** `omagari <args>`를 레포 폴더(또는 `cwd`)에서 돌린다. */
-    cli: (args: string[], { cwd = repo.folder } = {}) =>
+    /** `omagari <args>`를 레포 폴더에서 돌린다. */
+    cli: (...args: string[]) =>
+      run(process.execPath, [CLI, ...args], { cwd: repo.folder, env: cliEnv() }),
+    /** `omagari <args>`를 `cwd`에서 돌린다. */
+    cliIn: (cwd: string, ...args: string[]) =>
       run(process.execPath, [CLI, ...args], { cwd, env: cliEnv() }),
-    /** 끝나지 않는 `omagari <args>`(러너)를 레포 폴더(또는 `cwd`)에서 띄운다. */
-    launchCli: (args: string[], { cwd = repo.folder } = {}) =>
+    /** 끝나지 않는 `omagari <args>`(러너)를 `cwd`에서 띄운다. */
+    launchCliIn: (cwd: string, ...args: string[]) =>
       launch(process.execPath, [CLI, ...args], { cwd, env: cliEnv() }),
     /** 훅 실행 파일에 에이전트가 주는 입력(JSON)을 넣어 돌린다. */
     hook: (stdin: string, options: { keepStdinOpen?: boolean } = {}) =>
       run(process.execPath, [HOOK], { cwd: repo.folder, stdin, ...options }),
     async stop() {
-      runner.stop();
+      await runner.stop();
       await server.stop();
       await cleanup();
     },

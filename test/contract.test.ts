@@ -234,7 +234,7 @@ test("CLI와 훅은 실행 파일의 입출력으로 조작한다", async (t) =>
   const world = await startWorld();
   t.after(world.stop);
 
-  const version = await world.cli(["--version"]);
+  const version = await world.cli("--version");
   assert.equal(version.code, 0);
   assert.match(version.stdout, new RegExp(`contract ${CONTRACT_VERSION}\\b`));
 
