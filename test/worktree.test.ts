@@ -1,16 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, realpath, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { rm } from "node:fs/promises";
 import { test } from "node:test";
-import { eventually, startWorld, writer } from "./harness.ts";
-
-/** 레포 밖에 연결된 워크트리를 둘 임시 폴더. */
-async function place(t: { after: (fn: () => Promise<void>) => void }) {
-  const folder = await realpath(await mkdtemp(join(tmpdir(), "omagari-worktrees-")));
-  t.after(() => rm(folder, { recursive: true, force: true }));
-  return (name: string) => join(folder, name);
-}
+import { eventually, place, startWorld, writer } from "./harness.ts";
 
 // 워크트리마다 Git을 여러 번 부르고 단계가 다섯이라, 다른 테스트와 함께 돌 때 기본 시간 제한(30초)에 가깝다.
 test("등록한 폴더와 연결된 워크트리의 브랜치가 각각 작업으로 관측되고, 워크트리를 더하거나 지우면 관측이 따라온다", {

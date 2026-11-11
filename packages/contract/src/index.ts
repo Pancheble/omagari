@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 4;
+export const CONTRACT_VERSION = 5;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -91,6 +91,18 @@ export const StatusLine = z.discriminatedUnion("source", [
 ]);
 export type StatusLine = z.infer<typeof StatusLine>;
 
+/**
+ * 멤버들이 보는 작업 하나: 그 관측과 상태 한 줄. 웹(`api.works`)과 러너(`situation`)가 같이 쓴다.
+ * 러너가 떨어진 멤버의 작업은 `offlineSince`(떨어진 시각) 기준으로 남고, 7일이 지나면 지워진다.
+ */
+export const WorkView = z.strictObject({
+  login: z.string(),
+  ...Work.shape,
+  line: StatusLine.nullable(),
+  offlineSince: z.string().nullable(),
+});
+export type WorkView = z.infer<typeof WorkView>;
+
 /** 에이전트가 쓰는 상태 한 줄의 길이 상한. 줄바꿈과 겹친 공백은 공백 하나로 접는다. */
 export const MAX_STATUS_CHARS = 200;
 
@@ -118,6 +130,11 @@ export const serverToRunner = {
    * 러너는 한 번에 한 턴만 돌리고 나머지는 온 순서대로 줄 세운다.
    */
   ask: z.strictObject({ message: z.string().min(1) }),
+  /**
+   * 지금 상황: 워크스페이스의 작업 전부(받는 러너의 멤버 것도 포함). `api.works`와 같은 것이다.
+   * welcome 바로 뒤에 보내고, 그 뒤로는 달라질 때마다 다시 보낸다. 러너는 받아 두고 훅에 내준다(ADR-0005).
+   */
+  situation: z.strictObject({ works: z.array(WorkView) }),
   error: ContractError,
 } satisfies Payloads;
 
@@ -198,14 +215,27 @@ export function decode<P extends Payloads>(
 // --- CLI와 러너 사이(같은 기기) ---
 // 봉투, `encode`, `decode`는 러너와 서버 사이의 것을 그대로 쓴다.
 
-/** CLI가 러너에 보내는 것. 러너는 문답만 받는다. */
+/** CLI와 훅이 러너에 보내는 것. 러너는 문답과 지금 상황 묻기만 받는다. */
 export const cliToRunner = {
   ask: serverToRunner.ask,
+  /** 지금 상황을 묻는다. 러너는 서버를 부르지 않고 받아 둔 것으로 바로 답한다. 문답의 줄에 서지 않는다. */
+  situation: z.strictObject({}),
 } satisfies Payloads;
 
-/** 러너가 CLI에 보내는 것. */
+/** 러너가 CLI와 훅에 보내는 것. */
 export const runnerToCli = {
   answer: runnerToServer.answer,
+  /** `situation`의 답. 서버에서 받아 둔 것이 아직 없으면 `error`(`runner_offline`)다. */
+  situation: z.strictObject({
+    /** 이 러너의 멤버 */
+    login: z.string(),
+    /** 서버에서 마지막으로 받은 작업 전부 */
+    works: z.array(WorkView),
+    /** 서버와 끊겼으면 끊긴 시각. `works`는 그 시각까지 받은 것이다. 붙어 있으면 null. */
+    disconnectedAt: z.string().nullable(),
+    /** 이 러너가 마지막으로 관측한 내 작업들. 공유 수준과 상관없이 바뀐 파일의 경로가 있다(서버로는 수준대로 나간다). */
+    mine: z.array(Work),
+  }),
   error: ContractError,
 } satisfies Payloads;
 
@@ -272,23 +302,11 @@ export const api = {
       ),
     }),
   },
-  /**
-   * 멤버들의 작업과 그 관측, 상태 한 줄. 바뀐 파일과 그 내용까지 온다. 멤버만 본다.
-   * 러너가 떨어진 멤버의 작업은 `offlineSince`(떨어진 시각) 기준으로 남고, 7일이 지나면 지워진다.
-   */
+  /** 멤버들의 작업과 그 관측, 상태 한 줄. 바뀐 파일과 그 내용까지 온다. 멤버만 본다. */
   works: {
     method: "GET",
     path: "/api/works",
-    response: z.strictObject({
-      works: z.array(
-        z.strictObject({
-          login: z.string(),
-          ...Work.shape,
-          line: StatusLine.nullable(),
-          offlineSince: z.string().nullable(),
-        }),
-      ),
-    }),
+    response: z.strictObject({ works: z.array(WorkView) }),
   },
   /**
    * 내 작업(`branch`)의 상태 한 줄을 쓴다. 같은 작업에 다시 쓰면 나중에 쓴 것이 남는다.
@@ -340,4 +358,13 @@ export async function call<R extends Route>(
     );
   }
   return route.response.parse(json) as z.output<R["response"]>;
+}
+
+/** "3분 전"처럼 지금에서 거슬러 센 시간. 상태 한 줄의 쓴 시각과 오프라인의 기준 시각에 붙인다. */
+export function ago(iso: string) {
+  const minutes = Math.floor((Date.now() - Date.parse(iso)) / 60_000);
+  if (minutes < 1) return "방금 전";
+  if (minutes < 60) return `${minutes}분 전`;
+  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)}시간 전`;
+  return `${Math.floor(minutes / (24 * 60))}일 전`;
 }

@@ -7,6 +7,7 @@
     "omagari-hook": "./src/main.ts"
   },
   "dependencies": {
-    "@omagari/contract": "*"
+    "@omagari/contract": "*",
+    "@omagari/runner": "*"
   }
 }

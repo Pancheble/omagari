@@ -95,6 +95,13 @@ export const writer = (folder: string) => async (path: string, content: string |
   await writeFile(join(folder, path), content);
 };
 
+/** 레포 밖에 연결된 워크트리를 둘 임시 폴더. 테스트가 끝나면 지운다. 이름을 받아 그 안의 경로를 돌려주는 함수를 준다. */
+export async function place(t: { after: (fn: () => Promise<void>) => void }) {
+  const folder = await realpath(await mkdtemp(join(tmpdir(), "omagari-worktrees-")));
+  t.after(() => rm(folder, { recursive: true, force: true }));
+  return (name: string) => join(folder, name);
+}
+
 /**
  * 커밋 하나가 있는 실제 Git 레포를 임시 폴더에 만든다. origin은 `repo`(GitHub)를 가리킨다. 기기의 Git 설정은 읽지 않는다.
  * 받은(clone) 레포처럼 기본 브랜치 main이 원격 추적 브랜치 origin/main과 origin/HEAD로 있다. 푸시는 `git update-ref`로 흉내 낸다.
@@ -242,6 +249,8 @@ export async function startWorld(
     await cleanup();
     throw error;
   });
+  /** `stopServer`로 서버만 꺼 둔 채다. */
+  let serverDown = false;
 
   /** API로 기기 인증을 마치고 그 계정의 세션으로 부를 상대를 돌려준다. */
   const login = async (name: string) => {
@@ -302,11 +311,39 @@ export async function startWorld(
       ),
     /** 멤버 `as`의 눈으로 본 작업마다의 관측. */
     works: async (as: { url: string; session: string }) => (await call(as, api.works)).works,
+    /** 서버만 끈다. 러너들은 켜진 채 다시 붙으려 한다. `restartServer`로 다시 띄운다. */
+    async stopServer() {
+      serverDown = true;
+      await server.stop();
+    },
     /** 서버를 끄고 같은 포트, 같은 DB로 다시 띄운다. 배포로 서버가 다시 뜨는 것과 같다. */
     async restartServer() {
       const { port } = new URL(server.url);
-      await server.stop();
+      if (!serverDown) await server.stop();
       server = await startServer({ ...serverOptions, port: Number(port) });
+      serverDown = false;
+    },
+    /** 멤버 `as`의 레포 폴더 하나와 그 폴더에서 켠 러너. 멤버마다 기기가 따로다. 관측은 짧게 돈다. */
+    async desk(as: { session: string }) {
+      const repo = await tempRepo();
+      const options = {
+        serverUrl: server.url,
+        folder: repo.folder,
+        session: as.session,
+        observeMs: 50,
+      };
+      let runner = await startRunner(options);
+      return {
+        ...repo,
+        stop: () => runner.stop(),
+        async start() {
+          runner = await startRunner(options);
+        },
+        async remove() {
+          await runner.stop();
+          await repo.remove();
+        },
+      };
     },
     /** `omagari <args>`를 레포 폴더에서 돌린다. */
     cli: (...args: string[]) =>
@@ -322,7 +359,7 @@ export async function startWorld(
       run(process.execPath, [HOOK], { cwd: repo.folder, stdin, ...options }),
     async stop() {
       await runner.stop();
-      await server.stop();
+      if (!serverDown) await server.stop();
       await cleanup();
     },
   };

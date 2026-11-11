@@ -69,6 +69,7 @@ async function worktrees(folder: string) {
 
 /**
  * `folder`(등록한 폴더)와 그 연결된 워크트리마다 체크아웃된 작업을 공유 수준대로 읽는다. 브랜치가 아니면(detached HEAD) 작업이 없다.
+ * full이 아니면 내용 없이 경로만 읽는다. intent의 경로는 서버로 나가지 않는다(러너가 뺀다).
  * 기준 커밋은 HEAD와 `remote`의 기본 브랜치(`refs/remotes/<remote>/HEAD`)가 갈라진 지점이다.
  * 읽지 못한 워크트리는 빼고 그 까닭을 `problems`에 담는다. 하나가 안 읽혀도 나머지는 올라간다.
  */
@@ -101,7 +102,6 @@ export async function observe(folder: string, remote: string, share: ShareLevel)
         );
       },
     );
-    if (share === "intent") return { branch, base, share, files: [] };
     // 기준 커밋과 작업 트리의 차이(커밋한 것과 안 한 것)와, 추적하지 않는 새 파일(gitignore된 것은 빼고).
     const [changed, untracked] = await Promise.all([
       git(tree, "diff", "--name-only", "--no-renames", "-z", base, "--"),
@@ -119,7 +119,8 @@ export async function observe(folder: string, remote: string, share: ShareLevel)
         files.push({ path, deleted: true });
         continue;
       }
-      if (share === "declared") {
+      // intent도 경로는 읽는다. 러너가 서버로 보낼 때 뺀다(이 기기의 훅이 내 작업의 경로를 쓴다).
+      if (share !== "full") {
         files.push({ path, omitted: "share" });
         continue;
       }
