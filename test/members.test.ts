@@ -24,7 +24,14 @@ test("멤버 목록에 사람마다 이름과 실행기마다의 에이전트, �
 
   const members = async () => (await call(world.owner, api.members)).members;
   const aliceOf = async () => (await members()).find((member) => member.login === "alice");
-  await eventually(async () => assert.equal((await aliceOf())?.works.length, 2));
+  // 워크트리를 더한 뒤 파일을 쓰기 전에 관측이 돌면 refund는 바뀐 것 없는 작업(줄 없음)으로 먼저 온다.
+  // 작업 수가 아니라 두 작업의 줄이 다 올 때까지 기다린다.
+  await eventually(async () =>
+    assert.deepEqual(
+      (await aliceOf())?.works.map((work) => work.line?.text),
+      ["결제 붙이는 중", "refund.ts 수정 중"],
+    ),
+  );
 
   const all = await members();
   // 이름 순이다. 이름이 없는 사람은 아이디가 이름이다.
@@ -34,11 +41,21 @@ test("멤버 목록에 사람마다 이름과 실행기마다의 에이전트, �
   );
   assert.deepEqual(
     all.find((member) => member.login === "bob"),
-    { login: "bob", name: "bob", agents: [], offlineSince: null, works: [] },
+    {
+      login: "bob",
+      name: "bob",
+      presence: "offline", // 웹 창을 연 적이 없다
+      message: null,
+      agents: [],
+      offlineSince: null,
+      works: [],
+    },
   );
   assert.deepEqual(await aliceOf(), {
     login: "alice",
     name: "김지은",
+    presence: "offline",
+    message: null,
     agents: [{ executor: "claude-code", state: "online" }],
     offlineSince: null,
     works: [

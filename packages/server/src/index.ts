@@ -8,6 +8,7 @@ import {
   api,
   CHANNEL_CONTEXT,
   type ChannelMessage,
+  type ChosenPresence,
   CONTRACT_VERSION,
   type ContractError,
   ContractFailure,
@@ -20,6 +21,9 @@ import {
   MAX_FRAME_BYTES,
   type MemberView,
   type ObservedFile,
+  PRESENCE_DURATIONS,
+  type Presence,
+  type PresenceDuration,
   type Qa,
   RUNNER_SOCKET,
   runnerToServer,
@@ -129,6 +133,8 @@ export async function startServer(options: {
   heartbeatMs?: number;
   followMs?: number;
   forgetMs?: number;
+  /** 고른 접속 상태가 온라인으로 돌아오기까지의 시간. 테스트가 줄여 쓴다. 주지 않은 것은 계약의 시간이다. */
+  presenceDurations?: Partial<Record<PresenceDuration, number>>;
 }) {
   const { repo, github } = options;
   const hostname = options.hostname ?? "127.0.0.1";
@@ -171,6 +177,14 @@ export async function startServer(options: {
   db.exec(`CREATE TABLE IF NOT EXISTS offline (
     login TEXT PRIMARY KEY,
     since INTEGER NOT NULL
+  ) STRICT`);
+  // 사람마다 스스로 고른 접속 상태와 상태 메시지. `presence`는 계약의 ChosenPresence, `until`은 고른 것이 끝나는 시각(ms)이고
+  // NULL이면 직접 바꿀 때까지다. `message`가 빈 글이면 상태 메시지가 없다. 들어와 있는지(웹 창)는 여기 두지 않는다.
+  db.exec(`CREATE TABLE IF NOT EXISTS profiles (
+    login TEXT PRIMARY KEY,
+    presence TEXT NOT NULL,
+    until INTEGER,
+    message TEXT NOT NULL
   ) STRICT`);
   // 채팅 채널. 이름은 대소문자를 가리지 않고 하나뿐이다.
   db.exec(`CREATE TABLE IF NOT EXISTS channels (
@@ -358,17 +372,36 @@ export async function startServer(options: {
     });
   };
 
-  /** 멤버 목록: 사람마다 이름, 실행기마다의 에이전트, 작업마다의 상태 한 줄. 이름 순이다. */
+  /**
+   * 멤버 목록: 사람마다 이름, 접속 상태와 상태 메시지, 실행기마다의 에이전트, 작업마다의 상태 한 줄. 이름 순이다.
+   * 접속 상태는 웹 창(실시간 연결)이 하나라도 붙어 있으면 고른 것, 없거나 "오프라인으로 보이기"면 offline이다.
+   * 오프라인으로 보이는 사람과 정말 나간 사람은 같은 모양이다. 상태 메시지는 둘 다 그대로 보인다.
+   */
   const membersView = (works: WorkView[]): MemberView[] => {
     const people = db
       .prepare(
-        `SELECT s.login, COALESCE(p.name, s.login) AS name, o.since
+        `SELECT s.login, COALESCE(p.name, s.login) AS name, o.since, f.presence, f.until, f.message
          FROM (SELECT DISTINCT login FROM sessions) s
          LEFT JOIN people p ON p.login = s.login
          LEFT JOIN offline o ON o.login = s.login
+         LEFT JOIN profiles f ON f.login = s.login
          ORDER BY name, s.login`,
       )
-      .all() as { login: string; name: string; since: number | null }[];
+      .all() as {
+      login: string;
+      name: string;
+      since: number | null;
+      presence: ChosenPresence | null;
+      until: number | null;
+      message: string | null;
+    }[];
+    const open = new Set([...watchers.values()].map((watcher) => watcher.login));
+    const now = Date.now();
+    const presenceOf = (login: string, chosen: ChosenPresence | null, until: number | null) => {
+      // 끝난 것은 타이머가 지우기 전이라도 온라인이다.
+      const live = chosen !== null && (until === null || until > now) ? chosen : "online";
+      return !open.has(login) || live === "invisible" ? "offline" : (live satisfies Presence);
+    };
     const known = db.prepare("SELECT login, executor FROM agents ORDER BY executor").all() as {
       login: string;
       executor: ExecutorId;
@@ -384,7 +417,7 @@ export async function startServer(options: {
       return sockets.length > 0 ? ("online" as const) : ("offline" as const);
     };
     const byLogin = Map.groupBy(works, (work) => work.login);
-    return people.map(({ login, name, since }) => {
+    return people.map(({ login, name, since, ...profile }) => {
       const agents = known
         .filter((agent) => agent.login === login)
         .map(({ executor }) => ({ executor, state: state(login, executor) }));
@@ -394,6 +427,8 @@ export async function startServer(options: {
       return {
         login,
         name,
+        presence: presenceOf(login, profile.presence, profile.until),
+        message: profile.message || null,
         agents,
         offlineSince: since === null ? null : new Date(since).toISOString(),
         works: (byLogin.get(login) ?? []).map(({ branch, line }) => ({ branch, executor, line })),
@@ -417,6 +452,33 @@ export async function startServer(options: {
     if (changed) broadcast(frame);
     else if (to?.readyState === 1) to.send(frame); // OPEN
   };
+
+  const durations = { ...PRESENCE_DURATIONS, ...options.presenceDurations };
+  /** 고른 접속 상태가 끝날 때 온라인으로 돌릴 타이머. 사람마다 하나이고, 다시 고르면 바꾼다. */
+  const expiries = new Map<string, ReturnType<typeof setTimeout>>();
+  const expireAt = (login: string, until: number | null) => {
+    clearTimeout(expiries.get(login));
+    expiries.delete(login);
+    if (until === null) return;
+    const timer = setTimeout(
+      () => {
+        expiries.delete(login);
+        if (stopped) return;
+        db.prepare("UPDATE profiles SET presence = 'online', until = NULL WHERE login = ?").run(
+          login,
+        );
+        shareMembers();
+      },
+      Math.max(0, until - Date.now()),
+    );
+    expiries.set(login, timer);
+  };
+  // 서버가 다시 떴으면 남은 것을 다시 건다. 그사이 끝난 것은 바로 온라인으로 돌아온다.
+  for (const { login, until } of db
+    .prepare("SELECT login, until FROM profiles WHERE until IS NOT NULL")
+    .all() as { login: string; until: number }[]) {
+    expireAt(login, until);
+  }
 
   /** 러너에 마지막으로 보낸 상황. 같은 것을 다시 보내지 않는다. */
   let sent: string | undefined;
@@ -565,6 +627,27 @@ export async function startServer(options: {
     );
     shareSituation();
     return { text, at: new Date(at).toISOString() };
+  });
+
+  mount(app, api.setPresence, ({ presence, duration }, c) => {
+    const login = c.get("login") as string;
+    const until = presence === "online" || !duration ? null : Date.now() + durations[duration];
+    db.prepare(
+      `INSERT INTO profiles (login, presence, until, message) VALUES (?, ?, ?, '')
+       ON CONFLICT (login) DO UPDATE SET presence = excluded.presence, until = excluded.until`,
+    ).run(login, presence, until);
+    expireAt(login, until);
+    shareMembers();
+    return { until: until === null ? null : new Date(until).toISOString() };
+  });
+
+  mount(app, api.setStatusMessage, ({ message }, c) => {
+    db.prepare(
+      `INSERT INTO profiles (login, presence, until, message) VALUES (?, 'online', NULL, ?)
+       ON CONFLICT (login) DO UPDATE SET message = excluded.message`,
+    ).run(c.get("login") as string, message);
+    shareMembers();
+    return { message: message || null };
   });
 
   mount(app, api.ask, ({ agent, executor, channel, message, visibility }, c) => {
@@ -774,7 +857,8 @@ export async function startServer(options: {
         shareMembers(socket);
       },
       onClose(_, socket) {
-        watchers.delete(socket);
+        // 그 사람의 마지막 창이었으면 오프라인이 된다.
+        if (watchers.delete(socket) && !stopped) shareMembers();
       },
     })),
   );
@@ -971,6 +1055,7 @@ export async function startServer(options: {
       clearInterval(heartbeat);
       clearInterval(recheck);
       clearInterval(follow);
+      for (const timer of expiries.values()) clearTimeout(timer);
       for (const socket of sockets.clients) socket.terminate();
       server.close();
       await once(server, "close");
