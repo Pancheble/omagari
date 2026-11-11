@@ -15,6 +15,8 @@
   /* 파치먼트 위에 고른 줄 바탕(6%)을 겹친 한 색. 그 위에 놓인 접속 점의 둘레 고리에 쓴다. */
   --selected-solid: #e6e6e8;
   --online: #248a3d;
+  --away: #c27c0e;
+  --dnd: #d70015;
   --offline: #8e8e93;
   --tile: #272729;
   --on-dark: #ffffff;
@@ -123,6 +125,9 @@ svg.lucide {
 .nav-item:active,
 .category-name:active,
 .category-add:active,
+.emoji-button:active,
+.clear-button:active,
+.emoji-grid button:active,
 .send-button:active:not(:disabled) {
   transform: scale(0.95);
 }
@@ -505,6 +510,71 @@ svg.lucide {
   height: 40px;
 }
 
+/*
+ * 접속 점(DESIGN.md "접속 점"): 아바타 36px에는 12px, 40px에는 13px. 모양으로도 가른다.
+ * 둘레 2.5px 고리는 아바타를 점보다 크게 도려내 놓인 바탕이 보이게 한다. 바탕이 바뀌어도(올렸을 때) 고리가 맞는다.
+ */
+.dot {
+  --dot: 12px;
+  position: relative;
+  display: block;
+  flex: none;
+  width: var(--dot);
+  height: var(--dot);
+  border-radius: 50%;
+  background: var(--online);
+}
+
+.dot[data-presence="away"] {
+  background: var(--away);
+  mask: radial-gradient(
+    circle at 25% 25%,
+    transparent calc(var(--dot) * 0.375),
+    #000 calc(var(--dot) * 0.375 + 0.5px)
+  );
+}
+
+.dot[data-presence="dnd"] {
+  background: var(--dnd);
+}
+
+.dot[data-presence="dnd"]::after {
+  position: absolute;
+  inset: calc(50% - 1px) 25%;
+  border-radius: var(--pill);
+  background: var(--on-dark);
+  content: "";
+}
+
+.dot[data-presence="offline"] {
+  border: calc(var(--dot) * 0.25) solid var(--offline);
+  background: transparent;
+}
+
+.with-dot {
+  position: relative;
+  display: grid;
+  flex: none;
+}
+
+.with-dot .avatar-36 {
+  mask: radial-gradient(circle at 31px 31px, transparent 8.5px, #000 9px);
+}
+
+.with-dot .avatar-40 {
+  mask: radial-gradient(circle at 34.5px 34.5px, transparent 9px, #000 9.5px);
+}
+
+.with-dot .dot {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+}
+
+.avatar-40 + .dot {
+  --dot: 13px;
+}
+
 .menu {
   position: absolute;
   right: 0;
@@ -564,6 +634,191 @@ svg.lucide {
 
 .menu-note {
   font-size: 12px;
+}
+
+/* 상태 메뉴(DESIGN.md "프로필 패널과 상태 메뉴"). 설명이 한 줄에 들어가게 패널보다 넓게 연다. 좁은 화면(서랍)에서는 패널 폭이다. */
+.status-menu {
+  right: auto;
+  width: 280px;
+}
+
+/* ponytail: 넓은 화면에서는 시간 메뉴가 옆으로 나와야 해서 메뉴를 스크롤 칸으로 만들지 않는다. 650px보다 낮은 창에서 이모지까지 열면 위가 잘린다. */
+@media (max-width: 833px) {
+  .status-menu {
+    right: 0;
+    width: auto;
+    /* 서랍 위로 넘치지 않게: 시간 메뉴도 이 안에 펼쳐지니 스크롤해도 잘리지 않는다. */
+    max-height: calc(100dvh - 88px);
+    overflow-y: auto;
+  }
+}
+
+.status-editor {
+  display: grid;
+  gap: 6px;
+}
+
+/* 상태 메시지 칸: 높이 36px, 왼쪽에 28px 이모지 버튼, 오른쪽에 24px 지우기 버튼. */
+.status-field {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 36px;
+  padding: 0 4px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--rounded-md);
+  background: var(--canvas);
+  transition:
+    border-color 120ms ease-out,
+    box-shadow 120ms ease-out;
+}
+
+.status-field:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.status-field[data-invalid] {
+  border-color: var(--error);
+}
+
+.status-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+}
+
+.status-input:focus-visible {
+  outline: 0;
+}
+
+.emoji-button,
+.clear-button {
+  display: grid;
+  flex: none;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--rounded-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    transform 120ms ease-out,
+    background-color 120ms ease-out;
+}
+
+.emoji-button {
+  width: 28px;
+  height: 28px;
+}
+
+.clear-button {
+  width: 24px;
+  height: 24px;
+}
+
+.emoji-button:hover,
+.emoji-button[aria-expanded="true"],
+.clear-button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 2px;
+  min-width: 0;
+  margin: 0;
+  padding: 4px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--rounded-md);
+}
+
+.emoji-grid button {
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--rounded-sm);
+  background: transparent;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    transform 120ms ease-out,
+    background-color 120ms ease-out;
+}
+
+.emoji-grid button:hover {
+  background: var(--hover);
+}
+
+/* 접속 상태 줄: 점, 이름(설명이 붙으면 40px), 시간을 정하는 줄은 오른쪽 꺾쇠. 지금 상태는 고른 줄 바탕. */
+.presence-item {
+  justify-content: flex-start;
+  gap: 10px;
+}
+
+.presence-item .dot {
+  --dot: 10px;
+}
+
+.presence-item.with-note {
+  height: auto;
+  min-height: max(40px, var(--control));
+  padding-block: 4px;
+}
+
+.presence-item[data-current] {
+  background: var(--selected);
+  font-weight: 600;
+}
+
+.item-label {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  line-height: 1.3;
+}
+
+.item-label .menu-note {
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+.item-chevron {
+  color: var(--text-secondary);
+}
+
+/* 시간 메뉴: 그 줄 오른쪽 옆에 같은 떠 있는 층으로 열린다. 좁은 화면(서랍)에서는 옆에 자리가 없어 그 줄 아래에 펼친다. */
+.submenu {
+  position: relative;
+}
+
+/* 상태 메뉴가 창 아래에 붙어 있어 시간 메뉴는 그 줄의 아래 끝에 맞춰 위로 연다. 아래로 열면 창 밖으로 나간다. */
+.flyout {
+  top: auto;
+  right: auto;
+  bottom: -7px;
+  left: calc(100% + 13px);
+  width: 180px;
+}
+
+@media (max-width: 833px) {
+  .flyout {
+    position: static;
+    width: auto;
+    padding: 2px 0 4px 28px;
+    border: 0;
+    box-shadow: none;
+  }
 }
 
 /* 대화 칸: 패널이 아니라 창 바탕 위에 바로 놓는다. 위에 52px 머리 띠. */
@@ -1097,8 +1352,7 @@ button.member-row:active {
   line-height: 1.3;
 }
 
-.member-name,
-.member-status {
+.member-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1111,10 +1365,26 @@ button.member-row:active {
   font-weight: 400;
 }
 
+/* 둘째 줄: 상태 메시지(글씨색) · 접속 상태나 작업 수(보조 글씨). 길면 메시지만 잘린다. */
 .member-status {
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
   color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.38;
+  white-space: nowrap;
+}
+
+.status-message {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+}
+
+.status-rest {
+  flex: none;
 }
 
 .chevron {

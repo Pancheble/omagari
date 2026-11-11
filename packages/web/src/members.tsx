@@ -1,7 +1,7 @@
 import { ago, EXECUTOR_NAMES, type ExecutorId, type MemberView } from "@omagari/contract";
 import { ChevronRight, Clock } from "lucide-react";
 import { type ComponentProps, useEffect, useId, useReducer, useState } from "react";
-import { Avatar } from "./workspace.tsx";
+import { Avatar, PRESENCE_WORDS } from "./workspace.tsx";
 
 /** 에이전트 표시에 쓰는 실행기 약자(DESIGN.md 에이전트 표시). */
 const MARKS = { "claude-code": "CC", codex: "CX" } as const satisfies Record<ExecutorId, string>;
@@ -11,13 +11,13 @@ type Member = MemberView;
 type Agent = Member["agents"][number];
 type Work = Member["works"][number];
 
-/**
- * 사람이 오프라인인가. 사람의 접속 상태와 상태 메시지는 #39가 넣는다. 그 전까지는 에이전트로 가른다:
- * 붙은 에이전트가 하나도 없으면(러너를 켠 적이 없어도) 오프라인이다. 그룹, 흐린 아바타, 둘째 줄의 "오프라인"이 모두 이것을 본다.
- */
-const offline = (member: Member) => member.agents.every((agent) => agent.state === "offline");
+/** 사람이 오프라인인가(접속 상태). 에이전트의 러너가 붙어 있는지와 따로 간다. 그룹과 흐린 아바타가 이것을 본다. */
+const offline = (member: Member) => member.presence === "offline";
 
-/** 멤버 목록: "온라인 — N", "오프라인 — N"으로 묶은 사람 행. 행은 접힌 것이 기본이고, 펼치면 작업마다 한 덩어리다. */
+/**
+ * 멤버 목록: "온라인 — N", "오프라인 — N"으로 묶은 사람 행. 자리 비움과 방해 금지는 온라인에 든다.
+ * 행은 접힌 것이 기본이고, 펼치면 작업마다 한 덩어리다.
+ */
 export function MemberList({ me, members }: { me: string; members: Member[] }) {
   useMinuteTick();
   const groups = [
@@ -66,26 +66,34 @@ function MemberRow({ member, me }: { member: Member; me: boolean }) {
   const works = useId();
   const count = member.works.length;
   const away = offline(member);
-  // 둘째 줄: 상태 메시지(#39) · 작업 N개. 상태 메시지가 없으면 그 자리에 접속 상태를 쓰고, 둘 다 없으면 작업 수만 쓴다.
+  // 둘째 줄: 상태 메시지 · 작업 N개. 상태 메시지가 없으면 그 자리에 접속 상태(온라인 말고)를 보조 글씨로 쓰고,
+  // 둘 다 없으면 작업 수만 쓴다. 메시지가 길면 메시지만 잘린다.
   // 에이전트가 문답에 답하는 동안은 작업 수 앞에 "답하는 중"이 붙는다(PRD 17). 에이전트가 여럿이면 어느 것인지 쓴다.
   const answering = member.agents
     .filter((agent) => agent.state === "answering")
     .map((agent) =>
       member.agents.length > 1 ? `${EXECUTOR_NAMES[agent.executor]} 답하는 중` : "답하는 중",
     );
-  const status = [away && "오프라인", ...answering, count > 0 ? `작업 ${count}개` : "작업 없음"]
+  const word = member.presence === "online" ? undefined : PRESENCE_WORDS[member.presence];
+  const rest = [
+    member.message === null && word,
+    ...answering,
+    count > 0 ? `작업 ${count}개` : "작업 없음",
+  ]
     .filter(Boolean)
     .join(" · ");
   const head = (
     <>
-      {/* 사람의 접속 점(13px)은 #39가 아바타에 붙인다. */}
-      <Avatar name={member.name} size={40} />
+      <Avatar name={member.name} size={40} presence={member.presence} />
       <span className="member-names">
         <strong>
           <span className="member-name">{member.name}</span>
           {me && <span className="me">나</span>}
         </strong>
-        <span className="member-status">{status}</span>
+        <span className="member-status">
+          {member.message !== null && <span className="status-message">{member.message}</span>}
+          <span className="status-rest">{member.message === null ? rest : `\u00a0· ${rest}`}</span>
+        </span>
       </span>
       {count > 0 && <ChevronRight size={14} className="chevron" aria-hidden />}
     </>

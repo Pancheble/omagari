@@ -2,15 +2,18 @@ import {
   api,
   type Channel,
   type ChannelMessage,
+  type ChosenPresence,
   call,
   type ExecutorId,
   HISTORY_PAGE,
   type MemberView,
+  type Presence,
+  type PresenceDuration,
   type Qa,
 } from "@omagari/contract";
 import { Menu, MessageSquare, Users, X } from "lucide-react";
 import {
-  type KeyboardEvent,
+  type ComponentProps,
   type ReactNode,
   useEffect,
   useId,
@@ -24,6 +27,7 @@ import { ChannelTitle, Conversation, type View } from "./conversation.tsx";
 import { type Dm, DmPanel } from "./dm.tsx";
 import { useLive } from "./live.ts";
 import { MemberList, MemberSkeleton } from "./members.tsx";
+import { ProfilePanel } from "./profile.tsx";
 
 /** 이 폭부터 채널 패널이 늘 보인다. 그보다 좁으면 대화만 두고 채널 패널은 서랍으로 연다(DESIGN.md 앱의 좁은 화면). */
 const WIDE = "(min-width: 834px)";
@@ -256,8 +260,30 @@ export function Workspace({
     creator.current?.showModal();
   };
 
+  /** 내 접속 상태와 상태 메시지를 바꾼다. 바뀐 것은 실시간 연결의 멤버 목록으로 돌아온다. */
+  const setPresence = async (presence: ChosenPresence, duration?: PresenceDuration) => {
+    try {
+      await call(server(session), api.setPresence, { presence, duration });
+    } catch (error) {
+      throw check(error);
+    }
+  };
+  const setMessage = async (message: string) => {
+    try {
+      await call(server(session), api.setStatusMessage, { message });
+    } catch (error) {
+      throw check(error);
+    }
+  };
+
   const panel = (onPick?: () => void) => (
-    <ChannelPanel me={me} onLogout={onLogout}>
+    <ChannelPanel
+      me={me}
+      mine={members?.find((member) => member.login === me.login)}
+      onLogout={onLogout}
+      onPresence={setPresence}
+      onMessage={setMessage}
+    >
       <ChannelList
         channels={channels}
         current={current?.id}
@@ -443,11 +469,17 @@ export function RightPanel({
 
 function ChannelPanel({
   me,
+  mine,
   onLogout,
+  onPresence,
+  onMessage,
   children,
 }: {
   me: Me;
+  mine?: MemberView;
   onLogout: () => void;
+  onPresence: (presence: ChosenPresence, duration?: PresenceDuration) => Promise<void>;
+  onMessage: (message: string) => Promise<void>;
   children: ReactNode;
 }) {
   return (
@@ -458,83 +490,54 @@ function ChannelPanel({
         <p>{me.repo}</p>
       </div>
       {children}
-      <ProfilePanel me={me} onLogout={onLogout} />
+      <ProfilePanel
+        me={me}
+        mine={mine}
+        onLogout={onLogout}
+        onPresence={onPresence}
+        onMessage={onMessage}
+      />
     </>
   );
 }
 
-export const Avatar = ({ name, size }: { name: string; size: 36 | 40 }) => (
-  <span className={`avatar avatar-${size}`} aria-hidden>
-    {/* 접속 점(온라인, 자리 비움, 방해 금지, 오프라인)은 아바타 오른쪽 아래에 붙는다. 1단계에 넣을지 아직 정하지 않았다. */}
-    {Array.from(name)[0]?.toUpperCase()}
-  </span>
-);
+/** 접속 상태를 읽는 말. 접속 점의 이름이고, 상태 메시지가 없는 멤버 행의 둘째 줄이다. */
+export const PRESENCE_WORDS = {
+  online: "온라인",
+  away: "자리 비움",
+  dnd: "방해 금지",
+  offline: "오프라인",
+} as const satisfies Record<Presence, string>;
 
-/** 채널 패널 맨 아래의 프로필 패널. 누르면 바로 위에 메뉴가 열린다. */
-function ProfilePanel({ me, onLogout }: { me: Me; onLogout: () => void }) {
-  const [open, setOpen] = useState(false);
-  const wrap = useRef<HTMLDivElement>(null);
-  const button = useRef<HTMLButtonElement>(null);
-  const menu = useId();
-
-  // 메뉴 바깥을 누르면 닫힌다.
-  useEffect(() => {
-    if (!open) return;
-    const outside = (event: PointerEvent) => {
-      if (!wrap.current?.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener("pointerdown", outside);
-    return () => document.removeEventListener("pointerdown", outside);
-  }, [open]);
-
-  // Esc는 메뉴만 닫는다. 서랍 안에서 열었어도 서랍은 그대로 둔다.
-  const onKeyDown = (event: KeyboardEvent) => {
-    if (event.key !== "Escape" || !open) return;
-    event.preventDefault();
-    event.stopPropagation();
-    setOpen(false);
-    button.current?.focus();
-  };
-
-  return (
-    // biome-ignore lint/a11y/noStaticElementInteractions: 안에 든 메뉴와 버튼의 Esc를 한곳에서 받는다
-    <div className="profile" ref={wrap} onKeyDown={onKeyDown}>
-      <button
-        ref={button}
-        type="button"
-        className="profile-button"
-        aria-expanded={open}
-        aria-controls={open ? menu : undefined}
-        onClick={() => setOpen(!open)}
-      >
-        <Avatar name={me.name} size={36} />
-        {/* 이름 아래 줄은 상태 메시지 자리다. 상태 메시지가 생기기 전까지 GitHub 아이디를 둔다. */}
-        <span className="names">
-          <strong>{me.name}</strong>
-          <span>{me.login}</span>
-        </span>
-      </button>
-      {/* 메뉴는 버튼 뒤에 둔다. 위에 떠 보여도 Tab은 버튼에서 메뉴로 간다. */}
-      {open && (
-        <div className="menu" id={menu}>
-          <div className="menu-head">
-            <Avatar name={me.name} size={40} />
-            <div className="names">
-              <strong>{me.name}</strong>
-              <span>{me.login}</span>
-            </div>
-          </div>
-          {/* 상태 메시지 칸과 접속 상태 고르기가 여기에 온다. 1단계에 넣을지 아직 정하지 않았다. */}
-          <hr />
-          <button type="button" className="menu-item" disabled>
-            설정
-            <span className="menu-note">준비 중</span>
-          </button>
-          <button type="button" className="menu-item danger" onClick={onLogout}>
-            로그아웃
-          </button>
-        </div>
-      )}
-    </div>
+/**
+ * 사람 아바타. `presence`를 주면 오른쪽 아래에 접속 점(DESIGN.md "접속 점")이 붙는다.
+ * 점 둘레의 고리는 아바타를 점 모양으로 도려내 놓인 바탕이 그대로 보이게 한다. 바탕이 바뀌어도(올렸을 때) 맞는다.
+ */
+export const Avatar = ({
+  name,
+  size,
+  presence,
+}: {
+  name: string;
+  size: 36 | 40;
+  presence?: Presence;
+}) => {
+  const face = (
+    <span className={`avatar avatar-${size}`} aria-hidden>
+      {Array.from(name)[0]?.toUpperCase()}
+    </span>
   );
-}
+  if (!presence) return face;
+  const word = PRESENCE_WORDS[presence];
+  return (
+    <span className="with-dot">
+      {face}
+      <Dot presence={presence} role="img" aria-label={word} title={word} />
+    </span>
+  );
+};
+
+/** 접속 점의 모양만: 온라인은 초록 원, 자리 비움은 주황 초승달, 방해 금지는 빨간 원에 흰 가로줄, 오프라인은 회색 빈 고리. */
+export const Dot = ({ presence, ...rest }: { presence: Presence } & ComponentProps<"span">) => (
+  <span className="dot" data-presence={presence} {...rest} />
+);
