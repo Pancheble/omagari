@@ -50,7 +50,7 @@
 **만들면서 확인할 것**
 
 - 주인이 지금 쓰고 있는 세션을 포크하면 어디까지의 대화가 들어오는가
-- Codex: `codex exec resume <세션 ID>`가 있고, `codex exec`는 저장된 CLI 로그인(보통 ChatGPT 로그인)을 그대로 쓰며 기본이 읽기 전용 샌드박스다(문서로 확인). **손 점검(2026-11-11, codex-cli 0.167.1)에서 구독 로그인, 세션 이어 가기, 읽기 전용이 문서대로 됐다.** 기본 샌드박스는 사용자 설정(`~/.codex/config.toml`의 `sandbox_mode`)을 따르므로, 러너(#16)는 기본값에 기대지 않고 `-s read-only`를 직접 준다. `codex exec fork`는 0.167.1에 있다(돌려 보지는 않았다)
+- Codex: `codex exec resume <세션 ID>`가 있고, `codex exec`는 저장된 CLI 로그인(보통 ChatGPT 로그인)을 그대로 쓰며 기본이 읽기 전용 샌드박스다(문서로 확인). **손 점검(2026-11-11, codex-cli 0.167.1)에서 구독 로그인, 세션 이어 가기, 읽기 전용이 문서대로 됐다.** 기본 샌드박스는 사용자 설정(`~/.codex/config.toml`의 `sandbox_mode`)을 따르므로, 러너(#16)는 기본값에 기대지 않고 `-s read-only`를 직접 주고 MCP 서버, 앱, 플러그인을 끈다(ADR-0003). `codex exec fork`는 0.167.1에 있다(돌려 보지는 않았다)
 - 화면 없는 Claude Code 세션의 자동 컴팩트: 손 점검에서 일어났다. 문턱을 낮춘 세션(`CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000`)이 74,569 토큰에서 3,399 토큰으로 줄었고, 요약에 첫 턴의 내용이 남아 컴팩트 뒤의 턴도 기억했다. 세션 id는 그대로였다. Codex는 보지 않았다(아래 미정)
 
 **실제 실행기 손 점검 결과** (`test/real-executors.ts`, 돌리는 법은 `docs/executor-check.md`)
@@ -65,6 +65,10 @@
   - [x] 세션 이어 가기: `codex exec resume <id> -`로 이은 둘째 턴이 첫 턴의 암호를 답했고 세션 id가 그대로다
   - [x] 읽기 전용: `--sandbox` 없이(기본값) 파일을 만들고 고치라고 시킨 뒤에도 작업 폴더가 그대로다. 답은 "읽기 전용 권한으로 파일을 쓸 수 없습니다"
   - 긴 세션: 보지 않았다(`--quick`). 무료 요금제의 사용량으로는 맥락을 4만 토큰까지 키우기 어려워 미뤘다
+- Codex, 러너에 붙인 뒤 (2026-11-11, #16 세션이 `node test/real-executors.ts codex --quick`으로 돌림, codex-cli 0.167.1). 러너의 `codex` 실행기로 DM 채널 세션을 돌렸다
+  - [x] 구독 로그인: `codex login status`가 ChatGPT 로그인이다
+  - [x] 세션 이어 가기: 러너의 채널 세션으로 이은 둘째 턴이 첫 턴의 암호를 답했고 세션 id가 그대로다
+  - [x] 읽기 전용: 러너가 `-s read-only`로 이어 간 세션에 파일을 만들고 고치라고 시킨 뒤에도 작업 폴더가 그대로다. 답은 "작업공간이 읽기 전용이라 파일을 만들 수 없다"
 
 Sources: [Claude Code 비대화 실행](https://code.claude.com/docs/en/headless), [세션 다루기](https://code.claude.com/docs/en/agent-sdk/sessions), [플랜으로 Agent SDK 쓰기](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan), [/btw 설명](https://blog.vincentqiao.com/en/posts/claude-code-btw/), [Codex 비대화 모드](https://learn.chatgpt.com/docs/non-interactive-mode)
 
@@ -117,7 +121,7 @@ Sources: [Claude Code 비대화 실행](https://code.claude.com/docs/en/headless
 
 - **편지함과 피드를 나눈다**: 나에게 온 질문, 내 작업과의 부딪힘, 급한 알림만 편지함으로 가서 에이전트에게 들어간다. 나머지 소식은 피드에 남고 조회할 때만 보인다(Room의 방식)
 - **질문이 먼저, 토론은 그다음**: 부딪힘이 의심되면 에이전트가 먼저 상대에게 묻는다. 질문 한 번으로 풀리면 끝이고, 안 풀리면 안건과 근거를 붙여 토론을 요청한다
-- 훅의 이름은 Claude Code 기준이다. Codex도 세션 시작(SessionStart)과 편집 전(PreToolUse) 훅으로 글을 넣을 수 있고, 훅은 `/hooks`에서 신뢰해야 돈다([Codex hooks](https://learn.chatgpt.com/docs/hooks))
+- 훅의 이름은 Claude Code 기준이다. Codex도 세션 시작(SessionStart)과 편집 전(PreToolUse) 훅으로 글을 넣을 수 있고, 훅은 `/hooks`에서 신뢰해야 돈다([Codex hooks](https://learn.chatgpt.com/docs/hooks)). Codex의 편집 전 훅은 `apply_patch`에 걸고, 패치 하나가 고치는 파일마다 근처 작업을 본다(#16, ADR-0016)
 - **1단계에 넣는 길**: 세션 시작 훅, 편집 전 훅, `omagari status`(상황 보기와 상태 한 줄 쓰기). 나머지 길(계약 선언, 응답에 끼워 넣기, `omagari impact`, 밀어 넣기, `omagari ask`)은 선점, 편지함, 정의 줄과 함께 2단계에 넣는다
 
 **선점(claim)**: 에이전트가 작업을 시작할 때 `omagari claim`으로 "여기 내가 한다"를 선언하고, 끝나면 `omagari release`로 푼다. 단위와 줄 번호 옮기기는 Room의 방식 그대로다(ADR-0008).

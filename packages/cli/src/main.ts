@@ -36,7 +36,7 @@ const USAGE = `사용법:
   omagari status set <한 줄>    지금 브랜치의 작업에 상태 한 줄을 쓴다
   omagari metrics [--days <날 수>]
                                 지난 날들(기본 14일) 날마다 들어온 멤버 수와 문답 수를 본다
-  omagari install               이 기기의 에이전트(Claude Code)에 세션 시작 훅, 편집 전 훅, 상태 한 줄 스킬을 깐다
+  omagari install               이 기기의 에이전트(Claude Code, Codex)에 세션 시작 훅, 편집 전 훅, 상태 한 줄 스킬을 깐다
                                 이미 있는 설정은 그대로 두고, 다시 돌려도 하나만 깔린다
 
 서버는 OMAGARI_SERVER로 준다(기본 http://127.0.0.1:3000).`;
@@ -153,6 +153,8 @@ async function runner(chosen: string | undefined) {
     return start(await login());
   });
   console.log(`러너가 켜졌다: ${running.login}의 에이전트, ${running.repo} ↔ ${running.folder}`);
+  // Codex는 깔려 있고 로그인했을 때만 붙는다. 무엇이 붙었는지 주인이 바로 본다.
+  console.log(`에이전트: ${running.executors.map((id) => EXECUTOR_NAMES[id]).join(", ")}`);
   for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, running.stop);
   const reason = await running.ended;
   if (reason) throw reason;

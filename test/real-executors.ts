@@ -9,7 +9,7 @@ import { arch, homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
 import { parseArgs, promisify } from "node:util";
 import { EXECUTOR_NAMES, ExecutorId } from "@omagari/contract";
-import { claudeCode, runnerPaths } from "@omagari/runner";
+import { claudeCode, codex as codexExecutor, runnerPaths } from "@omagari/runner";
 import { startWorld, writer } from "./harness.ts";
 
 /** 이것이 있으면 구독 대신 API 키로 돈다. 값은 읽지도 찍지도 않는다. */
@@ -151,6 +151,19 @@ async function transcript(projects: string, session: string) {
   return [];
 }
 
+/** 웹이 하듯 러너의 `executor` 에이전트에게 DM으로 묻고, 답과 그 턴의 세션 id(실행 기록)를 돌려준다. */
+async function askRunner(world: World, channel: string, message: string, executor: ExecutorId) {
+  const { log } = await runnerPaths(world.repo.folder);
+  const pending = await world.ask(world.owner, channel, message, executor);
+  const qa = await world.settled(world.owner, pending, TURN_MS + 60_000);
+  if (qa.answer.state !== "answered") {
+    throw new Error(qa.answer.state === "failed" ? qa.answer.error.message : "답이 오지 않았다");
+  }
+  // 러너는 답을 보내기 전에 실행 기록을 남긴다. 마지막 줄이 이 턴이다.
+  const last = (await readFile(log, "utf8")).trimEnd().split("\n").at(-1) ?? "{}";
+  return { text: qa.answer.text, session: JSON.parse(last).session as string };
+}
+
 /**
  * Claude Code: 러너의 실제 실행기(`claudeCode`)를 꽂은 러너에 웹이 하듯 DM으로 묻는다.
  * 채널 세션, 읽기 전용 도구, `--resume`, 턴 상한, 실행 기록이 모두 러너의 코드로 돈다.
@@ -161,17 +174,8 @@ async function claude(world: World, head: string, quick: boolean) {
   const projects: string =
     status.projectsDirectory ??
     join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "projects");
-  const { log } = await runnerPaths(world.repo.folder);
-  const ask = async (channel: string, message: string) => {
-    const pending = await world.ask(world.owner, channel, message);
-    const qa = await world.settled(world.owner, pending, TURN_MS + 60_000);
-    if (qa.answer.state !== "answered") {
-      throw new Error(qa.answer.state === "failed" ? qa.answer.error.message : "답이 오지 않았다");
-    }
-    // 러너는 답을 보내기 전에 실행 기록을 남긴다. 마지막 줄이 이 턴이다.
-    const last = (await readFile(log, "utf8")).trimEnd().split("\n").at(-1) ?? "{}";
-    return { text: qa.answer.text, session: JSON.parse(last).session as string };
-  };
+  const ask = (channel: string, message: string) =>
+    askRunner(world, channel, message, "claude-code");
   const checks: Check[] = [];
 
   await attempt(checks, "구독 로그인", async () => ({
@@ -264,7 +268,7 @@ async function codexTurn(folder: string, prompt: string, resume?: string, option
     thread_id?: string;
     message?: string;
     error?: { message?: string };
-    item?: { type?: string; text?: string; status?: string };
+    item?: { type?: string; text?: string };
   };
   const events = stdout.split("\n").flatMap((line): Event[] => {
     try {
@@ -281,14 +285,8 @@ async function codexTurn(folder: string, prompt: string, resume?: string, option
     const why = failed?.error?.message ?? failed?.message ?? short(stderr.slice(-300), 300);
     throw new Error(`codex가 답하지 못했다(종료 코드 ${code}): ${why}`);
   }
-  const tried = events
-    .filter(
-      (e) =>
-        e.type === "item.completed" && !["agent_message", "reasoning"].includes(e.item?.type ?? ""),
-    )
-    .map((e) => `${e.item?.type}${e.item?.status ? ` ${e.item.status}` : ""}`);
   const thread = events.find((e) => e.type === "thread.started")?.thread_id ?? resume;
-  return { answer, thread, tried, stdout };
+  return { answer, thread, stdout };
 }
 
 /** Codex 세션에서 컴팩트가 일어났는지: `codex exec`의 출력과 이 기기에 남은 세션 기록(`$CODEX_HOME/sessions`)에서 찾는다. */
@@ -312,7 +310,10 @@ async function codexCompaction(thread: string, stdout: string) {
   };
 }
 
-/** Codex: 러너에 아직 없어(#16) 문서대로 `codex exec`를 바로 부른다. 샌드박스는 주지 않아 기본값으로 돈다. */
+/**
+ * Codex: 러너의 실제 실행기(`codex`)를 꽂은 러너에 웹이 하듯 DM으로 묻는다. 러너는 `-s read-only`를 준다.
+ * 긴 세션만 컴팩트 문턱을 낮춰야 해서(`-c`) `codex exec`를 바로 부른다. 그때도 샌드박스는 읽기 전용이다.
+ */
 async function codex(world: World, head: string, quick: boolean) {
   const folder = world.repo.folder;
   const version = (await sh("codex", ["--version"])).stdout.trim();
@@ -331,31 +332,34 @@ async function codex(world: World, head: string, quick: boolean) {
     return { ok: chatgpt, detail: `API 키 환경 변수 없이 돌렸다. \`codex login status\`: ${how}` };
   });
 
-  let thread: string | undefined;
+  const ask = (channel: string, message: string) => askRunner(world, channel, message, "codex");
+  const channel = await world.channel(world.owner, "Codex 점검");
   const word = secret();
   await attempt(checks, "세션 이어 가기", async () => {
-    const first = await codexTurn(folder, SAY.remember(word));
-    if (!first.thread) throw new Error("thread.started에서 세션 id를 받지 못했다");
-    thread = first.thread;
-    const second = await codexTurn(folder, SAY.recall, thread);
+    const first = await ask(channel, SAY.remember(word));
+    const second = await ask(channel, SAY.recall);
     return {
-      ok: second.answer.includes(word),
-      detail: `\`codex exec resume <id> -\`로 이은 둘째 턴이 첫 턴의 암호 ${word}를 물었더니 "${short(second.answer)}". 세션 ${thread} → ${second.thread === thread ? "그대로" : second.thread}`,
+      ok: second.text.includes(word),
+      detail: `러너의 채널 세션으로 이은(\`codex exec resume <id> -\`) 둘째 턴이 첫 턴의 암호 ${word}를 물었더니 "${short(second.text)}". 세션 ${first.session} → ${second.session === first.session ? "그대로" : second.session}`,
     };
   });
 
   await attempt(checks, "읽기 전용", async () => {
-    const turn = await codexTurn(folder, SAY.write, thread);
+    const answer = await ask(channel, SAY.write);
     const changed = await changes(world, head);
     return {
       ok: !changed,
-      detail: `${changed ?? "작업 폴더가 그대로다"}. \`--sandbox\` 없이(기본값) ${thread ? "이어 간" : "새"} 세션에 ${PROBE}를 만들고 README.md를 고치라고 시켰다. 시도한 것: ${turn.tried.join(", ") || "없음"}. 답: "${short(turn.answer)}"`,
+      detail: `${changed ?? "작업 폴더가 그대로다"}. 러너가 \`-s read-only\`로 이어 간 세션에 ${PROBE}를 만들고 README.md를 고치라고 시켰다. 답: "${short(answer.text)}"`,
     };
   });
 
   if (!quick) {
     await attempt(checks, "긴 세션", async () => {
-      const limit = ["-c", `model_auto_compact_token_limit=${CODEX_COMPACT_LIMIT}`];
+      const limit = [
+        "--sandbox=read-only",
+        "-c",
+        `model_auto_compact_token_limit=${CODEX_COMPACT_LIMIT}`,
+      ];
       const word = secret();
       const first = await codexTurn(folder, SAY.remember(word), undefined, limit);
       const id = first.thread;
@@ -395,7 +399,7 @@ async function codex(world: World, head: string, quick: boolean) {
 }
 
 progress("임시 레포에 서버와 러너를 띄운다");
-const world = await startWorld({ executors: { "claude-code": claudeCode } });
+const world = await startWorld({ executors: { "claude-code": claudeCode, codex: codexExecutor } });
 const write = writer(world.repo.folder);
 await write("README.md", "# 점검용 임시 레포\n");
 for (let n = 1; n <= FILLS; n++) await write(`fill/${n}.txt`, filler(String(n), 500));
@@ -426,7 +430,8 @@ if (failed) {
 
 const how = {
   "claude-code": "러너의 `claudeCode` 실행기로 DM 채널 세션을 돌렸다",
-  codex: "러너에 아직 없어(#16) `codex exec --json`을 바로 불렀다",
+  codex:
+    "러너의 `codex` 실행기로 DM 채널 세션을 돌렸다(긴 세션은 컴팩트 문턱을 낮추려고 `codex exec --json`을 바로 불렀다)",
 };
 const line = (c: Check) =>
   c.ok === null

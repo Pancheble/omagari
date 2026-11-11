@@ -94,6 +94,76 @@ export const claudeCode: Executor = async ({ message, resume, tools, folder, sig
   return { answer: result.result, session: result.session_id };
 };
 
+/** `codex exec --json`이 stdout에 한 줄씩 내는 이벤트 가운데 러너가 읽는 것. */
+type CodexEvent = {
+  type?: string;
+  thread_id?: string;
+  message?: string;
+  error?: { message?: string };
+  item?: { type?: string; text?: string };
+};
+
+/**
+ * Codex 실행기. `codex exec --json -`으로 띄우고 `codex exec --json resume <id> -`로 잇는다(Codex 비대화 모드).
+ * 샌드박스의 기본값은 주인의 `config.toml`(`sandbox_mode`)을 따르므로 기본값에 기대지 않고 `-s read-only`를 직접 준다(ADR-0003).
+ * 샌드박스는 셸 명령과 패치만 막고 MCP 도구는 그 밖에서 돈다. Claude Code에서 MCP 도구를 빼듯 주인이 설정한 MCP 서버를 하나씩 끄고,
+ * 앱(커넥터)과 플러그인(MCP 서버를 함께 가져온다)도 끈다.
+ * `-s`, `-C`, `--disable`, `-c`는 `resume` 앞에 둔다(`-s`와 `-C`는 `codex exec resume --help`에 없다). 메시지는 `-`로 표준 입력에서 읽힌다.
+ * Codex에는 쓸 도구를 고르는 플래그가 없어 `tools`는 쓰지 않는다.
+ * 세션 id는 `thread.started`의 `thread_id`, 답은 마지막 `item.completed`(`agent_message`)의 `text`다.
+ */
+export const codex: Executor = async ({ message, resume, folder, signal }) => {
+  // 레포의 `.codex/config.toml`까지 읽히도록 작업 폴더에서 묻는다. 서버 이름은 Codex가 `[a-zA-Z0-9_-]`만 받는다.
+  const listed = await execFileAsync("codex", ["mcp", "list", "--json"], { cwd: folder, signal });
+  const servers: { name: string }[] = JSON.parse(listed.stdout);
+  const run = execFileAsync(
+    "codex",
+    [
+      "exec",
+      "--json",
+      "--sandbox=read-only",
+      `--cd=${folder}`,
+      "--disable=apps",
+      "--disable=plugins",
+      ...servers.flatMap(({ name }) => ["-c", `mcp_servers.${name}.enabled=false`]),
+      ...(resume ? ["resume", resume] : []),
+      "-",
+    ],
+    { cwd: folder, maxBuffer: 64 * 1024 * 1024, signal },
+  );
+  run.child.stdin?.end(message);
+  // 실패한 턴도 이벤트를 stdout에 내고 0이 아닌 코드로 끝난다. 뜨지 못했거나 끊긴 것만 그대로 던진다.
+  const { stdout, stderr, code } = await run.then(
+    (done) => ({ ...done, code: 0 }),
+    (error) => {
+      if (signal.aborted || typeof error.code !== "number") throw error;
+      return error as { stdout: string; stderr: string; code: number };
+    },
+  );
+  const events = stdout.split("\n").flatMap((line): CodexEvent[] => {
+    try {
+      return [JSON.parse(line)];
+    } catch {
+      return [];
+    }
+  });
+  const answer = events.findLast(
+    (e) => e.type === "item.completed" && e.item?.type === "agent_message",
+  )?.item?.text;
+  const session = events.find((e) => e.type === "thread.started")?.thread_id ?? resume;
+  if (code === 0 && typeof answer === "string" && session) return { answer, session };
+  const failed = events.findLast((e) => e.type === "turn.failed" || e.type === "error");
+  const why = failed?.error?.message ?? failed?.message ?? (stderr.trim().slice(-300) || stdout);
+  throw new Error(`Codex가 답하지 못했다(종료 코드 ${code}): ${why}`);
+};
+
+/** 이 기기에서 Codex를 돌릴 수 있는지: 깔려 있고 로그인했다(`codex login status`가 0으로 끝난다). */
+export const codexReady = () =>
+  execFileAsync("codex", ["login", "status"]).then(
+    () => true,
+    () => false,
+  );
+
 /** 실행 기록 한 줄: 언제, 어느 실행기의 어느 세션으로, 무엇을 받아, 어떤 도구로 돌렸고, 실패했으면 왜. */
 export type RunRecord = {
   at: string;
@@ -231,7 +301,7 @@ export async function startRunner(options: {
   folder: string;
   /** 로그인으로 받은 세션. GitHub 토큰은 러너에 오지 않는다. */
   session: string;
-  /** 이 기기에서 돌릴 실행기. 실행기마다 에이전트가 하나다(ADR-0015). 기본은 Claude Code 하나다. Codex는 #16이 더한다. */
+  /** 이 기기에서 돌릴 실행기. 실행기마다 에이전트가 하나다(ADR-0015). 기본은 Claude Code와, 깔려 있고 로그인했으면 Codex다. */
   executors?: Partial<Record<ExecutorId, Executor>>;
   /** welcome을 기다리는 시간. */
   welcomeTimeoutMs?: number;
@@ -245,7 +315,10 @@ export async function startRunner(options: {
   const { folder, repos, remotes } = await readRepo(options.folder);
   const paths = await runnerPaths(folder);
   await mkdir(dirname(paths.log), { recursive: true });
-  const executors = options.executors ?? { "claude-code": claudeCode };
+  const executors = options.executors ?? {
+    "claude-code": claudeCode,
+    ...((await codexReady()) && { codex }),
+  };
   const executorIds = Object.keys(executors) as ExecutorId[];
   const url = new URL(RUNNER_SOCKET, options.serverUrl);
   url.protocol = url.protocol.replace("http", "ws");
@@ -570,6 +643,8 @@ export async function startRunner(options: {
     folder,
     login: welcome.login,
     repo: welcome.repo,
+    /** 서버에 알린 실행기. 실행기마다 에이전트가 하나다. */
+    executors: executorIds,
     /** 러너가 멈추면 끝난다. 서버가 거절해서 멈췄으면 그 이유가 온다. */
     ended: ended.promise,
     async stop() {

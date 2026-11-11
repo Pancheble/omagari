@@ -4,9 +4,9 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import type {
@@ -32,6 +32,7 @@ import { type GitHub, type Pull, startServer } from "@omagari/server";
 const executable = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 const CLI = executable("../packages/cli/src/main.ts");
 const HOOK = executable("../packages/hooks/src/main.ts");
+const FAKE_CODEX = executable("./fake-codex.ts");
 
 // 러너와 CLI가 부르는 Git도 기기의 Git 설정(전역 gitignore 등)을 읽지 않는다.
 process.env.GIT_CONFIG_GLOBAL = devNull;
@@ -222,6 +223,9 @@ export function fakeGitHub() {
 
 type ExecutorInput = Parameters<Executor>[0];
 
+/** 늘 실패하는 실행기. 가짜를 넘기지 않은 러너에 실제 실행기 대신 꽂는다. 이 기기에 깔린 Claude Code나 Codex에 따라 결과가 바뀌지 않게 한다. */
+const noExecutor: Executor = () => Promise.reject(new Error("가짜 실행기를 넘기지 않았다"));
+
 /**
  * 가짜 에이전트 실행기. 받은 입력과 옵션을 `calls`에 적고 `answer`가 정한 답을 낸다.
  * 이어 갈 세션이 없으면 `session-<몇 번째 부름>`으로 새 세션을 띄운다.
@@ -259,6 +263,30 @@ export function gatedExecutor() {
     ...fake,
     release: (message: string) => gate(message).resolve(`답: ${message}`),
     most: () => most,
+  };
+}
+
+/**
+ * 가짜 Codex CLI(`test/fake-codex.ts`)를 이 테스트 파일의 PATH 맨 앞에 둔다. 테스트 파일마다 프로세스가 따로라 다른 파일은 모른다.
+ * 러너의 실제 `codex` 실행기와 CLI가 띄운 러너가 이것을 부른다. `calls()`는 `codex exec`가 받은 인자, 입력, 작업 폴더다.
+ */
+export async function fakeCodex(t: { after: (fn: () => Promise<void>) => void }) {
+  const bin = await realpath(await mkdtemp(join(tmpdir(), "omagari-codex-")));
+  t.after(() => rm(bin, { recursive: true, force: true }));
+  await writeFile(
+    join(bin, "codex"),
+    `#!/bin/sh\nexec '${process.execPath}' '${FAKE_CODEX}' "$@"\n`,
+    { mode: 0o755 },
+  );
+  const calls = join(bin, "calls.jsonl");
+  process.env.PATH = `${bin}${delimiter}${process.env.PATH}`;
+  process.env.FAKE_CODEX_CALLS = calls;
+  return {
+    calls: async (): Promise<{ args: string[]; input: string; cwd: string }[]> =>
+      (await readFile(calls, "utf8").catch(() => ""))
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line)),
   };
 }
 
@@ -326,10 +354,7 @@ export async function startWorld(
     folder: repo.folder,
     session: owner.session,
     // 넘긴 가짜가 없으면 실제 실행기 대신 늘 실패하는 것을 꽂는다.
-    executors: options.executors ?? {
-      "claude-code":
-        options.executor ?? (() => Promise.reject(new Error("가짜 실행기를 넘기지 않았다"))),
-    },
+    executors: options.executors ?? { "claude-code": options.executor ?? noExecutor },
     turnTimeoutMs: options.turnTimeoutMs,
     observeMs: options.observeMs,
     share: options.share,
@@ -338,11 +363,13 @@ export async function startWorld(
     await cleanup();
     throw error;
   });
-  // CLI가 깔거나 읽는 Claude Code의 사용자 설정도 임시 폴더에 둔다. 테스트가 이 기기의 ~/.claude를 건드리지 않는다.
+  // CLI가 깔거나 읽는 Claude Code와 Codex의 사용자 설정도 임시 폴더에 둔다. 테스트가 이 기기의 ~/.claude, ~/.codex를 건드리지 않는다.
+  // CLI로 켠 러너도 이 Codex 설정을 읽어, 로그인이 없으니 Codex를 붙이지 않는다.
   const cliEnv = () => ({
     OMAGARI_SERVER: server.url,
     XDG_CONFIG_HOME: join(data, "config"),
     CLAUDE_CONFIG_DIR: join(data, "claude"),
+    CODEX_HOME: join(data, "codex"),
   });
 
   return {
@@ -358,6 +385,8 @@ export async function startWorld(
     config: join(data, "config"),
     /** 이 기기의 Claude Code 사용자 설정 폴더(`~/.claude` 자리). `omagari install`이 여기에 깐다. */
     claude: join(data, "claude"),
+    /** 이 기기의 Codex 사용자 설정 폴더(`~/.codex` 자리). `omagari install`이 여기에 깐다. */
+    codex: join(data, "codex"),
     /** 이 기기의 CLI가 `as`로 로그인해 둔 것처럼 세션을 남긴다. CLI로 로그인하는 흐름은 login.test가 본다. */
     async signInCli(as: { session: string }) {
       await mkdir(join(data, "config", "omagari"), { recursive: true });
@@ -455,6 +484,7 @@ export async function startWorld(
         serverUrl: server.url,
         folder: repo.folder,
         session: as.session,
+        executors: { "claude-code": noExecutor },
         observeMs: 50,
         share,
       };
@@ -483,9 +513,16 @@ export async function startWorld(
     /** 에이전트가 하듯 설정에 적힌 훅 명령 한 줄을 `sh -c`로 `cwd`에서 돌리고 입력(JSON)을 넣는다. */
     shell: (command: string, stdin: string, cwd = repo.folder) =>
       run("sh", ["-c", command], { cwd, stdin }),
-    /** Claude Code에 깔린 훅 실행 파일에 에이전트가 주는 입력(JSON)을 넣어 돌린다. */
-    hook: (stdin: string, options: { keepStdinOpen?: boolean } = {}) =>
-      run(process.execPath, [HOOK, "claude-code"], { cwd: repo.folder, stdin, ...options }),
+    /** 실행기(기본은 Claude Code)에 깔린 훅 실행 파일에 에이전트가 주는 입력(JSON)을 넣어 돌린다. */
+    hook: (
+      stdin: string,
+      options: { keepStdinOpen?: boolean; executor?: ExecutorId; cwd?: string } = {},
+    ) =>
+      run(process.execPath, [HOOK, options.executor ?? "claude-code"], {
+        cwd: options.cwd ?? repo.folder,
+        stdin,
+        keepStdinOpen: options.keepStdinOpen,
+      }),
     async stop() {
       await runner.stop();
       if (!serverDown) await server.stop();
