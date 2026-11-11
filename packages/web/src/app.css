@@ -22,6 +22,8 @@
   --overlay: #00000052;
   --error: #d70015;
   --error-bg: #fdeceb;
+  --warning: #b25000;
+  --warning-bg: #fff4e5;
   --on-primary: #ffffff;
   --floating: 0 8px 24px #0000001f;
   --rounded-xs: 5px;
@@ -166,6 +168,21 @@ svg.lucide {
 .banner.error {
   background: var(--error-bg);
   color: var(--error);
+}
+
+.banner.warning {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+/* 화면에는 보이지 않고 화면 낭독기만 읽는다. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 /* 로그인처럼 앱 틀 바깥의 화면 */
@@ -1086,13 +1103,14 @@ button.member-row:active {
   height: 9px;
   border-radius: 50%;
   background: var(--online);
-  box-shadow: 0 0 0 2px var(--selected-solid);
+  /* 점 둘레의 고리는 놓인 바탕색이다. 기본은 펼친 멤버 행의 바탕이고, 다른 바탕에서는 --mark-ring으로 바꾼다. */
+  box-shadow: 0 0 0 2px var(--mark-ring, var(--selected-solid));
   content: "";
 }
 
 .agent-mark[data-state="offline"]::after {
   border: 1.5px solid var(--offline);
-  background: var(--selected-solid);
+  background: var(--mark-ring, var(--selected-solid));
 }
 
 .work-body {
@@ -1140,6 +1158,276 @@ button.member-row:active {
 .badge.outline {
   border: 1px solid var(--hairline);
   color: var(--text-secondary);
+}
+
+.badge.chip {
+  background: var(--chip);
+}
+
+.badge.warning {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+/* DM 칸(DESIGN.md "DM 칸"): 머리 48px에 고른 에이전트. 연결된 에이전트가 둘 이상이면 머리가 버튼이고 아래에 메뉴가 열린다. */
+.dm-picker {
+  position: relative;
+  min-width: 0;
+}
+
+.dm-head {
+  --mark-ring: var(--parchment);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 48px;
+  padding: 0 8px 0 4px;
+  border: 0;
+  border-radius: var(--rounded-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+button.dm-head {
+  cursor: pointer;
+  transition:
+    transform 120ms ease-out,
+    background-color 120ms ease-out;
+}
+
+button.dm-head:hover,
+button.dm-head[aria-expanded="true"] {
+  background: var(--hover);
+}
+
+button.dm-head:active {
+  transform: scale(0.95);
+}
+
+.dm-names {
+  display: grid;
+  min-width: 0;
+}
+
+.dm-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.dm-chevron {
+  color: var(--text-secondary);
+}
+
+.dm-sub {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.33;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.agent-menu {
+  --mark-ring: var(--canvas);
+  top: calc(100% + 4px);
+  right: auto;
+  bottom: auto;
+  width: 220px;
+}
+
+.agent-menu .menu-item {
+  justify-content: flex-start;
+  gap: 8px;
+  height: max(36px, var(--control));
+}
+
+.agent-menu .menu-item[aria-checked="true"] {
+  background: var(--selected);
+  font-weight: 600;
+}
+
+.agent-name {
+  flex: 1;
+}
+
+.agent-state {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.agent-state.busy {
+  color: var(--primary);
+}
+
+/* DM의 문답 목록: 메시지처럼 거꾸로 쌓아 맨 아래가 먼저 보인다. */
+.qa-list {
+  display: grid;
+  gap: 10px;
+  padding: 4px 0 8px;
+}
+
+/* app-qa-card의 DM 모습: 비공개 배지와 시각, 질문, 답이나 답하는 중, 본 코드 */
+.qa-card {
+  --mark-ring: var(--canvas);
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--rounded-lg);
+  background: var(--canvas);
+}
+
+.qa-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.33;
+}
+
+.qa-question {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.qa-pending {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.38;
+}
+
+.qa-source {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.source-ref {
+  color: var(--text-secondary);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.33;
+}
+
+.qa-card .banner {
+  flex-wrap: wrap;
+}
+
+/* DM 칸 안의 입력 칸과 알림: 패널 안쪽 여백(8px)에 맞춘다. */
+.right-panel .composer {
+  margin: 8px 0 0;
+}
+
+.right-panel .banner {
+  flex: none;
+  margin-top: 8px;
+}
+
+.right-panel .empty {
+  padding-inline: 8px;
+}
+
+/* 지난 문답이 있는데 연결된 에이전트가 없을 때: 입력 칸 자리에 빈 상태를 작게 둔다. */
+.empty.no-agent {
+  flex: none;
+  padding-block: 12px 4px;
+}
+
+/* 에이전트 답의 마크다운(DESIGN.md "에이전트 답의 마크다운") */
+.answer {
+  min-width: 0;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.answer > * + * {
+  margin-top: 8px;
+}
+
+.answer :is(h1, h2, h3, h4, h5, h6) {
+  margin-bottom: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.answer :is(ul, ol) {
+  margin-bottom: 0;
+  padding-left: 20px;
+}
+
+.answer a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.answer code {
+  padding: 1px 5px;
+  border-radius: var(--rounded-xs);
+  background: var(--parchment);
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.answer pre {
+  margin-bottom: 0;
+  padding: 12px 14px;
+  overflow-x: auto;
+  border-radius: var(--rounded-md);
+  background: var(--parchment);
+  line-height: 1.55;
+}
+
+.answer pre code {
+  padding: 0;
+  background: none;
+  overflow-wrap: normal;
+}
+
+.answer blockquote {
+  margin-inline: 0;
+  padding-left: 12px;
+  border-left: 2px solid var(--hairline);
+  color: var(--text-secondary);
+}
+
+.answer table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.38;
+}
+
+.answer :is(th, td) {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--divider);
+  text-align: left;
+}
+
+.answer th {
+  font-weight: 600;
+}
+
+.answer hr {
+  border: 0;
+  border-top: 1px solid var(--divider);
 }
 
 /* 멤버 목록을 불러오는 중: 메시지의 뼈대(.skeleton-row, .bone)를 행 모양(안쪽 6px 8px, 아바타 40px)으로 쓴다. */

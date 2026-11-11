@@ -3,10 +3,12 @@ import {
   type Channel,
   type ChannelMessage,
   call,
+  type ExecutorId,
   HISTORY_PAGE,
   type MemberView,
+  type Qa,
 } from "@omagari/contract";
-import { Menu, Users, X } from "lucide-react";
+import { Menu, MessageSquare, Users, X } from "lucide-react";
 import {
   type KeyboardEvent,
   type ReactNode,
@@ -19,6 +21,7 @@ import {
 import { type Me, server, signedOut } from "./api.ts";
 import { byName, ChannelList, CreateChannel } from "./channels.tsx";
 import { ChannelTitle, Conversation, type View } from "./conversation.tsx";
+import { type Dm, DmPanel } from "./dm.tsx";
 import { useLive } from "./live.ts";
 import { MemberList, MemberSkeleton } from "./members.tsx";
 
@@ -42,6 +45,13 @@ const merge = (a: ChannelMessage[], b: ChannelMessage[]) =>
   [...new Map([...a, ...b].map((message) => [message.id, message])).values()].sort(
     (x, y) => x.id - y.id,
   );
+
+/** 문답을 번호로 넣거나 바꾼다. 답이 온 것은 늦게 온 "답을 기다리는 중"으로 되돌리지 않는다. */
+const upsert = (qas: Qa[], qa: Qa) => {
+  const known = qas.find((other) => other.id === qa.id);
+  if (known && known.answer.state !== "pending" && qa.answer.state === "pending") return qas;
+  return [...qas.filter((other) => other.id !== qa.id), qa].sort((x, y) => x.id - y.id);
+};
 
 /** 주소의 `#채널 id`. 채널 줄이 링크라 고르면 바뀌고, 뒤로 가기로도 바뀐다. */
 function useHash() {
@@ -84,21 +94,27 @@ export function Workspace({
   const [channels, setChannels] = useState<Channel[]>();
   const [members, setMembers] = useState<MemberView[]>();
   const wide = useMedia(WIDE);
-  /** 열린 오른쪽 칸. 내 에이전트(#21)가 여기에 더해진다. */
-  const [right, setRight] = useState<"members">();
+  /** 열린 오른쪽 칸: 멤버 목록이나 내 에이전트(DM). 한 번에 하나만 열린다. */
+  const [right, setRight] = useState<"members" | "agent">();
   const rightId = useId();
   const membersButton = useRef<HTMLButtonElement>(null);
-  const closing = useRef(false);
+  const agentButton = useRef<HTMLButtonElement>(null);
+  /** 닫히면 초점을 돌려줄 버튼. 연 버튼이다. */
+  const closing = useRef<HTMLButtonElement | null>(null);
   const closeRight = () => {
-    closing.current = true;
+    closing.current = right === "agent" ? agentButton.current : membersButton.current;
     setRight(undefined);
   };
+  const toggleRight = (panel: "members" | "agent") =>
+    right === panel ? closeRight() : setRight(panel);
   // 닫으면 연 버튼으로 돌아간다. 시트(모달)가 사라진 뒤라야 바깥에 포커스를 줄 수 있다.
   useEffect(() => {
     if (right || !closing.current) return;
-    closing.current = false;
-    membersButton.current?.focus();
+    closing.current.focus();
+    closing.current = null;
   }, [right]);
+  /** 채널마다 불러 둔 내 DM. 연 적 없는 채널은 없고, DM 칸을 처음 열 때 읽는다. */
+  const [dms, setDms] = useState<Record<string, Dm>>({});
   /** 채널마다 불러 둔 대화. 연 적 없는 채널은 없고, 처음 열 때 지난 대화를 읽는다. */
   const [views, setViews] = useState<Record<string, View>>({});
   const hash = useHash();
@@ -124,6 +140,47 @@ export function Workspace({
         : all;
     });
 
+  /** 불러 둔 채널의 DM이면 넣는다. 안 연 채널의 것은 버리고, 열 때 읽는다. */
+  const receiveQa = (qa: Qa) =>
+    setDms((all) => {
+      const dm = all[qa.channel];
+      return Array.isArray(dm) ? { ...all, [qa.channel]: upsert(dm, qa) } : all;
+    });
+
+  const loadDm = async (channel: string) => {
+    setDms((all) => ({ ...all, [channel]: "loading" }));
+    try {
+      const { qas } = await call(server(session), api.dms, { channel });
+      // 읽는 사이에 실시간으로 온 것도 합친다.
+      setDms((all) => {
+        const now = all[channel];
+        return { ...all, [channel]: Array.isArray(now) ? now.reduce(upsert, qas) : qas };
+      });
+    } catch (error) {
+      check(error);
+      setDms((all) => ({ ...all, [channel]: "error" }));
+    }
+  };
+  const dmLoaded = current !== undefined && dms[current.id] !== undefined;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: DM 칸에서 채널을 처음 열 때 한 번만 읽는다
+  useEffect(() => {
+    if (right === "agent" && current && !dmLoaded) void loadDm(current.id);
+  }, [right, current?.id, dmLoaded]);
+
+  const ask = async (channel: string, executor: ExecutorId, message: string) => {
+    try {
+      const { qa } = await call(server(session), api.ask, {
+        agent: me.login,
+        executor,
+        channel,
+        message,
+      });
+      receiveQa(qa);
+    } catch (error) {
+      throw check(error);
+    }
+  };
+
   const live = useLive(
     session,
     (event) => {
@@ -131,9 +188,12 @@ export function Workspace({
         call(server(session), api.channels)
           .then((list) => setChannels(byName(list.channels)))
           .catch(check);
+        // 끊긴 사이에 온 답은 다시 오지 않는다. 불러 둔 DM을 버리고 열려 있는 것은 다시 읽는다.
+        setDms({});
       } else if (event.kind === "channel") add(event.payload);
       else if (event.kind === "message") receive(event.payload);
       else if (event.kind === "members") setMembers(event.payload.members);
+      else if (event.kind === "qa") receiveQa(event.payload);
     },
     onSignedOut,
   );
@@ -222,8 +282,22 @@ export function Workspace({
             <Menu size={18} aria-hidden />
           </button>
           {current && <ChannelTitle channel={current} members={members?.length} />}
-          {/* 오른쪽 칸을 여는 버튼들. 평소에는 아이콘만, 연 버튼만 이름이 붙는다. #21이 내 에이전트를 앞에 더한다. */}
+          {/* 오른쪽 칸을 여는 버튼들. 평소에는 아이콘만, 연 버튼만 이름이 붙는다. */}
           <div className="header-actions">
+            {current && (
+              <button
+                ref={agentButton}
+                type="button"
+                className="header-button"
+                aria-label="내 에이전트"
+                aria-expanded={right === "agent"}
+                aria-controls={right === "agent" ? rightId : undefined}
+                onClick={() => toggleRight("agent")}
+              >
+                <MessageSquare size={18} aria-hidden />
+                {right === "agent" && <span>내 에이전트</span>}
+              </button>
+            )}
             <button
               ref={membersButton}
               type="button"
@@ -231,7 +305,7 @@ export function Workspace({
               aria-label="멤버 목록"
               aria-expanded={right === "members"}
               aria-controls={right === "members" ? rightId : undefined}
-              onClick={() => (right === "members" ? closeRight() : setRight("members"))}
+              onClick={() => toggleRight("members")}
             >
               <Users size={18} aria-hidden />
               {right === "members" && <span>멤버 목록</span>}
@@ -261,6 +335,19 @@ export function Workspace({
           />
         )}
       </main>
+      {right === "agent" && current && (
+        <DmPanel
+          key={current.id}
+          id={rightId}
+          sheet={!wide}
+          channel={current}
+          agents={members?.find((member) => member.login === me.login)?.agents ?? []}
+          dm={dms[current.id]}
+          onAsk={(executor, question) => ask(current.id, executor, question)}
+          onReload={() => void loadDm(current.id)}
+          onClose={closeRight}
+        />
+      )}
       {right === "members" && (
         <RightPanel id={rightId} title="멤버 목록" sheet={!wide} onClose={closeRight}>
           {live === "reconnecting" && members && (
@@ -289,16 +376,19 @@ export function Workspace({
 /**
  * 오른쪽 칸. 1069px 이상은 세 번째 칸, 834–1068px은 대화 위에 겹친 칸(CSS가 정한다),
  * 833px 이하(`sheet`)는 아래에서 올라오는 전체 높이 시트(모달 `<dialog>`)다. 닫기 버튼과 Esc, 덮개 누르기로 닫힌다.
+ * 머리 왼쪽은 제목(`title`)이고, `head`를 주면 그것이 대신 선다(DM 칸의 고른 에이전트).
  */
-function RightPanel({
+export function RightPanel({
   id,
   title,
+  head,
   sheet,
   onClose,
   children,
 }: {
   id: string;
   title: string;
+  head?: ReactNode;
   sheet: boolean;
   onClose: () => void;
   children: ReactNode;
@@ -310,7 +400,7 @@ function RightPanel({
   const body = (
     <div className="right-panel">
       <div className="panel-head">
-        <h2>{title}</h2>
+        {head ?? <h2>{title}</h2>}
         <button
           type="button"
           className="header-button"

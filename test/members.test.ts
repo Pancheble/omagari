@@ -105,10 +105,11 @@ test("웹은 실시간 연결에서 멤버 목록을 바로 받고, 작업과 �
   await eventually(() => assert.equal(owner()?.works[0]?.line?.text, "결제 붙이는 중"));
 
   // 문답에 답하는 동안 답하는 중이다.
-  const asked = call(world.owner, api.ask, { agent: "owner", message: "결제는 어디서 하나?" });
+  const channel = await world.channel(world.owner);
+  const asked = await world.ask(world.owner, channel, "결제는 어디서 하나?");
   await eventually(() => assert.equal(owner()?.agents[0]?.state, "answering"));
   answer.resolve("payment.ts에서 한다");
-  await asked;
+  await world.settled(world.owner, asked);
   await eventually(() => assert.equal(owner()?.agents[0]?.state, "online"));
 
   await world.runner.stop();
