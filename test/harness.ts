@@ -16,6 +16,10 @@ const executable = (path: string) => fileURLToPath(new URL(path, import.meta.url
 const CLI = executable("../packages/cli/src/main.ts");
 const HOOK = executable("../packages/hooks/src/main.ts");
 
+// 러너와 CLI가 부르는 Git도 기기의 Git 설정(전역 gitignore 등)을 읽지 않는다.
+process.env.GIT_CONFIG_GLOBAL = devNull;
+process.env.GIT_CONFIG_NOSYSTEM = "1";
+
 /** 워크스페이스의 레포. `tempRepo`의 origin이 이 레포를 가리킨다. */
 export const REPO = "omagari-test/space";
 
@@ -84,7 +88,10 @@ export async function eventually<T>(check: () => T | Promise<T>, timeoutMs = 10_
   }
 }
 
-/** 커밋 하나가 있는 실제 Git 레포를 임시 폴더에 만든다. origin은 `repo`(GitHub)를 가리킨다. 기기의 Git 설정은 읽지 않는다. */
+/**
+ * 커밋 하나가 있는 실제 Git 레포를 임시 폴더에 만든다. origin은 `repo`(GitHub)를 가리킨다. 기기의 Git 설정은 읽지 않는다.
+ * 받은(clone) 레포처럼 기본 브랜치 main이 원격 추적 브랜치 origin/main과 origin/HEAD로 있다. 푸시는 `git update-ref`로 흉내 낸다.
+ */
 export async function tempRepo(repo = REPO) {
   // macOS의 임시 폴더는 심볼릭 링크다. Git이 내는 최상위 폴더와 같게 실제 경로로 둔다.
   const folder = await realpath(await mkdtemp(join(tmpdir(), "omagari-")));
@@ -104,6 +111,8 @@ export async function tempRepo(repo = REPO) {
   await git("init", "--initial-branch=main");
   await git("commit", "--allow-empty", "--message=init");
   await git("remote", "add", "origin", `https://github.com/${repo}.git`);
+  await git("update-ref", "refs/remotes/origin/main", "HEAD");
+  await git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
   return { folder, git, remove: () => rm(folder, { recursive: true, force: true }) };
 }
 
@@ -243,6 +252,8 @@ export async function startWorld(
       Object.fromEntries(
         (await call(as, api.members)).members.map((member) => [member.login, member.agent]),
       ),
+    /** 멤버 `as`의 눈으로 본 작업마다의 관측. */
+    works: async (as: { url: string; session: string }) => (await call(as, api.works)).works,
     /** 서버를 끄고 같은 포트, 같은 DB로 다시 띄운다. 배포로 서버가 다시 뜨는 것과 같다. */
     async restartServer() {
       const { port } = new URL(server.url);
