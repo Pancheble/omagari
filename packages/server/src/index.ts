@@ -48,6 +48,11 @@ const MAX_PENDING_LOGINS = 100;
 const FOLLOW_MS = 60_000;
 /** 오프라인인 멤버의 관측과 상태 한 줄을 남겨 두는 시간. Room의 7일이다(1단계 질문 A10). */
 const FORGET_MS = 7 * 24 * 60 * 60_000;
+/** 지표의 하루를 자르는 시간대. 만드는 팀의 하루다(ADR-0018). 서울은 일광 절약 시간이 없어 하루가 늘 24시간이다. */
+const TIME_ZONE = "Asia/Seoul";
+const DAY_MS = 24 * 60 * 60_000;
+/** `TIME_ZONE`에서 그 시각의 날짜(YYYY-MM-DD). sv-SE가 ISO 꼴로 적는다. */
+const dayOf = (ms: number) => new Intl.DateTimeFormat("sv-SE", { timeZone: TIME_ZONE }).format(ms);
 
 /** 에이전트가 쓴 줄이 없을 때 보이는 고치는 파일의 줄. 바뀐 것이 없으면 없다. */
 function filesLine(files: ObservedFile[]) {
@@ -182,6 +187,12 @@ export async function startServer(options: {
     answer TEXT
   ) STRICT`);
   db.exec("CREATE INDEX IF NOT EXISTS qas_by_asker ON qas (login, channel, id)");
+  // 날마다 들어온 멤버(ADR-0018). 날은 `TIME_ZONE`의 날짜다. 지표가 남기는 것은 이것뿐이고, 문답 수는 `qas`에서 센다.
+  db.exec(`CREATE TABLE IF NOT EXISTS visits (
+    day TEXT NOT NULL,
+    login TEXT NOT NULL,
+    PRIMARY KEY (day, login)
+  ) STRICT`);
   // 서버가 막 떴으니 러너에 보낸 문답의 답은 오지 않는다. 기다리는 채로 남지 않게 실패로 둔다.
   db.prepare("UPDATE qas SET answer = ? WHERE answer IS NULL").run(
     JSON.stringify({
@@ -231,6 +242,12 @@ export async function startServer(options: {
         | { login: string }
         | undefined
     )?.login;
+
+  /** 멤버가 오늘 들어왔다고 적는다. 웹만 부르는 곳(실시간 연결, 채널에서 읽고 쓰기)에서만 부른다. 러너와 CLI는 세지 않는다. */
+  const visit = (login: string) =>
+    db
+      .prepare("INSERT OR IGNORE INTO visits (day, login) VALUES (?, ?)")
+      .run(dayOf(Date.now()), login);
 
   /** 끝나지 않은 기기 인증. 서버가 꺼지면 잃는다. 다시 로그인하면 된다. */
   const logins = new Map<
@@ -523,6 +540,7 @@ export async function startServer(options: {
       });
     }
     mustExist(channel);
+    visit(agent);
     // 같은 멤버의 러너가 여럿이면 그 실행기를 돌리는 것 가운데 마지막에 붙은 것이 답한다.
     const found = [...runners].findLast(
       ([, runner]) => runner.login === agent && runner.executors.includes(executor),
@@ -564,6 +582,7 @@ export async function startServer(options: {
 
   mount(app, api.dms, ({ channel }, c) => {
     mustExist(channel);
+    visit(c.get("login") as string);
     const rows = db
       .prepare(`${QAS} WHERE login = ? AND channel = ? ORDER BY id DESC LIMIT ?`)
       .all(c.get("login") as string, channel, HISTORY_PAGE) as QaRow[];
@@ -580,7 +599,8 @@ export async function startServer(options: {
     ).map(({ id, name }) => ({ id, name })),
   }));
 
-  mount(app, api.createChannel, ({ name }) => {
+  mount(app, api.createChannel, ({ name }, c) => {
+    visit(c.get("login") as string);
     if (db.prepare("SELECT 1 FROM channels WHERE name = ?").get(name)) {
       throw new ContractFailure({ code: "conflict", message: `#${name} 채널이 이미 있다` });
     }
@@ -596,8 +616,9 @@ export async function startServer(options: {
     }
   };
 
-  mount(app, api.history, ({ channel, before }) => {
+  mount(app, api.history, ({ channel, before }, c) => {
     mustExist(channel);
+    visit(c.get("login") as string);
     const rows = db
       .prepare(`${MESSAGES} WHERE m.channel = ? AND m.id < ? ORDER BY m.id DESC LIMIT ?`)
       .all(channel, before ?? Number.MAX_SAFE_INTEGER, HISTORY_PAGE) as MessageRow[];
@@ -606,6 +627,7 @@ export async function startServer(options: {
 
   mount(app, api.send, ({ channel, text }, c) => {
     mustExist(channel);
+    visit(c.get("login") as string);
     const { lastInsertRowid } = db
       .prepare("INSERT INTO messages (channel, login, text, at) VALUES (?, ?, ?, ?)")
       .run(channel, c.get("login") as string, text, Date.now());
@@ -614,6 +636,31 @@ export async function startServer(options: {
     );
     broadcast(encode(serverToWeb, "message", message));
     return { message };
+  });
+
+  mount(app, api.metrics, ({ days }) => {
+    const now = Date.now();
+    const range = Array.from({ length: days }, (_, i) => dayOf(now - (days - 1 - i) * DAY_MS));
+    const members = new Map(
+      (
+        db
+          .prepare("SELECT day, COUNT(*) AS n FROM visits WHERE day >= ? GROUP BY day")
+          .all(range[0] ?? "") as { day: string; n: number }[]
+      ).map(({ day, n }) => [day, n]),
+    );
+    // 문답은 물은 시각으로 센다. 답하지 못한 문답도 물은 것이라 센다. 내용은 읽지 않는다.
+    const asked = db.prepare("SELECT at FROM qas WHERE at > ?").all(now - (days + 1) * DAY_MS) as {
+      at: number;
+    }[];
+    const qas = Map.groupBy(asked, ({ at }) => dayOf(at));
+    return {
+      timeZone: TIME_ZONE,
+      days: range.map((day) => ({
+        day,
+        members: members.get(day) ?? 0,
+        qas: qas.get(day)?.length ?? 0,
+      })),
+    };
   });
 
   // 웹의 실시간 연결. hello 하나를 받으면 welcome과 끊긴 사이의 메시지, 지금의 멤버 목록을 보내고,
@@ -647,6 +694,7 @@ export async function startServer(options: {
           for (const row of missed) socket.send(encode(serverToWeb, "message", messageView(row)));
         }
         watchers.set(socket, { hash: hash(payload.session), login });
+        visit(login);
         shareMembers(socket);
       },
       onClose(_, socket) {
