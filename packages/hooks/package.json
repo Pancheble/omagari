@@ -1,0 +1,12 @@
+{
+  "name": "@omagari/hooks",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "omagari-hook": "./src/main.ts"
+  },
+  "dependencies": {
+    "@omagari/contract": "*"
+  }
+}

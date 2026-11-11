@@ -25,6 +25,15 @@
 - 새 장치를 만들기 전에 붙여 쓸 수 있는 것이 있는지 먼저 찾는다(구현 문서 10장).
 - 화면(`area:web`)을 만들거나 고칠 때는 먼저 루트의 `DESIGN.md`를 읽고 따른다. 어긋나게 가야 하면 PR에 이유를 적는다.
 
+## 코드와 명령
+
+- 스택은 ADR-0014에 있다: Node.js 24 이상(빌드 없이 `.ts`를 그대로 실행), Hono, SQLite, WebSocket.
+- 조각은 `packages/` 아래에 하나씩 있다: `contract`, `server`, `runner`, `cli`, `hooks`, `web`. 러너와 서버 사이의 메시지와 웹이 쓰는 API는 `packages/contract`에만 정의하고, 나머지 조각은 그것을 가져다 쓴다.
+- 동작 테스트는 `test/harness.ts`의 틀로 쓴다. 실제 서버와 실제 러너를 임시 Git 레포 위에 띄우고, 서버 API와 CLI·훅 실행 파일의 입출력으로만 조작하고 확인한다. 가짜는 GitHub와 에이전트 실행기 두 곳에만 둔다.
+  - 계약을 어기는 상대(뚫린 서버, 러너인 척하는 연결)를 흉내 낼 때만 `test/contract.test.ts`처럼 날 WebSocket을 쓴다.
+  - 예외는 `packages/server/src/http.test.ts` 하나다. 본문을 받는 경로가 아직 없어 틀의 본문 검사만 안쪽에서 확인한다. 본문을 받는 첫 경로가 생기면 경계로 옮기고 지운다. 본보기로 삼지 않는다.
+- 올리기 전에 셋을 돌린다: `npm run format`(포맷과 린트 고치기), `npm run typecheck`, `npm test`. CI도 같은 것을 돌린다.
+
 ## Git과 GitHub 규칙
 
 - 브랜치는 `dev`(기본, 작업이 모이는 곳)와 `main`(릴리즈와 데모) 두 갈래다.
