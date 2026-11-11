@@ -710,9 +710,18 @@ components:
     fontFamily: "{typography.app-caption.fontFamily}"
     fontSize: 14px
     fontWeight: "{typography.app-caption.fontWeight}"
+    lineHeight: "{typography.app-caption.lineHeight}"
     rounded: "{rounded.sm}"
     height: 32px
-    padding: 0 8px
+    padding: 8px
+  app-call-token:
+    backgroundColor: "{colors.canvas-parchment}"
+    textColor: "{colors.ink}"
+    fontFamily: "{typography.app-caption.fontFamily}"
+    fontSize: "{typography.app-caption.fontSize}"
+    fontWeight: 600
+    rounded: "{rounded.pill}"
+    height: 28px
   app-dialog:
     backgroundColor: "{colors.canvas}"
     borderColor: "{colors.hairline}"
@@ -1116,7 +1125,7 @@ Apple's whitespace is the product's pedestal. Every tile begins with at least 64
   - 2개 이상이면 머리 전체가 버튼이 되고, 이름 옆에 14px 꺾쇠가 붙는다(`aria-haspopup="menu"`). 누르면 머리 바로 아래에 `{component.app-popover}` 메뉴가 열린다. 줄마다 에이전트 표시, 이름, 오른쪽에 상태("답하는 중…"은 강조색, "쉬는 중"은 보조 글씨)를 보이고, 고른 줄은 `aria-checked`다. 몇 개로 늘어도 머리 한 줄만 쓴다.
   - 0개면 입력 칸 대신 빈 상태를 보인다: "연결된 에이전트가 없어요" / "이 기기에서 러너를 켜면 여기서 물을 수 있어요."
   - 고른 에이전트의 러너가 끊기면 남은 연결된 에이전트 가운데 첫째로 바뀐다. 남은 것이 없으면 빈 상태가 된다.
-- 문답 목록은 고른 에이전트의 것만 보인다. 채널 세션이 채널과 에이전트마다 하나라서(ADR-0015) 에이전트를 바꾸면 그 에이전트와의 문답으로 바뀐다.
+- 문답 목록은 고른 에이전트의 것만 보인다. 채널 세션이 채널과 에이전트마다 하나라서(ADR-0015) 에이전트를 바꾸면 그 에이전트와의 문답으로 바뀐다. 채널에 올린 문답과 `@호출`도 같은 채널 세션의 문답이라 공개 배지를 달고 함께 남는다. 머리의 "나만 보여요"는 칸 전체가 아니라 여기서 묻는 문답의 기본 공개 범위를 말한다.
 - 입력 칸의 안내 글은 "Claude Code에게 묻기"처럼 고른 에이전트 이름을 쓴다.
 
 #### 메시지
@@ -1128,12 +1137,14 @@ Apple's whitespace is the product's pedestal. Every tile begins with at least 64
 
 #### 문답
 
-- **`app-qa-line`** 채널에 올라온 문답의 접힌 한 줄. 파치먼트, `{rounded.pill}`, 최소 높이 36px, 메시지 본문 위치에 맞춰 들인다. 에이전트 표시, "지은의 Claude Code"(600), 질문(보조 글씨, 말줄임), 오른쪽에 "펼치기".
+- **`app-qa-line`** 채널에 올라온 문답의 접힌 한 줄. 파치먼트, `{rounded.pill}`, 최소 높이 36px, 메시지 본문 위치에 맞춰 들인다. 에이전트 표시, "지은의 Claude Code"(600), 질문(보조 글씨, 말줄임), 오른쪽에 "펼치기". `@호출`이 아직 답하는 중이면 "펼치기" 자리에 "답하는 중…"(강조색)을 쓰고, 답이 오면 같은 줄이 바뀐다.
 - **`app-qa-card`** 펼친 모습. 흰 바탕, 1px `{colors.hairline}`, `{rounded.lg}`, 안쪽 16px.
-  - 머리: 에이전트 표시, 이름, "지은이 올림 · 시각", 오른쪽에 공개 배지
+  - 머리: 에이전트 표시, 이름, "김지은이 올림 · 시각", 오른쪽에 공개 배지. 조사는 이름의 끝 글자 받침을 따른다("김지은이", "박민수가"). 한글로 끝나지 않는 이름은 조사 없이 "owner 올림"으로 쓴다.
   - 질문(15px/600), 답(`{typography.app-answer}` 마크다운)
   - 아래 구분선 위에 "본 코드", 브랜치·커밋(`{component.app-source-ref}`), 작업 중 변경이 있으면 "작업 중 변경 포함" 배지, 오른쪽에 "접기"
-- DM 안의 문답은 같은 카드에 비공개 배지를 달고, 아래에 "채널에 올리기"(테두리 버튼)를 둔다.
+  - 채널의 카드에는 "다시 묻기"가 없다. 끊긴 `@호출`은 알림만 보이고, 다시 물으려면 주인이 입력 칸에서 다시 `@호출`한다.
+- 접힌 줄과 카드의 에이전트 표시 점은 그 에이전트의 지금 상태(러너가 붙어 있는지)다.
+- DM 안의 문답은 같은 카드에 비공개 배지를 달고, 답이 왔으면 아래에 "채널에 올리기"(테두리 버튼)를 둔다. 올리면 배지가 공개로 바뀌고 버튼이 사라진다. 공개를 비공개로 되돌리지는 않는다.
 
 #### 입력
 
@@ -1142,6 +1153,19 @@ Apple's whitespace is the product's pedestal. Every tile begins with at least 64
   - 오류: 테두리 `{colors.error}`, 도움말 글씨도 `{colors.error}`, `aria-invalid`
 - **`app-composer`** 메시지 입력 칸. 흰 바탕, 1px 선, `{rounded.lg}`, 안쪽 6px 6px 6px 16px. 줄이 늘어나면 200px까지 커지고 그 뒤로는 칸 안에서 스크롤한다. 오른쪽에 32px 둥근 보내기 버튼(`{component.app-send-button}`). Enter는 보내기, Shift+Enter는 줄바꿈.
   - 러너가 꺼져 있으면 `{component.app-composer-disabled}`: 파치먼트 바탕에 "Claude Code 러너가 꺼져 있어 지금은 물을 수 없어요", 보내기 버튼은 막힌다.
+
+#### `@호출` 입력
+
+채널 입력 칸에서 내 에이전트를 불러 처음부터 모두가 보게 묻는다(이슈 #22). DM 칸의 고르기 규칙과 `{component.app-popover}`, `{component.app-menu-item}`을 그대로 쓴다.
+
+- **열기**: 채널 입력 칸의 맨 앞이나 공백 뒤에서 `@`를 치면, 입력 칸 바로 위에 왼쪽을 맞춰 폭 260px의 메뉴가 열린다. 메일 주소처럼 낱말 중간의 `@`로는 열리지 않는다. `@` 뒤에 친 글로 거르고(`@co` → Codex), 맞는 것이 없으면 닫힌다.
+- **줄**: 맨 위에 "모두가 보게 묻기"(12px/600 보조 글씨)를 둬서 DM과 달리 공개라는 것을 알린다. 그 아래 줄은 DM 칸의 에이전트 메뉴와 같다: 에이전트 표시, 이름, 오른쪽 상태("답하는 중…"은 강조색, "쉬는 중"은 보조 글씨).
+- **고를 거리**: 내 에이전트 가운데 연결된 것만 나온다. 하나여도 한 줄짜리 메뉴로 고른다. 남의 에이전트는 부를 수 없다.
+- **없을 때**: 메뉴가 "연결된 에이전트가 없어요" / "이 기기에서 러너를 켜면 @로 내 에이전트를 불러 모두가 보게 물을 수 있어요."를 보인다(`role="status"`).
+- **토큰**(`{component.app-call-token}`): 고르면 친 `@…`가 지워지고 입력 칸 앞에 토큰이 선다. 파치먼트 알약, 높이 28px(좁은 화면 40px), 에이전트 표시 20px, 이름 13px/600, 오른쪽에 지우기(×) 버튼이 있다. 한 번에 한 에이전트만 부른다. 토큰이 있으면 `@`로 메뉴가 다시 열리지 않고, 커서가 맨 앞일 때 Backspace도 토큰을 지운다.
+- **안내 글**: 토큰이 있으면 "Claude Code에게 모두가 보게 묻기", 없으면 "# 결제에 메시지 보내기".
+- **보내기 실패**: 글과 토큰을 입력 칸에 되돌리고 알림 띠를 띄운다. 러너가 꺼졌으면 "Claude Code 러너가 꺼져 있어 지금은 물을 수 없어요", 그 밖에는 "질문을 보내지 못했어요".
+- **키보드**: WAI-ARIA 콤보박스(목록) 패턴이다. 초점은 입력 칸에 두고(`aria-activedescendant`), 위아래 화살표로 고르고, Enter나 Tab으로 넣고, Esc로 닫는다. 한글을 조합하는 중의 Enter는 고르지 않는다.
 
 #### 버튼
 
