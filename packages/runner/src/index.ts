@@ -22,6 +22,7 @@ import {
   type Work,
   type WorkView,
 } from "@omagari/contract";
+import { nearby } from "./nearby.ts";
 import { observe } from "./observe.ts";
 
 export { observationNotice } from "./observe.ts";
@@ -114,6 +115,8 @@ export async function runnerPaths(folder: string) {
     log: join(common, "omagari", "runs.jsonl"),
     /** 주인이 고른 공유 수준. 다시 켤 때 따로 고르지 않으면 이것을 쓴다. */
     share: join(common, "omagari", "share"),
+    /** 편집 전 훅이 작업 세션마다 보여 준 것을 적어 두는 폴더. 세션 id마다 파일 하나다. */
+    hooks: join(common, "omagari", "hooks"),
   };
 }
 
@@ -341,9 +344,8 @@ export async function startRunner(options: {
     const decoded = decode(cliToRunner, frame);
     if ("error" in decoded) return encode(runnerToCli, "error", decoded.error, decoded.re);
     const { message } = decoded;
-    if (message.kind === "situation") {
+    if (message.kind === "situation" || message.kind === "nearby") {
       // 문답의 줄에 서지 않고 받아 둔 것으로 바로 답한다. 서버는 부르지 않는다.
-      // ponytail: 받아 둔 것을 내용까지 통째로 준다. 편집마다 부르는 훅(#14)에 무거우면 요청에 경로를 받아 거른다.
       if (!situation || !login) {
         return encode(
           runnerToCli,
@@ -352,7 +354,18 @@ export async function startRunner(options: {
           message.id,
         );
       }
-      return encode(runnerToCli, "situation", { login, ...situation, mine }, message.id);
+      if (message.kind === "situation") {
+        // ponytail: 받아 둔 것을 내용까지 통째로 준다. 세션을 시작할 때 한 번이라 견딘다. 편집마다 부르는 훅은 nearby로 거른다.
+        return encode(runnerToCli, "situation", { login, ...situation, mine }, message.id);
+      }
+      // 실행기(ADR-0015)는 아직 쓰지 않는다. 작업이 어느 에이전트의 것인지 서버에 알리는 것은 다음 계약 변경에서 더한다.
+      const { disconnectedAt, works } = situation;
+      return encode(
+        runnerToCli,
+        "nearby",
+        { works: await nearby(folder, works, login, message.payload.path), disconnectedAt },
+        message.id,
+      );
     }
     const { kind, payload } = await reply(message.payload.message);
     return encode(runnerToCli, kind, payload, message.id);

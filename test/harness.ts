@@ -324,13 +324,14 @@ export async function startWorld(
       serverDown = false;
     },
     /** 멤버 `as`의 레포 폴더 하나와 그 폴더에서 켠 러너. 멤버마다 기기가 따로다. 관측은 짧게 돈다. */
-    async desk(as: { session: string }) {
+    async desk(as: { session: string }, share?: ShareLevel) {
       const repo = await tempRepo();
       const options = {
         serverUrl: server.url,
         folder: repo.folder,
         session: as.session,
         observeMs: 50,
+        share,
       };
       let runner = await startRunner(options);
       return {
