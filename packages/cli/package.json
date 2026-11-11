@@ -1,0 +1,13 @@
+{
+  "name": "@omagari/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "omagari": "./src/main.ts"
+  },
+  "dependencies": {
+    "@omagari/contract": "*",
+    "@omagari/runner": "*"
+  }
+}
