@@ -45,10 +45,39 @@ const Envelope = z.strictObject({
 
 type Payloads = Record<string, z.ZodType>;
 
+/**
+ * 관측한 파일 하나: 지금 내용, 지운 파일, 또는 경로만 보낸 파일과 그 까닭.
+ * `binary`는 글이 아니거나(UTF-8이 아니거나 NUL이 있다) 파일이 아니거나 읽지 못한 것,
+ * `too_large`는 파일 하나의 상한이나 합계의 상한을 넘은 것이다(ADR-0007).
+ */
+export const ObservedFile = z.union([
+  z.strictObject({ path: z.string(), content: z.string() }),
+  z.strictObject({ path: z.string(), deleted: z.literal(true) }),
+  z.strictObject({ path: z.string(), omitted: z.enum(["binary", "too_large"]) }),
+]);
+export type ObservedFile = z.infer<typeof ObservedFile>;
+
+/**
+ * 작업 하나(멤버 + 브랜치)의 관측. 기준 커밋 이후 그 브랜치가 바꾼 파일이다: 커밋한 것, 안 한 것, 추적하지 않는 새 파일.
+ * 경로는 레포 최상위에서 본 것이다. 정의 줄은 싣지 않는다(ADR-0009).
+ */
+export const Work = z.strictObject({
+  branch: z.string(),
+  /** 기준 커밋. 이 브랜치와 기본 브랜치(원격 추적)가 갈라진 지점이다(ADR-0002). */
+  base: z.string(),
+  files: z.array(ObservedFile),
+});
+export type Work = z.infer<typeof Work>;
+
 /** 러너가 서버에 보내는 것. 이후의 이슈는 자기 메시지를 여기에 더한다. */
 export const runnerToServer = {
   /** 붙자마자 보낸다. `repos`는 러너 폴더의 GitHub 원격이 가리키는 레포(`owner/name`)들이다. */
   hello: z.strictObject({ session: z.string(), repos: z.array(z.string()) }),
+  /**
+   * 관측. 러너가 지금 보는 작업 전부다. 서버는 그 멤버의 작업을 이것으로 바꾼다.
+   * 붙을 때마다, 그리고 관측이 달라질 때마다 보낸다. 브랜치가 아니면(detached HEAD) 작업이 없다.
+   */
+  observation: z.strictObject({ works: z.array(Work) }),
   /** `ask`(`re`)에 러너 세션이 답했다. 답하지 못했으면 `error`를 `re`를 붙여 보낸다. */
   answer: z.strictObject({ text: z.string() }),
   error: ContractError,
@@ -72,8 +101,11 @@ export const serverToRunner = {
  */
 export const RUNNER_SOCKET = "/api/runner";
 
-/** 프레임 하나, HTTP 본문 하나의 상한. 서버는 넘는 것을 읽지 않는다. 더 큰 것이 필요한 이슈가 알고 올린다. */
+/** HTTP 본문 하나의 상한. 서버는 넘는 것을 읽지 않는다. 더 큰 것이 필요한 이슈가 알고 올린다. */
 export const MAX_MESSAGE_BYTES = 1024 * 1024;
+
+/** 러너 소켓의 프레임 하나의 상한. 서버는 넘는 것을 읽지 않는다. 관측 하나(내용 합계 8MiB와 경로)가 들어가게 잡았다. */
+export const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 
 export type Message<P extends Payloads> = {
   [K in keyof P & string]: {
@@ -212,6 +244,14 @@ export const api = {
           agent: z.enum(["online", "answering", "offline"]),
         }),
       ),
+    }),
+  },
+  /** 멤버들의 작업과 그 관측. 바뀐 파일과 그 내용까지 온다. 멤버만 본다. */
+  works: {
+    method: "GET",
+    path: "/api/works",
+    response: z.strictObject({
+      works: z.array(z.strictObject({ login: z.string(), ...Work.shape })),
     }),
   },
   /**

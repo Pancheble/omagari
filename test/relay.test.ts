@@ -109,10 +109,14 @@ test("러너가 답하기 전에 떨어지면 기다리던 문답은 러너가 �
   const world = await startWorld({ executor: fake.executor });
   t.after(world.stop);
 
-  const asked = ask(world.owner, "길게 생각해");
+  // 러너가 멈추는 동안(관측 고리를 기다리는 동안) 실패가 먼저 올 수 있어, 멈추기 전에 받을 준비를 한다.
+  const offline = assert.rejects(ask(world.owner, "길게 생각해"), {
+    code: "runner_offline",
+    message: /답하기 전에 떨어졌다/,
+  });
   await eventually(() => assert.equal(fake.calls.length, 1));
   await world.runner.stop();
-  await assert.rejects(asked, { code: "runner_offline", message: /답하기 전에 떨어졌다/ });
+  await offline;
 });
 
 test("러너는 한 번에 한 턴만 돌리고, 나머지 문답은 온 순서대로 줄을 선다", async (t) => {

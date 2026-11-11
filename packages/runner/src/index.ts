@@ -13,11 +13,15 @@ import {
   cliToRunner,
   decode,
   encode,
+  MAX_FRAME_BYTES,
   RUNNER_SOCKET,
   runnerToCli,
   runnerToServer,
   serverToRunner,
 } from "@omagari/contract";
+import { observe } from "./observe.ts";
+
+export { OBSERVATION_NOTICE } from "./observe.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -37,6 +41,9 @@ export type Executor = (input: {
   /** 턴이 시간 상한을 넘으면 abort된다. 실행기는 띄운 것을 끈다. */
   signal: AbortSignal;
 }) => Promise<{ answer: string; session: string }>;
+
+/** 관측을 다시 읽는 주기. Room의 기준 커밋 확인 주기(3초)에서 시작한다. */
+const OBSERVE_MS = 3000;
 
 /** 러너 세션에 허용하는 도구. 파일을 쓰거나 명령을 실행하는 도구는 넣지 않는다(ADR-0003). */
 const READ_ONLY_TOOLS = ["Read", "Grep", "Glob"];
@@ -108,17 +115,24 @@ export async function runnerPaths(folder: string) {
 /** GitHub 원격 URL에서 `owner/name`을 읽는다: https, ssh, scp 꼴(git@github.com:owner/name). */
 const GITHUB_REMOTE = /(?:@|\/\/)github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/i;
 
-/** 폴더가 어느 레포의 것인지 읽는다. Git 레포가 아니거나 GitHub 원격이 없으면 이유를 들어 던진다. */
-export async function readRepo(folder: string): Promise<{ folder: string; repos: string[] }> {
+/**
+ * 폴더가 어느 레포의 것인지 읽는다. `remotes`는 GitHub 원격의 이름과 그 레포다.
+ * Git 레포가 아니거나 GitHub 원격이 없으면 이유를 들어 던진다.
+ */
+export async function readRepo(folder: string) {
   const git = async (...args: string[]) =>
     (await execFileAsync("git", ["-C", folder, ...args])).stdout.trim();
   const top = await git("rev-parse", "--show-toplevel").catch(() => {
     throw new Error(`Git 레포가 아닌 폴더다: ${folder}`);
   });
-  const urls = (await git("remote", "-v")).split("\n").map((line) => line.split(/\s+/)[1] ?? "");
-  const repos = [...new Set(urls.flatMap((url) => GITHUB_REMOTE.exec(url)?.[1] ?? []))];
+  const remotes = (await git("remote", "-v")).split("\n").flatMap((line) => {
+    const [name = "", url = ""] = line.split(/\s+/);
+    const repo = GITHUB_REMOTE.exec(url)?.[1];
+    return repo ? [{ name, repo }] : [];
+  });
+  const repos = [...new Set(remotes.map((remote) => remote.repo))];
   if (repos.length === 0) throw new Error(`GitHub 원격이 없는 레포다: ${top}`);
-  return { folder: top, repos };
+  return { folder: top, repos, remotes };
 }
 
 /**
@@ -134,10 +148,12 @@ export async function startRunner(options: {
   executor?: Executor;
   /** welcome을 기다리는 시간. */
   welcomeTimeoutMs?: number;
+  /** 관측을 다시 읽는 주기. */
+  observeMs?: number;
   /** 한 턴의 시간 상한. 기본 10분. */
   turnTimeoutMs?: number;
 }) {
-  const { folder, repos } = await readRepo(options.folder);
+  const { folder, repos, remotes } = await readRepo(options.folder);
   const paths = await runnerPaths(folder);
   await mkdir(dirname(paths.log), { recursive: true });
   const executor = options.executor ?? claudeCode;
@@ -147,6 +163,8 @@ export async function startRunner(options: {
   const stopping = new AbortController();
   const ended = Promise.withResolvers<Error | undefined>();
   let socket: WebSocket | undefined;
+  /** welcome을 받은 연결. 관측은 여기로만 보낸다. */
+  let live: WebSocket | undefined;
 
   async function connect() {
     const current = new WebSocket(url);
@@ -192,7 +210,9 @@ export async function startRunner(options: {
 
     try {
       const welcome = await welcomed.promise;
+      live = current;
       current.addEventListener("close", ({ code }) => {
+        if (live === current) live = undefined;
         if (code === 1008) end(refusal ?? new Error("서버가 러너를 거절했다"));
         else void reconnect();
       });
@@ -322,6 +342,46 @@ export async function startRunner(options: {
     await localClosed;
     throw error;
   });
+  // 서버가 받아들인 레포의 원격. 기준 커밋은 그 원격의 기본 브랜치에서 찾는다.
+  const remote = remotes.find((r) => r.repo.toLowerCase() === welcome.repo.toLowerCase());
+  const observing = remote ? observeLoop(remote.name) : Promise.resolve();
+
+  /**
+   * 관측: 주기마다 작업을 다시 읽고, 이 연결로 지난번에 보낸 것과 다를 때만 보낸다. 다시 붙으면 처음부터 보낸다.
+   * 읽지 못하면 까닭을 한 번만 알리고 다음 주기에 다시 읽는다.
+   */
+  async function observeLoop(remote: string) {
+    // ponytail: 파일 감시(Room의 0.3초 묶음) 없이 3초마다 전체를 다시 읽는다. 늘 전체라 1분 재조정도 따로 없다.
+    // 고친 뒤 3초가 길거나 큰 레포에서 읽기가 무거워지면 fs.watch로 깨운다.
+    // ponytail: 달라지면 작업 전체(내용 합계 8MiB까지)를 다시 보낸다. 큰 작업을 자주 고치면 파일마다의 차이만 보낸다.
+    let sent: { to?: WebSocket; works?: string } = {};
+    let problem: string | undefined;
+    while (!stopping.signal.aborted) {
+      try {
+        const works = await observe(folder, remote);
+        const json = JSON.stringify(works);
+        if (live && (live !== sent.to || json !== sent.works)) {
+          const frame = encode(runnerToServer, "observation", { works });
+          if (Buffer.byteLength(frame) > MAX_FRAME_BYTES) {
+            throw new Error(
+              `관측이 ${MAX_FRAME_BYTES}바이트를 넘어 보내지 못했다(바뀐 파일이 너무 많다)`,
+            );
+          }
+          live.send(frame);
+          sent = { to: live, works: json };
+        }
+        problem = undefined;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message !== problem && !stopping.signal.aborted) console.warn(`관측: ${message}`);
+        problem = message;
+      }
+      await sleep(options.observeMs ?? OBSERVE_MS, undefined, { signal: stopping.signal }).catch(
+        () => {},
+      );
+    }
+  }
+
   return {
     folder,
     login: welcome.login,
@@ -330,7 +390,7 @@ export async function startRunner(options: {
     ended: ended.promise,
     async stop() {
       end();
-      await localClosed;
+      await Promise.all([localClosed, observing]);
     },
   };
 }

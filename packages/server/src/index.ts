@@ -10,10 +10,11 @@ import {
   ContractFailure,
   decode,
   encode,
-  MAX_MESSAGE_BYTES,
+  MAX_FRAME_BYTES,
   RUNNER_SOCKET,
   runnerToServer,
   serverToRunner,
+  type Work,
 } from "@omagari/contract";
 import type { WSContext } from "hono/ws";
 import { type WebSocket, WebSocketServer } from "ws";
@@ -52,6 +53,25 @@ export async function startServer(options: {
     login TEXT NOT NULL,
     github_token TEXT NOT NULL
   ) STRICT`);
+  // 작업(멤버 + 브랜치)마다의 마지막 관측. `files`는 계약의 ObservedFile 배열(JSON)이다.
+  db.exec(`CREATE TABLE IF NOT EXISTS works (
+    login TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    base TEXT NOT NULL,
+    files TEXT NOT NULL,
+    PRIMARY KEY (login, branch)
+  ) STRICT`);
+  /** 멤버의 작업을 러너가 지금 보는 것으로 바꾼다. */
+  // ponytail: 멤버 하나에 러너 하나로 본다. 한 멤버가 기기 둘에서 러너를 켜면 나중에 보낸 쪽이 덮는다. 그때는 러너마다 나눈다.
+  const replaceWorks = (login: string, works: Work[]) => {
+    db.exec("BEGIN");
+    db.prepare("DELETE FROM works WHERE login = ?").run(login);
+    const insert = db.prepare(
+      "INSERT OR REPLACE INTO works (login, branch, base, files) VALUES (?, ?, ?, ?)",
+    );
+    for (const work of works) insert.run(login, work.branch, work.base, JSON.stringify(work.files));
+    db.exec("COMMIT");
+  };
   const sessionLogin = (session: string) =>
     (
       db.prepare("SELECT login FROM sessions WHERE hash = ?").get(hash(session)) as
@@ -171,6 +191,17 @@ export async function startServer(options: {
     };
   });
 
+  mount(app, api.works, () => {
+    // 워크스페이스에서 빠진 사람(세션이 없는 사람)의 작업은 보이지 않는다.
+    const rows = db
+      .prepare(
+        `SELECT login, branch, base, files FROM works
+         WHERE login IN (SELECT login FROM sessions) ORDER BY login, branch`,
+      )
+      .all() as { login: string; branch: string; base: string; files: string }[];
+    return { works: rows.map((row) => ({ ...row, files: JSON.parse(row.files) })) };
+  });
+
   // ponytail: 답이 올 때까지 HTTP 요청을 붙들고 있다. 줄을 서면 10분을 넘을 수 있고, 그 전에
   // 부른 쪽이 끊을 수 있다(Node의 fetch는 답 머리를 5분까지 기다린다, 프록시도 끊는다).
   // 웹이 실시간으로 받는 길(#20)이 생기면 문답을 저장하고 답을 그 길로 보낸다(#21).
@@ -234,9 +265,14 @@ export async function startServer(options: {
           }
           runners.set(socket, { login, hash: hash(session) });
           socket.send(encode(serverToRunner, "welcome", { login, repo }, message.id));
-        } else if (!runners.has(socket)) {
+          return;
+        }
+        const runner = runners.get(socket);
+        if (!runner) {
           // hello를 마치지 않은 연결의 메시지는 받지 않는다.
           refuse(socket, { code: "unauthorized", message: "hello를 먼저 보내라" }, message.id);
+        } else if (message.kind === "observation") {
+          replaceWorks(runner.login, message.payload.works);
         } else {
           // 문답의 답이나 실패. 그 문답을 보낸 연결에서 온 것만 받는다.
           const ask = message.re === undefined ? undefined : asks.get(message.re);
@@ -266,7 +302,7 @@ export async function startServer(options: {
     })),
   );
 
-  const sockets = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES });
+  const sockets = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
   // 연결의 생사: 주기마다 ping을 보내고, 다음 주기까지 pong이 없으면 끊는다.
   // 잠든 기기처럼 close 없이 사라진 러너도 이렇게 오프라인이 된다. 러너(내장 WebSocket)는 pong을 알아서 보낸다.
   const alive = new WeakSet<WebSocket>();
