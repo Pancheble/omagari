@@ -1,6 +1,26 @@
-import { type Channel, type ChannelMessage, MAX_MESSAGE_CHARS } from "@omagari/contract";
+import {
+  type Channel,
+  type ChannelMessage,
+  ContractFailure,
+  EXECUTOR_NAMES,
+  type ExecutorId,
+  MAX_MESSAGE_CHARS,
+  type MemberView,
+} from "@omagari/contract";
 import { ArrowUp, Hash } from "lucide-react";
-import { Fragment, type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  type ComponentProps,
+  Fragment,
+  type KeyboardEvent,
+  type ReactNode,
+  type RefObject,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
+import { CallComposer } from "./call.tsx";
+import { QaLine } from "./dm.tsx";
 import type { LiveState } from "./live.ts";
 import { Avatar } from "./workspace.tsx";
 
@@ -58,38 +78,58 @@ export function ChannelTitle({ channel, members }: { channel: Channel; members?:
 
 /**
  * 대화 칸의 머리 띠 아래: 알림 띠, 메시지 목록, 입력 칸. 채널을 아직 모르면(처음 붙는 중) 뼈대만 보인다.
- * 보내지 못한 메시지는 입력 칸에 되돌려 두고, 알림 띠의 "다시 시도"가 다시 보낸다.
+ * 입력 칸에서 내 에이전트를 `@호출`하면 메시지 대신 그 에이전트에게 모두가 보게 묻는다.
+ * 보내지 못한 메시지나 질문은 입력 칸에 (부른 에이전트와 함께) 되돌려 두고, 알림 띠의 "다시 시도"가 다시 보낸다.
  */
 export function Conversation({
   channel,
   view,
   live,
+  members,
+  me,
   onSend,
+  onCall,
   onRetry,
   onOlder,
 }: {
   channel?: Channel;
   view?: View;
   live: LiveState;
+  /** 멤버 목록. 내 에이전트(`@호출`)와 문답한 에이전트의 지금 상태를 여기서 읽는다. */
+  members?: MemberView[];
+  me: string;
   onSend: (text: string) => Promise<void>;
+  onCall: (executor: ExecutorId, question: string) => Promise<void>;
   onRetry: () => void;
   onOlder: () => void;
 }) {
   const [text, setText] = useState("");
-  const [failed, setFailed] = useState(false);
+  const [token, setToken] = useState<ExecutorId>();
+  const [failure, setFailure] = useState<string>();
   const scroller = useRef<HTMLDivElement>(null);
+  const agentsOf = (login: string) => members?.find((member) => member.login === login)?.agents;
 
   const send = async () => {
     const message = text.trim();
     if (!message) return;
+    const called = token;
     setText("");
-    setFailed(false);
+    setToken(undefined);
+    setFailure(undefined);
     scroller.current?.scrollTo({ top: 0 }); // 거꾸로 쌓는 목록이라 0이 맨 아래다
     try {
-      await onSend(message);
-    } catch {
-      setFailed(true);
+      await (called ? onCall(called, message) : onSend(message));
+    } catch (error) {
+      const offline = error instanceof ContractFailure && error.code === "runner_offline";
+      setFailure(
+        !called
+          ? "메시지를 보내지 못했어요"
+          : offline
+            ? `${EXECUTOR_NAMES[called]} 러너가 꺼져 있어 지금은 물을 수 없어요`
+            : "질문을 보내지 못했어요",
+      );
       setText((now) => now || message);
+      setToken((now) => now ?? called);
     }
   };
 
@@ -100,9 +140,9 @@ export function Conversation({
           서버에 다시 붙는 중…
         </div>
       )}
-      {failed && (
+      {failure && (
         <div className="banner error" role="alert">
-          메시지를 보내지 못했어요
+          {failure}
           <button type="button" className="banner-action" onClick={() => void send()}>
             다시 시도
           </button>
@@ -138,14 +178,28 @@ export function Conversation({
             {view.messages.map((message, i) => {
               const previous = view.messages[i - 1];
               const newDay = !previous || dayOf(previous.at) !== dayOf(message.at);
+              // 문답은 묶지 않고, 문답 다음의 글은 머리를 다시 단다.
               const grouped =
                 !newDay &&
+                message.kind === "text" &&
+                previous.kind === "text" &&
                 previous.login === message.login &&
                 Date.parse(message.at) - Date.parse(previous.at) < GROUP_MS;
               return (
                 <Fragment key={message.id}>
                   {newDay && <div className="day">{dayLabel(message.at)}</div>}
-                  <Message message={message} grouped={grouped} />
+                  {message.kind === "qa" ? (
+                    <QaLine
+                      message={message}
+                      state={
+                        agentsOf(message.login)?.find(
+                          (agent) => agent.executor === message.qa.executor,
+                        )?.state ?? "offline"
+                      }
+                    />
+                  ) : (
+                    <Message message={message} grouped={grouped} />
+                  )}
                 </Fragment>
               );
             })}
@@ -153,10 +207,13 @@ export function Conversation({
         </div>
       )}
       {channel && (
-        <Composer
+        <CallComposer
           label={`#${channel.name}에 메시지 보내기`}
+          agents={agentsOf(me) ?? []}
           value={text}
           onChange={setText}
+          token={token}
+          onToken={setToken}
           onSubmit={() => void send()}
         />
       )}
@@ -173,13 +230,26 @@ export function Composer({
   value,
   onChange,
   onSubmit,
+  area: given,
+  before,
+  menu,
+  textarea,
 }: {
   label: string;
   value: string;
   onChange: (text: string) => void;
   onSubmit: () => void;
+  /** 입력 칸을 부른 쪽도 쓸 때(초점, 글쇠 자리) 넘긴다. */
+  area?: RefObject<HTMLTextAreaElement | null>;
+  /** 입력 칸 앞에 둘 것(`@호출`의 토큰). */
+  before?: ReactNode;
+  /** 입력 칸 위에 뜨는 메뉴(`@호출`의 에이전트 메뉴). */
+  menu?: ReactNode;
+  /** 입력 칸에 더할 속성. `onKeyDown`은 먼저 불리고, 막으면(preventDefault) 보내기와 줄바꿈을 하지 않는다. */
+  textarea?: ComponentProps<"textarea">;
 }) {
-  const area = useRef<HTMLTextAreaElement>(null);
+  const own = useRef<HTMLTextAreaElement>(null);
+  const area = given ?? own;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: 글이 바뀔 때마다 높이를 다시 잰다
   useLayoutEffect(() => {
@@ -189,11 +259,14 @@ export function Composer({
     element.style.height = `${element.scrollHeight}px`;
   }, [value]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 열릴 때 한 번만 초점을 둔다
   useEffect(() => {
     if (matchMedia("(pointer: fine)").matches) area.current?.focus();
   }, []);
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    textarea?.onKeyDown?.(event);
+    if (event.defaultPrevented) return;
     // 한글을 조합하는 중의 Enter는 글자를 끝내는 것이다. Safari는 그때 isComposing 없이 229를 낸다.
     if (event.nativeEvent.isComposing || event.keyCode === 229) return;
     if (event.key !== "Enter" || event.shiftKey) return;
@@ -209,7 +282,10 @@ export function Composer({
         onSubmit();
       }}
     >
+      {menu}
+      {before}
       <textarea
+        {...textarea}
         ref={area}
         rows={1}
         value={value}
@@ -227,7 +303,13 @@ export function Composer({
 }
 
 /** 메시지 한 줄. 글은 React가 글자로만 넣는다. 든 HTML이나 스크립트는 실행되지 않고 그대로 보인다. */
-function Message({ message, grouped }: { message: ChannelMessage; grouped: boolean }) {
+function Message({
+  message,
+  grouped,
+}: {
+  message: Extract<ChannelMessage, { kind: "text" }>;
+  grouped: boolean;
+}) {
   return (
     <article className={grouped ? "message grouped" : "message"}>
       {grouped ? (

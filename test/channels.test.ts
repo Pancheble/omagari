@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { api, call, HISTORY_PAGE, MAX_MESSAGE_CHARS } from "@omagari/contract";
-import { eventually, startWorld } from "./harness.ts";
+import { eventually, said, startWorld } from "./harness.ts";
 
 /** owner와 alice가 들어온 워크스페이스. */
 async function team(
@@ -84,19 +84,15 @@ test("지난 대화는 남아 있어 서버가 다시 떠도 오래된 것부터
 
   const latest = (await call(alice, api.history, { channel: channel.id })).messages;
   assert.deepEqual(
-    latest.map((m) => m.text),
+    latest.map(said),
     Array.from({ length: HISTORY_PAGE }, (_, i) => `메시지 ${i + 6}`),
   );
   const older = (await call(alice, api.history, { channel: channel.id, before: latest[0]?.id }))
     .messages;
-  assert.deepEqual(
-    older.map((m) => m.text),
-    ["메시지 1", "메시지 2", "메시지 3", "메시지 4", "메시지 5"],
-  );
-  assert.deepEqual(
-    (await call(alice, api.history, { channel: other.id })).messages.map((m) => m.text),
-    ["다른 채널"],
-  );
+  assert.deepEqual(older.map(said), ["메시지 1", "메시지 2", "메시지 3", "메시지 4", "메시지 5"]);
+  assert.deepEqual((await call(alice, api.history, { channel: other.id })).messages.map(said), [
+    "다른 채널",
+  ]);
 });
 
 test("연결이 끊겼다 붙으면 그 사이에 쌓인 메시지를 빠짐없이 받는다", async (t) => {
@@ -191,10 +187,9 @@ test("메시지에 든 HTML은 서버가 바꾸지 않고 쓴 글자 그대로 �
 
   assert.deepEqual((await call(alice, api.channels)).channels, [channel]);
   assert.equal(channel.name, "<b>굵게</b>");
-  assert.deepEqual(
-    (await call(alice, api.history, { channel: channel.id })).messages.map((m) => m.text),
-    [text],
-  );
+  assert.deepEqual((await call(alice, api.history, { channel: channel.id })).messages.map(said), [
+    text,
+  ]);
 });
 
 test("없는 채널, 빈 메시지, 너무 긴 메시지는 받지 않는다", async (t) => {
