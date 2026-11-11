@@ -8,6 +8,7 @@ import {
   CONTRACT_VERSION,
   call,
   encode,
+  MAX_FRAME_BYTES,
   MAX_MESSAGE_BYTES,
   RUNNER_SOCKET,
   runnerToServer,
@@ -18,7 +19,8 @@ import { type WebSocket as ServerSocket, WebSocketServer } from "ws";
 import { eventually, fakeExecutor, REPO, startWorld, tempRepo } from "./harness.ts";
 
 const frame = (fields: object) => JSON.stringify({ v: CONTRACT_VERSION, payload: {}, ...fields });
-const tooBig = "x".repeat(MAX_MESSAGE_BYTES + 1);
+const tooBigFrame = "x".repeat(MAX_FRAME_BYTES + 1);
+const tooBigBody = "x".repeat(MAX_MESSAGE_BYTES + 1);
 
 /** 러너인 척 서버에 붙는 날 연결. 계약을 거치지 않고 프레임을 그대로 보낸다. */
 async function rawRunner(t: TestContext, serverUrl: string) {
@@ -49,7 +51,7 @@ async function fakeServer(
     socket.on("message", (data) => {
       const message = JSON.parse(String(data));
       if (message.kind === "hello") onHello(socket, message);
-      else received.push(message);
+      else if (message.kind !== "observation") received.push(message);
     });
   });
   t.after(() => {
@@ -65,7 +67,7 @@ async function fakeServer(
       folder: repo.folder,
       session: "세션",
     },
-    /** hello 다음에 러너가 보낸 메시지들. 온 순서대로다. */
+    /** hello 다음에 러너가 보낸 메시지들(관측은 빼고). 온 순서대로다. */
     received,
     /** 러너와의 연결이 닫혔다. */
     closed: closed.promise,
@@ -131,14 +133,14 @@ test("서버는 상한을 넘는 프레임과 본문을 읽지 않는다", async
   t.after(world.stop);
   const { socket } = await rawRunner(t, world.server.url);
 
-  socket.send(frame({ id: "a", kind: "hello", payload: { junk: tooBig } }));
+  socket.send(frame({ id: "a", kind: "hello", payload: { junk: tooBigFrame } }));
   const [{ code }] = await once(socket, "close");
   assert.equal(code, 1009); // 메시지가 너무 크다
   assert.deepEqual(await world.agents(world.owner), { owner: "online" });
 
   const response = await fetch(world.server.url + api.health.path, {
     method: "POST",
-    body: tooBig,
+    body: tooBigBody,
   });
   assert.equal(response.status, 413);
   assert.partialDeepStrictEqual(await response.json(), { error: { code: "invalid_request" } });

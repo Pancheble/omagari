@@ -15,7 +15,13 @@ import {
   encode,
   runnerToCli,
 } from "@omagari/contract";
-import { type RunRecord, readRepo, runnerPaths, startRunner } from "@omagari/runner";
+import {
+  OBSERVATION_NOTICE,
+  type RunRecord,
+  readRepo,
+  runnerPaths,
+  startRunner,
+} from "@omagari/runner";
 import manifest from "../package.json" with { type: "json" };
 
 const USAGE = `사용법:
@@ -83,6 +89,8 @@ async function login() {
 async function runner() {
   const folder = process.cwd();
   await readRepo(folder); // Git 레포가 아니면 로그인하기 전에 멈춘다
+  // 로그인하고 붙기 전에, 그러니 아무것도 나가기 전에 무엇이 나가는지 알린다.
+  console.log(OBSERVATION_NOTICE);
   const saved = (await readSessions())[server];
   const start = async (session: string) => startRunner({ serverUrl: server, folder, session });
   const running = await start(saved ?? (await login())).catch(async (error) => {
