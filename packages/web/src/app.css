@@ -1,0 +1,543 @@
+/* 값은 모두 DESIGN.md의 토큰이다. 1단계 화면은 밝은 모드만 낸다. */
+:root {
+  color-scheme: light;
+  --primary: #0066cc;
+  --primary-focus: #0071e3;
+  --ink: #1d1d1f;
+  --text-secondary: #636366;
+  --canvas: #ffffff;
+  --parchment: #f5f5f7;
+  --hairline: #e0e0e0;
+  --divider: #00000014;
+  --chip: #e8e8ed;
+  --hover: #0000000a;
+  --selected: #0000000f;
+  --focus-ring: #0071e33d;
+  --overlay: #00000052;
+  --error: #d70015;
+  --error-bg: #fdeceb;
+  --on-primary: #ffffff;
+  --floating: 0 8px 24px #0000001f;
+  --rounded-sm: 8px;
+  --rounded-md: 11px;
+  --rounded-lg: 18px;
+  --pill: 9999px;
+  --font:
+    "IBM Plex Sans KR", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic",
+    system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  /* 버튼, 머리 띠 버튼, 메뉴 줄의 높이. 좁은 화면에서는 44px로 키운다. */
+  --control: 32px;
+  scrollbar-color: #0000003d transparent;
+}
+
+@media (max-width: 833px) {
+  :root {
+    --control: 44px;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--ink);
+  font: 400 15px / 1.47 var(--font);
+  caret-color: var(--primary);
+  -webkit-font-smoothing: antialiased;
+  /* 한글은 낱말 가운데서 줄을 바꾸지 않는다. 긴 아이디는 넘치지 않게 끊는다. */
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+::selection {
+  background: var(--focus-ring);
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--primary-focus);
+  outline-offset: 2px;
+}
+
+svg.lucide {
+  flex: none;
+  stroke-width: 1.5;
+}
+
+/* 버튼(app-button). 누르면 0.95배로 줄었다가 돌아온다. */
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: var(--control);
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: var(--pill);
+  background: transparent;
+  font-size: 14px;
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    transform 120ms ease-out,
+    background-color 120ms ease-out;
+}
+
+.button:active:not(:disabled),
+.header-button:active,
+.profile-button:active,
+.menu-item:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+.button.primary {
+  background: var(--primary);
+  color: var(--on-primary);
+}
+
+.button.primary:disabled {
+  background: var(--chip);
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+.button.outline {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.button.quiet {
+  color: var(--ink);
+}
+
+.button.outline:hover,
+.button.quiet:hover {
+  background: var(--hover);
+}
+
+/* 알림 띠 */
+.banner {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 8px 12px;
+  border-radius: var(--rounded-md);
+  font-size: 13px;
+  line-height: 1.38;
+}
+
+.banner.info {
+  background: var(--selected);
+}
+
+.banner.error {
+  background: var(--error-bg);
+  color: var(--error);
+}
+
+/* 로그인처럼 앱 틀 바깥의 화면 */
+.centered {
+  display: grid;
+  place-items: center;
+  min-height: 100%;
+  padding: 48px 16px;
+}
+
+.centered > div {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(400px, 100%);
+}
+
+.centered h1 {
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-wrap: balance;
+}
+
+.centered p {
+  color: var(--text-secondary);
+  text-wrap: pretty;
+}
+
+/* 묶음 사이는 12px, 동작 앞과 알림 띠 뒤는 24px로 띄운다. */
+.centered .notice {
+  margin-bottom: 12px;
+}
+
+.centered .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.centered .hint {
+  font-size: 13px;
+  line-height: 1.38;
+}
+
+/* GitHub에 넣을 코드. 사람이 옮겨 적는 값이라 고정폭으로 크게 보인다. */
+.device-code {
+  display: grid;
+  place-items: center;
+  height: 64px;
+  margin-top: 12px;
+  border-radius: var(--rounded-md);
+  background: var(--parchment);
+  font: 400 24px / 1 var(--mono);
+  user-select: all;
+}
+
+/* 앱 틀: 창 안쪽 8px, 칸 사이 8px. 채널 패널 240px과 대화 칸. */
+.app {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 8px;
+  height: 100%;
+  padding: 8px;
+}
+
+.side-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 14px 8px 8px;
+  border: 1px solid var(--selected);
+  border-radius: var(--rounded-lg);
+  background: var(--parchment);
+}
+
+.workspace {
+  padding: 0 10px;
+}
+
+.workspace h1 {
+  overflow: hidden;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.24;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace p {
+  overflow: hidden;
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.33;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channels {
+  flex: 1;
+  min-height: 0;
+  margin-top: 24px;
+  overflow-y: auto;
+}
+
+.section-title {
+  padding: 0 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.33;
+}
+
+.section-empty {
+  padding: 8px 10px 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.38;
+}
+
+/* 프로필 패널과 그 메뉴 */
+.profile {
+  position: relative;
+  margin-top: 8px;
+}
+
+.profile-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px;
+  border: 0;
+  border-radius: var(--rounded-md);
+  background: var(--selected);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    transform 120ms ease-out,
+    background-color 120ms ease-out;
+}
+
+.profile-button:hover,
+.profile-button[aria-expanded="true"] {
+  background: var(--divider);
+}
+
+.names {
+  display: grid;
+  min-width: 0;
+}
+
+.names strong,
+.names span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.names strong {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.names span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.33;
+}
+
+.avatar {
+  display: grid;
+  flex: none;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--chip);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.avatar-36 {
+  width: 36px;
+  height: 36px;
+}
+
+/* 프로필 패널의 바탕(검정 6%) 위에서는 칩 회색이 묻혀 아바타만 흰 바탕으로 띄운다. */
+.profile-button .avatar {
+  background: var(--canvas);
+}
+
+.avatar-40 {
+  width: 40px;
+  height: 40px;
+}
+
+.menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 1;
+  padding: 6px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--rounded-md);
+  background: var(--canvas);
+  box-shadow: var(--floating);
+}
+
+.menu-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+}
+
+.menu hr {
+  margin: 6px 0;
+  border: 0;
+  border-top: 1px solid var(--divider);
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: var(--control);
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--rounded-sm);
+  background: transparent;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    transform 120ms ease-out,
+    background-color 120ms ease-out;
+}
+
+.menu-item:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.menu-item:disabled {
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+.menu-item.danger {
+  color: var(--error);
+}
+
+.menu-note {
+  font-size: 12px;
+}
+
+/* 대화 칸: 패널이 아니라 창 바탕 위에 바로 놓는다. 위에 52px 머리 띠. */
+.conversation {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.channel-header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  height: 52px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.header-button {
+  display: inline-grid;
+  place-items: center;
+  min-width: var(--control);
+  height: var(--control);
+  padding: 0;
+  border: 0;
+  border-radius: var(--rounded-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    transform 120ms ease-out,
+    background-color 120ms ease-out;
+}
+
+.header-button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.drawer-button {
+  display: none;
+}
+
+.empty {
+  display: grid;
+  flex: 1;
+  place-content: center;
+  gap: 4px;
+  padding: 24px 16px;
+  text-align: center;
+}
+
+.empty h2 {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.empty p {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.38;
+}
+
+/* 좁은 화면(833px 이하): 대화만 두고, 머리 띠 왼쪽 버튼이 채널 패널을 왼쪽 서랍으로 연다. */
+.drawer {
+  inset: 0 auto 0 0;
+  width: min(300px, 100vw - 56px);
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  margin: 0;
+  padding: 8px;
+  border: 0;
+  background: transparent;
+}
+
+.drawer .side-panel {
+  height: 100%;
+}
+
+.drawer::backdrop {
+  background: var(--overlay);
+}
+
+@media (max-width: 833px) {
+  .app {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app > .side-panel {
+    display: none;
+  }
+
+  .channel-header {
+    padding: 0 8px 0 0;
+  }
+
+  .drawer-button {
+    display: inline-grid;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .drawer[open] {
+    animation: drawer-in 240ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .drawer[open]::backdrop {
+    animation: fade-in 240ms ease-out;
+  }
+}
+
+@keyframes drawer-in {
+  from {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}

@@ -47,6 +47,31 @@ test("push 권한이 없는 계정은 워크스페이스의 어떤 것도 읽지
   assert.deepEqual(await world.agents(world.owner), { owner: "online" });
 });
 
+test("남겨 둔 세션으로 나와 워크스페이스를 다시 읽고, 로그아웃한 세션만 끝난다", async (t) => {
+  const world = await startWorld();
+  t.after(world.stop);
+  world.github.grant("alice");
+  world.github.names.set("alice", "앨리스");
+  const browser = await world.login("alice");
+  const laptop = await world.login("alice"); // 같은 사람이 다른 브라우저에서
+
+  assert.deepEqual(await call(browser, api.me), { login: "alice", name: "앨리스", repo: REPO });
+  // 프로필 이름을 비워 둔 사람은 로그인이 이름이다.
+  assert.deepEqual(await call(world.owner, api.me), { login: "owner", name: "owner", repo: REPO });
+
+  await call(browser, api.logout);
+  await assert.rejects(call(browser, api.me), { code: "unauthorized" });
+  assert.equal((await call(laptop, api.me)).login, "alice");
+  assert.deepEqual(await world.agents(laptop), { alice: "offline", owner: "online" });
+
+  // 러너가 쓰는 세션으로 로그아웃하면 그 러너도 끊긴다.
+  await call(world.owner, api.logout);
+  const reason = await world.runner.ended;
+  assert.ok(reason instanceof ContractFailure);
+  assert.equal(reason.code, "unauthorized");
+  assert.deepEqual(await world.agents(laptop), { alice: "offline" });
+});
+
 test("push 권한을 잃은 멤버는 다음 재확인 뒤 워크스페이스에서 빠지고 러너도 끊긴다", async (t) => {
   const world = await startWorld({ recheckMs: 50 });
   t.after(world.stop);

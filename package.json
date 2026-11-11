@@ -14,7 +14,8 @@
     "format:check": "biome ci",
     "typecheck": "tsc",
     "test": "node --test --test-force-exit --test-timeout=30000 \"test/**/*.test.ts\" \"packages/*/src/**/*.test.ts\"",
-    "server": "node packages/server/src/main.ts"
+    "server": "node packages/server/src/main.ts",
+    "web": "npm run dev -w @omagari/web"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.6",
