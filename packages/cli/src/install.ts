@@ -1,5 +1,5 @@
 // 이 기기의 에이전트에 Omagari의 두 훅(세션 시작, 편집 전)과 상태 한 줄 스킬을 깐다(ADR-0016).
-// 실행기마다 자기 사용자 설정에 깐다. Codex(#16)는 `install`에 자기 것을 더하고 `mergeHooks`와 `SKILL`을 같이 쓴다.
+// 실행기마다 자기 사용자 설정에 깐다. 훅 파일과 스킬은 하나이고, 훅은 인자로 받은 실행기로 가른다.
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -14,7 +14,7 @@ const TIMEOUT = 10;
 
 /** 이 기기의 실행기마다 훅과 스킬을 깔고, 깐 것을 한 줄씩 돌려준다. */
 export async function install() {
-  return [await claudeCode()];
+  return [await claudeCode(), await codex()];
 }
 
 async function claudeCode() {
@@ -30,6 +30,22 @@ async function claudeCode() {
   await mkdir(dirname(skill), { recursive: true });
   await copyFile(SKILL, skill);
   return `Claude Code: ${settings}에 세션 시작 훅과 편집 전 훅을, ${skill}에 상태 한 줄 스킬을 깔았다. 새 작업 세션부터 돈다.`;
+}
+
+/**
+ * Codex는 `$CODEX_HOME`(기본 `~/.codex`)의 `hooks.json`과 `skills/`를 읽는다(Codex hooks, skill-installer의 설치 자리).
+ * 깔린 훅은 사용자가 Codex의 `/hooks`에서 신뢰해야 돈다. 신뢰는 훅마다의 해시에 걸려 경로가 바뀌어 다시 깔면 다시 신뢰해야 한다.
+ */
+async function codex() {
+  const home = process.env.CODEX_HOME || join(homedir(), ".codex");
+  const hooks = join(home, "hooks.json");
+  // SessionStart는 Claude Code와 같은 까닭으로 matcher 없이 건다. Codex의 matcher는 정규식이다.
+  // 파일을 고치는 도구는 apply_patch 하나다. 셸 명령(Bash, exec_command)에는 걸지 않는다(1단계 질문 A1, A6).
+  await mergeHooks(hooks, "codex", { SessionStart: {}, PreToolUse: { matcher: "^apply_patch$" } });
+  const skill = join(home, "skills", "omagari-status", "SKILL.md");
+  await mkdir(dirname(skill), { recursive: true });
+  await copyFile(SKILL, skill);
+  return `Codex: ${hooks}에 세션 시작 훅과 편집 전 훅을, ${skill}에 상태 한 줄 스킬을 깔았다. Codex에서 /hooks를 열어 두 훅을 신뢰해야 돈다(다시 깔아 명령이 바뀌면 다시 신뢰한다).`;
 }
 
 /** sh가 한 낱말로 그대로 받게 작은따옴표로 감싼다. */
