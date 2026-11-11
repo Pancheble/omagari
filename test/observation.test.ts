@@ -149,6 +149,7 @@ test("바이너리와 크기 상한(파일 하나 512KiB, 합계 8MiB)을 넘는
 
   await write("image.png", new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01]));
   await write("latin1.txt", new Uint8Array([0x63, 0x61, 0x66, 0xe9])); // UTF-8이 아니다
+  await write("utf16.txt", Buffer.from("hi", "utf16le")); // UTF-8로 읽히지만 NUL이 있다
   await write("bom.txt", "﻿첫 줄\n"); // BOM도 그대로 온다
   await write("edge.txt", "e".repeat(512 * KiB)); // 딱 상한: 내용이 온다
   await write("huge.txt", "h".repeat(512 * KiB + 1)); // 상한을 넘는다
@@ -169,6 +170,7 @@ test("바이너리와 크기 상한(파일 하나 512KiB, 합계 8MiB)을 넘는
         i < 15 ? { path, content: "p".repeat(500 * KiB) } : { path, omitted: "too_large" },
       ),
       { path: "small.txt", content: "s\n" },
+      { path: "utf16.txt", omitted: "binary" },
     ]);
   });
 });
