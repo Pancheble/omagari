@@ -324,6 +324,24 @@ export const api = {
       z.strictObject({ session: z.string(), login: z.string() }),
     ]),
   },
+  /** 이 세션의 멤버와 워크스페이스. 웹은 새로 고친 뒤 남겨 둔 세션이 아직 쓸 수 있는지 이것으로 본다. */
+  me: {
+    method: "GET",
+    path: "/api/me",
+    response: z.strictObject({
+      login: z.string(),
+      /** GitHub 프로필의 이름. 비워 두었으면 `login`과 같다. 로그인할 때 읽는다. */
+      name: z.string(),
+      /** 워크스페이스의 레포 `owner/name`. 워크스페이스 하나에 레포 하나다(ADR-0012). */
+      repo: z.string(),
+    }),
+  },
+  /** 이 세션을 끝낸다. 같은 멤버의 다른 세션(다른 브라우저, CLI와 러너)은 그대로다. */
+  logout: {
+    method: "POST",
+    path: "/api/logout",
+    response: z.strictObject({}),
+  },
   /**
    * 워크스페이스의 멤버와 그 사람의 에이전트. 에이전트는 러너가 서버에 붙어 있으면 online이고,
    * 그중 받은 문답에 아직 답하지 않았으면(줄을 선 것 포함) answering("답하는 중")이다.

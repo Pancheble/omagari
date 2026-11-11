@@ -48,6 +48,7 @@ function filesLine(files: ObservedFile[]) {
 }
 
 const hash = (session: string) => createHash("sha256").update(session).digest("hex");
+const bearer = (authorization?: string) => authorization?.match(/^Bearer (\S+)$/)?.[1];
 
 export async function startServer(options: {
   /** 워크스페이스의 레포 `owner/name`. 서버 하나에 워크스페이스 하나, 레포 하나다(ADR-0012). */
@@ -71,6 +72,11 @@ export async function startServer(options: {
     hash TEXT PRIMARY KEY,
     login TEXT NOT NULL,
     github_token TEXT NOT NULL
+  ) STRICT`);
+  // 멤버마다 GitHub 프로필의 이름. 로그인할 때마다 다시 적는다.
+  db.exec(`CREATE TABLE IF NOT EXISTS people (
+    login TEXT PRIMARY KEY,
+    name TEXT NOT NULL
   ) STRICT`);
   // 작업(멤버 + 브랜치)마다의 마지막 관측. `files`는 계약의 ObservedFile 배열(JSON)이다.
   db.exec(`CREATE TABLE IF NOT EXISTS works (
@@ -213,8 +219,15 @@ export async function startServer(options: {
     socket.close(1008, error.code);
   };
 
+  /** 세션 하나를 끝낸다. 그 세션으로 붙은 러너는 `error`를 받고 끊긴다. */
+  const endSession = (sessionHash: string, error: ContractError) => {
+    db.prepare("DELETE FROM sessions WHERE hash = ?").run(sessionHash);
+    for (const [socket, runner] of runners) if (runner.hash === sessionHash) refuse(socket, error);
+    shareSituation(); // 세션이 하나도 남지 않은 멤버의 작업은 보이지 않는다
+  };
+
   const app = createApp((authorization) => {
-    const session = authorization?.match(/^Bearer (\S+)$/)?.[1];
+    const session = bearer(authorization);
     return session && sessionLogin(session);
   });
 
@@ -266,7 +279,7 @@ export async function startServer(options: {
     if ("error" in polled)
       throw new ContractFailure({ code: "unauthorized", message: polled.error });
 
-    const login = await github.login(polled.token);
+    const { login, name } = await github.user(polled.token);
     const push = await github.canPush(polled.token, repo);
     if (push === undefined) {
       throw new ContractFailure({
@@ -286,8 +299,28 @@ export async function startServer(options: {
       login,
       polled.token,
     );
+    db.prepare("INSERT OR REPLACE INTO people (login, name) VALUES (?, ?)").run(
+      login,
+      name ?? login,
+    );
     shareSituation(); // 빠졌다 돌아온 멤버의 작업이 다시 보인다
     return { session, login };
+  });
+
+  mount(app, api.me, (_, c) => {
+    const login = c.get("login") as string;
+    const person = db.prepare("SELECT name FROM people WHERE login = ?").get(login) as
+      | { name: string }
+      | undefined;
+    return { login, name: person?.name ?? login, repo };
+  });
+
+  mount(app, api.logout, (_, c) => {
+    endSession(hash(bearer(c.req.header("authorization")) as string), {
+      code: "unauthorized",
+      message: "로그아웃해 세션이 끝났다",
+    });
+    return {};
   });
 
   mount(app, api.members, () => {
@@ -463,15 +496,10 @@ export async function startServer(options: {
       }[];
       for (const row of rows) {
         if ((await github.canPush(row.github_token, repo)) !== false || stopped) continue;
-        db.prepare("DELETE FROM sessions WHERE hash = ?").run(row.hash);
-        for (const [socket, runner] of runners) {
-          if (runner.hash !== row.hash) continue;
-          refuse(socket, {
-            code: "forbidden",
-            message: `${row.login}는 이제 ${repo}에 push 권한이 없어 워크스페이스에서 빠졌다`,
-          });
-        }
-        shareSituation();
+        endSession(row.hash, {
+          code: "forbidden",
+          message: `${row.login}는 이제 ${repo}에 push 권한이 없어 워크스페이스에서 빠졌다`,
+        });
       }
     } catch (error) {
       console.error("push 권한을 다시 확인하지 못했다:", error);

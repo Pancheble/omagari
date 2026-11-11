@@ -133,6 +133,7 @@ export async function tempRepo(repo = REPO) {
 /**
  * 가짜 GitHub. 기기 인증은 사람이 코드를 넣는 대신 `approve`로 끝내고,
  * push 권한은 `grant`와 `revoke`로 준다. 내준 GitHub 토큰은 `tokens`에 남는다.
+ * 프로필 이름은 `names`에 적은 사람만 있다.
  * 브랜치의 PR은 `openPull`로 열고, 돌려받은 PR을 고치거나 `merge`해 바꾼다.
  */
 export function fakeGitHub() {
@@ -140,6 +141,7 @@ export function fakeGitHub() {
   const pulls: (Pull & { branch: string })[] = [];
   const devices = new Map<string, { userCode: string; login?: string }>();
   const tokens = new Map<string, string>();
+  const names = new Map<string, string>();
   const github: GitHub = {
     async startDevice() {
       const deviceCode = crypto.randomUUID();
@@ -161,10 +163,10 @@ export function fakeGitHub() {
       tokens.set(token, login);
       return { token };
     },
-    async login(token) {
+    async user(token) {
       const login = tokens.get(token);
       if (!login) throw new Error("모르는 토큰이다");
-      return login;
+      return { login, name: names.get(login) ?? null };
     },
     async canPush(token, repo) {
       return repo === REPO && pushers.has(tokens.get(token) ?? "");
@@ -177,6 +179,7 @@ export function fakeGitHub() {
   return {
     github,
     tokens,
+    names,
     /** 사람이 브라우저에서 `userCode`를 넣고 `login` 계정으로 승인했다. */
     approve(userCode: string, login: string) {
       const device = [...devices.values()].find((d) => d.userCode === userCode);

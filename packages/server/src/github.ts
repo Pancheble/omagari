@@ -15,8 +15,8 @@ export type GitHub = {
   pollDevice(
     deviceCode: string,
   ): Promise<{ token: string } | { pending: true; intervalMs?: number } | { error: string }>;
-  /** 토큰 주인의 GitHub 로그인. */
-  login(token: string): Promise<string>;
+  /** 토큰 주인의 GitHub 로그인과 프로필 이름. 이름을 비워 두었으면 `name`이 null이다. */
+  user(token: string): Promise<{ login: string; name: string | null }>;
   /** 토큰 주인이 `owner/name`에 push할 수 있나. GitHub이 답하지 못하면 `undefined`다. */
   canPush(token: string, repo: string): Promise<boolean | undefined>;
   /** `owner/name`에서 `branch`를 head로 하는 PR들(닫힌 것 포함). GitHub이 답하지 못하면 `undefined`다. */
@@ -81,10 +81,11 @@ export function realGitHub(clientId: string): GitHub {
       if (b.error === "slow_down") return { pending: true, intervalMs: b.interval * 1000 };
       return { error: b.error_description ?? b.error ?? "GitHub이 토큰을 주지 않았다" };
     },
-    async login(token) {
+    async user(token) {
       const response = await get("/user", token);
       if (!response.ok) throw new Error(`GitHub /user: HTTP ${response.status}`);
-      return (await response.json()).login;
+      const { login, name } = await response.json();
+      return { login, name: name || null };
     },
     async canPush(token, repo) {
       const response = await get(`/repos/${repo}`, token).catch(() => undefined);
