@@ -14,7 +14,11 @@ const CLI = executable("../packages/cli/src/main.ts");
 const HOOK = executable("../packages/hooks/src/main.ts");
 
 /** 실행 파일 하나를 돌리고 종료 코드와 출력을 돌려준다. 0이 아닌 종료도 결과다. */
-function run(file: string, args: string[], options: { cwd: string; stdin?: string; env?: object }) {
+function run(
+  file: string,
+  args: string[],
+  options: { cwd: string; stdin?: string; keepStdinOpen?: boolean; env?: object },
+) {
   return new Promise<{ code: number; stdout: string; stderr: string }>((resolve, reject) => {
     const child = execFile(
       file,
@@ -26,7 +30,8 @@ function run(file: string, args: string[], options: { cwd: string; stdin?: strin
         else resolve({ code: child.exitCode, stdout, stderr });
       },
     );
-    child.stdin?.end(options.stdin ?? "");
+    if (options.keepStdinOpen) child.stdin?.write(options.stdin ?? "");
+    else child.stdin?.end(options.stdin ?? "");
   });
 }
 
@@ -54,11 +59,18 @@ export async function tempRepo() {
 /** 서버 하나, 러너 하나, 레포 하나. 가짜를 넘기지 않으면 빈 것이 꽂힌다. */
 export async function startWorld(fakes: { github?: GitHub; executor?: Executor } = {}) {
   const repo = await tempRepo();
-  const server = await startServer({ github: fakes.github });
+  const server = await startServer({ github: fakes.github }).catch(async (error) => {
+    await repo.remove();
+    throw error;
+  });
   const runner = await startRunner({
     serverUrl: server.url,
     folder: repo.folder,
     executor: fakes.executor,
+  }).catch(async (error) => {
+    await server.stop();
+    await repo.remove();
+    throw error;
   });
   return {
     repo,
@@ -67,7 +79,8 @@ export async function startWorld(fakes: { github?: GitHub; executor?: Executor }
     /** `omagari <args>`를 레포 폴더에서 돌린다. */
     cli: (...args: string[]) => run(process.execPath, [CLI, ...args], { cwd: repo.folder }),
     /** 훅 실행 파일에 에이전트가 주는 입력(JSON)을 넣어 돌린다. */
-    hook: (stdin: string) => run(process.execPath, [HOOK], { cwd: repo.folder, stdin }),
+    hook: (stdin: string, options: { keepStdinOpen?: boolean } = {}) =>
+      run(process.execPath, [HOOK], { cwd: repo.folder, stdin, ...options }),
     async stop() {
       runner.stop();
       await server.stop();

@@ -6,6 +6,7 @@ import {
   CONTRACT_VERSION,
   decode,
   encode,
+  MAX_MESSAGE_BYTES,
   RUNNER_SOCKET,
   runnerToServer,
   serverToRunner,
@@ -19,8 +20,19 @@ import { createApp, mount } from "./http.ts";
  */
 export type GitHub = Record<string, never>;
 
-export async function startServer(options: { port?: number; github?: GitHub } = {}) {
-  const runners = new Set<unknown>(); // hello를 마친 러너의 연결
+export async function startServer(
+  options: {
+    port?: number;
+    /** 듣는 주소. 기본은 이 기기 안에서만 듣는다. 바깥에 열 때만 "0.0.0.0"처럼 준다. */
+    hostname?: string;
+    github?: GitHub;
+  } = {},
+) {
+  const hostname = options.hostname ?? "127.0.0.1";
+  // hello를 마친 러너의 연결.
+  // ponytail: 러너의 생사를 close로만 안다. 잠든 기기처럼 close 없이 사라진 연결은 남는다.
+  // ping/pong은 러너가 다시 붙기와 한 설계라 "떨어지면 오프라인"을 만드는 #8이 넣는다.
+  const runners = new Set<unknown>();
   const app = createApp();
 
   mount(app, api.health, () => ({ contract: CONTRACT_VERSION, runners: runners.size }));
@@ -49,16 +61,17 @@ export async function startServer(options: { port?: number; github?: GitHub } = 
     })),
   );
 
-  const sockets = new WebSocketServer({ noServer: true });
+  const sockets = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES });
   const server = serve({
     fetch: app.fetch,
     port: options.port ?? 0,
+    hostname,
     websocket: { server: sockets },
   });
   await once(server, "listening");
 
   return {
-    url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    url: `http://${hostname}:${(server.address() as AddressInfo).port}`,
     async stop() {
       for (const socket of sockets.clients) socket.terminate();
       server.close();
