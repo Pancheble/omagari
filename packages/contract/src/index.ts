@@ -215,11 +215,43 @@ export function decode<P extends Payloads>(
 // --- CLI와 러너 사이(같은 기기) ---
 // 봉투, `encode`, `decode`는 러너와 서버 사이의 것을 그대로 쓴다.
 
+/** 에이전트 세션을 돌리는 실행기(ADR-0015). 훅과 CLI는 러너에 보내는 요청에 자기 실행기를 싣는다. */
+export const ExecutorId = z.enum(["claude-code", "codex"]);
+export type ExecutorId = z.infer<typeof ExecutorId>;
+
+/**
+ * 근처 작업 하나: 고치려는 파일을 바꾸고 있는 다른 멤버의 작업과, 그 파일에서 바꾼 곳.
+ * `lines`의 줄 번호는 그 사람의 사본 기준이고(1부터, 끝 포함), 지운 줄만 있는 곳은 그 앞 줄로 적는다.
+ * 내용을 읽을 수 없으면 `unknown`과 까닭이다: 공유 수준과 빠진 파일(`ObservedFile.omitted`), 또는 그 사람의 기준 커밋이 이 기기에 없다(`base`).
+ */
+export const NearbyWork = z.strictObject({
+  login: z.string(),
+  branch: z.string(),
+  offlineSince: z.string().nullable(),
+  change: z.discriminatedUnion("kind", [
+    z.strictObject({
+      kind: z.literal("lines"),
+      ranges: z.array(z.strictObject({ from: z.number(), to: z.number() })),
+    }),
+    z.strictObject({ kind: z.literal("deleted") }),
+    z.strictObject({
+      kind: z.literal("unknown"),
+      reason: z.enum(["share", "binary", "too_large", "base"]),
+    }),
+  ]),
+});
+export type NearbyWork = z.infer<typeof NearbyWork>;
+
 /** CLI와 훅이 러너에 보내는 것. 러너는 문답과 지금 상황 묻기만 받는다. */
 export const cliToRunner = {
   ask: serverToRunner.ask,
   /** 지금 상황을 묻는다. 러너는 서버를 부르지 않고 받아 둔 것으로 바로 답한다. 문답의 줄에 서지 않는다. */
   situation: z.strictObject({}),
+  /**
+   * 파일 하나(`path`, 레포 최상위에서 본 경로)의 근처 작업을 묻는다. 편집 전 훅이 고칠 때마다 부른다.
+   * `situation`처럼 받아 둔 것으로 바로 답하고, 그 파일을 바꾼 다른 멤버의 작업만 준다.
+   */
+  nearby: z.strictObject({ path: z.string().min(1), executor: ExecutorId }),
 } satisfies Payloads;
 
 /** 러너가 CLI와 훅에 보내는 것. */
@@ -235,6 +267,12 @@ export const runnerToCli = {
     disconnectedAt: z.string().nullable(),
     /** 이 러너가 마지막으로 관측한 내 작업들. 공유 수준과 상관없이 바뀐 파일의 경로가 있다(서버로는 수준대로 나간다). */
     mine: z.array(Work),
+  }),
+  /** `nearby`의 답. 근처 작업이 없으면 `works`가 비어 있다. 받아 둔 것이 아직 없으면 `error`(`runner_offline`)다. */
+  nearby: z.strictObject({
+    works: z.array(NearbyWork),
+    /** `situation`의 것과 같다. */
+    disconnectedAt: z.string().nullable(),
   }),
   error: ContractError,
 } satisfies Payloads;
