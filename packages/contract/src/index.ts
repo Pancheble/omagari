@@ -246,7 +246,7 @@ export type NearbyWork = z.infer<typeof NearbyWork>;
 export const cliToRunner = {
   ask: serverToRunner.ask,
   /** 지금 상황을 묻는다. 러너는 서버를 부르지 않고 받아 둔 것으로 바로 답한다. 문답의 줄에 서지 않는다. */
-  situation: z.strictObject({}),
+  situation: z.strictObject({ executor: ExecutorId }),
   /**
    * 파일 하나(`path`, 레포 최상위에서 본 경로)의 근처 작업을 묻는다. 편집 전 훅이 고칠 때마다 부른다.
    * `situation`처럼 받아 둔 것으로 바로 답하고, 그 파일을 바꾼 다른 멤버의 작업만 준다.

@@ -15,6 +15,7 @@ import {
   startRunner,
 } from "@omagari/runner";
 import manifest from "../package.json" with { type: "json" };
+import { install } from "./install.ts";
 
 const USAGE = `사용법:
   omagari --version
@@ -25,6 +26,8 @@ const USAGE = `사용법:
   omagari runner log            러너가 실행한 것을 본다
   omagari status                지금 상황을 본다: 멤버, 작업, 상태 한 줄, 바뀐 파일
   omagari status set <한 줄>    지금 브랜치의 작업에 상태 한 줄을 쓴다
+  omagari install               이 기기의 에이전트(Claude Code)에 세션 시작 훅, 편집 전 훅, 상태 한 줄 스킬을 깐다
+                                이미 있는 설정은 그대로 두고, 다시 돌려도 하나만 깔린다
 
 서버는 OMAGARI_SERVER로 준다(기본 http://127.0.0.1:3000).`;
 
@@ -36,7 +39,6 @@ const sessionsFile = join(
   "sessions.json",
 );
 
-// 명령은 그것을 만드는 이슈가 더한다: 훅과 스킬 깔기(#15).
 const [command, sub, ...rest] = process.argv.slice(2);
 try {
   if (command === "--version") {
@@ -55,6 +57,8 @@ try {
     await status();
   } else if (command === "status" && sub === "set" && rest.length > 0) {
     await setStatus(rest.join(" "));
+  } else if (command === "install" && sub === undefined) {
+    for (const line of await install()) console.log(line);
   } else {
     console.error(USAGE);
     process.exitCode = 1;

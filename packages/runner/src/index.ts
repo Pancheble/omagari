@@ -346,6 +346,7 @@ export async function startRunner(options: {
     const { message } = decoded;
     if (message.kind === "situation" || message.kind === "nearby") {
       // 문답의 줄에 서지 않고 받아 둔 것으로 바로 답한다. 서버는 부르지 않는다.
+      // 두 요청에 실린 실행기(ADR-0015)는 아직 쓰지 않는다. 작업이 어느 에이전트의 것인지 서버에 알리는 것은 다음 계약 변경에서 더한다.
       if (!situation || !login) {
         return encode(
           runnerToCli,
@@ -358,7 +359,6 @@ export async function startRunner(options: {
         // ponytail: 받아 둔 것을 내용까지 통째로 준다. 세션을 시작할 때 한 번이라 견딘다. 편집마다 부르는 훅은 nearby로 거른다.
         return encode(runnerToCli, "situation", { login, ...situation, mine }, message.id);
       }
-      // 실행기(ADR-0015)는 아직 쓰지 않는다. 작업이 어느 에이전트의 것인지 서버에 알리는 것은 다음 계약 변경에서 더한다.
       const { disconnectedAt, works } = situation;
       return encode(
         runnerToCli,
