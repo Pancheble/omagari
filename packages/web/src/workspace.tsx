@@ -19,7 +19,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { type Me, server, signedOut } from "./api.ts";
-import { byName, ChannelList, CreateChannel } from "./channels.tsx";
+import { byName, ChannelList, CreateChannel, useCollapsed } from "./channels.tsx";
 import { ChannelTitle, Conversation, type View } from "./conversation.tsx";
 import { type Dm, DmPanel } from "./dm.tsx";
 import { useLive } from "./live.ts";
@@ -92,6 +92,7 @@ export function Workspace({
   }, []);
 
   const [channels, setChannels] = useState<Channel[]>();
+  const [collapsed, toggleCollapsed] = useCollapsed();
   const [members, setMembers] = useState<MemberView[]>();
   const wide = useMedia(WIDE);
   /** 열린 오른쪽 칸: 멤버 목록이나 내 에이전트(DM). 한 번에 하나만 열린다. */
@@ -260,6 +261,8 @@ export function Workspace({
       <ChannelList
         channels={channels}
         current={current?.id}
+        collapsed={collapsed}
+        onToggle={toggleCollapsed}
         onPick={onPick}
         onCreate={openCreator}
       />
