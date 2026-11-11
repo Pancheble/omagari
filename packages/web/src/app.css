@@ -1103,6 +1103,7 @@ svg.lucide {
 
 /* 메시지 입력 칸(app-composer): 200px까지 커지고 그 뒤로는 칸 안에서 스크롤한다. */
 .composer {
+  position: relative; /* @호출 메뉴가 바로 위에 뜬다 */
   display: flex;
   flex: none;
   align-items: flex-end;
@@ -1585,10 +1586,12 @@ button.dm-head:active {
   width: 220px;
 }
 
-.agent-menu .menu-item {
+:is(.agent-menu, .call-menu) .menu-item {
   justify-content: flex-start;
   gap: 8px;
   height: max(36px, var(--control));
+  padding: 8px;
+  line-height: 1.38; /* app-menu-item은 app-caption의 줄 높이다 */
 }
 
 .agent-menu .menu-item[aria-checked="true"] {
@@ -1669,6 +1672,179 @@ button.dm-head:active {
 
 .qa-card .banner {
   flex-wrap: wrap;
+}
+
+/* 채널에 올라온 문답의 펼친 모습: 머리에 누구의 에이전트인지, 누가 올렸는지, 오른쪽에 공개 배지 */
+.qa-head.posted {
+  gap: 10px;
+  color: var(--ink);
+}
+
+.qa-owner {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+.qa-owner-name {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.qa-owner-meta {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.33;
+}
+
+/* 아래 구분선 위에 "본 코드", 브랜치·커밋, 오른쪽에 "접기"(DM에서는 "채널에 올리기") */
+.qa-source.posted {
+  padding-top: 10px;
+  border-top: 1px solid var(--divider);
+}
+
+.qa-source-label {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.33;
+}
+
+.qa-action {
+  margin-left: auto;
+}
+
+/* 채널에 올라온 문답(app-qa-line): 메시지 본문 위치(안쪽 20px + 아바타 36px + 12px)에 맞춰 들인다. */
+.qa-row {
+  padding: 4px 20px 4px 68px;
+}
+
+.qa-row > * {
+  max-width: 720px;
+}
+
+.qa-line {
+  --mark-ring: var(--parchment);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 12px 6px 8px;
+  border: 0;
+  border-radius: var(--pill);
+  background: var(--parchment);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.38;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    transform 120ms ease-out,
+    background-color 120ms ease-out;
+}
+
+.qa-line:hover {
+  background-image: linear-gradient(var(--hover), var(--hover));
+}
+
+.qa-line:active {
+  transform: scale(0.95);
+}
+
+.qa-line-owner {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qa-line-question {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qa-line-toggle {
+  flex: none;
+  color: var(--primary);
+  font-weight: 600;
+}
+
+/* @호출: 입력 칸 바로 위에 뜨는 내 에이전트 메뉴(app-popover)와, 고른 에이전트의 토큰 */
+.call-menu {
+  --mark-ring: var(--canvas);
+  right: auto;
+  width: 260px;
+}
+
+.call-menu-title {
+  padding: 4px 8px 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.33;
+}
+
+.call-menu .menu-item[aria-selected="true"] {
+  background: var(--selected);
+}
+
+.call-empty {
+  display: grid;
+  gap: 2px;
+  padding: 6px 8px;
+  font-size: 13px;
+  line-height: 1.38;
+}
+
+.call-empty-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.call-empty-text {
+  color: var(--text-secondary);
+}
+
+.call-token {
+  --mark-ring: var(--parchment);
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: calc(var(--control) - 4px);
+  margin: 2px 0 2px -10px;
+  padding: 0 2px 0 4px;
+  border-radius: var(--pill);
+  background: var(--parchment);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.call-token-remove {
+  display: grid;
+  place-items: center;
+  width: calc(var(--control) - 8px);
+  height: calc(var(--control) - 8px);
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.call-token-remove:hover {
+  background: var(--hover);
+  color: var(--ink);
 }
 
 /* DM 칸 안의 입력 칸과 알림: 패널 안쪽 여백(8px)에 맞춘다. */

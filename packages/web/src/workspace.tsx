@@ -10,6 +10,7 @@ import {
   type Presence,
   type PresenceDuration,
   type Qa,
+  type Visibility,
 } from "@omagari/contract";
 import { Menu, MessageSquare, Users, X } from "lucide-react";
 import {
@@ -44,11 +45,23 @@ function useMedia(query: string) {
   );
 }
 
-/** 번호로 합친다. 같은 메시지가 지난 대화와 실시간으로 두 번 와도 하나만 남는다. */
-const merge = (a: ChannelMessage[], b: ChannelMessage[]) =>
-  [...new Map([...a, ...b].map((message) => [message.id, message])).values()].sort(
-    (x, y) => x.id - y.id,
-  );
+/**
+ * 번호로 합친다. 같은 메시지가 지난 대화와 실시간으로 두 번 와도 하나만 남고, 나중에 온 것이 앞의 것을 바꾼다.
+ * 다만 답이 온 문답은 늦게 온 "답을 기다리는 중"으로 되돌리지 않는다.
+ */
+const merge = (a: ChannelMessage[], b: ChannelMessage[]) => {
+  const byId = new Map<number, ChannelMessage>();
+  for (const message of [...a, ...b]) {
+    const known = byId.get(message.id);
+    const stale =
+      known?.kind === "qa" &&
+      message.kind === "qa" &&
+      known.qa.answer.state !== "pending" &&
+      message.qa.answer.state === "pending";
+    if (!stale) byId.set(message.id, message);
+  }
+  return [...byId.values()].sort((x, y) => x.id - y.id);
+};
 
 /** 문답을 번호로 넣거나 바꾼다. 답이 온 것은 늦게 온 "답을 기다리는 중"으로 되돌리지 않는다. */
 const upsert = (qas: Qa[], qa: Qa) => {
@@ -172,15 +185,34 @@ export function Workspace({
     if (right === "agent" && current && !dmLoaded) void loadDm(current.id);
   }, [right, current?.id, dmLoaded]);
 
-  const ask = async (channel: string, executor: ExecutorId, message: string) => {
+  /** 내 에이전트에게 묻는다. DM은 비공개, `@호출`은 공개다. `@호출`이면 채널에 선 문답도 바로 넣는다. */
+  const ask = async (
+    channel: string,
+    executor: ExecutorId,
+    message: string,
+    visibility: Visibility = "private",
+  ) => {
     try {
-      const { qa } = await call(server(session), api.ask, {
+      const asked = await call(server(session), api.ask, {
         agent: me.login,
         executor,
         channel,
         message,
+        visibility,
       });
-      receiveQa(qa);
+      receiveQa(asked.qa);
+      if (asked.message) receive(asked.message);
+    } catch (error) {
+      throw check(error);
+    }
+  };
+
+  /** DM의 문답을 채널에 올린다. 채널에 선 줄과, 공개가 된 DM의 문답을 바로 넣는다. */
+  const post = async (qa: Qa) => {
+    try {
+      const { message } = await call(server(session), api.postQa, { qa: qa.id });
+      receive(message);
+      if (message.kind === "qa") receiveQa(message.qa);
     } catch (error) {
       throw check(error);
     }
@@ -355,7 +387,12 @@ export function Workspace({
             channel={current}
             view={current && views[current.id]}
             live={live}
+            members={members}
+            me={me.login}
             onSend={(text) => send((current as Channel).id, text)}
+            onCall={(executor, question) =>
+              ask((current as Channel).id, executor, question, "public")
+            }
             onRetry={() => current && void load(current.id)}
             onOlder={() => {
               const view = current && views[current.id];
@@ -373,6 +410,7 @@ export function Workspace({
           agents={members?.find((member) => member.login === me.login)?.agents ?? []}
           dm={dms[current.id]}
           onAsk={(executor, question) => ask(current.id, executor, question)}
+          onPost={post}
           onReload={() => void loadDm(current.id)}
           onClose={closeRight}
         />

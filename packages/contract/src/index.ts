@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 8;
+export const CONTRACT_VERSION = 9;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -194,26 +194,6 @@ export const MAX_MESSAGE_CHARS = 4000;
 export const HISTORY_PAGE = 50;
 
 /**
- * 채널에 쌓인 것 하나. `id`는 워크스페이스 전체에서 늘어나기만 하는 번호라 채널 안의 순서이자,
- * 실시간 연결이 다시 붙을 때 이어 받을 자리(`webToServer.hello`의 `after`)다.
- * 지금은 사람이 쓴 글(`text`)뿐이다. 채널에 올린 문답(#22)은 `kind`를 하나 더해 같은 줄에 선다.
- */
-export const ChannelMessage = z.discriminatedUnion("kind", [
-  z.strictObject({
-    kind: z.literal("text"),
-    id: z.number(),
-    channel: z.string(),
-    login: z.string(),
-    /** 쓴 사람의 GitHub 프로필 이름. 비워 두었으면 `login`과 같다. */
-    name: z.string(),
-    /** 쓴 그대로의 글. HTML이 들어 있어도 서버는 바꾸지 않고, 웹은 글자로만 보인다. */
-    text: z.string(),
-    at: z.string(),
-  }),
-]);
-export type ChannelMessage = z.infer<typeof ChannelMessage>;
-
-/**
  * 문답의 답이 본 코드: 러너가 그 턴을 시작할 때 등록한 폴더에 체크아웃되어 있던 것(1단계 질문 A12).
  * `dirty`면 커밋하지 않은 변경(추적하지 않는 새 파일 포함)도 함께 본 답이라 "커밋 + 작업 중 변경"으로 보인다.
  */
@@ -229,7 +209,14 @@ export type Source = z.infer<typeof Source>;
 export const CHANNEL_CONTEXT = 50;
 
 /**
- * 문답 하나: 질문과 그 답. 지금은 DM(비공개, 묻는 사람만 본다)뿐이다. 공개 범위는 `@호출`과 채널에 올리기(#22)가 더한다.
+ * 문답의 공개 범위. 비공개(DM)는 묻는 사람만 보고, 공개는 채널의 모두가 본다.
+ * DM으로 물은 문답은 비공개로 시작해 주인이 채널에 올리면 공개가 되고, `@호출`은 처음부터 공개다. 공개를 비공개로 되돌리지는 않는다.
+ */
+export const Visibility = z.enum(["private", "public"]);
+export type Visibility = z.infer<typeof Visibility>;
+
+/**
+ * 문답 하나: 질문과 그 답, 공개 범위. DM과 `@호출`은 같은 채널 세션이 답하고 공개 범위만 다르다(ADR-0015).
  * `answer`는 답을 기다리는 중(`pending`, 줄을 선 것 포함), 답함, 또는 답하지 못함(`turn_timeout`은 끊긴 답)이다.
  */
 export const Qa = z.strictObject({
@@ -241,6 +228,7 @@ export const Qa = z.strictObject({
   question: z.string(),
   /** 물은 시각 */
   at: z.string(),
+  visibility: Visibility,
   answer: z.discriminatedUnion("state", [
     z.strictObject({ state: z.literal("pending") }),
     z.strictObject({ state: z.literal("answered"), text: z.string(), source: Source }),
@@ -248,6 +236,39 @@ export const Qa = z.strictObject({
   ]),
 });
 export type Qa = z.infer<typeof Qa>;
+
+/**
+ * 채널에 쌓인 것 하나. `id`는 워크스페이스 전체에서 늘어나기만 하는 번호라 채널 안의 순서이자,
+ * 실시간 연결이 다시 붙을 때 이어 받을 자리(`webToServer.hello`의 `after`)다.
+ * 사람이 쓴 글(`text`)과 공개된 문답(`qa`)이 같은 번호 줄에 선다.
+ */
+export const ChannelMessage = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("text"),
+    id: z.number(),
+    channel: z.string(),
+    login: z.string(),
+    /** 쓴 사람의 GitHub 프로필 이름. 비워 두었으면 `login`과 같다. */
+    name: z.string(),
+    /** 쓴 그대로의 글. HTML이 들어 있어도 서버는 바꾸지 않고, 웹은 글자로만 보인다. */
+    text: z.string(),
+    at: z.string(),
+  }),
+  /**
+   * 공개된 문답: 채널에 올린 DM이나 `@호출`. 질문과 답이 늘 함께 있다. `login`과 `name`은 그 에이전트의 주인(올린 사람)이고,
+   * `at`은 채널에 올라온 시각(`@호출`이면 물은 시각)이다. 답이 오면 같은 `id`의 것이 실시간 연결로 다시 온다.
+   */
+  z.strictObject({
+    kind: z.literal("qa"),
+    id: z.number(),
+    channel: z.string(),
+    login: z.string(),
+    name: z.string(),
+    at: z.string(),
+    qa: Qa,
+  }),
+]);
+export type ChannelMessage = z.infer<typeof ChannelMessage>;
 
 /** 러너가 서버에 보내는 것. 이후의 이슈는 자기 메시지를 여기에 더한다. */
 export const runnerToServer = {
@@ -552,8 +573,10 @@ export const api = {
     response: z.strictObject({ message: z.string().nullable() }),
   },
   /**
-   * 채널 안에서 `agent`(멤버의 로그인)의 `executor` 에이전트에게 DM으로 묻는다. 에이전트는 주인만 부른다(`forbidden`).
-   * 답을 기다리지 않고 답을 기다리는 문답을 돌려준다. 답은 실시간 연결의 `qa`로 묻는 사람에게만 온다.
+   * 채널 안에서 `agent`(멤버의 로그인)의 `executor` 에이전트에게 묻는다. 에이전트는 주인만 부른다(`forbidden`).
+   * `visibility`가 private(기본)이면 DM, public이면 `@호출`이다. 둘 다 그 채널과 에이전트의 채널 세션이 답한다.
+   * 답을 기다리지 않고 답을 기다리는 문답을 돌려준다. 답은 실시간 연결의 `qa`로 묻는 사람에게 오고,
+   * `@호출`이면 채널에 선 문답(`message`)도 돌려주고 실시간 연결의 `message`로 모두에게 간다(답이 오면 같은 번호로 다시).
    * 그 에이전트의 러너가 꺼져 있으면 쌓아 두지 않고 바로 `runner_offline`이다. 없는 채널이면 `not_found`.
    */
   ask: {
@@ -564,11 +587,23 @@ export const api = {
       executor: ExecutorId,
       channel: z.string(),
       message: z.string().trim().min(1).max(MAX_MESSAGE_CHARS),
+      visibility: Visibility.default("private"),
     }),
-    response: z.strictObject({ qa: Qa }),
+    response: z.strictObject({ qa: Qa, message: ChannelMessage.optional() }),
   },
   /**
-   * 채널 안의 내 DM 문답. 최근 `HISTORY_PAGE`개를 오래된 것부터 준다. 다른 멤버의 DM은 오지 않는다.
+   * 내 DM의 문답 하나를 채널에 올린다. 질문과 답이 함께 올라가고, 답만 올릴 수는 없다. 공개를 비공개로 되돌리지는 않는다.
+   * 답이 온 문답만 올린다(`invalid_request`). 이미 올렸으면 `conflict`. 내 문답이 아니면 있어도 `not_found`다.
+   * 채널에 선 문답이 실시간 연결의 `message`로 모두에게, 공개가 된 문답이 `qa`로 나에게 간다.
+   */
+  postQa: {
+    method: "POST",
+    path: "/api/qas/post",
+    body: z.strictObject({ qa: z.number().int() }),
+    response: z.strictObject({ message: ChannelMessage }),
+  },
+  /**
+   * 채널 안의 내 문답(그 채널의 내 채널 세션들이 답한 것). 비공개(DM)와 내가 공개한 것(올린 것, `@호출`)이 함께 온다. 최근 `HISTORY_PAGE`개를 오래된 것부터 준다. 다른 멤버의 DM은 오지 않는다.
    * 읽기지만 채널을 본문에 실으려고 POST다. 없는 채널이면 `not_found`.
    */
   dms: {
@@ -618,6 +653,28 @@ export const api = {
     }),
     response: z.strictObject({ message: ChannelMessage }),
   },
+  /**
+   * 지난 `days`일(오늘 포함) 날마다 들어온 멤버 수와 문답 수. 오래된 날부터 오고, 아무 일 없던 날은 0이다(ADR-0018).
+   * 날은 `timeZone`(서울)의 자정으로 자른다. 들어온 멤버는 그날 웹을 열었거나 채널에서 읽고 쓴 멤버다.
+   * 문답은 그날 서버가 받은 DM과 `@호출`이다. 수만 오고, 누가 무엇을 물었는지는 오지 않는다.
+   * 읽기지만 날 수를 본문에 실으려고 POST다.
+   */
+  metrics: {
+    method: "POST",
+    path: "/api/metrics",
+    body: z.strictObject({ days: z.number().int().min(1).max(366).default(14) }),
+    response: z.strictObject({
+      timeZone: z.string(),
+      days: z.array(
+        z.strictObject({
+          /** 그 시간대의 날짜 YYYY-MM-DD */
+          day: z.string(),
+          members: z.number(),
+          qas: z.number(),
+        }),
+      ),
+    }),
+  },
 } satisfies Record<string, Route>;
 
 // --- 웹의 실시간 연결 ---
@@ -640,13 +697,19 @@ export const webToServer = {
 export const serverToWeb = {
   /** hello를 받아들였다. `seq`는 지금 마지막 메시지 번호다. 다음에 다시 붙을 때 `after`로 쓴다. */
   welcome: z.strictObject({ seq: z.number() }),
-  /** 채널에 새로 쌓인 것. welcome 바로 뒤에 `after` 뒤의 것을 번호 순서대로 보내고, 그 뒤로는 쌓이는 대로 보낸다. */
+  /**
+   * 채널에 새로 쌓인 것. welcome 바로 뒤에 `after` 뒤의 것을 번호 순서대로 보내고, 그 뒤로는 쌓이는 대로 보낸다.
+   * 공개된 문답에 답이 오면 같은 번호의 것을 다시 보낸다. 끊긴 사이에 답이 온 것도 welcome 뒤에 다시 보낸다.
+   */
   message: ChannelMessage,
   /** 새 채널이 생겼다. 끊긴 사이에 생긴 채널은 다시 보내지 않으니, 다시 붙으면 `api.channels`를 읽는다. */
   channel: Channel,
   /** 멤버 목록 전부(`api.members`와 같다). 붙을 때마다 welcome 뒤에 한 번, 그 뒤로는 달라질 때마다 보낸다. */
   members: Members,
-  /** 내 문답이 생겼거나 답이 왔다(`api.ask`, `api.dms`의 것과 같다). 묻는 사람의 연결에만 간다. 끊긴 사이의 것은 다시 보내지 않으니, 다시 붙으면 `api.dms`를 읽는다. */
+  /**
+   * 내 문답이 생겼거나, 답이 왔거나, 채널에 올렸다(`api.ask`, `api.dms`의 것과 같다). 묻는 사람의 연결에만 간다.
+   * 공개된 문답은 채널의 모두에게 `message`(kind `qa`)로도 간다. 끊긴 사이의 것은 다시 보내지 않으니, 다시 붙으면 `api.dms`를 읽는다.
+   */
   qa: Qa,
   error: ContractError,
 } satisfies Payloads;

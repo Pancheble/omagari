@@ -34,6 +34,8 @@ const USAGE = `사용법:
   omagari runner log            러너가 실행한 것을 본다
   omagari status                지금 상황을 본다: 멤버, 작업, 상태 한 줄, 바뀐 파일
   omagari status set <한 줄>    지금 브랜치의 작업에 상태 한 줄을 쓴다
+  omagari metrics [--days <날 수>]
+                                지난 날들(기본 14일) 날마다 들어온 멤버 수와 문답 수를 본다
   omagari install               이 기기의 에이전트(Claude Code)에 세션 시작 훅, 편집 전 훅, 상태 한 줄 스킬을 깐다
                                 이미 있는 설정은 그대로 두고, 다시 돌려도 하나만 깔린다
 
@@ -65,6 +67,12 @@ try {
     await status();
   } else if (command === "status" && sub === "set" && rest.length > 0) {
     await setStatus(rest.join(" "));
+  } else if (command === "metrics" && (sub === undefined || sub.startsWith("--"))) {
+    const { values } = parseArgs({
+      args: process.argv.slice(3),
+      options: { days: { type: "string" } },
+    });
+    await metrics(values.days);
   } else if (command === "install" && sub === undefined) {
     for (const line of await install()) console.log(line);
   } else {
@@ -226,4 +234,13 @@ async function setStatus(text: string) {
     });
   const written = await call(await member(), api.setStatus, { branch, text });
   console.log(`${branch}의 상태 한 줄을 썼다: ${written.text}`);
+}
+
+/** 날마다 들어온 멤버 수와 문답 수를 오래된 날부터 한 줄에 하루씩 보인다. */
+async function metrics(days: string | undefined) {
+  const reply = await call(await member(), api.metrics, {
+    ...(days !== undefined && { days: Number(days) }),
+  });
+  console.log(`날짜(${reply.timeZone})  들어온 멤버  문답`);
+  for (const { day, members, qas } of reply.days) console.log(`${day}  ${members}  ${qas}`);
 }
