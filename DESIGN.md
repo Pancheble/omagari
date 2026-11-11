@@ -722,6 +722,15 @@ components:
     fontWeight: 600
     rounded: "{rounded.pill}"
     height: 28px
+  app-composer-chip:
+    backgroundColor: transparent
+    textColor: "{colors.text-secondary}"
+    fontFamily: "{typography.app-caption.fontFamily}"
+    fontSize: "{typography.app-caption.fontSize}"
+    fontWeight: "{typography.app-caption.fontWeight}"
+    rounded: "{rounded.sm}"
+    height: 28px
+    padding: 0 8px
   app-dialog:
     backgroundColor: "{colors.canvas}"
     borderColor: "{colors.hairline}"
@@ -1127,6 +1136,12 @@ Apple's whitespace is the product's pedestal. Every tile begins with at least 64
   - 고른 에이전트의 러너가 끊기면 남은 연결된 에이전트 가운데 첫째로 바뀐다. 남은 것이 없으면 빈 상태가 된다.
 - 문답 목록은 고른 에이전트의 것만 보인다. 채널 세션이 채널과 에이전트마다 하나라서(ADR-0015) 에이전트를 바꾸면 그 에이전트와의 문답으로 바뀐다. 채널에 올린 문답과 `@호출`도 같은 채널 세션의 문답이라 공개 배지를 달고 함께 남는다. 머리의 "나만 보여요"는 칸 전체가 아니라 여기서 묻는 문답의 기본 공개 범위를 말한다.
 - 입력 칸의 안내 글은 "Claude Code에게 묻기"처럼 고른 에이전트 이름을 쓴다.
+- **모델과 effort**는 입력 칸 안에서 고른다. 보낼 때마다 눈에 보이는 자리라서다.
+  - DM 칸의 `{component.app-composer}`는 두 줄이 된다. 위는 글, 아래 줄 왼쪽에 모델 칩과 effort 칩(`{component.app-composer-chip}`), 오른쪽 끝에 보내기 버튼이다. 칩은 "Opus ⌄", "effort high ⌄"처럼 고른 값과 12px 꺾쇠를 쓴다. 좁은 화면에서는 칩 높이가 40px이다.
+  - 칩을 누르면 칩 바로 위에 `{component.app-popover}` 메뉴가 열린다(`aria-haspopup="menu"`). 줄은 `{component.app-menu-item}`이고 고른 줄은 `aria-checked`와 `{colors.selected}` 바탕이다. 열린 칩도 `{colors.selected}` 바탕이다.
+  - 고를 거리는 고른 에이전트의 실행기가 러너를 거쳐 알려 준 것만 보인다. 실행기마다 다르고, 모델에 따라 effort 값도 다르다. 맨 위 줄은 "기본"(오른쪽 보조 글씨 "설정값")이고, 실행기 자기 설정을 그대로 따른다는 뜻이다. 실행기가 effort를 알려 주지 않으면 effort 칩을 두지 않는다.
+  - 고른 값은 에이전트마다 기억하고 그 에이전트의 다음 질문부터 쓴다. 에이전트를 바꾸면 칩도 그 에이전트의 값으로 바뀐다. `@호출`은 칩을 따로 두지 않고 그 에이전트에 기억된 값으로 묻는다.
+  - 답한 문답 카드에는 어느 모델로 답했는지 배지를 단다(아래 배지).
 
 #### 메시지
 
@@ -1141,7 +1156,7 @@ Apple's whitespace is the product's pedestal. Every tile begins with at least 64
 - **`app-qa-card`** 펼친 모습. 흰 바탕, 1px `{colors.hairline}`, `{rounded.lg}`, 안쪽 16px.
   - 머리: 에이전트 표시, 이름, "김지은이 올림 · 시각", 오른쪽에 공개 배지. 조사는 이름의 끝 글자 받침을 따른다("김지은이", "박민수가"). 한글로 끝나지 않는 이름은 조사 없이 "owner 올림"으로 쓴다.
   - 질문(15px/600), 답(`{typography.app-answer}` 마크다운)
-  - 아래 구분선 위에 "본 코드", 브랜치·커밋(`{component.app-source-ref}`), 작업 중 변경이 있으면 "작업 중 변경 포함" 배지, 오른쪽에 "접기"
+  - 아래 구분선 위에 "본 코드", 브랜치·커밋(`{component.app-source-ref}`), 작업 중 변경이 있으면 "작업 중 변경 포함" 배지, 답한 모델 배지, 오른쪽에 "접기"
   - 채널의 카드에는 "다시 묻기"가 없다. 끊긴 `@호출`은 알림만 보이고, 다시 물으려면 주인이 입력 칸에서 다시 `@호출`한다.
 - 접힌 줄과 카드의 에이전트 표시 점은 그 에이전트의 지금 상태(러너가 붙어 있는지)다.
 - DM 안의 문답은 같은 카드에 비공개 배지를 달고, 답이 왔으면 아래에 "채널에 올리기"(테두리 버튼)를 둔다. 올리면 배지가 공개로 바뀌고 버튼이 사라진다. 공개를 비공개로 되돌리지는 않는다.
@@ -1175,11 +1190,12 @@ Apple's whitespace is the product's pedestal. Every tile begins with at least 64
 
 #### 배지
 
-- **`app-badge`** 높이 20px, `{rounded.pill}`, 12px. 쓰임은 넷이다.
+- **`app-badge`** 높이 20px, `{rounded.pill}`, 12px. 쓰임은 다섯이다.
   - 비공개: 칩 바탕
   - 공개: `{component.app-badge-outline}`
   - 작업 중 변경 포함: `{component.app-badge-warning}`
   - N시간 전 기준: 테두리 배지 앞에 11px 시계 아이콘
+  - 답한 모델: `{component.app-badge-outline}`에 "Opus · high"처럼 모델과 effort. "기본"으로 물었으면 실행기가 알려 준 실제 모델 이름을 쓰고, 모르면 배지를 달지 않는다.
 
 #### 알림 띠
 
