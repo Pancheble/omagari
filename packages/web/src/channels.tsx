@@ -1,52 +1,97 @@
 import { type Channel, ContractFailure, MAX_CHANNEL_NAME_CHARS } from "@omagari/contract";
-import { Hash, Plus } from "lucide-react";
+import { ChevronDown, Hash, Plus } from "lucide-react";
 import { type FormEvent, type RefObject, useId, useState } from "react";
 
 /** 채널 이름 순서. 받은 곳(목록, 실시간, 만들기)과 상관없이 같은 순서로 둔다. */
 export const byName = (channels: Channel[]) =>
   channels.toSorted((a, b) => a.name.localeCompare(b.name, "ko"));
 
+const COLLAPSED = "omagari.channels-collapsed";
+
 /**
- * 채널 패널의 "채널" 섹션: 채널 줄과 "채널 만들기". 채널 줄은 주소의 `#채널 id`를 바꾸는 링크라,
- * 새 탭에서 열 수 있고 뒤로 가기로 앞 채널에 돌아간다.
+ * "채팅 채널" 카테고리를 접었는지. 이 기기에 기억한다. 저장소를 막아 둔 브라우저(사생활 보호 창 등)에서는
+ * 이 탭에서만 남는다. 채널 패널이 앞(옆 칸)과 서랍에 둘 다 있어서 앱 틀이 하나만 들고 둘에 나눠 준다.
+ */
+export function useCollapsed() {
+  const [collapsed, set] = useState(() => {
+    try {
+      return localStorage.getItem(COLLAPSED) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggle = () => {
+    set(!collapsed);
+    try {
+      if (collapsed) localStorage.removeItem(COLLAPSED);
+      else localStorage.setItem(COLLAPSED, "1");
+    } catch {}
+  };
+  return [collapsed, toggle] as const;
+}
+
+/**
+ * 채널 패널의 "채팅 채널" 카테고리: 접을 수 있는 머리(이름, 꺾쇠, 채널을 만드는 `+`)와 채널 줄.
+ * 채널 줄은 주소의 `#채널 id`를 바꾸는 링크라, 새 탭에서 열 수 있고 뒤로 가기로 앞 채널에 돌아간다.
+ * 접어도 지금 고른 채널 줄은 남는다.
  */
 export function ChannelList({
   channels,
   current,
+  collapsed,
+  onToggle,
   onPick,
   onCreate,
 }: {
   channels?: Channel[];
   current?: string;
+  collapsed: boolean;
+  onToggle: () => void;
   onPick?: () => void;
   onCreate: () => void;
 }) {
   const title = useId();
+  const list = useId();
   return (
     <nav className="channels" aria-labelledby={title}>
-      <h2 className="section-title" id={title}>
-        채널
-      </h2>
-      <ul className="nav-list">
-        {channels?.map((channel) => (
-          <li key={channel.id}>
-            <a
-              className="nav-item"
-              href={`#${channel.id}`}
-              aria-current={channel.id === current ? "page" : undefined}
-              onClick={onPick}
-            >
-              <Hash size={18} aria-hidden />
-              <span>{channel.name}</span>
-            </a>
-          </li>
-        ))}
-        <li>
-          <button type="button" className="nav-item create" onClick={onCreate}>
-            <Plus size={18} aria-hidden />
-            <span>채널 만들기</span>
+      <div className="category-head">
+        <h2 className="section-title" id={title}>
+          <button
+            type="button"
+            className="category-name"
+            aria-expanded={!collapsed}
+            aria-controls={list}
+            onClick={onToggle}
+          >
+            채팅 채널
+            <ChevronDown className="category-chevron" size={12} aria-hidden />
           </button>
-        </li>
+        </h2>
+        <button
+          type="button"
+          className="category-add"
+          aria-label="채팅 채널 만들기"
+          onClick={onCreate}
+        >
+          <Plus size={18} aria-hidden />
+        </button>
+      </div>
+      <ul className="nav-list" id={list}>
+        {channels
+          ?.filter((channel) => !collapsed || channel.id === current)
+          .map((channel) => (
+            <li key={channel.id}>
+              <a
+                className="nav-item"
+                href={`#${channel.id}`}
+                aria-current={channel.id === current ? "page" : undefined}
+                onClick={onPick}
+              >
+                <Hash size={18} aria-hidden />
+                <span>{channel.name}</span>
+              </a>
+            </li>
+          ))}
       </ul>
     </nav>
   );
