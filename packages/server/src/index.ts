@@ -10,16 +10,21 @@ import {
   type ContractError,
   ContractFailure,
   decode,
+  type ExecutorId,
   encode,
   MAX_FRAME_BYTES,
+  type MemberView,
   type ObservedFile,
   RUNNER_SOCKET,
   runnerToServer,
   type ShareLevel,
   type StatusLine,
   serverToRunner,
+  serverToWeb,
+  WEB_SOCKET,
   type Work,
   type WorkView,
+  webToServer,
 } from "@omagari/contract";
 import type { WSContext } from "hono/ws";
 import { type WebSocket, WebSocketServer } from "ws";
@@ -95,6 +100,12 @@ export async function startServer(options: {
     at INTEGER NOT NULL,
     PRIMARY KEY (login, branch)
   ) STRICT`);
+  // 멤버마다 러너가 붙을 때 알린 실행기. 실행기마다 에이전트가 하나다(ADR-0015). 러너가 떨어져도 남아 오프라인으로 보인다.
+  db.exec(`CREATE TABLE IF NOT EXISTS agents (
+    login TEXT NOT NULL,
+    executor TEXT NOT NULL,
+    PRIMARY KEY (login, executor)
+  ) STRICT`);
   // 러너가 떨어진 멤버와 떨어진 시각(ms). 러너가 붙으면 지운다.
   db.exec(`CREATE TABLE IF NOT EXISTS offline (
     login TEXT PRIMARY KEY,
@@ -148,8 +159,10 @@ export async function startServer(options: {
     string,
     { deviceCode: string; expiresAt: number; intervalMs: number; nextPollAt: number }
   >();
-  /** hello를 마친 러너의 연결. */
-  const runners = new Map<WSContext, { login: string; hash: string }>();
+  /** hello를 마친 러너의 연결과 그 러너가 돌리는 실행기. */
+  const runners = new Map<WSContext, { login: string; hash: string; executors: ExecutorId[] }>();
+  /** hello를 마친 웹의 연결. 멤버 목록이 달라질 때마다 받는다. */
+  const viewers = new Map<WSContext, { hash: string }>();
   /** 러너에 보내고 답을 기다리는 문답. 키는 보낸 `ask`의 id다. 서버가 꺼지면 잃는다. */
   const asks = new Map<
     string,
@@ -194,6 +207,67 @@ export async function startServer(options: {
     });
   };
 
+  /** 멤버 목록: 사람마다 이름, 실행기마다의 에이전트, 작업마다의 상태 한 줄. 이름 순이다. */
+  const membersView = (works: WorkView[]): MemberView[] => {
+    const people = db
+      .prepare(
+        `SELECT s.login, COALESCE(p.name, s.login) AS name, o.since
+         FROM (SELECT DISTINCT login FROM sessions) s
+         LEFT JOIN people p ON p.login = s.login
+         LEFT JOIN offline o ON o.login = s.login
+         ORDER BY name, s.login`,
+      )
+      .all() as { login: string; name: string; since: number | null }[];
+    const known = db.prepare("SELECT login, executor FROM agents ORDER BY executor").all() as {
+      login: string;
+      executor: ExecutorId;
+    }[];
+    // ponytail: 문답은 아직 실행기를 고르지 않아(#9) 그 러너의 에이전트가 모두 답하는 중이 된다. 문답에 실행기가 붙으면 그 에이전트만이다.
+    const busy = new Set([...asks.values()].map((ask) => ask.socket));
+    const state = (login: string, executor: ExecutorId) => {
+      const sockets = [...runners]
+        .filter(([, runner]) => runner.login === login && runner.executors.includes(executor))
+        .map(([socket]) => socket);
+      if (sockets.some((socket) => busy.has(socket))) return "answering" as const;
+      return sockets.length > 0 ? ("online" as const) : ("offline" as const);
+    };
+    const byLogin = Map.groupBy(works, (work) => work.login);
+    return people.map(({ login, name, since }) => {
+      const agents = known
+        .filter((agent) => agent.login === login)
+        .map(({ executor }) => ({ executor, state: state(login, executor) }));
+      // ponytail: 실행기가 하나뿐이면 작업은 그 에이전트의 것이다. 둘 이상(#16)이면 그 브랜치에서 마지막으로
+      // 훅이나 status set을 보낸 실행기로 정한다(ADR-0015). 그 길이 생기기 전까지 둘 이상이면 모른다(null).
+      const executor = agents.length === 1 ? (agents[0]?.executor ?? null) : null;
+      return {
+        login,
+        name,
+        agents,
+        offlineSince: since === null ? null : new Date(since).toISOString(),
+        works: (byLogin.get(login) ?? []).map(({ branch, line }) => ({ branch, executor, line })),
+      };
+    });
+  };
+
+  /** 웹에 마지막으로 보낸 멤버 목록. 같은 것을 다시 보내지 않는다. */
+  let sentMembers: string | undefined;
+  /**
+   * 멤버 목록이 달라졌으면 붙어 있는 웹 모두에게 보낸다. 그대로면 `to`(막 붙은 웹)에게만 보낸다.
+   * 상황이 바뀌는 곳은 `shareSituation`이 부르고, 에이전트만 바뀌는 곳(문답의 시작과 끝)은 따로 부른다.
+   */
+  // ponytail: 달라질 때마다 목록 전부를 보낸다. 멤버와 작업이 많아지면 사람마다의 차이만 보낸다.
+  const shareMembers = (to?: WSContext, works = worksView()) => {
+    const members = membersView(works);
+    const json = JSON.stringify(members);
+    const targets = (json !== sentMembers ? [...viewers.keys()] : to ? [to] : []).filter(
+      (socket) => socket.readyState === 1, // OPEN
+    );
+    sentMembers = json;
+    if (targets.length === 0) return;
+    const frame = encode(serverToWeb, "members", { members });
+    for (const socket of targets) socket.send(frame);
+  };
+
   /** 러너에 마지막으로 보낸 상황. 같은 것을 다시 보내지 않는다. */
   let sent: string | undefined;
   /**
@@ -204,6 +278,7 @@ export async function startServer(options: {
   // ponytail: 달라질 때마다 작업 전부(내용 포함)를 러너마다 보낸다. 멤버와 큰 작업이 많아지면 작업마다의 차이만 보낸다.
   const shareSituation = (to?: WSContext) => {
     const works = worksView();
+    shareMembers(undefined, works); // 멤버 목록은 상황에서 나온다
     const json = JSON.stringify(works);
     const targets = (json !== sent ? [...runners.keys()] : to ? [to] : []).filter(
       (socket) => socket.readyState === 1, // OPEN
@@ -214,15 +289,17 @@ export async function startServer(options: {
     for (const socket of targets) socket.send(frame);
   };
 
+  /** 오류를 보내고 1008로 닫는다. 러너와 웹의 `error`는 같은 꼴이다. */
   const refuse = (socket: WSContext, error: ContractError, re?: string) => {
     socket.send(encode(serverToRunner, "error", error, re));
     socket.close(1008, error.code);
   };
 
-  /** 세션 하나를 끝낸다. 그 세션으로 붙은 러너는 `error`를 받고 끊긴다. */
+  /** 세션 하나를 끝낸다. 그 세션으로 붙은 러너와 웹은 `error`를 받고 끊긴다. */
   const endSession = (sessionHash: string, error: ContractError) => {
     db.prepare("DELETE FROM sessions WHERE hash = ?").run(sessionHash);
     for (const [socket, runner] of runners) if (runner.hash === sessionHash) refuse(socket, error);
+    for (const [socket, viewer] of viewers) if (viewer.hash === sessionHash) refuse(socket, error);
     shareSituation(); // 세션이 하나도 남지 않은 멤버의 작업은 보이지 않는다
   };
 
@@ -323,23 +400,7 @@ export async function startServer(options: {
     return {};
   });
 
-  mount(app, api.members, () => {
-    const online = new Set([...runners.values()].map((runner) => runner.login));
-    const answering = new Set([...asks.values()].map((ask) => ask.login));
-    const rows = db.prepare("SELECT DISTINCT login FROM sessions ORDER BY login").all() as {
-      login: string;
-    }[];
-    return {
-      members: rows.map(({ login }) => ({
-        login,
-        agent: answering.has(login)
-          ? ("answering" as const)
-          : online.has(login)
-            ? ("online" as const)
-            : ("offline" as const),
-      })),
-    };
-  });
+  mount(app, api.members, () => ({ members: membersView(worksView()) }));
 
   mount(app, api.works, () => ({ works: worksView() }));
 
@@ -377,11 +438,13 @@ export async function startServer(options: {
     const { id } = JSON.parse(frame) as { id: string };
     const ask = { socket, login: agent, ...Promise.withResolvers<string>() };
     asks.set(id, ask);
+    shareMembers(); // 답하는 중
     try {
       socket.send(frame);
       return { answer: await ask.promise };
     } finally {
       asks.delete(id);
+      if (!stopped) shareMembers();
     }
   });
 
@@ -397,7 +460,7 @@ export async function startServer(options: {
         }
         const { message } = decoded;
         if (message.kind === "hello") {
-          const { session, repos } = message.payload;
+          const { session, repos, executors } = message.payload;
           const login = sessionLogin(session);
           if (!login) {
             return refuse(
@@ -416,8 +479,12 @@ export async function startServer(options: {
               message.id,
             );
           }
-          runners.set(socket, { login, hash: hash(session) });
+          runners.set(socket, { login, hash: hash(session), executors });
           db.prepare("DELETE FROM offline WHERE login = ?").run(login);
+          // ponytail: 멤버 하나에 러너 하나로 본다. 기기 둘에서 실행기가 다른 러너를 켜면 나중에 붙은 쪽의 것만 남는다.
+          db.prepare("DELETE FROM agents WHERE login = ?").run(login);
+          const known = db.prepare("INSERT OR IGNORE INTO agents (login, executor) VALUES (?, ?)");
+          for (const executor of executors) known.run(login, executor);
           socket.send(encode(serverToRunner, "welcome", { login, repo }, message.id));
           shareSituation(socket);
           return;
@@ -463,6 +530,32 @@ export async function startServer(options: {
             }),
           );
         }
+      },
+    })),
+  );
+
+  // 웹의 실시간 길. 세션을 hello로 받고, 멤버 목록을 바로 한 번, 그 뒤로는 달라질 때마다 보낸다.
+  // 웹이 보내는 것은 hello뿐이라, 계약과 다른 것이 오면 닫는다.
+  app.get(
+    WEB_SOCKET,
+    upgradeWebSocket(() => ({
+      onMessage({ data }, socket) {
+        const decoded = decode(webToServer, data);
+        if ("error" in decoded) return refuse(socket, decoded.error, decoded.re);
+        const { message } = decoded;
+        const { session } = message.payload;
+        if (!sessionLogin(session)) {
+          return refuse(
+            socket,
+            { code: "unauthorized", message: "세션이 없거나 끝났다. 다시 로그인하라" },
+            message.id,
+          );
+        }
+        viewers.set(socket, { hash: hash(session) });
+        shareMembers(socket);
+      },
+      onClose(_, socket) {
+        viewers.delete(socket);
       },
     })),
   );

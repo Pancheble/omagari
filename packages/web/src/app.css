@@ -12,6 +12,12 @@
   --chip: #e8e8ed;
   --hover: #0000000a;
   --selected: #0000000f;
+  /* 파치먼트 위에 고른 줄 바탕(6%)을 겹친 한 색. 그 위에 놓인 접속 점의 둘레 고리에 쓴다. */
+  --selected-solid: #e6e6e8;
+  --online: #248a3d;
+  --offline: #8e8e93;
+  --tile: #272729;
+  --on-dark: #ffffff;
   --focus-ring: #0071e33d;
   --overlay: #00000052;
   --error: #d70015;
@@ -460,6 +466,28 @@ svg.lucide {
   display: none;
 }
 
+/* 머리 띠 오른쪽: 오른쪽 칸을 여는 버튼들. 연 버튼만 바탕 6%, 강조색 아이콘, 이름(13px)이 붙는다. */
+.header-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.header-button[aria-expanded="true"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  background: var(--selected);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.38;
+}
+
+.header-button[aria-expanded="true"] svg {
+  color: var(--primary);
+}
+
 .empty {
   display: grid;
   flex: 1;
@@ -479,6 +507,335 @@ svg.lucide {
   color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.38;
+}
+
+/* 오른쪽 칸(app-right-panel): 채널 패널과 같은 떠 있는 패널, 폭 300px. 1069px 이상에서는 세 번째 칸이다. */
+@media (min-width: 1069px) {
+  .app.with-panel {
+    grid-template-columns: 240px minmax(0, 1fr) 300px;
+  }
+}
+
+.right-slot {
+  display: flex;
+  min-height: 0;
+}
+
+.right-panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 14px 8px 8px;
+  border: 1px solid var(--selected);
+  border-radius: var(--rounded-lg);
+  background: var(--parchment);
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: -6px;
+  padding-left: 10px;
+}
+
+.panel-head h2 {
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.24;
+}
+
+.panel-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+  margin-top: 12px;
+  overflow-y: auto;
+}
+
+/* 멤버 목록 */
+.member-group h3 {
+  margin: 0 0 4px;
+}
+
+.member-group > ul,
+.works {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.member {
+  border-radius: var(--rounded-md);
+}
+
+.member[data-open] {
+  background: var(--selected);
+}
+
+/* app-member-row: 아바타 40px, 이름이 왼쪽 60px에서 시작한다. */
+.member-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--rounded-md);
+  background: transparent;
+  text-align: left;
+}
+
+button.member-row {
+  cursor: pointer;
+  transition:
+    transform 120ms ease-out,
+    background-color 120ms ease-out;
+}
+
+button.member-row:hover {
+  background: var(--hover);
+}
+
+button.member-row:active {
+  transform: scale(0.95);
+}
+
+.member-names {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+.member-names strong {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.member-name,
+.member-status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.me {
+  flex: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.member-status {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.38;
+}
+
+.chevron {
+  color: var(--text-secondary);
+  transition: transform 120ms ease-out;
+}
+
+.member[data-open] .chevron {
+  transform: rotate(90deg);
+}
+
+/* 오프라인인 사람: 아바타 50%, 이름은 보조 글씨색. */
+.member[data-offline] .avatar {
+  opacity: 0.5;
+}
+
+.member[data-offline] .member-names strong {
+  color: var(--text-secondary);
+}
+
+/* 펼친 행: 이름 시작 위치(60px)에 맞춰 작업마다 한 덩어리. */
+.works {
+  display: grid;
+  gap: 10px;
+  padding: 2px 8px 10px 60px;
+}
+
+.work {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+/* app-agent-mark: 20px 둥근 네모에 실행기 약자. 오른쪽 아래 9px 점은 러너가 붙어 있는지다. */
+.agent-mark,
+.agent-space {
+  position: relative;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+}
+
+.agent-mark {
+  border-radius: 5px;
+  background: var(--tile);
+  color: var(--on-dark);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.agent-mark::after {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--online);
+  box-shadow: 0 0 0 2px var(--selected-solid);
+  content: "";
+}
+
+.agent-mark[data-state="offline"]::after {
+  border: 1.5px solid var(--offline);
+  background: var(--selected-solid);
+}
+
+.work-body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.work-line {
+  font-size: 13px;
+  line-height: 1.38;
+}
+
+.work-line.none {
+  color: var(--text-secondary);
+}
+
+.work-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.33;
+}
+
+.branch {
+  font-family: var(--mono);
+}
+
+/* app-badge. 테두리 배지("N시간 전 기준")는 앞에 11px 시계 아이콘. */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--pill);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.badge.outline {
+  border: 1px solid var(--hairline);
+  color: var(--text-secondary);
+}
+
+/* 불러오는 중: 아바타 자리 원과 두 줄(30%, 90%). */
+.skeleton {
+  display: grid;
+  gap: 12px;
+  padding: 6px 8px;
+}
+
+.skeleton-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.skeleton-dot {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--chip);
+}
+
+.skeleton-lines {
+  display: grid;
+  flex: 1;
+  gap: 8px;
+}
+
+.skeleton-bar {
+  width: 90%;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--chip);
+}
+
+.skeleton-bar.short {
+  width: 30%;
+}
+
+/* 834–1068px: 오른쪽 칸은 대화 위에 겹쳐 열린다(폭 320px, 떠 있는 층). */
+@media (min-width: 834px) and (max-width: 1068px) {
+  .app {
+    position: relative;
+  }
+
+  .right-slot {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    bottom: 8px;
+    z-index: 1;
+    width: 320px;
+    border-radius: var(--rounded-lg);
+    box-shadow: var(--floating);
+  }
+
+  .right-slot .right-panel {
+    border-color: var(--hairline);
+  }
+}
+
+/* 833px 이하: 오른쪽 칸은 아래에서 올라오는 전체 높이 시트다. */
+.sheet {
+  inset: 0;
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  margin: 0;
+  padding: 8px;
+  border: 0;
+  background: transparent;
+}
+
+.sheet .right-panel {
+  height: 100%;
+}
+
+.sheet::backdrop {
+  background: var(--overlay);
 }
 
 /* 좁은 화면(833px 이하): 대화만 두고, 머리 띠 왼쪽 버튼이 채널 패널을 왼쪽 서랍으로 연다. */
@@ -525,8 +882,19 @@ svg.lucide {
     animation: drawer-in 240ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
-  .drawer[open]::backdrop {
+  .drawer[open]::backdrop,
+  .sheet[open]::backdrop {
     animation: fade-in 240ms ease-out;
+  }
+
+  .sheet[open] {
+    animation: sheet-in 240ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+}
+
+@keyframes sheet-in {
+  from {
+    transform: translateY(100%);
   }
 }
 

@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 5;
+export const CONTRACT_VERSION = 6;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -106,10 +106,58 @@ export type WorkView = z.infer<typeof WorkView>;
 /** 에이전트가 쓰는 상태 한 줄의 길이 상한. 줄바꿈과 겹친 공백은 공백 하나로 접는다. */
 export const MAX_STATUS_CHARS = 200;
 
+/** 에이전트 세션을 돌리는 실행기. 에이전트는 주인과 실행기 한 쌍이라 실행기마다 하나다(ADR-0015). */
+export const ExecutorId = z.enum(["claude-code", "codex"]);
+export type ExecutorId = z.infer<typeof ExecutorId>;
+
+/** 사람이 읽는 실행기 이름. 에이전트는 "지은의 Claude Code"처럼 사람과 함께 부른다(ADR-0015). */
+export const EXECUTOR_NAMES = {
+  "claude-code": "Claude Code",
+  codex: "Codex",
+} as const satisfies Record<ExecutorId, string>;
+
+/**
+ * 멤버 목록의 한 사람: 이름, 실행기마다의 에이전트, 작업마다의 상태 한 줄. 웹의 멤버 목록이 이것만으로 그린다.
+ * 작업의 바뀐 파일과 내용은 싣지 않는다. 그것은 `api.works`에 있다.
+ */
+export const MemberView = z.strictObject({
+  login: z.string(),
+  /** GitHub 프로필의 이름. 비워 두었으면 `login`과 같다. */
+  name: z.string(),
+  /**
+   * 러너가 붙을 때 알린 실행기마다 에이전트 하나. 러너를 켠 적이 없으면 비어 있다.
+   * 러너가 붙어 있으면 online, 그중 받은 문답에 아직 답하지 않았으면(줄을 선 것 포함) answering("답하는 중")이다.
+   */
+  agents: z.array(
+    z.strictObject({
+      executor: ExecutorId,
+      state: z.enum(["online", "answering", "offline"]),
+    }),
+  ),
+  /** 러너가 떨어진 시각. 작업과 상태 한 줄은 이 시각 기준으로 남은 것이다. 붙어 있거나 켠 적이 없으면 null. */
+  offlineSince: z.string().nullable(),
+  works: z.array(
+    z.strictObject({
+      branch: z.string(),
+      /** 이 작업의 에이전트. 모르면 null이고, 작업은 에이전트 없이 사람 아래에 둔다(ADR-0015). */
+      executor: ExecutorId.nullable(),
+      line: StatusLine.nullable(),
+    }),
+  ),
+});
+export type MemberView = z.infer<typeof MemberView>;
+
 /** 러너가 서버에 보내는 것. 이후의 이슈는 자기 메시지를 여기에 더한다. */
 export const runnerToServer = {
-  /** 붙자마자 보낸다. `repos`는 러너 폴더의 GitHub 원격이 가리키는 레포(`owner/name`)들이다. */
-  hello: z.strictObject({ session: z.string(), repos: z.array(z.string()) }),
+  /**
+   * 붙자마자 보낸다. `repos`는 러너 폴더의 GitHub 원격이 가리키는 레포(`owner/name`)들이다.
+   * `executors`는 이 기기에서 러너가 돌릴 수 있는 실행기다. 실행기마다 에이전트가 하나씩 생긴다(ADR-0015).
+   */
+  hello: z.strictObject({
+    session: z.string(),
+    repos: z.array(z.string()),
+    executors: z.array(ExecutorId),
+  }),
   /**
    * 관측. 러너가 지금 보는 작업 전부다: 등록한 폴더와 그 연결된 워크트리마다 체크아웃된 브랜치 하나씩(ADR-0006).
    * 서버는 그 멤버의 작업을 이것으로 바꾼다. 그래서 공유 수준을 낮추면 전에 올린 내용이 서버에서 내려간다.
@@ -143,6 +191,24 @@ export const serverToRunner = {
  * 1008로 닫힌 러너는 다시 붙지 않는다. 그 밖의 이유로 끊기면 다시 붙는다.
  */
 export const RUNNER_SOCKET = "/api/runner";
+
+// --- 웹과 서버 사이의 실시간 길 ---
+// 웹은 API로 읽고 쓰고, 달라진 것은 이 WebSocket으로 받는다. 봉투, `encode`, `decode`는 러너의 것을 그대로 쓴다.
+
+/** 웹이 붙는 WebSocket 경로. 서버는 hello를 거절하거나 세션이 끝나면 `error`를 보낸 뒤 1008로 닫는다(이유는 오류 코드). */
+export const WEB_SOCKET = "/api/live";
+
+/** 웹이 서버에 보내는 것. 브라우저의 WebSocket은 머리말을 달 수 없어 세션을 첫 메시지로 보낸다. */
+export const webToServer = {
+  hello: z.strictObject({ session: z.string() }),
+} satisfies Payloads;
+
+/** 서버가 웹에 보내는 것. 이후의 이슈는 자기 알림을 여기에 더한다. */
+export const serverToWeb = {
+  /** 멤버 목록 전부. hello 바로 뒤에 보내고, 그 뒤로는 달라질 때마다 다시 보낸다. `api.members`와 같다. */
+  members: z.strictObject({ members: z.array(MemberView) }),
+  error: ContractError,
+} satisfies Payloads;
 
 /** HTTP 본문 하나의 상한. 서버는 넘는 것을 읽지 않는다. 더 큰 것이 필요한 이슈가 알고 올린다. */
 export const MAX_MESSAGE_BYTES = 1024 * 1024;
@@ -214,10 +280,6 @@ export function decode<P extends Payloads>(
 
 // --- CLI와 러너 사이(같은 기기) ---
 // 봉투, `encode`, `decode`는 러너와 서버 사이의 것을 그대로 쓴다.
-
-/** 에이전트 세션을 돌리는 실행기(ADR-0015). 훅과 CLI는 러너에 보내는 요청에 자기 실행기를 싣는다. */
-export const ExecutorId = z.enum(["claude-code", "codex"]);
-export type ExecutorId = z.infer<typeof ExecutorId>;
 
 /**
  * 근처 작업 하나: 고치려는 파일을 바꾸고 있는 다른 멤버의 작업과, 그 파일에서 바꾼 곳.
@@ -342,21 +404,11 @@ export const api = {
     path: "/api/logout",
     response: z.strictObject({}),
   },
-  /**
-   * 워크스페이스의 멤버와 그 사람의 에이전트. 에이전트는 러너가 서버에 붙어 있으면 online이고,
-   * 그중 받은 문답에 아직 답하지 않았으면(줄을 선 것 포함) answering("답하는 중")이다.
-   */
+  /** 워크스페이스의 멤버와 그 사람의 에이전트, 작업마다의 상태 한 줄. 이름 순이다. 달라지면 `WEB_SOCKET`으로도 온다. */
   members: {
     method: "GET",
     path: "/api/members",
-    response: z.strictObject({
-      members: z.array(
-        z.strictObject({
-          login: z.string(),
-          agent: z.enum(["online", "answering", "offline"]),
-        }),
-      ),
-    }),
+    response: serverToWeb.members,
   },
   /** 멤버들의 작업과 그 관측, 상태 한 줄. 바뀐 파일과 그 내용까지 온다. 멤버만 본다. */
   works: {

@@ -214,8 +214,15 @@ export async function startRunner(options: {
       timeoutMs,
     );
 
+    // 러너가 돌리는 실행기는 아직 Claude Code 하나다. Codex는 #16이 더한다.
     current.addEventListener("open", () =>
-      current.send(encode(runnerToServer, "hello", { session: options.session, repos })),
+      current.send(
+        encode(runnerToServer, "hello", {
+          session: options.session,
+          repos,
+          executors: ["claude-code"],
+        }),
+      ),
     );
     current.addEventListener("message", ({ data }) => {
       const decoded = decode(serverToRunner, data);

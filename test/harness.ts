@@ -8,8 +8,8 @@ import { devNull, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import type { ShareLevel } from "@omagari/contract";
-import { api, call } from "@omagari/contract";
+import type { MemberView, ShareLevel } from "@omagari/contract";
+import { api, call, decode, encode, serverToWeb, WEB_SOCKET, webToServer } from "@omagari/contract";
 import { type Executor, startRunner } from "@omagari/runner";
 import { type GitHub, type Pull, startServer } from "@omagari/server";
 
@@ -314,11 +314,47 @@ export async function startWorld(
         JSON.stringify({ [server.url]: as.session }),
       );
     },
-    /** 멤버 `as`의 눈으로 본 멤버마다의 에이전트 상태. */
+    /**
+     * 멤버 `as`의 눈으로 본 멤버마다의 에이전트 상태 하나. 붙은 에이전트가 있으면 그 상태,
+     * 없으면(러너를 켠 적이 없어 에이전트가 없어도) offline이다.
+     */
     agents: async (as: { url: string; session: string }) =>
       Object.fromEntries(
-        (await call(as, api.members)).members.map((member) => [member.login, member.agent]),
+        (await call(as, api.members)).members.map((member) => [
+          member.login,
+          member.agents.find((agent) => agent.state !== "offline")?.state ?? "offline",
+        ]),
       ),
+    /** 웹처럼 실시간 길에 `as`로 붙는다. 받은 멤버 목록이 차례로 쌓이고, 서버가 닫으면 그 코드와 이유가 남는다. */
+    async live(as: { session: string }) {
+      const url = new URL(WEB_SOCKET, server.url);
+      url.protocol = "ws:";
+      const socket = new WebSocket(url);
+      const received: MemberView[][] = [];
+      let closed: { code: number; reason: string } | undefined;
+      socket.addEventListener("message", ({ data }) => {
+        const decoded = decode(serverToWeb, data);
+        if ("message" in decoded && decoded.message.kind === "members") {
+          received.push(decoded.message.payload.members);
+        }
+      });
+      socket.addEventListener("close", ({ code, reason }) => {
+        closed = { code, reason };
+      });
+      await once(socket, "open");
+      socket.send(encode(webToServer, "hello", { session: as.session }));
+      return {
+        received,
+        /** 마지막으로 받은 멤버 목록. 아직 없으면 던진다. `eventually`로 기다린다. */
+        latest() {
+          const last = received.at(-1);
+          if (!last) throw new Error("아직 받은 멤버 목록이 없다");
+          return last;
+        },
+        closed: () => closed,
+        close: () => socket.close(),
+      };
+    },
     /** 멤버 `as`의 눈으로 본 작업마다의 관측. */
     works: async (as: { url: string; session: string }) => (await call(as, api.works)).works,
     /** 서버만 끈다. 러너들은 켜진 채 다시 붙으려 한다. `restartServer`로 다시 띄운다. */
