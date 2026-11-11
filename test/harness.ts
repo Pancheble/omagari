@@ -323,10 +323,16 @@ export async function startWorld(
         JSON.stringify({ [server.url]: as.session }),
       );
     },
-    /** 멤버 `as`의 눈으로 본 멤버마다의 에이전트 상태. */
+    /**
+     * 멤버 `as`의 눈으로 본 멤버마다의 에이전트 상태 하나. 붙은 에이전트가 있으면 그 상태,
+     * 없으면(러너를 켠 적이 없어 에이전트가 없어도) offline이다.
+     */
     agents: async (as: { url: string; session: string }) =>
       Object.fromEntries(
-        (await call(as, api.members)).members.map((member) => [member.login, member.agent]),
+        (await call(as, api.members)).members.map((member) => [
+          member.login,
+          member.agents.find((agent) => agent.state !== "offline")?.state ?? "offline",
+        ]),
       ),
     /** 멤버 `as`의 눈으로 본 작업마다의 관측. */
     works: async (as: { url: string; session: string }) => (await call(as, api.works)).works,
@@ -355,6 +361,12 @@ export async function startWorld(
         received,
         /** 받은 채널 메시지만, 받은 순서대로. */
         messages: () => received.flatMap((m) => (m.kind === "message" ? [m.payload] : [])),
+        /** 마지막으로 받은 멤버 목록. 아직 없으면 던진다. `eventually`로 기다린다. */
+        members() {
+          const last = received.findLast((m) => m.kind === "members");
+          if (!last) throw new Error("아직 받은 멤버 목록이 없다");
+          return last.payload.members;
+        },
         /** 닫힌 코드. 서버가 거절하면 1008이다. */
         closed: closed.promise,
         close() {

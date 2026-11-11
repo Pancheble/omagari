@@ -181,7 +181,13 @@ test("답하지 않는 러너 연결은 끊겨 그 에이전트가 오프라인�
   });
   t.after(() => silent.terminate());
   await once(silent, "open");
-  silent.send(encode(runnerToServer, "hello", { session: alice.session, repos: [REPO] }));
+  silent.send(
+    encode(runnerToServer, "hello", {
+      session: alice.session,
+      repos: [REPO],
+      executors: ["claude-code"],
+    }),
+  );
   const [welcome] = await once(silent, "message");
   assert.partialDeepStrictEqual(JSON.parse(String(welcome)), {
     v: CONTRACT_VERSION,

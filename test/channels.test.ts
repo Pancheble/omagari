@@ -105,10 +105,12 @@ test("연결이 끊겼다 붙으면 그 사이에 쌓인 메시지를 빠짐없�
   const payments = (await call(owner, api.createChannel, { name: "결제" })).channel;
   const old = (await call(owner, api.send, { channel: general.id, text: "붙기 전" })).message;
 
-  // 처음 붙을 때는 지난 것을 다시 받지 않고, welcome이 지금의 끝 번호를 알려 준다.
+  // 처음 붙을 때는 지난 것을 다시 받지 않고, welcome이 지금의 끝 번호를 알려 준다(뒤따르는 멤버 목록은 members.test가 본다).
   const first = await world.live(alice);
   assert.deepEqual(
-    first.received.map(({ kind, payload }) => ({ kind, payload })),
+    first.received
+      .filter(({ kind }) => kind !== "members")
+      .map(({ kind, payload }) => ({ kind, payload })),
     [{ kind: "welcome", payload: { seq: old.id } }],
   );
 

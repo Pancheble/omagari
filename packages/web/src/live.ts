@@ -70,7 +70,9 @@ export function useLive(
     return () => {
       stopped = true;
       clearTimeout(timer);
-      socket?.close();
+      // 붙는 중에 닫으면 브라우저가 경고를 남긴다(개발 모드의 StrictMode가 늘 그렇게 한다). 붙은 뒤에 닫는다.
+      if (socket?.readyState === WebSocket.CONNECTING) socket.onopen = () => socket?.close();
+      else socket?.close();
     };
   }, [session]);
 

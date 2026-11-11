@@ -5,7 +5,15 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs, promisify } from "node:util";
-import { ago, api, CONTRACT_VERSION, ContractFailure, call, ShareLevel } from "@omagari/contract";
+import {
+  ago,
+  api,
+  CONTRACT_VERSION,
+  ContractFailure,
+  call,
+  EXECUTOR_NAMES,
+  ShareLevel,
+} from "@omagari/contract";
 import {
   callRunner,
   observationNotice,
@@ -179,10 +187,15 @@ async function status() {
   const AGENT = { online: "온라인", answering: "답하는 중", offline: "오프라인" } as const;
   const as = await member();
   const [{ members }, { works }] = await Promise.all([call(as, api.members), call(as, api.works)]);
-  for (const { login, agent } of members) {
+  for (const { login, agents } of members) {
     const own = works.filter((work) => work.login === login);
     const since = own[0]?.offlineSince;
-    console.log(`${login} · 에이전트 ${AGENT[agent]}${since ? ` · ${ago(since)} 기준` : ""}`);
+    // 에이전트는 실행기마다 하나다(ADR-0015). 러너를 켠 적이 없으면 없다.
+    const shown =
+      agents
+        .map(({ executor, state }) => `${EXECUTOR_NAMES[executor]} ${AGENT[state]}`)
+        .join(" · ") || "에이전트 없음";
+    console.log(`${login} · ${shown}${since ? ` · ${ago(since)} 기준` : ""}`);
     if (own.length === 0) console.log("  작업 없음");
     for (const { branch, share, line, files } of own) {
       const shown =

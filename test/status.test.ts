@@ -206,12 +206,12 @@ test("omagari status로 멤버, 작업, 상태 한 줄, 바뀐 파일을 본다.
   assert.equal(
     stdout,
     [
-      "alice · 에이전트 오프라인 · 방금 전 기준",
+      "alice · Claude Code 오프라인 · 방금 전 기준",
       "  refund: refund.ts 수정 중",
       "    refund.ts",
-      "bob · 에이전트 오프라인",
+      "bob · 에이전트 없음",
       "  작업 없음",
-      "owner · 에이전트 온라인",
+      "owner · Claude Code 온라인",
       "  payment: 결제 붙이는 중 (방금 전)",
       "    gone.ts (지움)",
       "    payment.ts",
