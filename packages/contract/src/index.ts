@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 3;
+export const CONTRACT_VERSION = 4;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -46,25 +46,35 @@ const Envelope = z.strictObject({
 type Payloads = Record<string, z.ZodType>;
 
 /**
+ * 공유 수준: 관측이 서버에 올리는 범위. 주인이 러너마다 고르고, 기본은 full이다(ADR-0007).
+ * 1단계에는 선점이 없어 declared는 바뀐 파일의 경로만, intent는 작업(브랜치)과 상태 한 줄만 올린다.
+ */
+export const ShareLevel = z.enum(["full", "declared", "intent"]);
+export type ShareLevel = z.infer<typeof ShareLevel>;
+
+/**
  * 관측한 파일 하나: 지금 내용, 지운 파일, 또는 경로만 보낸 파일과 그 까닭.
  * `binary`는 글이 아니거나(UTF-8이 아니거나 NUL이 있다) 파일이 아니거나 읽지 못한 것,
- * `too_large`는 파일 하나의 상한이나 합계의 상한을 넘은 것이다(ADR-0007).
+ * `too_large`는 파일 하나의 상한이나 합계의 상한을 넘은 것(ADR-0007),
+ * `share`는 공유 수준이 내용을 내보내지 않는 것이다.
  */
 export const ObservedFile = z.union([
   z.strictObject({ path: z.string(), content: z.string() }),
   z.strictObject({ path: z.string(), deleted: z.literal(true) }),
-  z.strictObject({ path: z.string(), omitted: z.enum(["binary", "too_large"]) }),
+  z.strictObject({ path: z.string(), omitted: z.enum(["binary", "too_large", "share"]) }),
 ]);
 export type ObservedFile = z.infer<typeof ObservedFile>;
 
 /**
  * 작업 하나(멤버 + 브랜치)의 관측. 기준 커밋 이후 그 브랜치가 바꾼 파일이다: 커밋한 것, 안 한 것, 추적하지 않는 새 파일.
- * 경로는 레포 최상위에서 본 것이다. 정의 줄은 싣지 않는다(ADR-0009).
+ * 경로는 그 작업 폴더(등록한 폴더나 연결된 워크트리)의 최상위에서 본 것이다. 정의 줄은 싣지 않는다(ADR-0009).
  */
 export const Work = z.strictObject({
   branch: z.string(),
   /** 기준 커밋. 이 브랜치와 기본 브랜치(원격 추적)가 갈라진 지점이다(ADR-0002). */
   base: z.string(),
+  /** 이 관측의 공유 수준. intent의 빈 `files`는 바뀐 것이 없다는 뜻이 아니라 보내지 않았다는 뜻이다. */
+  share: ShareLevel,
   files: z.array(ObservedFile),
 });
 export type Work = z.infer<typeof Work>;
@@ -74,7 +84,8 @@ export const runnerToServer = {
   /** 붙자마자 보낸다. `repos`는 러너 폴더의 GitHub 원격이 가리키는 레포(`owner/name`)들이다. */
   hello: z.strictObject({ session: z.string(), repos: z.array(z.string()) }),
   /**
-   * 관측. 러너가 지금 보는 작업 전부다. 서버는 그 멤버의 작업을 이것으로 바꾼다.
+   * 관측. 러너가 지금 보는 작업 전부다: 등록한 폴더와 그 연결된 워크트리마다 체크아웃된 브랜치 하나씩(ADR-0006).
+   * 서버는 그 멤버의 작업을 이것으로 바꾼다. 그래서 공유 수준을 낮추면 전에 올린 내용이 서버에서 내려간다.
    * 붙을 때마다, 그리고 관측이 달라질 때마다 보낸다. 브랜치가 아니면(detached HEAD) 작업이 없다.
    */
   observation: z.strictObject({ works: z.array(Work) }),

@@ -2,9 +2,10 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { text } from "node:stream/consumers";
 import { setTimeout as sleep } from "node:timers/promises";
+import { parseArgs } from "node:util";
 import {
   api,
   CONTRACT_VERSION,
@@ -14,9 +15,10 @@ import {
   decode,
   encode,
   runnerToCli,
+  ShareLevel,
 } from "@omagari/contract";
 import {
-  OBSERVATION_NOTICE,
+  observationNotice,
   type RunRecord,
   readRepo,
   runnerPaths,
@@ -26,7 +28,9 @@ import manifest from "../package.json" with { type: "json" };
 
 const USAGE = `사용법:
   omagari --version
-  omagari runner                레포 폴더에서 러너를 켠다. 처음이면 GitHub 기기 인증으로 로그인한다
+  omagari runner [--share <수준>]
+                                레포 폴더에서 러너를 켠다. 처음이면 GitHub 기기 인증으로 로그인한다
+                                공유 수준은 full(기본), declared(경로만), intent(상태 한 줄만). 고른 것은 이 레포에 남는다
   omagari runner ask <메시지>   이 레포의 러너 세션에 묻는다. 다음 질문은 같은 세션으로 이어진다
   omagari runner log            러너가 실행한 것을 본다
 
@@ -45,8 +49,12 @@ const [command, sub, ...rest] = process.argv.slice(2);
 try {
   if (command === "--version") {
     console.log(`omagari ${manifest.version} (contract ${CONTRACT_VERSION})`);
-  } else if (command === "runner" && sub === undefined) {
-    await runner();
+  } else if (command === "runner" && (sub === undefined || sub.startsWith("--"))) {
+    const { values } = parseArgs({
+      args: process.argv.slice(3),
+      options: { share: { type: "string" } },
+    });
+    await runner(values.share);
   } else if (command === "runner" && sub === "ask" && rest.length > 0) {
     console.log(await ask(rest.join(" ")));
   } else if (command === "runner" && sub === "log") {
@@ -85,14 +93,43 @@ async function login() {
   }
 }
 
+/**
+ * 이 레포의 공유 수준. 고르면 레포(연결된 워크트리 포함)에 남기고, 안 고르면 남긴 것을, 남긴 것도 없으면 full을 쓴다.
+ * 남겨 두지 않으면 수준을 낮춘 주인이 그냥 다시 켰을 때 모르는 채로 내용이 나간다.
+ */
+async function shareLevel(folder: string, chosen: string | undefined) {
+  const { share: file } = await runnerPaths(folder);
+  const level =
+    chosen ??
+    (await readFile(file, "utf8").then(
+      (saved) => saved.trim(),
+      (error) => {
+        if (error.code === "ENOENT") return "full";
+        throw error; // 남긴 것을 못 읽었는데 full로 내보내지 않는다
+      },
+    ));
+  const parsed = ShareLevel.safeParse(level);
+  if (!parsed.success) {
+    const from = chosen === undefined ? ` (${file})` : "";
+    throw new Error(`공유 수준은 full, declared, intent 가운데 하나다: ${level}${from}`);
+  }
+  if (chosen !== undefined) {
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(file, `${parsed.data}\n`);
+  }
+  return parsed.data;
+}
+
 /** 이 폴더에서 러너를 켜고, 끄거나 서버가 거절할 때까지 돈다. */
-async function runner() {
+async function runner(chosen: string | undefined) {
   const folder = process.cwd();
   await readRepo(folder); // Git 레포가 아니면 로그인하기 전에 멈춘다
+  const share = await shareLevel(folder, chosen);
   // 로그인하고 붙기 전에, 그러니 아무것도 나가기 전에 무엇이 나가는지 알린다.
-  console.log(OBSERVATION_NOTICE);
+  console.log(observationNotice(share));
   const saved = (await readSessions())[server];
-  const start = async (session: string) => startRunner({ serverUrl: server, folder, session });
+  const start = async (session: string) =>
+    startRunner({ serverUrl: server, folder, session, share });
   const running = await start(saved ?? (await login())).catch(async (error) => {
     // 남겨 둔 세션이 끝났으면 한 번 다시 로그인한다.
     if (!saved || !(error instanceof ContractFailure) || error.code !== "unauthorized") throw error;

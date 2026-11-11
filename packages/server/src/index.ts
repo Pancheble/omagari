@@ -13,6 +13,7 @@ import {
   MAX_FRAME_BYTES,
   RUNNER_SOCKET,
   runnerToServer,
+  type ShareLevel,
   serverToRunner,
   type Work,
 } from "@omagari/contract";
@@ -58,6 +59,7 @@ export async function startServer(options: {
     login TEXT NOT NULL,
     branch TEXT NOT NULL,
     base TEXT NOT NULL,
+    share TEXT NOT NULL,
     files TEXT NOT NULL,
     PRIMARY KEY (login, branch)
   ) STRICT`);
@@ -67,9 +69,11 @@ export async function startServer(options: {
     db.exec("BEGIN");
     db.prepare("DELETE FROM works WHERE login = ?").run(login);
     const insert = db.prepare(
-      "INSERT OR REPLACE INTO works (login, branch, base, files) VALUES (?, ?, ?, ?)",
+      "INSERT OR REPLACE INTO works (login, branch, base, share, files) VALUES (?, ?, ?, ?, ?)",
     );
-    for (const work of works) insert.run(login, work.branch, work.base, JSON.stringify(work.files));
+    for (const work of works) {
+      insert.run(login, work.branch, work.base, work.share, JSON.stringify(work.files));
+    }
     db.exec("COMMIT");
   };
   const sessionLogin = (session: string) =>
@@ -195,10 +199,10 @@ export async function startServer(options: {
     // 워크스페이스에서 빠진 사람(세션이 없는 사람)의 작업은 보이지 않는다.
     const rows = db
       .prepare(
-        `SELECT login, branch, base, files FROM works
+        `SELECT login, branch, base, share, files FROM works
          WHERE login IN (SELECT login FROM sessions) ORDER BY login, branch`,
       )
-      .all() as { login: string; branch: string; base: string; files: string }[];
+      .all() as { login: string; branch: string; base: string; share: ShareLevel; files: string }[];
     return { works: rows.map((row) => ({ ...row, files: JSON.parse(row.files) })) };
   });
 
