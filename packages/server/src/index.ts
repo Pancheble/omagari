@@ -6,11 +6,14 @@ import { DatabaseSync } from "node:sqlite";
 import { serve, upgradeWebSocket } from "@hono/node-server";
 import {
   api,
+  type ChannelMessage,
   CONTRACT_VERSION,
   type ContractError,
   ContractFailure,
   decode,
   encode,
+  HISTORY_PAGE,
+  LIVE_SOCKET,
   MAX_FRAME_BYTES,
   type ObservedFile,
   RUNNER_SOCKET,
@@ -18,8 +21,10 @@ import {
   type ShareLevel,
   type StatusLine,
   serverToRunner,
+  serverToWeb,
   type Work,
   type WorkView,
+  webToServer,
 } from "@omagari/contract";
 import type { WSContext } from "hono/ws";
 import { type WebSocket, WebSocketServer } from "ws";
@@ -49,6 +54,27 @@ function filesLine(files: ObservedFile[]) {
 
 const hash = (session: string) => createHash("sha256").update(session).digest("hex");
 const bearer = (authorization?: string) => authorization?.match(/^Bearer (\S+)$/)?.[1];
+
+/** 메시지를 쓴 사람의 이름과 함께 읽는다. 뒤에 WHERE와 ORDER BY를 붙여 쓴다. */
+const MESSAGES = `SELECT m.id, m.channel, m.login, m.text, m.at, p.name FROM messages m
+  LEFT JOIN people p ON p.login = m.login`;
+type MessageRow = {
+  id: number;
+  channel: string;
+  login: string;
+  text: string;
+  at: number;
+  name: string | null;
+};
+const messageView = (row: MessageRow): ChannelMessage => ({
+  kind: "text",
+  id: row.id,
+  channel: row.channel,
+  login: row.login,
+  name: row.name ?? row.login,
+  text: row.text,
+  at: new Date(row.at).toISOString(),
+});
 
 export async function startServer(options: {
   /** 워크스페이스의 레포 `owner/name`. 서버 하나에 워크스페이스 하나, 레포 하나다(ADR-0012). */
@@ -100,6 +126,21 @@ export async function startServer(options: {
     login TEXT PRIMARY KEY,
     since INTEGER NOT NULL
   ) STRICT`);
+  // 채팅 채널. 이름은 대소문자를 가리지 않고 하나뿐이다.
+  db.exec(`CREATE TABLE IF NOT EXISTS channels (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE
+  ) STRICT`);
+  // 채널의 메시지. `id`는 워크스페이스 전체에서 늘어나기만 한다(AUTOINCREMENT라 지워도 다시 쓰지 않는다).
+  // 웹이 다시 붙을 때 이 번호 뒤의 것을 이어 받는다. `at`은 쓴 시각(ms)이다.
+  db.exec(`CREATE TABLE IF NOT EXISTS messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel TEXT NOT NULL REFERENCES channels (id),
+    login TEXT NOT NULL,
+    text TEXT NOT NULL,
+    at INTEGER NOT NULL
+  ) STRICT`);
+  db.exec("CREATE INDEX IF NOT EXISTS messages_by_channel ON messages (channel, id)");
   // 서버가 막 떴으니 아무 러너도 붙어 있지 않다. 이미 떨어져 있던 멤버는 떨어진 시각을 그대로 둔다.
   db.prepare(
     `INSERT OR IGNORE INTO offline (login, since)
@@ -150,6 +191,12 @@ export async function startServer(options: {
   >();
   /** hello를 마친 러너의 연결. */
   const runners = new Map<WSContext, { login: string; hash: string }>();
+  /** hello를 마친 웹의 실시간 연결과 그 세션의 해시. 세션이 끝나면 닫는다. */
+  const watchers = new Map<WSContext, string>();
+  /** 붙어 있는 웹 모두에 보낸다. 멤버가 아니게 된 세션의 연결은 이미 닫혔다. */
+  const broadcast = (frame: string) => {
+    for (const socket of watchers.keys()) if (socket.readyState === 1) socket.send(frame); // OPEN
+  };
   /** 러너에 보내고 답을 기다리는 문답. 키는 보낸 `ask`의 id다. 서버가 꺼지면 잃는다. */
   const asks = new Map<
     string,
@@ -214,15 +261,17 @@ export async function startServer(options: {
     for (const socket of targets) socket.send(frame);
   };
 
+  /** `error`를 보내고 1008로 닫는다. 러너와 웹의 `error`는 같은 형식이다. */
   const refuse = (socket: WSContext, error: ContractError, re?: string) => {
     socket.send(encode(serverToRunner, "error", error, re));
     socket.close(1008, error.code);
   };
 
-  /** 세션 하나를 끝낸다. 그 세션으로 붙은 러너는 `error`를 받고 끊긴다. */
+  /** 세션 하나를 끝낸다. 그 세션으로 붙은 러너와 웹의 실시간 연결은 `error`를 받고 끊긴다. */
   const endSession = (sessionHash: string, error: ContractError) => {
     db.prepare("DELETE FROM sessions WHERE hash = ?").run(sessionHash);
     for (const [socket, runner] of runners) if (runner.hash === sessionHash) refuse(socket, error);
+    for (const [socket, watcher] of watchers) if (watcher === sessionHash) refuse(socket, error);
     shareSituation(); // 세션이 하나도 남지 않은 멤버의 작업은 보이지 않는다
   };
 
@@ -384,6 +433,88 @@ export async function startServer(options: {
       asks.delete(id);
     }
   });
+
+  mount(app, api.channels, () => ({
+    channels: (
+      db.prepare("SELECT id, name FROM channels ORDER BY name").all() as {
+        id: string;
+        name: string;
+      }[]
+    ).map(({ id, name }) => ({ id, name })),
+  }));
+
+  mount(app, api.createChannel, ({ name }) => {
+    if (db.prepare("SELECT 1 FROM channels WHERE name = ?").get(name)) {
+      throw new ContractFailure({ code: "conflict", message: `#${name} 채널이 이미 있다` });
+    }
+    const channel = { id: randomBytes(8).toString("hex"), name };
+    db.prepare("INSERT INTO channels (id, name) VALUES (?, ?)").run(channel.id, channel.name);
+    broadcast(encode(serverToWeb, "channel", channel));
+    return { channel };
+  });
+
+  const mustExist = (channel: string) => {
+    if (!db.prepare("SELECT 1 FROM channels WHERE id = ?").get(channel)) {
+      throw new ContractFailure({ code: "not_found", message: `없는 채널이다: ${channel}` });
+    }
+  };
+
+  mount(app, api.history, ({ channel, before }) => {
+    mustExist(channel);
+    const rows = db
+      .prepare(`${MESSAGES} WHERE m.channel = ? AND m.id < ? ORDER BY m.id DESC LIMIT ?`)
+      .all(channel, before ?? Number.MAX_SAFE_INTEGER, HISTORY_PAGE) as MessageRow[];
+    return { messages: rows.reverse().map(messageView) };
+  });
+
+  mount(app, api.send, ({ channel, text }, c) => {
+    mustExist(channel);
+    const { lastInsertRowid } = db
+      .prepare("INSERT INTO messages (channel, login, text, at) VALUES (?, ?, ?, ?)")
+      .run(channel, c.get("login") as string, text, Date.now());
+    const message = messageView(
+      db.prepare(`${MESSAGES} WHERE m.id = ?`).get(lastInsertRowid) as MessageRow,
+    );
+    broadcast(encode(serverToWeb, "message", message));
+    return { message };
+  });
+
+  // 웹의 실시간 연결. hello 하나를 받으면 welcome과 끊긴 사이의 메시지를 보내고, 그 뒤로는 쌓이는 대로 보낸다.
+  // 이 처리기는 끝까지 동기라 welcome의 seq, 다시 보낸 것, 이어 보낼 것 사이에 빠지는 메시지가 없다.
+  // ponytail: 끊긴 사이의 것을 개수 상한 없이 다 보낸다. 오래 끊겼던 웹이 많아 무거워지면 상한을 두고 넘으면 다시 읽으라고 알린다.
+  app.get(
+    LIVE_SOCKET,
+    upgradeWebSocket(() => ({
+      onMessage({ data }, socket) {
+        // 웹은 hello만 보낸다. 그 밖의 것은 고장 난 웹이라 닫는다.
+        const decoded = decode(webToServer, data);
+        if ("error" in decoded) return refuse(socket, decoded.error, decoded.re);
+        const { id, payload } = decoded.message;
+        const login = sessionLogin(payload.session);
+        if (!login) {
+          return refuse(
+            socket,
+            { code: "unauthorized", message: "세션이 없거나 끝났다. 다시 로그인하라" },
+            id,
+          );
+        }
+        const { seq } = db.prepare("SELECT COALESCE(MAX(id), 0) AS seq FROM messages").get() as {
+          seq: number;
+        };
+        socket.send(encode(serverToWeb, "welcome", { seq }, id));
+        if (payload.after !== undefined) {
+          const missed = db
+            .prepare(`${MESSAGES} WHERE m.id > ? ORDER BY m.id`)
+            .all(payload.after) as MessageRow[];
+          for (const row of missed) socket.send(encode(serverToWeb, "message", messageView(row)));
+        }
+        watchers.set(socket, hash(payload.session));
+      },
+      onClose(_, socket) {
+        watchers.delete(socket);
+      },
+    })),
+  );
 
   app.get(
     RUNNER_SOCKET,

@@ -59,7 +59,7 @@ function App() {
     saveSession(undefined);
     setState({ kind: "out" });
   };
-  return <Workspace me={state.me} onLogout={logout} />;
+  return <Workspace me={state.me} session={state.session} onLogout={logout} />;
 }
 
 createRoot(document.getElementById("root") as HTMLElement).render(

@@ -24,6 +24,7 @@ const STATUS = {
   executor_failed: 500,
   runner_offline: 503,
   turn_timeout: 504,
+  conflict: 409,
 } as const satisfies Record<ContractError["code"], number>;
 
 const fail = (
