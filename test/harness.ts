@@ -5,9 +5,10 @@ import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import type { ShareLevel } from "@omagari/contract";
 import { api, call } from "@omagari/contract";
 import { type Executor, startRunner } from "@omagari/runner";
 import { type GitHub, type Pull, startServer } from "@omagari/server";
@@ -87,6 +88,12 @@ export async function eventually<T>(check: () => T | Promise<T>, timeoutMs = 10_
     }
   }
 }
+
+/** 폴더에 파일을 쓰는 함수를 돌려준다. 폴더가 없으면 만든다. */
+export const writer = (folder: string) => async (path: string, content: string | Uint8Array) => {
+  await mkdir(dirname(join(folder, path)), { recursive: true });
+  await writeFile(join(folder, path), content);
+};
 
 /**
  * 커밋 하나가 있는 실제 Git 레포를 임시 폴더에 만든다. origin은 `repo`(GitHub)를 가리킨다. 기기의 Git 설정은 읽지 않는다.
@@ -213,6 +220,7 @@ export async function startWorld(
     heartbeatMs?: number;
     turnTimeoutMs?: number;
     observeMs?: number;
+    share?: ShareLevel;
     followMs?: number;
     forgetMs?: number;
   } = {},
@@ -260,6 +268,7 @@ export async function startWorld(
     executor: options.executor ?? (() => Promise.reject(new Error("가짜 실행기를 넘기지 않았다"))),
     turnTimeoutMs: options.turnTimeoutMs,
     observeMs: options.observeMs,
+    share: options.share,
   }).catch(async (error) => {
     await server.stop();
     await cleanup();

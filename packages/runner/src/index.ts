@@ -17,11 +17,12 @@ import {
   RUNNER_SOCKET,
   runnerToCli,
   runnerToServer,
+  type ShareLevel,
   serverToRunner,
 } from "@omagari/contract";
 import { observe } from "./observe.ts";
 
-export { OBSERVATION_NOTICE } from "./observe.ts";
+export { observationNotice } from "./observe.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -109,6 +110,8 @@ export async function runnerPaths(folder: string) {
     socket: join(process.env.XDG_RUNTIME_DIR ?? tmpdir(), `omagari-${id}.sock`),
     /** 실행 기록. 서버로 나가지 않는다. */
     log: join(common, "omagari", "runs.jsonl"),
+    /** 주인이 고른 공유 수준. 다시 켤 때 따로 고르지 않으면 이것을 쓴다. */
+    share: join(common, "omagari", "share"),
   };
 }
 
@@ -152,6 +155,8 @@ export async function startRunner(options: {
   observeMs?: number;
   /** 한 턴의 시간 상한. 기본 10분. */
   turnTimeoutMs?: number;
+  /** 관측의 공유 수준. 기본 full. */
+  share?: ShareLevel;
 }) {
   const { folder, repos, remotes } = await readRepo(options.folder);
   const paths = await runnerPaths(folder);
@@ -347,7 +352,7 @@ export async function startRunner(options: {
   const observing = remote ? observeLoop(remote.name) : Promise.resolve();
 
   /**
-   * 관측: 주기마다 작업을 다시 읽고, 이 연결로 지난번에 보낸 것과 다를 때만 보낸다. 다시 붙으면 처음부터 보낸다.
+   * 관측: 주기마다 등록한 폴더와 연결된 워크트리의 작업을 다시 읽고, 이 연결로 지난번에 보낸 것과 다를 때만 보낸다. 다시 붙으면 처음부터 보낸다.
    * 읽지 못하면 까닭을 한 번만 알리고 다음 주기에 다시 읽는다.
    */
   async function observeLoop(remote: string) {
@@ -357,8 +362,11 @@ export async function startRunner(options: {
     let sent: { to?: WebSocket; works?: string } = {};
     let problem: string | undefined;
     while (!stopping.signal.aborted) {
+      let problems: string[];
       try {
-        const works = await observe(folder, remote);
+        const observed = await observe(folder, remote, options.share ?? "full");
+        const { works } = observed;
+        problems = observed.problems;
         const json = JSON.stringify(works);
         if (live && (live !== sent.to || json !== sent.works)) {
           const frame = encode(runnerToServer, "observation", { works });
@@ -370,12 +378,13 @@ export async function startRunner(options: {
           live.send(frame);
           sent = { to: live, works: json };
         }
-        problem = undefined;
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (message !== problem && !stopping.signal.aborted) console.warn(`관측: ${message}`);
-        problem = message;
+        problems = [error instanceof Error ? error.message : String(error)];
       }
+      const message = problems.join("\n  ") || undefined;
+      if (message && message !== problem && !stopping.signal.aborted)
+        console.warn(`관측: ${message}`);
+      problem = message;
       await sleep(options.observeMs ?? OBSERVE_MS, undefined, { signal: stopping.signal }).catch(
         () => {},
       );

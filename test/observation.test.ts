@@ -1,18 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { readdir, readFile, rm, stat, utimes } from "node:fs/promises";
+import { join, relative } from "node:path";
 import { test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { api, call } from "@omagari/contract";
 import { startRunner } from "@omagari/runner";
-import { eventually, startWorld, tempRepo } from "./harness.ts";
-
-/** 레포 폴더에 파일을 쓴다. 폴더가 없으면 만든다. */
-const writer = (folder: string) => async (path: string, content: string | Uint8Array) => {
-  await mkdir(dirname(join(folder, path)), { recursive: true });
-  await writeFile(join(folder, path), content);
-};
+import { eventually, startWorld, tempRepo, writer } from "./harness.ts";
 
 test("커밋한 것, 커밋하지 않은 것, 추적하지 않는 새 파일이 푸시 여부와 상관없이 그 작업의 변경으로 올라가고, 다른 멤버가 API로 본다", async (t) => {
   const world = await startWorld();
@@ -50,6 +44,7 @@ test("커밋한 것, 커밋하지 않은 것, 추적하지 않는 새 파일이 
         login: "owner",
         branch: "feat",
         base,
+        share: "full",
         // 경로, 내용, 지웠는지만 온다. 정의 줄 같은 다른 것은 없다.
         files: [
           { path: "committed.ts", content: "committed\n" },
@@ -101,6 +96,7 @@ test("기준 커밋은 기본 브랜치(원격 추적)와 갈라진 지점이다
         login: "owner",
         branch: "feat",
         base: forkPoint,
+        share: "full",
         files: [
           { path: "local.ts", content: "local\n" },
           { path: "mine.ts", content: "mine\n" },
@@ -136,6 +132,7 @@ test("gitignore된 파일과 .env, .env.*는 추적되더라도 올라가지 않
         login: "owner",
         branch: "main",
         base: await git("rev-parse", "origin/main"),
+        share: "full",
         files: [
           { path: ".env.example", content: "TOKEN=\n" },
           { path: ".gitignore", content: "secret.txt\nbuild/\n" },
@@ -293,6 +290,7 @@ test("러너를 켤 때 로그인하기 전에 무엇이 서버로 나가는지 
           login: "alice",
           branch: "main",
           base: await desk.git("rev-parse", "origin/main"),
+          share: "full",
           files: [{ path: "hello.ts", content: "hello\n" }],
           line: { source: "files", text: "hello.ts 수정 중" },
           offlineSince: null,

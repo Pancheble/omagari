@@ -15,6 +15,7 @@ import {
   type ObservedFile,
   RUNNER_SOCKET,
   runnerToServer,
+  type ShareLevel,
   type StatusLine,
   serverToRunner,
   type Work,
@@ -75,6 +76,7 @@ export async function startServer(options: {
     login TEXT NOT NULL,
     branch TEXT NOT NULL,
     base TEXT NOT NULL,
+    share TEXT NOT NULL,
     files TEXT NOT NULL,
     PRIMARY KEY (login, branch)
   ) STRICT`);
@@ -113,12 +115,15 @@ export async function startServer(options: {
     );
     db.prepare("DELETE FROM works WHERE login = ?").run(login);
     const insert = db.prepare(
-      "INSERT OR REPLACE INTO works (login, branch, base, files) VALUES (?, ?, ?, ?)",
+      "INSERT OR REPLACE INTO works (login, branch, base, share, files) VALUES (?, ?, ?, ?, ?)",
     );
     const clear = db.prepare("DELETE FROM lines WHERE login = ? AND branch = ?");
     for (const work of works) {
-      insert.run(login, work.branch, work.base, JSON.stringify(work.files));
-      if (work.files.length === 0 && changed.has(work.branch)) clear.run(login, work.branch);
+      insert.run(login, work.branch, work.base, work.share, JSON.stringify(work.files));
+      // intent의 빈 files는 바뀐 것이 0이 된 것이 아니라 보내지 않은 것이다. 수준을 낮춰도 쓴 줄은 남는다.
+      if (work.share !== "intent" && work.files.length === 0 && changed.has(work.branch)) {
+        clear.run(login, work.branch);
+      }
     }
     db.exec("COMMIT");
   };
@@ -247,7 +252,7 @@ export async function startServer(options: {
     // 워크스페이스에서 빠진 사람(세션이 없는 사람)의 작업은 보이지 않는다.
     const rows = db
       .prepare(
-        `SELECT w.login, w.branch, w.base, w.files, l.text, l.at, o.since FROM works w
+        `SELECT w.login, w.branch, w.base, w.share, w.files, l.text, l.at, o.since FROM works w
          LEFT JOIN lines l ON l.login = w.login AND l.branch = w.branch
          LEFT JOIN offline o ON o.login = w.login
          WHERE w.login IN (SELECT login FROM sessions) ORDER BY w.login, w.branch`,
@@ -256,13 +261,14 @@ export async function startServer(options: {
       login: string;
       branch: string;
       base: string;
+      share: ShareLevel;
       files: string;
       text: string | null;
       at: number | null;
       since: number | null;
     }[];
     return {
-      works: rows.map(({ login, branch, base, text, at, since, ...row }) => {
+      works: rows.map(({ login, branch, base, share, text, at, since, ...row }) => {
         const files: ObservedFile[] = JSON.parse(row.files);
         const draft = drafts.get(branch);
         const changes = filesLine(files);
@@ -276,7 +282,7 @@ export async function startServer(options: {
                 ? { source: "files", text: changes }
                 : null;
         const offlineSince = since === null ? null : new Date(since).toISOString();
-        return { login, branch, base, files, line, offlineSince };
+        return { login, branch, base, share, files, line, offlineSince };
       }),
     };
   });
