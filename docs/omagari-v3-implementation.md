@@ -50,7 +50,21 @@
 **만들면서 확인할 것**
 
 - 주인이 지금 쓰고 있는 세션을 포크하면 어디까지의 대화가 들어오는가
-- Codex: `codex exec resume <세션 ID>`가 있고, `codex exec`는 저장된 CLI 로그인(보통 ChatGPT 로그인)을 그대로 쓰며 기본이 읽기 전용 샌드박스다(문서로 확인). `codex exec`용 포크는 문서에 없다. 실제로 러너에서 도는지는 만들면서 확인한다
+- Codex: `codex exec resume <세션 ID>`가 있고, `codex exec`는 저장된 CLI 로그인(보통 ChatGPT 로그인)을 그대로 쓰며 기본이 읽기 전용 샌드박스다(문서로 확인). **손 점검(2026-11-11, codex-cli 0.167.1)에서 구독 로그인, 세션 이어 가기, 읽기 전용이 문서대로 됐다.** 기본 샌드박스는 사용자 설정(`~/.codex/config.toml`의 `sandbox_mode`)을 따르므로, 러너(#16)는 기본값에 기대지 않고 `-s read-only`를 직접 준다. `codex exec fork`는 0.167.1에 있다(돌려 보지는 않았다)
+- 화면 없는 Claude Code 세션의 자동 컴팩트: 손 점검에서 일어났다. 문턱을 낮춘 세션(`CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000`)이 74,569 토큰에서 3,399 토큰으로 줄었고, 요약에 첫 턴의 내용이 남아 컴팩트 뒤의 턴도 기억했다. 세션 id는 그대로였다. Codex는 보지 않았다(아래 미정)
+
+**실제 실행기 손 점검 결과** (`test/real-executors.ts`, 돌리는 법은 `docs/executor-check.md`)
+
+- Claude Code (2026-11-11, 이 레포의 #7 세션이 주인 기기의 claude.ai 로그인으로 돌림, 사용량을 줄이려고 `ANTHROPIC_MODEL=haiku`)
+  - [x] 구독 로그인: API 키 없이 돌았고 `claude auth status`가 claude.ai 로그인이다
+  - [x] 세션 이어 가기: 러너의 채널 세션으로 이은 둘째 턴이 첫 턴의 암호를 답했고 세션 id가 그대로다
+  - [x] 읽기 전용: 파일을 만들고 고치라고 시킨 뒤에도 작업 폴더가 그대로다. 답은 "쓸 수 있는 도구가 Glob, Grep, Read뿐이라 못 했다"
+  - 긴 세션(관찰): 위의 자동 컴팩트 줄
+- Codex (2026-11-11, 주인이 `node test/real-executors.ts codex --quick`으로 돌림, codex-cli 0.167.1, darwin arm64, Node 24.19.0)
+  - [x] 구독 로그인: API 키 환경 변수 없이 돌았고 `codex login status`가 ChatGPT 로그인이다
+  - [x] 세션 이어 가기: `codex exec resume <id> -`로 이은 둘째 턴이 첫 턴의 암호를 답했고 세션 id가 그대로다
+  - [x] 읽기 전용: `--sandbox` 없이(기본값) 파일을 만들고 고치라고 시킨 뒤에도 작업 폴더가 그대로다. 답은 "읽기 전용 권한으로 파일을 쓸 수 없습니다"
+  - 긴 세션: 보지 않았다(`--quick`). 무료 요금제의 사용량으로는 맥락을 4만 토큰까지 키우기 어려워 미뤘다
 
 Sources: [Claude Code 비대화 실행](https://code.claude.com/docs/en/headless), [세션 다루기](https://code.claude.com/docs/en/agent-sdk/sessions), [플랜으로 Agent SDK 쓰기](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan), [/btw 설명](https://blog.vincentqiao.com/en/posts/claude-code-btw/), [Codex 비대화 모드](https://learn.chatgpt.com/docs/non-interactive-mode)
 
@@ -269,7 +283,8 @@ CSCW 연구에서 작업 공간 인식이라고 부르는 것이다. 진행 중�
 * [ ] 초안 PR은 커밋이 있어야 열린다. 작업 시작 때 무엇을 먼저 커밋할지
 * [ ] 작업 세션을 읽기만 하고 갈라 띄우는 방식(토론이 씀)이 Codex에서도 되는지
 
-- [ ] Codex에서 구독 로그인으로 러너를 돌릴 수 있는지(Claude Code는 확인됨). 문서로는 `codex exec`가 저장된 ChatGPT 로그인을 쓴다. 러너에서 실제로 도는지는 만들면서 확인한다
+- [x] Codex에서 구독 로그인으로 러너를 돌릴 수 있는지(Claude Code는 확인됨). 2026-11-11 손 점검에서 `codex exec`가 저장된 ChatGPT 로그인으로 돌고 세션 이어 가기와 읽기 전용이 됐다(1장 "실제 실행기 손 점검 결과"). 러너에 붙이는 것은 #16
+- [ ] 화면 없는 Codex 세션이 길어지면 자동 컴팩트가 일어나는가, 일어나면 무엇이 남는가. Claude Code는 확인했다(1장). Codex는 `node test/real-executors.ts codex`(긴 세션 포함)로 본다
 - [x] 채널 대화를 DM 세션에 얼마나 넘길지 → 지난 턴 이후의 메시지만, 첫 턴은 최근 50개까지(3장)
 - [ ] DM에서 내 작업 세션의 맥락까지 물을 수 있게 할지. 1단계에서는 넣지 않는다(실행 중인 세션 포크가 확인되지 않았다)
 
