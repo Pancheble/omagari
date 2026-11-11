@@ -56,6 +56,21 @@ export async function tempRepo() {
   return { folder, git, remove: () => rm(folder, { recursive: true, force: true }) };
 }
 
+type ExecutorInput = Parameters<Executor>[0];
+
+/**
+ * 가짜 에이전트 실행기. 받은 입력과 옵션을 `calls`에 적고 `answer`가 정한 답을 낸다.
+ * 이어 갈 세션이 없으면 `session-<몇 번째 부름>`으로 새 세션을 띄운다.
+ */
+export function fakeExecutor(answer: (input: ExecutorInput) => string = () => "가짜 답") {
+  const calls: ExecutorInput[] = [];
+  const executor: Executor = async (input) => {
+    calls.push(input);
+    return { answer: answer(input), session: input.resume ?? `session-${calls.length}` };
+  };
+  return { executor, calls };
+}
+
 /** 서버 하나, 러너 하나, 레포 하나. 가짜를 넘기지 않으면 빈 것이 꽂힌다. */
 export async function startWorld(fakes: { github?: GitHub; executor?: Executor } = {}) {
   const repo = await tempRepo();
@@ -66,7 +81,8 @@ export async function startWorld(fakes: { github?: GitHub; executor?: Executor }
   const runner = await startRunner({
     serverUrl: server.url,
     folder: repo.folder,
-    executor: fakes.executor,
+    // 넘긴 가짜가 없으면 실제 실행기 대신 늘 실패하는 것을 꽂는다.
+    executor: fakes.executor ?? (() => Promise.reject(new Error("가짜 실행기를 넘기지 않았다"))),
   }).catch(async (error) => {
     await server.stop();
     await repo.remove();
@@ -82,7 +98,7 @@ export async function startWorld(fakes: { github?: GitHub; executor?: Executor }
     hook: (stdin: string, options: { keepStdinOpen?: boolean } = {}) =>
       run(process.execPath, [HOOK], { cwd: repo.folder, stdin, ...options }),
     async stop() {
-      runner.stop();
+      await runner.stop();
       await server.stop();
       await repo.remove();
     },
