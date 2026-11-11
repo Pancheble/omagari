@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 7;
+export const CONTRACT_VERSION = 8;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -118,13 +118,44 @@ export const EXECUTOR_NAMES = {
 } as const satisfies Record<ExecutorId, string>;
 
 /**
- * 멤버 목록의 한 사람: 이름, 실행기마다의 에이전트, 작업마다의 상태 한 줄. 웹의 멤버 목록이 이것만으로 그린다.
+ * 다른 멤버에게 보이는 사람의 접속 상태. 웹 창이 하나도 열려 있지 않거나 "오프라인으로 보이기"를 골랐으면 offline이다.
+ * 사람의 것이다. 에이전트의 러너가 붙어 있는지(`MemberView.agents`)와 따로 간다.
+ */
+export const Presence = z.enum(["online", "away", "dnd", "offline"]);
+export type Presence = z.infer<typeof Presence>;
+
+/** 사람이 스스로 고르는 접속 상태. invisible은 "오프라인으로 보이기"다. 고른 사람 자신의 웹도 offline으로 받는다. */
+export const ChosenPresence = z.enum(["online", "away", "dnd", "invisible"]);
+export type ChosenPresence = z.infer<typeof ChosenPresence>;
+
+/** 고른 접속 상태가 온라인으로 돌아오기까지의 시간. 고르지 않으면 직접 바꿀 때까지다. */
+export const PresenceDuration = z.enum(["15m", "1h", "8h", "24h", "3d"]);
+export type PresenceDuration = z.infer<typeof PresenceDuration>;
+export const PRESENCE_DURATIONS = {
+  "15m": 15 * 60_000,
+  "1h": 60 * 60_000,
+  "8h": 8 * 60 * 60_000,
+  "24h": 24 * 60 * 60_000,
+  "3d": 3 * 24 * 60 * 60_000,
+} as const satisfies Record<PresenceDuration, number>;
+
+/**
+ * 상태 메시지의 길이 상한. 코드 포인트로 센다(이모지 하나가 1~몇 자다). Slack의 상태 글 상한 100자를 따랐다.
+ * 줄바꿈과 겹친 공백은 공백 하나로 접는다.
+ */
+export const MAX_STATUS_MESSAGE_CHARS = 100;
+
+/**
+ * 멤버 목록의 한 사람: 이름, 접속 상태와 상태 메시지, 실행기마다의 에이전트, 작업마다의 상태 한 줄. 웹의 멤버 목록이 이것만으로 그린다.
  * 작업의 바뀐 파일과 내용은 싣지 않는다. 그것은 `api.works`에 있다.
  */
 export const MemberView = z.strictObject({
   login: z.string(),
   /** GitHub 프로필의 이름. 비워 두었으면 `login`과 같다. */
   name: z.string(),
+  presence: Presence,
+  /** 사람이 쓴 상태 메시지. 쓴 그대로이고(HTML이 들어 있어도 바꾸지 않는다) 접속 상태와 상관없이 보인다. 없으면 null. */
+  message: z.string().nullable(),
   /**
    * 러너가 붙을 때 알린 실행기마다 에이전트 하나. 러너를 켠 적이 없으면 비어 있다.
    * 러너가 붙어 있으면 online, 그중 받은 문답에 아직 답하지 않았으면(줄을 선 것 포함) answering("답하는 중")이다.
@@ -465,7 +496,10 @@ export const api = {
     path: "/api/logout",
     response: z.strictObject({}),
   },
-  /** 워크스페이스의 멤버와 그 사람의 에이전트, 작업마다의 상태 한 줄. 이름 순이다. 달라지면 실시간 연결로도 온다. */
+  /**
+   * 워크스페이스의 멤버와 그 사람의 접속 상태, 상태 메시지, 에이전트, 작업마다의 상태 한 줄. 이름 순이다.
+   * 달라지면 실시간 연결로도 온다. 멤버가 아니면(세션이 없거나 끝났으면) `unauthorized`다.
+   */
   members: {
     method: "GET",
     path: "/api/members",
@@ -492,6 +526,30 @@ export const api = {
         .pipe(z.string().min(1).max(MAX_STATUS_CHARS)),
     }),
     response: z.strictObject({ text: z.string(), at: z.string() }),
+  },
+  /**
+   * 내 접속 상태를 고른다. `duration`이 지나면 온라인으로 돌아오고, 없으면 직접 바꿀 때까지다(online이면 무시한다).
+   * 멤버 목록이 실시간 연결로 모두에게 간다. 답의 `until`은 온라인으로 돌아오는 시각이다.
+   */
+  setPresence: {
+    method: "POST",
+    path: "/api/presence",
+    body: z.strictObject({ presence: ChosenPresence, duration: PresenceDuration.optional() }),
+    response: z.strictObject({ until: z.string().nullable() }),
+  },
+  /** 내 상태 메시지를 쓴다. 빈 글이면 지운다. 따로 만료는 없다. 멤버 목록이 실시간 연결로 모두에게 간다. */
+  setStatusMessage: {
+    method: "POST",
+    path: "/api/status-message",
+    body: z.strictObject({
+      message: z
+        .string()
+        .transform((text) => text.replace(/\s+/g, " ").trim())
+        .refine((text) => Array.from(text).length <= MAX_STATUS_MESSAGE_CHARS, {
+          message: `상태 메시지는 ${MAX_STATUS_MESSAGE_CHARS}자까지다`,
+        }),
+    }),
+    response: z.strictObject({ message: z.string().nullable() }),
   },
   /**
    * 채널 안에서 `agent`(멤버의 로그인)의 `executor` 에이전트에게 DM으로 묻는다. 에이전트는 주인만 부른다(`forbidden`).

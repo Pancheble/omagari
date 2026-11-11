@@ -34,11 +34,21 @@ test("멤버 목록에 사람마다 이름과 실행기마다의 에이전트, �
   );
   assert.deepEqual(
     all.find((member) => member.login === "bob"),
-    { login: "bob", name: "bob", agents: [], offlineSince: null, works: [] },
+    {
+      login: "bob",
+      name: "bob",
+      presence: "offline", // 웹 창을 연 적이 없다
+      message: null,
+      agents: [],
+      offlineSince: null,
+      works: [],
+    },
   );
   assert.deepEqual(await aliceOf(), {
     login: "alice",
     name: "김지은",
+    presence: "offline",
+    message: null,
     agents: [{ executor: "claude-code", state: "online" }],
     offlineSince: null,
     works: [

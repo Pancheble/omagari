@@ -9,7 +9,7 @@ import { devNull, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import type { ExecutorId, Message, Qa, ShareLevel } from "@omagari/contract";
+import type { ExecutorId, Message, PresenceDuration, Qa, ShareLevel } from "@omagari/contract";
 import {
   api,
   call,
@@ -269,6 +269,8 @@ export async function startWorld(
     share?: ShareLevel;
     followMs?: number;
     forgetMs?: number;
+    /** 고른 접속 상태가 온라인으로 돌아오기까지의 시간. 줄여서 만료를 본다. */
+    presenceDurations?: Partial<Record<PresenceDuration, number>>;
   } = {},
 ) {
   const repo = await tempRepo();
@@ -283,6 +285,7 @@ export async function startWorld(
     heartbeatMs: options.heartbeatMs,
     followMs: options.followMs,
     forgetMs: options.forgetMs,
+    presenceDurations: options.presenceDurations,
   };
   let server = await startServer(serverOptions).catch(async (error) => {
     await cleanup();
