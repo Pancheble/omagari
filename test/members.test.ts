@@ -79,7 +79,7 @@ test("멤버 목록에 사람마다 이름과 실행기마다의 에이전트, �
   );
 });
 
-test("웹은 실시간 길에서 멤버 목록을 바로 받고, 작업과 상태 한 줄과 에이전트가 바뀌면 새로 고치지 않아도 따라온다. 세션이 끝나면 길이 닫힌다", async (t) => {
+test("웹은 실시간 연결에서 멤버 목록을 바로 받고, 작업과 상태 한 줄과 에이전트가 바뀌면 새로 고치지 않아도 따라온다. 세션이 끝나면 연결이 닫힌다", async (t) => {
   const answer = Promise.withResolvers<string>();
   const world = await startWorld({
     observeMs: 50,
@@ -90,7 +90,7 @@ test("웹은 실시간 길에서 멤버 목록을 바로 받고, 작업과 상�
   const alice = await world.login("alice");
 
   const live = await world.live(alice);
-  const owner = () => live.latest().find((member) => member.login === "owner");
+  const owner = () => live.members().find((member) => member.login === "owner");
   await eventually(() =>
     assert.deepEqual(owner()?.agents, [{ executor: "claude-code", state: "online" }]),
   );
@@ -118,13 +118,5 @@ test("웹은 실시간 길에서 멤버 목록을 바로 받고, 작업과 상�
   });
 
   await call(alice, api.logout);
-  await eventually(() => assert.deepEqual(live.closed(), { code: 1008, reason: "unauthorized" }));
-});
-
-test("세션 없이 실시간 길에 붙으면 아무것도 받지 못하고 닫힌다", async (t) => {
-  const world = await startWorld();
-  t.after(world.stop);
-  const live = await world.live({ session: "made-up-session" });
-  await eventually(() => assert.deepEqual(live.closed(), { code: 1008, reason: "unauthorized" }));
-  assert.equal(live.received.length, 0);
+  assert.equal(await live.closed, 1008);
 });

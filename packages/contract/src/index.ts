@@ -19,6 +19,7 @@ export const ContractError = z.strictObject({
     "executor_failed", // 에이전트 실행기가 실패했거나 답 없이 끝났다
     "runner_offline", // 그 에이전트의 러너가 서버에 붙어 있지 않다. 문답은 쌓아 두지 않는다
     "turn_timeout", // 러너 세션의 한 턴이 시간 상한을 넘어 끊겼다
+    "conflict", // 이미 있다(같은 이름의 채널)
   ]),
   message: z.string(),
 });
@@ -147,6 +148,9 @@ export const MemberView = z.strictObject({
 });
 export type MemberView = z.infer<typeof MemberView>;
 
+/** 멤버 목록 전부, 이름 순. `api.members`의 답이고, 실시간 연결의 `members`로도 온다. */
+export const Members = z.strictObject({ members: z.array(MemberView) });
+
 /** 러너가 서버에 보내는 것. 이후의 이슈는 자기 메시지를 여기에 더한다. */
 export const runnerToServer = {
   /**
@@ -191,24 +195,6 @@ export const serverToRunner = {
  * 1008로 닫힌 러너는 다시 붙지 않는다. 그 밖의 이유로 끊기면 다시 붙는다.
  */
 export const RUNNER_SOCKET = "/api/runner";
-
-// --- 웹과 서버 사이의 실시간 길 ---
-// 웹은 API로 읽고 쓰고, 달라진 것은 이 WebSocket으로 받는다. 봉투, `encode`, `decode`는 러너의 것을 그대로 쓴다.
-
-/** 웹이 붙는 WebSocket 경로. 서버는 hello를 거절하거나 세션이 끝나면 `error`를 보낸 뒤 1008로 닫는다(이유는 오류 코드). */
-export const WEB_SOCKET = "/api/live";
-
-/** 웹이 서버에 보내는 것. 브라우저의 WebSocket은 머리말을 달 수 없어 세션을 첫 메시지로 보낸다. */
-export const webToServer = {
-  hello: z.strictObject({ session: z.string() }),
-} satisfies Payloads;
-
-/** 서버가 웹에 보내는 것. 이후의 이슈는 자기 알림을 여기에 더한다. */
-export const serverToWeb = {
-  /** 멤버 목록 전부. hello 바로 뒤에 보내고, 그 뒤로는 달라질 때마다 다시 보낸다. `api.members`와 같다. */
-  members: z.strictObject({ members: z.array(MemberView) }),
-  error: ContractError,
-} satisfies Payloads;
 
 /** HTTP 본문 하나의 상한. 서버는 넘는 것을 읽지 않는다. 더 큰 것이 필요한 이슈가 알고 올린다. */
 export const MAX_MESSAGE_BYTES = 1024 * 1024;
@@ -352,6 +338,37 @@ export type Route = {
 export type BodyOf<R extends Route> = R["body"] extends z.ZodType ? z.output<R["body"]> : undefined;
 export type ReplyOf<R extends Route> = z.input<R["response"]>;
 
+/** 채팅 채널. 1단계의 채널은 채팅 채널뿐이고(포럼 채널은 없다), 워크스페이스의 멤버 모두가 읽고 쓴다. */
+export const Channel = z.strictObject({ id: z.string(), name: z.string() });
+export type Channel = z.infer<typeof Channel>;
+
+/** 채널 이름의 길이 상한. 앞뒤 공백은 떼고, 줄바꿈과 겹친 공백은 공백 하나로 접는다. */
+export const MAX_CHANNEL_NAME_CHARS = 80;
+/** 메시지 하나의 길이 상한. 앞뒤 공백은 뗀다. */
+export const MAX_MESSAGE_CHARS = 4000;
+/** 지난 대화를 한 번에 읽는 수. */
+export const HISTORY_PAGE = 50;
+
+/**
+ * 채널에 쌓인 것 하나. `id`는 워크스페이스 전체에서 늘어나기만 하는 번호라 채널 안의 순서이자,
+ * 실시간 연결이 다시 붙을 때 이어 받을 자리(`webToServer.hello`의 `after`)다.
+ * 지금은 사람이 쓴 글(`text`)뿐이다. 채널에 올린 문답(#21)은 `kind`를 하나 더해 같은 줄에 선다.
+ */
+export const ChannelMessage = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("text"),
+    id: z.number(),
+    channel: z.string(),
+    login: z.string(),
+    /** 쓴 사람의 GitHub 프로필 이름. 비워 두었으면 `login`과 같다. */
+    name: z.string(),
+    /** 쓴 그대로의 글. HTML이 들어 있어도 서버는 바꾸지 않고, 웹은 글자로만 보인다. */
+    text: z.string(),
+    at: z.string(),
+  }),
+]);
+export type ChannelMessage = z.infer<typeof ChannelMessage>;
+
 /** 웹이 쓰는 API. 이후의 이슈는 자기 경로를 여기에 더한다. */
 export const api = {
   health: {
@@ -404,11 +421,11 @@ export const api = {
     path: "/api/logout",
     response: z.strictObject({}),
   },
-  /** 워크스페이스의 멤버와 그 사람의 에이전트, 작업마다의 상태 한 줄. 이름 순이다. 달라지면 `WEB_SOCKET`으로도 온다. */
+  /** 워크스페이스의 멤버와 그 사람의 에이전트, 작업마다의 상태 한 줄. 이름 순이다. 달라지면 실시간 연결로도 온다. */
   members: {
     method: "GET",
     path: "/api/members",
-    response: serverToWeb.members,
+    response: Members,
   },
   /** 멤버들의 작업과 그 관측, 상태 한 줄. 바뀐 파일과 그 내용까지 온다. 멤버만 본다. */
   works: {
@@ -442,7 +459,77 @@ export const api = {
     body: z.strictObject({ agent: z.string(), message: z.string().min(1) }),
     response: z.strictObject({ answer: z.string() }),
   },
+  /** 채팅 채널 전부, 이름 순서. 멤버만 본다. */
+  channels: {
+    method: "GET",
+    path: "/api/channels",
+    response: z.strictObject({ channels: z.array(Channel) }),
+  },
+  /**
+   * 채팅 채널을 만든다. 같은 이름(대소문자를 가리지 않는다)이 있으면 `conflict`다.
+   * 실시간 연결이 붙어 있는 웹 모두에 `channel`이 간다.
+   */
+  createChannel: {
+    method: "POST",
+    path: "/api/channels",
+    body: z.strictObject({
+      name: z
+        .string()
+        .transform((name) => name.replace(/\s+/g, " ").trim())
+        .pipe(z.string().min(1).max(MAX_CHANNEL_NAME_CHARS)),
+    }),
+    response: z.strictObject({ channel: Channel }),
+  },
+  /**
+   * 채널의 지난 대화. `before`(메시지 번호) 앞의 것 가운데 마지막 `HISTORY_PAGE`개를 오래된 것부터 준다.
+   * `before`가 없으면 맨 끝에서부터다. 없는 채널이면 `not_found`. 읽기지만 채널을 본문에 실으려고 POST다.
+   */
+  history: {
+    method: "POST",
+    path: "/api/channels/history",
+    body: z.strictObject({ channel: z.string(), before: z.number().optional() }),
+    response: z.strictObject({ messages: z.array(ChannelMessage) }),
+  },
+  /** 채널에 글을 쓴다. 실시간 연결이 붙어 있는 웹 모두(쓴 사람 것 포함)에 `message`가 간다. */
+  send: {
+    method: "POST",
+    path: "/api/channels/messages",
+    body: z.strictObject({
+      channel: z.string(),
+      text: z.string().trim().min(1).max(MAX_MESSAGE_CHARS),
+    }),
+    response: z.strictObject({ message: ChannelMessage }),
+  },
 } satisfies Record<string, Route>;
+
+// --- 웹의 실시간 연결 ---
+// 웹은 조작을 HTTP API로 하고, 받는 것만 이 WebSocket으로 받는다(ADR-0014). 봉투, `encode`, `decode`는 러너의 것과 같다.
+
+/** 웹이 실시간으로 받는 WebSocket 경로. */
+export const LIVE_SOCKET = "/api/live";
+
+/** 웹이 실시간 연결에 보내는 것. 붙자마자 hello 하나만 보낸다. */
+export const webToServer = {
+  /**
+   * 브라우저의 WebSocket은 머리말을 싣지 못해 세션을 여기에 싣는다.
+   * `after`는 지난 연결에서 마지막으로 받은 메시지 번호(또는 그 연결의 welcome `seq`)다.
+   * 주면 그 뒤에 쌓인 메시지를 끊긴 사이의 것까지 다시 받는다. 처음 붙을 때는 주지 않는다.
+   */
+  hello: z.strictObject({ session: z.string(), after: z.number().int().nonnegative().optional() }),
+} satisfies Payloads;
+
+/** 서버가 웹의 실시간 연결에 보내는 것. 세션이 없거나 끝나면 `error`를 보낸 뒤 1008로 닫는다. */
+export const serverToWeb = {
+  /** hello를 받아들였다. `seq`는 지금 마지막 메시지 번호다. 다음에 다시 붙을 때 `after`로 쓴다. */
+  welcome: z.strictObject({ seq: z.number() }),
+  /** 채널에 새로 쌓인 것. welcome 바로 뒤에 `after` 뒤의 것을 번호 순서대로 보내고, 그 뒤로는 쌓이는 대로 보낸다. */
+  message: ChannelMessage,
+  /** 새 채널이 생겼다. 끊긴 사이에 생긴 채널은 다시 보내지 않으니, 다시 붙으면 `api.channels`를 읽는다. */
+  channel: Channel,
+  /** 멤버 목록 전부(`api.members`와 같다). 붙을 때마다 welcome 뒤에 한 번, 그 뒤로는 달라질 때마다 보낸다. */
+  members: Members,
+  error: ContractError,
+} satisfies Payloads;
 
 /** API 하나를 부른다. 웹, CLI, 테스트가 같이 쓴다. 오류 답은 `ContractFailure`로 던진다. */
 export async function call<R extends Route>(

@@ -41,15 +41,20 @@ export function MemberList({ me, members }: { me: string; members: Member[] }) {
   );
 }
 
-/** 불러오는 중: 아바타 자리 원과 두 줄을 사람 셋만큼. */
+/** 불러오는 중: 아바타 자리 원과 두 줄을 사람 셋만큼. 메시지의 뼈대와 같은 부품이다. */
 export const MemberSkeleton = () => (
-  <div className="skeleton" role="status" aria-busy="true" aria-label="멤버 목록을 불러오는 중">
+  <div
+    className="member-skeleton"
+    role="status"
+    aria-busy="true"
+    aria-label="멤버 목록을 불러오는 중"
+  >
     {[0, 1, 2].map((key) => (
-      <div key={key} className="skeleton-row">
-        <span className="skeleton-dot" />
-        <span className="skeleton-lines">
-          <span className="skeleton-bar short" />
-          <span className="skeleton-bar" />
+      <div key={key} className="skeleton-row" aria-hidden>
+        <span className="bone circle" />
+        <span className="bones">
+          <span className="bone" />
+          <span className="bone" />
         </span>
       </div>
     ))}
