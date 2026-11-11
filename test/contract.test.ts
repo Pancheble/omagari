@@ -15,7 +15,7 @@ import {
 } from "@omagari/contract";
 import { startRunner } from "@omagari/runner";
 import { type WebSocket as ServerSocket, WebSocketServer } from "ws";
-import { REPO, startWorld, tempRepo } from "./harness.ts";
+import { eventually, fakeExecutor, REPO, startWorld, tempRepo } from "./harness.ts";
 
 const frame = (fields: object) => JSON.stringify({ v: CONTRACT_VERSION, payload: {}, ...fields });
 const tooBig = "x".repeat(MAX_MESSAGE_BYTES + 1);
@@ -42,14 +42,14 @@ async function fakeServer(
 ) {
   const server = new WebSocketServer({ port: 0 });
   await once(server, "listening");
-  const received = Promise.withResolvers<unknown>();
+  const received: unknown[] = [];
   const closed = Promise.withResolvers<void>();
   server.on("connection", (socket) => {
     socket.on("close", () => closed.resolve());
     socket.on("message", (data) => {
       const message = JSON.parse(String(data));
       if (message.kind === "hello") onHello(socket, message);
-      else received.resolve(message);
+      else received.push(message);
     });
   });
   t.after(() => {
@@ -65,8 +65,8 @@ async function fakeServer(
       folder: repo.folder,
       session: "세션",
     },
-    /** hello 다음에 러너가 보낸 첫 메시지. */
-    received: received.promise,
+    /** hello 다음에 러너가 보낸 메시지들. 온 순서대로다. */
+    received,
     /** 러너와의 연결이 닫혔다. */
     closed: closed.promise,
   };
@@ -182,20 +182,32 @@ test("서버는 따로 열지 않으면 이 기기 안에서만 듣는다", asyn
   await assert.rejects(fetch(`http://${outside.address}:${port}${api.health.path}`));
 });
 
-test("러너는 계약에 없는 종류의 메시지를 받지 않는다", async (t) => {
-  // 뚫린 서버 흉내: hello에는 제대로 답하고, 이어서 계약에 없는 요청을 보낸다.
+test("러너는 문답만 받는다. 계약에 없는 요청도, 도구를 넓히려는 문답도 실행하지 않는다", async (t) => {
+  // 뚫린 서버 흉내: hello에는 제대로 답하고, 이어서 계약에 없는 요청, 도구를 넓히려는 문답, 제대로 된 문답을 보낸다.
   const server = await fakeServer(t, (socket, hello) => {
     socket.send(encode(serverToRunner, "welcome", { login: "owner", repo: REPO }, hello.id));
     socket.send(frame({ id: "x", kind: "run_command", payload: { command: "rm -rf ~" } }));
+    socket.send(frame({ id: "y", kind: "ask", payload: { message: "지워", tools: ["Bash"] } }));
+    socket.send(frame({ id: "z", kind: "ask", payload: { message: "읽기만 해" } }));
   });
-  const runner = await startRunner(server.runner);
+  const fake = fakeExecutor();
+  const runner = await startRunner({ ...server.runner, executor: fake.executor });
   t.after(runner.stop);
 
-  assert.partialDeepStrictEqual(await server.received, {
+  await eventually(() => assert.equal(server.received.length, 3));
+  const [x, y, z] = server.received;
+  assert.partialDeepStrictEqual(x, { kind: "error", re: "x", payload: { code: "unknown_kind" } });
+  assert.partialDeepStrictEqual(y, {
     kind: "error",
-    re: "x",
-    payload: { code: "unknown_kind" },
+    re: "y",
+    payload: { code: "invalid_message" },
   });
+  assert.partialDeepStrictEqual(z, { kind: "answer", re: "z", payload: { text: "가짜 답" } });
+  // 실행기에 닿은 것은 제대로 된 문답 하나이고, 도구와 폴더는 러너가 정한 것이다.
+  assert.deepEqual(
+    fake.calls.map(({ message, tools, folder }) => ({ message, tools, folder })),
+    [{ message: "읽기만 해", tools: ["Read", "Grep", "Glob"], folder: server.runner.folder }],
+  );
 });
 
 test("러너는 계약 버전이 다른 서버를 알아보고 켜지지 않는다", async (t) => {

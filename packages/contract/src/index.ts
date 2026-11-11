@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 2;
+export const CONTRACT_VERSION = 3;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -17,6 +17,8 @@ export const ContractError = z.strictObject({
     "not_found",
     "internal",
     "executor_failed", // 에이전트 실행기가 실패했거나 답 없이 끝났다
+    "runner_offline", // 그 에이전트의 러너가 서버에 붙어 있지 않다. 문답은 쌓아 두지 않는다
+    "turn_timeout", // 러너 세션의 한 턴이 시간 상한을 넘어 끊겼다
   ]),
   message: z.string(),
 });
@@ -47,6 +49,8 @@ type Payloads = Record<string, z.ZodType>;
 export const runnerToServer = {
   /** 붙자마자 보낸다. `repos`는 러너 폴더의 GitHub 원격이 가리키는 레포(`owner/name`)들이다. */
   hello: z.strictObject({ session: z.string(), repos: z.array(z.string()) }),
+  /** `ask`(`re`)에 러너 세션이 답했다. 답하지 못했으면 `error`를 `re`를 붙여 보낸다. */
+  answer: z.strictObject({ text: z.string() }),
   error: ContractError,
 } satisfies Payloads;
 
@@ -54,6 +58,11 @@ export const runnerToServer = {
 export const serverToRunner = {
   /** hello를 받아들였다. 러너는 이 멤버의 에이전트로, 이 레포에 짝지어졌다. */
   welcome: z.strictObject({ login: z.string(), repo: z.string() }),
+  /**
+   * 문답. 러너가 받는 요청은 이것뿐이다. 메시지만 오고, 도구·폴더·세션은 러너가 정한다.
+   * 러너는 한 번에 한 턴만 돌리고 나머지는 온 순서대로 줄 세운다.
+   */
+  ask: z.strictObject({ message: z.string().min(1) }),
   error: ContractError,
 } satisfies Payloads;
 
@@ -133,12 +142,12 @@ export function decode<P extends Payloads>(
 
 /** CLI가 러너에 보내는 것. 러너는 문답만 받는다. */
 export const cliToRunner = {
-  ask: z.strictObject({ message: z.string().min(1) }),
+  ask: serverToRunner.ask,
 } satisfies Payloads;
 
 /** 러너가 CLI에 보내는 것. */
 export const runnerToCli = {
-  answer: z.strictObject({ text: z.string() }),
+  answer: runnerToServer.answer,
   error: ContractError,
 } satisfies Payloads;
 
@@ -189,13 +198,31 @@ export const api = {
       z.strictObject({ session: z.string(), login: z.string() }),
     ]),
   },
-  /** 워크스페이스의 멤버와 그 사람의 에이전트. 에이전트는 러너가 서버에 붙어 있으면 online이다. */
+  /**
+   * 워크스페이스의 멤버와 그 사람의 에이전트. 에이전트는 러너가 서버에 붙어 있으면 online이고,
+   * 그중 받은 문답에 아직 답하지 않았으면(줄을 선 것 포함) answering("답하는 중")이다.
+   */
   members: {
     method: "GET",
     path: "/api/members",
     response: z.strictObject({
-      members: z.array(z.strictObject({ login: z.string(), agent: z.enum(["online", "offline"]) })),
+      members: z.array(
+        z.strictObject({
+          login: z.string(),
+          agent: z.enum(["online", "answering", "offline"]),
+        }),
+      ),
     }),
+  },
+  /**
+   * `agent`(멤버의 로그인)의 에이전트에게 묻고 러너 세션의 답을 기다린다. 에이전트는 주인만 부른다(`forbidden`).
+   * 러너가 꺼져 있으면 쌓아 두지 않고 바로 `runner_offline`, 한 턴이 10분을 넘으면 `turn_timeout`이다.
+   */
+  ask: {
+    method: "POST",
+    path: "/api/ask",
+    body: z.strictObject({ agent: z.string(), message: z.string().min(1) }),
+    response: z.strictObject({ answer: z.string() }),
   },
 } satisfies Record<string, Route>;
 

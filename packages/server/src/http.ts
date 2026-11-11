@@ -22,6 +22,8 @@ const STATUS = {
   not_found: 404,
   internal: 500,
   executor_failed: 500,
+  runner_offline: 503,
+  turn_timeout: 504,
 } as const satisfies Record<ContractError["code"], number>;
 
 const fail = (
