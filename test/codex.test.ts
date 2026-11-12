@@ -11,8 +11,11 @@ import { eventually, fakeCodex, fakeExecutor, startWorld, tempRepo, writer } fro
 type World = Awaited<ReturnType<typeof startWorld>>;
 type Group = { matcher?: string; hooks: { type: string; command: string; timeout?: number }[] };
 
+/** 멤버의 에이전트와 그 상태. 고를 거리는 model.test가 본다. */
 const agentsOf = async (world: World, login: string) =>
-  (await call(world.owner, api.members)).members.find((m) => m.login === login)?.agents;
+  (await call(world.owner, api.members)).members
+    .find((m) => m.login === login)
+    ?.agents.map(({ executor, state }) => ({ executor, state }));
 
 test("Codex에게 물으면 러너가 codex exec를 읽기 전용으로 화면 없이 띄우고, 같은 채널의 다음 문답은 resume으로 같은 세션을 잇는다", async (t) => {
   const fake = await fakeCodex(t);

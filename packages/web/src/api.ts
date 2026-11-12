@@ -1,4 +1,10 @@
-import { type api, ContractFailure, type call } from "@omagari/contract";
+import {
+  type api,
+  ContractFailure,
+  type call,
+  type ExecutorId,
+  type ModelPick,
+} from "@omagari/contract";
 
 export type Me = Awaited<ReturnType<typeof call<typeof api.me>>>;
 
@@ -23,6 +29,24 @@ export function saveSession(session: string | undefined) {
   try {
     if (session) localStorage.setItem(KEY, session);
     else localStorage.removeItem(KEY);
+  } catch {}
+}
+
+/** 멤버마다, 에이전트(실행기)마다 DM에서 고른 모델과 effort. 이 브라우저에만 남는다(ADR-0020). */
+const picksKey = (login: string) => `omagari.picks.${login}`;
+
+export function savedPicks(login: string): Partial<Record<ExecutorId, ModelPick>> {
+  try {
+    const saved = JSON.parse(localStorage.getItem(picksKey(login)) ?? "{}");
+    return saved && typeof saved === "object" ? saved : {};
+  } catch {
+    return {};
+  }
+}
+
+export function savePicks(login: string, picks: Partial<Record<ExecutorId, ModelPick>>) {
+  try {
+    localStorage.setItem(picksKey(login), JSON.stringify(picks));
   } catch {}
 }
 

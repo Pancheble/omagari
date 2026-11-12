@@ -105,27 +105,26 @@ test("같은 채널의 다음 문답은 같은 채널 세션으로, 다른 채�
   t.after(world.stop);
   world.github.grant("alice");
   const alice = await world.login("alice");
+  /** alice가 본 owner의 에이전트와 그 상태. 고를 거리는 model.test가 본다. */
+  const agentsOf = async (as: typeof alice) =>
+    (await call(as, api.members)).members
+      .find((m) => m.login === "owner")
+      ?.agents.map(({ executor, state }) => ({ executor, state }));
   const payment = await world.channel(world.owner, "결제");
   const deploy = await world.channel(world.owner, "배포");
   await call(world.owner, api.send, { channel: deploy, text: "배포는 금요일" });
-  assert.deepEqual(
-    (await call(alice, api.members)).members.find((m) => m.login === "owner")?.agents,
-    [
-      { executor: "claude-code", state: "online" },
-      { executor: "codex", state: "online" },
-    ],
-  );
+  assert.deepEqual(await agentsOf(alice), [
+    { executor: "claude-code", state: "online" },
+    { executor: "codex", state: "online" },
+  ]);
 
   // Codex에게 물으면 Codex만 답하는 중이다.
   const toCodex = await world.ask(world.owner, payment, "Codex야, 결제는?", "codex");
   await eventually(async () =>
-    assert.deepEqual(
-      (await call(alice, api.members)).members.find((m) => m.login === "owner")?.agents,
-      [
-        { executor: "claude-code", state: "online" },
-        { executor: "codex", state: "answering" },
-      ],
-    ),
+    assert.deepEqual(await agentsOf(alice), [
+      { executor: "claude-code", state: "online" },
+      { executor: "codex", state: "answering" },
+    ]),
   );
   codex.release("Codex야, 결제는?");
   assert.partialDeepStrictEqual(await world.settled(world.owner, toCodex), {

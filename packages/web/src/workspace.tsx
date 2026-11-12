@@ -22,10 +22,10 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { type Me, server, signedOut } from "./api.ts";
+import { type Me, savedPicks, savePicks, server, signedOut } from "./api.ts";
 import { byName, ChannelList, CreateChannel, useCollapsed } from "./channels.tsx";
 import { ChannelTitle, Conversation, type View } from "./conversation.tsx";
-import { type Dm, DmPanel } from "./dm.tsx";
+import { chosen, type Dm, DmPanel, type Picks } from "./dm.tsx";
 import { useLive } from "./live.ts";
 import { MemberList, MemberSkeleton } from "./members.tsx";
 import { ProfilePanel } from "./profile.tsx";
@@ -133,6 +133,8 @@ export function Workspace({
   }, [right]);
   /** 채널마다 불러 둔 내 DM. 연 적 없는 채널은 없고, DM 칸을 처음 열 때 읽는다. */
   const [dms, setDms] = useState<Record<string, Dm>>({});
+  /** 에이전트마다 고른 모델과 effort. 이 브라우저에 남아 새로 고쳐도 그대로다. DM과 `@호출`이 같이 쓴다. */
+  const [picks, setPicks] = useState<Picks>(() => savedPicks(me.login));
   /** 채널마다 불러 둔 대화. 연 적 없는 채널은 없고, 처음 열 때 지난 대화를 읽는다. */
   const [views, setViews] = useState<Record<string, View>>({});
   const hash = useHash();
@@ -192,6 +194,9 @@ export function Workspace({
     message: string,
     visibility: Visibility = "private",
   ) => {
+    const agent = members
+      ?.find((m) => m.login === me.login)
+      ?.agents.find((a) => a.executor === executor);
     try {
       const asked = await call(server(session), api.ask, {
         agent: me.login,
@@ -199,6 +204,7 @@ export function Workspace({
         channel,
         message,
         visibility,
+        ...chosen(agent?.choices, picks[executor]),
       });
       receiveQa(asked.qa);
       if (asked.message) receive(asked.message);
@@ -409,6 +415,12 @@ export function Workspace({
           channel={current}
           agents={members?.find((member) => member.login === me.login)?.agents ?? []}
           dm={dms[current.id]}
+          picks={picks}
+          onPick={(executor, pick) => {
+            const next = { ...picks, [executor]: pick };
+            setPicks(next);
+            savePicks(me.login, next);
+          }}
           onAsk={(executor, question) => ask(current.id, executor, question)}
           onPost={post}
           onReload={() => void loadDm(current.id)}
