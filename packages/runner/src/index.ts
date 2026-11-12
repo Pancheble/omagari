@@ -1,16 +1,18 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { appendFile, mkdir, rm } from "node:fs/promises";
 import { connect as connectLocal, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { createInterface } from "node:readline";
 import { text } from "node:stream/consumers";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import {
   type Channel,
   type ChannelMessage,
+  type Choices,
   CONTRACT_VERSION,
   type ContractError,
   ContractFailure,
@@ -20,6 +22,7 @@ import {
   type ExecutorId,
   encode,
   MAX_FRAME_BYTES,
+  type ModelChoice,
   RUNNER_SOCKET,
   runnerToCli,
   runnerToServer,
@@ -42,7 +45,7 @@ const execFileAsync = promisify(execFile);
  * 러너의 바깥 경계: 에이전트 실행기. 러너 세션의 한 턴을 화면 없이 돌린다.
  * 테스트는 여기에 가짜를 꽂는다.
  */
-export type Executor = (input: {
+export type Executor = ((input: {
   /** 받은 메시지 */
   message: string;
   /** 이어 갈 세션. 없으면 새 세션을 띄운다. */
@@ -53,7 +56,58 @@ export type Executor = (input: {
   folder: string;
   /** 턴이 시간 상한을 넘으면 abort된다. 실행기는 띄운 것을 끈다. */
   signal: AbortSignal;
-}) => Promise<{ answer: string; session: string }>;
+  /** 고른 모델(`ModelChoice.id`). 없으면 실행기 자기 설정을 따르고 모델 플래그를 넘기지 않는다. */
+  model?: string;
+  /** 고른 effort. 없으면 실행기 자기 설정을 따르고 effort 플래그를 넘기지 않는다. */
+  effort?: string;
+}) => Promise<{
+  answer: string;
+  session: string;
+  /** 실제로 답한 모델(`ModelChoice.id`). 실행기가 알려 주지 않으면 없다. */
+  model?: string;
+}>) & {
+  /** 고를 거리를 실행기에 묻는다(ADR-0020). 모델을 부르지 않는다. 없으면 고를 거리가 없어 "기본"으로만 묻는다. */
+  choices?: () => Promise<Choices>;
+};
+
+/** 고를 거리를 묻는 시간 상한. 넘으면 그 실행기는 고를 거리 없이 붙는다. */
+const CHOICES_TIMEOUT_MS = 15_000;
+
+/**
+ * 실행기를 대화형 규약으로 띄워 표준 입력에 JSON 줄들을 쓰고, `pick`이 값을 내는 줄이 올 때까지 표준 출력을 줄마다 읽고 끈다.
+ * 고를 거리를 물을 때 쓴다(Claude Code의 stream-json 제어 요청, Codex의 app-server). 상한 안에 답이 없으면 던진다.
+ */
+async function converse<T>(
+  command: string,
+  args: string[],
+  lines: object[],
+  pick: (event: Record<string, unknown>) => T | undefined,
+): Promise<T> {
+  const child = spawn(command, args, {
+    stdio: ["pipe", "pipe", "ignore"],
+    signal: AbortSignal.timeout(CHOICES_TIMEOUT_MS),
+  });
+  // 깔려 있지 않거나 상한을 넘으면 표준 출력이 닫혀 아래 읽기가 끝난다.
+  child.on("error", () => {});
+  child.stdin.on("error", () => {});
+  child.stdin.write(lines.map((line) => `${JSON.stringify(line)}\n`).join(""));
+  try {
+    for await (const line of createInterface({ input: child.stdout })) {
+      let event: unknown;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const found =
+        event && typeof event === "object" ? pick(event as Record<string, unknown>) : undefined;
+      if (found !== undefined) return found;
+    }
+  } finally {
+    child.kill();
+  }
+  throw new Error(`${command}가 고를 거리를 알려 주지 않았다`);
+}
 
 /** 관측을 다시 읽는 주기. Room의 기준 커밋 확인 주기(3초)에서 시작한다. */
 const OBSERVE_MS = 3000;
@@ -63,40 +117,115 @@ const READ_ONLY_TOOLS = ["Read", "Grep", "Glob"];
 /** 한 턴의 시간 상한. 넘으면 끊는다. Room의 러너와 같은 10분이다(1단계 질문 A11). */
 const TURN_TIMEOUT_MS = 10 * 60_000;
 
+/** `claude -p --output-format=stream-json`이 stdout에 한 줄씩 내는 것 가운데 러너가 읽는 것. */
+type ClaudeEvent = {
+  type?: string;
+  subtype?: string;
+  /** `system`/`init`: 이 턴을 도는 모델 */
+  model?: string;
+  /** `result`: 답 */
+  result?: unknown;
+  session_id?: unknown;
+  is_error?: boolean;
+};
+
 /**
  * Claude Code 실행기. `claude -p`로 띄우고 `--resume`으로 잇는다.
  * `--allowedTools`는 승인 없이 돌 도구를 정할 뿐이라 주인의 `permissions.allow`가 있으면 목록 밖의 Bash도 돈다.
  * 그래서 `--tools`로 쓸 수 있는 도구 자체를 줄이고, `--tools`가 손대지 않는 MCP 도구는 따로 뺀다(ADR-0003).
- * 메시지는 플래그로 읽히지 않게 표준 입력으로 넘긴다.
+ * 메시지는 플래그로 읽히지 않게 표준 입력으로 넘긴다. 고른 모델과 effort는 `--model`, `--effort`로 넘긴다.
+ * 이어 가는 세션에서 `--model`을 빼면 설정의 모델이 아니라 그 세션의 마지막 모델로 돈다(ADR-0020).
+ * 그래서 답한 모델은 `system`/`init` 줄에서 읽는다. 결과의 `modelUsage`는 세션 전체를 더한 것이라 쓰지 않는다.
  */
-export const claudeCode: Executor = async ({ message, resume, tools, folder, signal }) => {
+export const claudeCode: Executor = async ({
+  message,
+  resume,
+  tools,
+  folder,
+  signal,
+  model,
+  effort,
+}) => {
   const run = execFileAsync(
     "claude",
     [
       "-p",
-      "--output-format=json",
+      "--output-format=stream-json",
+      "--verbose",
       `--tools=${tools.join(",")}`,
       "--disallowedTools=mcp__*",
+      ...(model ? [`--model=${model}`] : []),
+      ...(effort ? [`--effort=${effort}`] : []),
       ...(resume ? [`--resume=${resume}`] : []),
     ],
     { cwd: folder, maxBuffer: 64 * 1024 * 1024, signal },
   );
   run.child.stdin?.end(message);
-  // 실행 중의 실패도 결과를 stdout에 JSON으로 내고 0이 아닌 코드로 끝난다(Claude Code 비대화 실행 문서).
+  // 실행 중의 실패도 결과를 stdout에 내고 0이 아닌 코드로 끝난다(Claude Code 비대화 실행 문서).
   const { stdout } = await run.catch((error) => {
     if (error.stdout) return error;
     throw error;
   });
-  const result = JSON.parse(stdout);
+  const events = (stdout as string).split("\n").flatMap((line): ClaudeEvent[] => {
+    try {
+      return [JSON.parse(line)];
+    } catch {
+      return [];
+    }
+  });
+  const result = events.findLast((e) => e.type === "result");
   if (
+    !result ||
     result.is_error ||
     typeof result.result !== "string" ||
     typeof result.session_id !== "string"
   ) {
-    throw new Error(`Claude Code가 답하지 못했다: ${result.result ?? stdout}`);
+    throw new Error(`Claude Code가 답하지 못했다: ${result?.result ?? stdout}`);
   }
-  return { answer: result.result, session: result.session_id };
+  const init = events.find((e) => e.type === "system" && e.subtype === "init");
+  return { answer: result.result, session: result.session_id, model: init?.model };
 };
+
+/** Claude Code가 제어 요청 `initialize`에 알려 주는 모델 하나(Agent SDK의 `supportedModels()`와 같은 것). */
+type ClaudeModel = {
+  value: string;
+  resolvedModel?: string;
+  displayName: string;
+  supportedEffortLevels?: string[];
+};
+
+/**
+ * Claude Code의 고를 거리. Agent SDK가 하듯 `--input-format=stream-json`으로 띄워 제어 요청 `initialize`를 보내고 `models`를 읽는다.
+ * 모델을 부르지 않고, 주인의 훅도 돌리지 않는다. "default"는 우리의 "기본"이라 빼고 그 effort 값을 "기본"의 것으로 둔다.
+ * `id`는 별칭이 가리키는 전체 이름(`resolvedModel`)이라 `system`/`init`이 알리는 답한 모델과 맞춰 볼 수 있다. 같은 모델은 하나만 둔다.
+ */
+claudeCode.choices = () =>
+  converse(
+    "claude",
+    [
+      "-p",
+      "--input-format=stream-json",
+      "--output-format=stream-json",
+      "--verbose",
+      '--settings={"disableAllHooks":true}',
+    ],
+    [{ type: "control_request", request_id: "choices", request: { subtype: "initialize" } }],
+    (event) => {
+      const response = event.response as
+        | { request_id?: string; response?: { models?: ClaudeModel[] } }
+        | undefined;
+      if (event.type !== "control_response" || response?.request_id !== "choices") return;
+      const listed = response.response?.models ?? [];
+      const models: ModelChoice[] = [];
+      for (const { value, resolvedModel, displayName, supportedEffortLevels } of listed) {
+        const id = resolvedModel ?? value;
+        if (value === "default" || models.some((m) => m.id === id)) continue;
+        models.push({ id, name: displayName, efforts: supportedEffortLevels ?? [] });
+      }
+      const efforts = listed.find((m) => m.value === "default")?.supportedEffortLevels ?? [];
+      return { models, efforts };
+    },
+  );
 
 /** `codex exec --json`이 stdout에 한 줄씩 내는 이벤트 가운데 러너가 읽는 것. */
 type CodexEvent = {
@@ -113,10 +242,13 @@ type CodexEvent = {
  * 샌드박스는 셸 명령과 패치만 막고 MCP 도구는 그 밖에서 돈다. Claude Code에서 MCP 도구를 빼듯 주인이 설정한 MCP 서버를 하나씩 끄고,
  * 앱(커넥터)과 플러그인(MCP 서버를 함께 가져온다)도 끈다.
  * `-s`, `-C`, `--disable`, `-c`는 `resume` 앞에 둔다(`-s`와 `-C`는 `codex exec resume --help`에 없다). 메시지는 `-`로 표준 입력에서 읽힌다.
+ * 고른 모델과 effort는 `-m`, `-c model_reasoning_effort=`로 함께 `resume` 앞에 둔다. 이어 가는 세션에서 모델을 바꾸면 Codex가 경고 한 줄
+ * (`item.completed`의 `error`)을 내지만 턴은 그대로 돈다. `-m`을 빼면 그 세션의 모델이 아니라 설정의 모델로 돈다(ADR-0020).
+ * Codex는 답한 모델을 이벤트로 알려 주지 않아 "기본"으로 물은 답의 모델은 모른다.
  * Codex에는 쓸 도구를 고르는 플래그가 없어 `tools`는 쓰지 않는다.
  * 세션 id는 `thread.started`의 `thread_id`, 답은 마지막 `item.completed`(`agent_message`)의 `text`다.
  */
-export const codex: Executor = async ({ message, resume, folder, signal }) => {
+export const codex: Executor = async ({ message, resume, folder, signal, model, effort }) => {
   // 레포의 `.codex/config.toml`까지 읽히도록 작업 폴더에서 묻는다. 서버 이름은 Codex가 `[a-zA-Z0-9_-]`만 받는다.
   const listed = await execFileAsync("codex", ["mcp", "list", "--json"], { cwd: folder, signal });
   const servers: { name: string }[] = JSON.parse(listed.stdout);
@@ -130,6 +262,8 @@ export const codex: Executor = async ({ message, resume, folder, signal }) => {
       "--disable=apps",
       "--disable=plugins",
       ...servers.flatMap(({ name }) => ["-c", `mcp_servers.${name}.enabled=false`]),
+      ...(model ? ["-m", model] : []),
+      ...(effort ? ["-c", `model_reasoning_effort=${effort}`] : []),
       ...(resume ? ["resume", resume] : []),
       "-",
     ],
@@ -161,6 +295,48 @@ export const codex: Executor = async ({ message, resume, folder, signal }) => {
   throw new Error(`Codex가 답하지 못했다(종료 코드 ${code}): ${why}`);
 };
 
+/** Codex app-server가 `model/list`에 알려 주는 모델 하나. */
+type CodexModel = {
+  model: string;
+  displayName: string;
+  hidden?: boolean;
+  isDefault?: boolean;
+  supportedReasoningEfforts?: { reasoningEffort: string }[];
+};
+
+/**
+ * Codex의 고를 거리. IDE 확장이 하듯 `codex app-server`를 띄워 `initialize` 뒤에 `model/list`를 부른다. 모델을 부르지 않는다.
+ * "기본"의 effort 값은 Codex가 기본으로 둔 모델(`isDefault`)의 것이다.
+ */
+// ponytail: model/list의 첫 쪽만 읽는다. 모델이 많아져 nextCursor가 오면 이어 읽는다.
+codex.choices = () =>
+  converse(
+    "codex",
+    ["app-server"],
+    [
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { clientInfo: { name: "omagari", version: "0.0.0" } },
+      },
+      { jsonrpc: "2.0", method: "initialized" },
+      { jsonrpc: "2.0", id: 2, method: "model/list", params: {} },
+    ],
+    (event) => {
+      if (event.id !== 2) return;
+      const listed = ((event.result as { data?: CodexModel[] } | undefined)?.data ?? []).filter(
+        (m) => !m.hidden,
+      );
+      const efforts = (m?: CodexModel) =>
+        m?.supportedReasoningEfforts?.map((e) => e.reasoningEffort) ?? [];
+      return {
+        models: listed.map((m) => ({ id: m.model, name: m.displayName, efforts: efforts(m) })),
+        efforts: efforts(listed.find((m) => m.isDefault)),
+      };
+    },
+  );
+
 /** 이 기기에서 Codex를 돌릴 수 있는지: 깔려 있고 로그인했다(`codex login status`가 0으로 끝난다). */
 export const codexReady = () =>
   execFileAsync("codex", ["login", "status"]).then(
@@ -176,6 +352,9 @@ export type RunRecord = {
   /** 실행기에 넘긴 그대로: 채널 세션이면 데이터로 감싼 채널 대화와 질문이다. */
   message: string;
   tools: string[];
+  /** 고른 모델과 effort. "기본"이면 없다. */
+  model?: string;
+  effort?: string;
   error?: string;
 };
 
@@ -340,6 +519,20 @@ export async function startRunner(options: {
     ...((await codexReady()) && { codex }),
   };
   const executorIds = Object.keys(executors) as ExecutorId[];
+  /** 실행기마다 고를 거리. 묻지 못한 실행기는 빠지고 "기본"으로만 묻는다. */
+  const choices: Partial<Record<ExecutorId, Choices>> = Object.fromEntries(
+    (
+      await Promise.all(
+        executorIds.map(async (id) => [
+          id,
+          await executors[id]?.choices?.().catch((error) => {
+            console.warn(`고를 거리: ${EXECUTOR_NAMES[id]}에 묻지 못했다: ${error.message}`);
+            return undefined;
+          }),
+        ]),
+      )
+    ).filter(([, listed]) => listed),
+  );
   const url = new URL(RUNNER_SOCKET, options.serverUrl);
   url.protocol = url.protocol.replace("http", "ws");
   const timeoutMs = options.welcomeTimeoutMs ?? 10_000;
@@ -371,6 +564,7 @@ export async function startRunner(options: {
           session: options.session,
           repos,
           executors: executorIds,
+          choices,
         }),
       ),
     );
@@ -393,9 +587,10 @@ export async function startRunner(options: {
         situation = { works: message.payload.works, disconnectedAt: null };
       } else if (message.kind === "ask") {
         // 답은 문답이 온 연결로 보낸다. 그사이 끊겼으면 서버는 이미 실패로 돌려줬고, 보낸 것은 버려진다.
-        const { executor, channel, message: question, recent } = message.payload;
-        void reply(executor, `${executor} ${channel.id}`, { question, channel, recent }).then(
-          ({ kind, payload }) => current.send(encode(runnerToServer, kind, payload, message.id)),
+        const { executor, channel, message: question, recent, model, effort } = message.payload;
+        const ask = { question, channel, recent, model, effort };
+        void reply(executor, `${executor} ${channel.id}`, ask).then(({ kind, payload }) =>
+          current.send(encode(runnerToServer, kind, payload, message.id)),
         );
       } else {
         // 거절의 이유. welcome 전이면 던지고, 뒤면 1008로 닫힐 때 `ended`로 낸다.
@@ -449,8 +644,14 @@ export async function startRunner(options: {
   let queue: Promise<unknown> = Promise.resolve();
   const turnTimeoutMs = options.turnTimeoutMs ?? TURN_TIMEOUT_MS;
 
-  /** 한 턴에 받은 것: 질문과, 채널 세션이면 그 채널과 최근 대화. */
-  type Ask = { question: string; channel?: Channel; recent?: ChannelMessage[] };
+  /** 한 턴에 받은 것: 질문과, 채널 세션이면 그 채널과 최근 대화, 고른 모델과 effort. */
+  type Ask = {
+    question: string;
+    channel?: Channel;
+    recent?: ChannelMessage[];
+    model?: string;
+    effort?: string;
+  };
 
   /**
    * 러너 세션의 한 턴. 채널 대화는 그 세션에 지난번에 넘긴 것 뒤의 것만 데이터로 감싸 넘긴다.
@@ -463,6 +664,22 @@ export async function startRunner(options: {
       throw new ContractFailure({
         code: "invalid_message",
         message: `이 러너가 돌리지 않는 실행기다: ${executorId}`,
+      });
+    }
+    // 고른 값은 이 러너가 알린 고를 거리 안의 것만 실행기에 넘긴다. effort는 고른 모델(없으면 "기본")의 것이어야 한다.
+    const { model, effort } = ask;
+    const offered = choices[executorId] ?? { models: [], efforts: [] };
+    const chosen = offered.models.find((m) => m.id === model);
+    if (model !== undefined && !chosen) {
+      throw new ContractFailure({
+        code: "invalid_message",
+        message: `${EXECUTOR_NAMES[executorId]}가 알리지 않은 모델이다: ${model}`,
+      });
+    }
+    if (effort !== undefined && !(chosen ?? offered).efforts.includes(effort)) {
+      throw new ContractFailure({
+        code: "invalid_message",
+        message: `${chosen?.name ?? "기본 모델"}에 고를 수 없는 effort다: ${effort}`,
       });
     }
     const known = sessions.get(key);
@@ -481,6 +698,8 @@ export async function startRunner(options: {
       session: known?.session,
       message,
       tools: READ_ONLY_TOOLS,
+      model,
+      effort,
     };
     let signal: AbortSignal | undefined;
     try {
@@ -499,6 +718,8 @@ export async function startRunner(options: {
           tools: READ_ONLY_TOOLS,
           folder,
           signal: timeout,
+          model,
+          effort,
         }),
         cut,
       ]);
@@ -508,7 +729,10 @@ export async function startRunner(options: {
         session: result.session,
         seen: Math.max(seen, ...recent.map((m) => m.id)),
       });
-      return { text: result.answer, source };
+      // 답한 모델: 실행기가 알린 것, 없으면 고른 것. 고를 거리에 있으면 그 이름으로 쓴다.
+      const answered = result.model ?? model;
+      const name = offered.models.find((m) => m.id === answered)?.name ?? answered;
+      return { text: result.answer, source, model: name, effort };
     } catch (error) {
       if (signal?.aborted) {
         record.error = `한 턴이 ${turnTimeoutMs / 60_000}분을 넘어 끊었다`;

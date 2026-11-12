@@ -4,10 +4,12 @@
 // 답은 받은 글의 마지막 줄 앞에 "Codex: "를 붙인 것이다. 마지막 줄이 "실패"면 `turn.failed`를 내고 1로 끝난다.
 // `codex login status`는 `$CODEX_HOME/auth.json`이 있을 때만 로그인한 것이다(실제 codex처럼 없으면 1로 끝난다).
 // `codex mcp list --json`은 `FAKE_CODEX_MCP`(쉼표로 이은 이름)의 서버를 켜진 것으로 낸다.
+// `codex app-server`는 JSON-RPC로 `initialize`와 `model/list`에 답한다(숨긴 모델 하나와 기본 모델 하나가 섞여 있다).
 import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { createInterface } from "node:readline";
 
 const args = process.argv.slice(2);
 const say = (event: object) => process.stdout.write(`${JSON.stringify(event)}\n`);
@@ -23,6 +25,37 @@ if (args[0] === "login" && args[1] === "status") {
   // 주인이 설정한 MCP 서버. 테스트가 `FAKE_CODEX_MCP`에 이름을 쉼표로 이어 준다.
   const names = process.env.FAKE_CODEX_MCP?.split(",").filter(Boolean) ?? [];
   console.log(JSON.stringify(names.map((name) => ({ name, enabled: true }))));
+} else if (args[0] === "app-server") {
+  const efforts = (...names: string[]) =>
+    names.map((reasoningEffort) => ({ reasoningEffort, description: reasoningEffort }));
+  const models = [
+    {
+      model: "gpt-6-luna",
+      displayName: "GPT-6-Luna",
+      hidden: false,
+      isDefault: true,
+      supportedReasoningEfforts: efforts("low", "medium", "high", "xhigh", "max"),
+    },
+    {
+      model: "gpt-5.6-terra",
+      displayName: "GPT-5.6-Terra",
+      hidden: false,
+      isDefault: false,
+      supportedReasoningEfforts: efforts("low", "medium", "high", "xhigh", "max", "ultra"),
+    },
+    {
+      model: "codex-auto-review",
+      displayName: "Codex Auto Review",
+      hidden: true,
+      isDefault: false,
+      supportedReasoningEfforts: efforts("low"),
+    },
+  ];
+  for await (const line of createInterface({ input: process.stdin })) {
+    const { id, method } = JSON.parse(line);
+    if (method === "initialize") say({ id, result: { userAgent: "fake" } });
+    if (method === "model/list") say({ id, result: { data: models, nextCursor: null } });
+  }
 } else if (args[0] === "exec") {
   const input = readFileSync(0, "utf8");
   const calls = process.env.FAKE_CODEX_CALLS;

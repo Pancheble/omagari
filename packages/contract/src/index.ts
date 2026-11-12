@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 10;
+export const CONTRACT_VERSION = 11;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -118,6 +118,36 @@ export const EXECUTOR_NAMES = {
 } as const satisfies Record<ExecutorId, string>;
 
 /**
+ * 실행기가 고를 수 있게 알린 모델 하나. `id`는 실행기에 그대로 넘기는 값, `name`은 사람이 읽는 이름이다.
+ * `efforts`는 이 모델에 고를 수 있는 effort 값이고, 비어 있으면 effort를 고르지 않는다.
+ */
+export const ModelChoice = z.strictObject({
+  id: z.string(),
+  name: z.string(),
+  efforts: z.array(z.string()),
+});
+export type ModelChoice = z.infer<typeof ModelChoice>;
+
+/**
+ * 실행기 하나의 고를 거리(ADR-0020). 러너가 붙을 때 실행기에 물어 알린다. 실행기마다 다르고, 모델에 따라 effort 값도 다르다.
+ * `efforts`는 모델을 "기본"(실행기 자기 설정)으로 둘 때 고를 수 있는 effort 값이다. 알리지 못했으면 둘 다 비어 있다.
+ */
+export const Choices = z.strictObject({
+  models: z.array(ModelChoice),
+  efforts: z.array(z.string()),
+});
+export type Choices = z.infer<typeof Choices>;
+
+/**
+ * 문답에 고른 모델과 effort. 없는 것은 "기본"이라 실행기 자기 설정을 따른다. 러너는 알린 고를 거리에 없는 값이면 실행기를 띄우지 않는다.
+ */
+export const ModelPick = z.strictObject({
+  model: z.string().optional(),
+  effort: z.string().optional(),
+});
+export type ModelPick = z.infer<typeof ModelPick>;
+
+/**
  * 다른 멤버에게 보이는 사람의 접속 상태. 웹 창이 하나도 열려 있지 않거나 "오프라인으로 보이기"를 골랐으면 offline이다.
  * 사람의 것이다. 에이전트의 러너가 붙어 있는지(`MemberView.agents`)와 따로 간다.
  */
@@ -170,11 +200,13 @@ export const MemberView = z.strictObject({
   /**
    * 러너가 붙을 때 알린 실행기마다 에이전트 하나. 러너를 켠 적이 없으면 비어 있다.
    * 러너가 붙어 있으면 online, 그중 받은 문답에 아직 답하지 않았으면(줄을 선 것 포함) answering("답하는 중")이다.
+   * `choices`는 붙어 있는 러너가 그 실행기에 물어 알린 고를 거리다. 주인의 DM 입력 칸이 쓴다. 꺼져 있으면 비어 있다.
    */
   agents: z.array(
     z.strictObject({
       executor: ExecutorId,
       state: z.enum(["online", "answering", "offline"]),
+      choices: Choices,
     }),
   ),
   /** 러너가 떨어진 시각. 작업과 상태 한 줄은 이 시각 기준으로 남은 것이다. 붙어 있거나 켠 적이 없으면 null. */
@@ -216,6 +248,17 @@ export const Source = z.strictObject({
 });
 export type Source = z.infer<typeof Source>;
 
+/**
+ * 러너 세션의 답. `model`은 답한 모델의 사람이 읽는 이름, `effort`는 그 턴에 고른 effort다.
+ * "기본"으로 물어 실행기가 실제 모델을 알려 주지 않았거나 effort를 고르지 않았으면 없다(모르면 배지를 달지 않는다).
+ */
+const Reply = z.strictObject({
+  text: z.string(),
+  source: Source,
+  model: z.string().optional(),
+  effort: z.string().optional(),
+});
+
 /** 채널 세션의 첫 턴에 넘기는 채널 대화의 최대 수. 그 뒤의 턴은 지난 턴 이후의 것만 넘긴다(구현 3장). */
 export const CHANNEL_CONTEXT = 50;
 
@@ -242,7 +285,7 @@ export const Qa = z.strictObject({
   visibility: Visibility,
   answer: z.discriminatedUnion("state", [
     z.strictObject({ state: z.literal("pending") }),
-    z.strictObject({ state: z.literal("answered"), text: z.string(), source: Source }),
+    z.strictObject({ state: z.literal("answered"), ...Reply.shape }),
     z.strictObject({ state: z.literal("failed"), error: ContractError }),
   ]),
 });
@@ -286,11 +329,13 @@ export const runnerToServer = {
   /**
    * 붙자마자 보낸다. `repos`는 러너 폴더의 GitHub 원격이 가리키는 레포(`owner/name`)들이다.
    * `executors`는 이 기기에서 러너가 돌릴 수 있는 실행기다. 실행기마다 에이전트가 하나씩 생긴다(ADR-0015).
+   * `choices`는 실행기마다 고를 거리다. 실행기에 묻지 못한 것은 빠진다(ADR-0020).
    */
   hello: z.strictObject({
     session: z.string(),
     repos: z.array(z.string()),
     executors: z.array(ExecutorId),
+    choices: z.partialRecord(ExecutorId, Choices),
   }),
   /**
    * 관측. 러너가 지금 보는 작업 전부다: 등록한 폴더와 그 연결된 워크트리마다 체크아웃된 브랜치 하나씩(ADR-0006).
@@ -299,7 +344,7 @@ export const runnerToServer = {
    */
   observation: z.strictObject({ works: z.array(Work) }),
   /** `ask`(`re`)에 러너 세션이 답했다. 답하지 못했으면 `error`를 `re`를 붙여 보낸다. */
-  answer: z.strictObject({ text: z.string(), source: Source }),
+  answer: Reply,
   error: ContractError,
 } satisfies Payloads;
 
@@ -312,12 +357,14 @@ export const serverToRunner = {
    * 러너는 채널과 실행기마다 채널 세션 하나를 잇고(ADR-0015), 한 번에 한 턴만 돌리고 나머지는 온 순서대로 줄 세운다.
    * `recent`는 그 채널의 최근 대화(오래된 것부터 `CHANNEL_CONTEXT`개까지)다. 러너는 그 채널 세션의 지난 턴 뒤의 것만
    * 지시가 아닌 데이터로 감싸 넘긴다. 질문은 그 에이전트의 주인이 쓴 것이다.
+   * `model`과 `effort`는 주인이 고른 것이다. 러너는 hello로 알린 고를 거리에 없으면 실행기를 띄우지 않고 오류로 답한다.
    */
   ask: z.strictObject({
     executor: ExecutorId,
     channel: Channel,
     message: z.string().min(1),
     recent: z.array(ChannelMessage).max(CHANNEL_CONTEXT),
+    ...ModelPick.shape,
   }),
   /**
    * 지금 상황: 워크스페이스의 작업 전부(받는 러너의 멤버 것도 포함). `api.works`와 같은 것이다.
@@ -619,6 +666,7 @@ export const api = {
    * 답을 기다리지 않고 답을 기다리는 문답을 돌려준다. 답은 실시간 연결의 `qa`로 묻는 사람에게 오고,
    * `@호출`이면 채널에 선 문답(`message`)도 돌려주고 실시간 연결의 `message`로 모두에게 간다(답이 오면 같은 번호로 다시).
    * 그 에이전트의 러너가 꺼져 있으면 쌓아 두지 않고 바로 `runner_offline`이다. 없는 채널이면 `not_found`.
+   * `model`과 `effort`는 고른 것이고 없으면 "기본"이다. 서버는 그대로 러너에 넘기고, 고를 거리에 없으면 러너가 문답을 실패로 돌려준다.
    */
   ask: {
     method: "POST",
@@ -629,6 +677,7 @@ export const api = {
       channel: z.string(),
       message: z.string().trim().min(1).max(MAX_MESSAGE_CHARS),
       visibility: Visibility.default("private"),
+      ...ModelPick.shape,
     }),
     response: z.strictObject({ qa: Qa, message: ChannelMessage.optional() }),
   },

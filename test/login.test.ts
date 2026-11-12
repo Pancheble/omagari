@@ -186,6 +186,7 @@ test("답하지 않는 러너 연결은 끊겨 그 에이전트가 오프라인�
       session: alice.session,
       repos: [REPO],
       executors: ["claude-code"],
+      choices: {},
     }),
   );
   const [welcome] = await once(silent, "message");

@@ -1301,6 +1301,82 @@ svg.lucide {
   color: var(--text-secondary);
 }
 
+/* DM 칸의 입력 칸은 두 줄이다: 위는 글, 아래 줄 왼쪽에 모델·effort 칩, 오른쪽 끝에 보내기 버튼(DESIGN.md "모델과 effort"). */
+.composer.stacked {
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+
+.composer.stacked textarea {
+  flex-basis: 100%;
+}
+
+.composer-tools {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* 칩 글자를 위의 글과 맞춘다. 칸 밖으로 내지 않고 안에서 당겨야 아래 줄로 내려간다. */
+.composer-tools > :first-child {
+  margin-left: -8px;
+}
+
+.chip-picker {
+  position: relative;
+}
+
+/* app-composer-chip */
+.composer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--rounded-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.38;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 120ms ease-out;
+}
+
+.composer-chip:hover {
+  background: var(--hover);
+}
+
+.composer-chip[aria-expanded="true"] {
+  background: var(--selected);
+}
+
+/* 칩 바로 위에 열리는 메뉴. 모델이 많으면 메뉴 안에서 스크롤한다. */
+.chip-menu {
+  right: auto;
+  bottom: calc(100% + 4px);
+  width: max-content;
+  min-width: 200px;
+  max-height: min(420px, 60vh);
+  overflow-y: auto;
+}
+
+.chip-menu .menu-item {
+  gap: 12px;
+}
+
+.chip-menu .menu-item[aria-checked="true"] {
+  background: var(--selected);
+}
+
+.chip-menu .menu-note {
+  color: var(--text-secondary);
+}
+
 .send-button {
   display: grid;
   flex: none;
@@ -2221,6 +2297,10 @@ button.dm-head:active {
   .conversation > .banner,
   .composer {
     margin-inline: 8px;
+  }
+
+  .composer-chip {
+    height: 40px;
   }
 
   .message,

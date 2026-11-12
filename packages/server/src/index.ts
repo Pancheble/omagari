@@ -8,6 +8,7 @@ import {
   api,
   CHANNEL_CONTEXT,
   type ChannelMessage,
+  type Choices,
   type ChosenPresence,
   CONTRACT_VERSION,
   type ContractError,
@@ -293,8 +294,16 @@ export async function startServer(options: {
     string,
     { deviceCode: string; expiresAt: number; intervalMs: number; nextPollAt: number }
   >();
-  /** hello를 마친 러너의 연결과 그 러너가 돌리는 실행기. */
-  const runners = new Map<WSContext, { login: string; hash: string; executors: ExecutorId[] }>();
+  /** hello를 마친 러너의 연결과 그 러너가 돌리는 실행기, 실행기마다의 고를 거리. */
+  const runners = new Map<
+    WSContext,
+    {
+      login: string;
+      hash: string;
+      executors: ExecutorId[];
+      choices: Partial<Record<ExecutorId, Choices>>;
+    }
+  >();
   /** hello를 마친 웹의 실시간 연결과 그 세션의 해시, 멤버. 세션이 끝나면 닫는다. */
   const watchers = new Map<WSContext, { hash: string; login: string }>();
   /** 붙어 있는 웹 모두에 보낸다. 멤버가 아니게 된 세션의 연결은 이미 닫혔다. */
@@ -414,21 +423,24 @@ export async function startServer(options: {
       login: string;
       executor: ExecutorId;
     }[];
-    const state = (login: string, executor: ExecutorId) => {
-      const sockets = [...runners]
-        .filter(([, runner]) => runner.login === login && runner.executors.includes(executor))
-        .map(([socket]) => socket);
+    const agent = (login: string, executor: ExecutorId) => {
+      const live = [...runners].filter(
+        ([, runner]) => runner.login === login && runner.executors.includes(executor),
+      );
+      const sockets = live.map(([socket]) => socket);
       const busy = [...asks.values()].some(
         (ask) => ask.executor === executor && sockets.includes(ask.socket),
       );
-      if (busy) return "answering" as const;
-      return sockets.length > 0 ? ("online" as const) : ("offline" as const);
+      // 고를 거리는 묻는 문답이 갈 러너(마지막에 붙은 것)의 것이다.
+      const choices = live.at(-1)?.[1].choices[executor] ?? { models: [], efforts: [] };
+      const state = busy ? "answering" : sockets.length > 0 ? "online" : "offline";
+      return { executor, state, choices } as const;
     };
     const byLogin = Map.groupBy(works, (work) => work.login);
     return people.map(({ login, name, since, ...profile }) => {
       const agents = known
         .filter((agent) => agent.login === login)
-        .map(({ executor }) => ({ executor, state: state(login, executor) }));
+        .map(({ executor }) => agent(login, executor));
       // ponytail: 실행기가 하나뿐이면 작업은 그 에이전트의 것이다. 둘 이상(#16)이면 그 브랜치에서 마지막으로
       // 훅이나 status set을 보낸 실행기로 정한다(ADR-0015). 그 길이 생기기 전까지 둘 이상이면 모른다(null).
       const executor = agents.length === 1 ? (agents[0]?.executor ?? null) : null;
@@ -659,7 +671,7 @@ export async function startServer(options: {
     return { message: message || null, emoji };
   });
 
-  mount(app, api.ask, ({ agent, executor, channel, message, visibility }, c) => {
+  mount(app, api.ask, ({ agent, executor, channel, message, visibility, model, effort }, c) => {
     if (agent !== c.get("login")) {
       throw new ContractFailure({
         code: "forbidden",
@@ -710,6 +722,8 @@ export async function startServer(options: {
       channel: { id: channel, name },
       message,
       recent,
+      model,
+      effort,
     });
     asks.set((JSON.parse(frame) as { id: string }).id, { socket, login: agent, executor, qa: id });
     socket.send(frame);
@@ -887,7 +901,7 @@ export async function startServer(options: {
         }
         const { message } = decoded;
         if (message.kind === "hello") {
-          const { session, repos, executors } = message.payload;
+          const { session, repos, executors, choices } = message.payload;
           const login = sessionLogin(session);
           if (!login) {
             return refuse(
@@ -906,7 +920,7 @@ export async function startServer(options: {
               message.id,
             );
           }
-          runners.set(socket, { login, hash: hash(session), executors });
+          runners.set(socket, { login, hash: hash(session), executors, choices });
           db.prepare("DELETE FROM offline WHERE login = ?").run(login);
           // ponytail: 멤버 하나에 러너 하나로 본다. 기기 둘에서 실행기가 다른 러너를 켜면 나중에 붙은 쪽의 것만 남는다.
           db.prepare("DELETE FROM agents WHERE login = ?").run(login);

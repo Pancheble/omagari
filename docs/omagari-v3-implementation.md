@@ -69,6 +69,10 @@
   - [x] 구독 로그인: `codex login status`가 ChatGPT 로그인이다
   - [x] 세션 이어 가기: 러너의 채널 세션으로 이은 둘째 턴이 첫 턴의 암호를 답했고 세션 id가 그대로다
   - [x] 읽기 전용: 러너가 `-s read-only`로 이어 간 세션에 파일을 만들고 고치라고 시킨 뒤에도 작업 폴더가 그대로다. 답은 "작업공간이 읽기 전용이라 파일을 만들 수 없다"
+- 이어 가는 세션에서 모델 바꾸기 (2026-11-12, #55 세션이 주인 기기에서 직접 돌림, 빈 Git 폴더, 러너와 같은 플래그). 정한 것은 ADR-0020
+  - 고를 거리 묻기: 둘 다 모델을 부르지 않는다. Claude Code(2.1.319)는 `claude -p --input-format=stream-json --output-format=stream-json --verbose --settings={"disableAllHooks":true}`에 제어 요청 `initialize`를 보내면 1.7초 안에 `models` 14개(`default` 포함, `resolvedModel`과 `supportedEffortLevels`가 붙는다)가 왔고 세션 기록을 남기지 않았다. Codex(0.167.1)는 `codex app-server`의 `model/list`에 숨기지 않은 모델 3개(무료 요금제)와 모델마다 `supportedReasoningEfforts`, `isDefault`가 왔다
+  - Claude Code: haiku로 암호를 기억시킨 세션을 `--resume --model=sonnet --effort=low`로 이었더니 sonnet이 암호를 답했다(`modelUsage`에 sonnet이 더해짐). 이어서 `--model` 없이 이었더니 설정의 기본(Fable 5.2)이 아니라 **sonnet으로** 답했다(`system`/`init`의 `model`이 `claude-sonnet-5-5`). 세션 기록의 요청 effort는 `--effort=low`를 준 턴만 low이고 나머지는 medium이라 effort는 이어지지 않는다. 결과의 `modelUsage`는 세션 전체를 더한 것이라 이 턴의 모델을 가리지 못한다. 러너의 `claudeCode` 실행기로 다시 돌려도 같았다: 실행기가 돌려준 답한 모델이 haiku → (`--model` sonnet, `--effort` low) sonnet → (플래그 없음) sonnet이고 셋째 턴까지 암호를 답했다
+  - Codex: `-m gpt-5.6-luna -c model_reasoning_effort=low`로 암호를 기억시킨 세션을 `exec -m gpt-6-luna -c model_reasoning_effort=high resume <id> -`로 이었더니 "This session was recorded with model `gpt-5.6-luna` but is resuming with `gpt-6-luna`" 경고(`item.completed`의 `error` 항목) 뒤에 같은 턴에서 암호를 답했고 종료 코드는 0이다. 세션 기록의 `turn_context`가 턴마다 모델과 effort를 적는다: luna/low → 6-luna/high → (플래그 없음) 6-luna/없음 → `-m gpt-5.6-terra` terra/없음 → (플래그 없음) **6-luna**/없음. `-m` 없이 이으면 그 세션의 모델이 아니라 설정의 모델로 돌고, effort도 이어지지 않는다
 
 Sources: [Claude Code 비대화 실행](https://code.claude.com/docs/en/headless), [세션 다루기](https://code.claude.com/docs/en/agent-sdk/sessions), [플랜으로 Agent SDK 쓰기](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan), [/btw 설명](https://blog.vincentqiao.com/en/posts/claude-code-btw/), [Codex 비대화 모드](https://learn.chatgpt.com/docs/non-interactive-mode)
 
@@ -90,6 +94,7 @@ Sources: [Claude Code 비대화 실행](https://code.claude.com/docs/en/headless
 
 - **관측**: 작업 폴더의 Git 상태를 보고 바뀐 파일과 그 내용, 정의 줄을 서버에 올린다. 얼마나 올릴지는 공유 수준이 정한다(11장)
 - **세션 실행**: 에이전트 DM, 채널의 @호출, 토론 참여 요청이 오면 주인 기기에서 에이전트 세션을 화면 없이 띄워 답을 돌려보낸다. DM과 @호출은 채널과 에이전트마다 하나씩 이어 가는 같은 세션을 쓰고, 그 채널의 대화를 데이터로 받아 레포를 읽으며 답한다. 채널 대화는 매 턴에 지난 턴 이후의 메시지만 넘기고, 첫 턴은 최근 50개까지 넘긴다. 작업 세션의 맥락은 1단계에서 넣지 않는다. 둘의 차이는 문답의 공개 범위뿐이라 서버가 문답마다 비공개·공개 표시만 갖는다. 토론은 주인의 작업 세션을 읽기만 하고 갈라서 띄운다. 기기가 꺼져 있으면 그 에이전트는 오프라인으로 보인다
+- **모델과 effort**: DM에서 고른 모델과 effort를 러너가 실행기에 넘긴다. 고를 거리는 러너가 켤 때 실행기에 물어 서버에 알리고, 이어 가는 채널 세션에서도 바꿔 넘긴다(ADR-0020)
 - **합쳐서 돌려 보기**: 추정 충돌이 걸리면 임시 워크트리에서 합치고 테스트를 돌린다
 - 에이전트 실행 비용은 모두 주인의 구독·사용량에서 나간다
 
