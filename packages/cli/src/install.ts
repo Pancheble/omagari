@@ -21,10 +21,10 @@ async function claudeCode() {
   const home = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
   const settings = join(home, "settings.json");
   // SessionStart는 matcher 없이 건다. 세션이 비워지거나(clear) 컴팩트될 때도 돌아야 편집 전 훅의 기억을 지운다.
-  // PreToolUse는 파일을 고치는 도구에만 건다. 훅도 스스로 거르지만(EDIT_TOOLS), 다른 도구마다 훅을 띄우지 않는다.
+  // PreToolUse는 파일을 고치는 도구와, 편지함을 넘기려고 셸 명령(Bash)에 건다. 훅도 스스로 거르지만, 다른 도구마다 훅을 띄우지 않는다.
   await mergeHooks(settings, "claude-code", {
     SessionStart: {},
-    PreToolUse: { matcher: "Edit|Write|MultiEdit|NotebookEdit" },
+    PreToolUse: { matcher: "Edit|Write|MultiEdit|NotebookEdit|Bash" },
   });
   const skill = join(home, "skills", "omagari-status", "SKILL.md");
   await mkdir(dirname(skill), { recursive: true });
@@ -40,8 +40,11 @@ async function codex() {
   const home = process.env.CODEX_HOME || join(homedir(), ".codex");
   const hooks = join(home, "hooks.json");
   // SessionStart는 Claude Code와 같은 까닭으로 matcher 없이 건다. Codex의 matcher는 정규식이다.
-  // 파일을 고치는 도구는 apply_patch 하나다. 셸 명령(Bash, exec_command)에는 걸지 않는다(1단계 질문 A1, A6).
-  await mergeHooks(hooks, "codex", { SessionStart: {}, PreToolUse: { matcher: "^apply_patch$" } });
+  // 파일을 고치는 도구는 apply_patch 하나다. 셸 명령(Bash, exec_command)에는 편지함을 넘기려고 건다(1단계 질문 A1, 2단계 질문 A7).
+  await mergeHooks(hooks, "codex", {
+    SessionStart: {},
+    PreToolUse: { matcher: "^(apply_patch|Bash|exec_command)$" },
+  });
   const skill = join(home, "skills", "omagari-status", "SKILL.md");
   await mkdir(dirname(skill), { recursive: true });
   await copyFile(SKILL, skill);

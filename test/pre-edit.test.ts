@@ -25,7 +25,11 @@ async function runHook(world: World, input: object | string, event: string) {
   assert.deepEqual(rest, {});
   assert.deepEqual(Object.keys(hookSpecificOutput), ["hookEventName", "additionalContext"]);
   assert.equal(hookSpecificOutput.hookEventName, event);
-  return hookSpecificOutput.additionalContext as string;
+  // 이 파일은 근처 작업만 본다. 같은 줄을 고쳐 생긴 부딪힘 알림의 편지함은 inbox.test가 본다.
+  return (hookSpecificOutput.additionalContext as string).replace(
+    /^Omagari: 내 작업\(브랜치 [\s\S]*?<\/omagari-inbox>\n?\n?/,
+    "",
+  );
 }
 
 /**

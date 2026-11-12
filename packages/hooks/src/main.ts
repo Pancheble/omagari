@@ -2,6 +2,7 @@
 // 훅은 어떤 경우에도 도구 호출도 세션 시작도 막지 않는다. 글만 넣고, 늘 0으로 끝난다.
 // 서버는 부르지 않는다. 같은 기기의 러너가 서버에서 받아 둔 상황만 읽는다(구현 4장).
 // 세션 시작 훅(SessionStart)은 팀의 지금 상황을, 편집 전 훅(PreToolUse)은 고치려는 파일의 근처 작업을 넣는다.
+// 둘 다 이 작업(브랜치)의 편지함에 밀린 소식을 먼저 넣는다. 편집 전 훅은 편지함을 넘기려고 셸 명령에도 건다(근처 작업은 넣지 않는다).
 // 실행기마다 `omagari install`이 깔고, 첫 인자로 그 실행기를 받는다(`omagari-hook claude-code`, ADR-0015).
 // 이 기기의 모든 레포에서 돌므로, 러너를 켠 적 없는 레포에서는 아무것도 하지 않는다(ADR-0016).
 import { execFile } from "node:child_process";
@@ -11,7 +12,7 @@ import { text } from "node:stream/consumers";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import { ago, ExecutorId, type NearbyWork, type WorkView } from "@omagari/contract";
-import { callRunner, runnerPaths } from "@omagari/runner";
+import { callRunner, inboxNotice, runnerPaths } from "@omagari/runner";
 
 /** 넣는 글의 상한. Claude Code는 넘으면 파일로 돌리고 앞 2,000자만 보인다(ADR-0005). */
 const MAX_CONTEXT = 10_000;
@@ -25,7 +26,7 @@ const SAME_FILES_SHOWN = 5;
 const RANGES_SHOWN = 10;
 /** 이 훅을 부른 실행기. 러너에 보내는 요청에 싣는다. 모르는 실행기면 아무것도 넣지 않는다. */
 const executor = ExecutorId.safeParse(process.argv[2]).data;
-/** 편집 전 훅이 걸리는 Claude Code의 도구와 그 입력에서 파일 경로가 든 키. 셸 명령에는 걸지 않는다(1단계 질문 A6). */
+/** 편집 전 훅이 근처 작업을 넣는 Claude Code의 도구와 그 입력에서 파일 경로가 든 키. 셸 명령에는 넣지 않는다(1단계 질문 A6). */
 const EDIT_TOOLS: Record<string, string> = {
   Edit: "file_path",
   Write: "file_path",
@@ -37,6 +38,8 @@ const EDIT_TOOLS: Record<string, string> = {
  * 더하기, 고치기, 지우기와 옮겨 갈 자리(`*** Move to:`). 패치 하나가 여러 파일을 고칠 수 있다(Codex hooks, apply_patch 형식).
  */
 const PATCH_FILE = /^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+?)\s*$/gm;
+/** 셸 명령 도구: Claude Code의 Bash, Codex의 Bash와 exec_command(1단계 질문 A1). 편집 전 훅은 여기에 편지함만 넣는다(2단계 질문 A7). */
+const SHELL_TOOLS = new Set(["Bash", "exec_command"]);
 
 type HookEvent = {
   hook_event_name?: unknown;
@@ -64,19 +67,9 @@ const result: { name: string; context?: string; remember?: () => Promise<void> }
   executor === undefined
     ? undefined
     : event?.hook_event_name === "SessionStart"
-      ? {
-          name: "SessionStart",
-          context: await Promise.race([
-            sessionStart(executor).catch((error) =>
-              notConfirmed("팀의 지금 상황", reasonOf(error)),
-            ),
-            sleep(SITUATION_MS).then(() =>
-              notConfirmed("팀의 지금 상황", `러너가 ${SITUATION_MS / 1000}초 안에 답하지 않았다`),
-            ),
-          ]),
-        }
+      ? { name: "SessionStart", ...(await sessionStart(executor).catch(() => undefined)) }
       : event?.hook_event_name === "PreToolUse"
-        ? { name: "PreToolUse", ...(await preEdit(event, executor).catch(() => undefined)) }
+        ? { name: "PreToolUse", ...(await preToolUse(event, executor).catch(() => undefined)) }
         : undefined;
 const output = result?.context
   ? JSON.stringify({
@@ -151,9 +144,56 @@ async function sessionStart(executor: ExecutorId) {
   if (session && (event?.source === "clear" || event?.source === "compact")) {
     await rm(join(paths.hooks, `${session}.json`), { force: true });
   }
-  const branch = await promisify(execFile)("git", ["-C", cwd, "symbolic-ref", "--short", "HEAD"])
+  const branch = await currentBranch();
+  const [mail, team] = await Promise.all([
+    mailbox(branch, false),
+    Promise.race([
+      situation(executor, branch).catch((error) => notConfirmed("팀의 지금 상황", reasonOf(error))),
+      sleep(SITUATION_MS).then(() =>
+        notConfirmed("팀의 지금 상황", `러너가 ${SITUATION_MS / 1000}초 안에 답하지 않았다`),
+      ),
+    ]),
+  ]);
+  return {
+    context: [mail?.text, team].filter(Boolean).join("\n\n") || undefined,
+    remember: mail?.remember,
+  };
+}
+
+/** 이 폴더에 체크아웃된 브랜치. 브랜치가 아니면(detached HEAD) 없다. */
+function currentBranch() {
+  return promisify(execFile)("git", ["-C", cwd, "symbolic-ref", "--short", "HEAD"])
     .then(({ stdout }) => stdout.trim())
     .catch(() => undefined);
+}
+
+/**
+ * 이 작업(`branch`)의 편지함에 밀린 소식을 넣을 글과, 넘긴 뒤에 러너에 알릴 것. 밀린 것이 없거나 러너에 닿지 않으면 없다.
+ * 러너에 닿지 않는 것은 다른 글이 이미 말하므로 따로 넣지 않는다. 서브에이전트에게는 보여 주되 넘긴 것으로 알리지 않는다.
+ * 그래야 메인 대화의 다음 훅에서 다시 들어간다(Room의 편집 전 훅과 같다).
+ */
+async function mailbox(branch: string | undefined, subagent: boolean) {
+  if (!branch) return;
+  const reply = await Promise.race([
+    callRunner(cwd, "inbox", { branch }),
+    sleep(SITUATION_MS).then(() => undefined),
+  ]).catch(() => undefined);
+  if (reply?.kind !== "inbox") return;
+  const { login, items, disconnectedAt } = reply.payload;
+  const notice = inboxNotice(items, { login, branch }, disconnectedAt, MAX_CONTEXT);
+  if (!notice) return;
+  return {
+    text: notice.text,
+    remember: subagent
+      ? undefined
+      : async () => {
+          await callRunner(cwd, "delivered", { ids: notice.ids });
+        },
+  };
+}
+
+/** 세션 시작 훅의 팀의 지금 상황. 다른 멤버의 작업이 없으면 없다. */
+async function situation(executor: ExecutorId, branch: string | undefined) {
   const reply = await callRunner(cwd, "situation", { executor });
   if (reply.kind !== "situation") throw new Error(`러너가 묻지 않은 것으로 답했다: ${reply.kind}`);
   const { login, works, disconnectedAt, mine } = reply.payload;
@@ -241,6 +281,28 @@ type Memory = {
   unconfirmed?: true;
 };
 
+/**
+ * 편집 전 훅이 넣는 글: 이 작업의 편지함과, 파일을 고치는 도구면 그 파일의 근처 작업. 셸 명령에는 편지함만 넣는다.
+ * 서브에이전트의 호출(`agent_id`가 있다)에도 넣지만 편지함을 넘긴 것으로 치지 않는다.
+ */
+async function preToolUse(event: HookEvent, executor: ExecutorId) {
+  const shell = typeof event.tool_name === "string" && SHELL_TOOLS.has(event.tool_name);
+  if (!shell && editTargets(event).length === 0) return;
+  if (!(await omagariPaths())) return;
+  const subagent = typeof event.agent_id === "string" && event.agent_id !== "";
+  const [mail, edit] = await Promise.all([
+    currentBranch().then((branch) => mailbox(branch, subagent)),
+    shell ? undefined : preEdit(event, executor).catch(() => undefined),
+  ]);
+  return {
+    context: [mail?.text, edit?.context].filter(Boolean).join("\n\n") || undefined,
+    remember: async () => {
+      await edit?.remember?.();
+      await mail?.remember?.();
+    },
+  };
+}
+
 /** 편집 전 훅이 볼 파일: Claude Code의 편집 도구는 입력의 경로 하나, Codex의 `apply_patch`는 패치가 고치는 파일 모두다. */
 function editTargets(event: HookEvent) {
   const input =
@@ -258,7 +320,7 @@ function editTargets(event: HookEvent) {
 }
 
 /**
- * 편집 전 훅이 넣는 글. 파일을 고치는 도구에만, 그 파일의 근처 작업이 지난번에 보여 준 것과 달라졌을 때만 넣는다.
+ * 편집 전 훅이 넣는 근처 작업. 파일을 고치는 도구에만, 그 파일의 근처 작업이 지난번에 보여 준 것과 달라졌을 때만 넣는다.
  * 패치처럼 한 번에 여러 파일을 고치면 파일마다 따로 본다.
  * 기억은 작업 세션과 경로마다 둔다. 서브에이전트의 호출(`agent_id`가 있다)에도 넣지만 기억에 적지 않는다.
  * 그래야 메인 대화의 다음 편집에서 다시 들어간다(1단계 질문 A5). Codex의 PreToolUse 입력에는 `agent_id`가 없어 가리지 못한다.

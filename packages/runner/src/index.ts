@@ -21,6 +21,7 @@ import {
   EXECUTOR_NAMES,
   type ExecutorId,
   encode,
+  type InboxItem,
   MAX_FRAME_BYTES,
   type ModelChoice,
   RUNNER_SOCKET,
@@ -39,6 +40,7 @@ import { nearby } from "./nearby.ts";
 import { observe, uses } from "./observe.ts";
 import { named } from "./symbols.ts";
 
+export { alertLine, inboxNotice } from "./inbox.ts";
 export { observationNotice } from "./observe.ts";
 
 const execFileAsync = promisify(execFile);
@@ -569,6 +571,10 @@ export async function startRunner(options: {
   let mine: Work[] = [];
   /** 내 작업마다 체크아웃된 폴더. 직접 충돌을 계산할 때 내 내용을 여기서 읽는다. */
   let folders = new Map<string, string>();
+  /** 서버에서 받아 둔 이 멤버의 편지함. 넘겨준 것은 빼고 둔다. 아직 받지 못했으면 없다. */
+  let inbox: InboxItem[] | undefined;
+  /** 넘겨줬지만 서버가 아직 지우지 않은 소식. 받은 편지함에서 빼고, 다시 붙으면 서버에 다시 알린다. */
+  const delivered = new Set<number>();
 
   async function connect() {
     const current = new WebSocket(url);
@@ -607,6 +613,11 @@ export async function startRunner(options: {
         welcomed.resolve(message.payload);
       } else if (message.kind === "situation") {
         situation = { works: message.payload.works, disconnectedAt: null };
+      } else if (message.kind === "inbox") {
+        const ids = new Set(message.payload.items.map((item) => item.id));
+        // 서버가 지운 것은 더 기억하지 않는다.
+        for (const id of delivered) if (!ids.has(id)) delivered.delete(id);
+        inbox = message.payload.items.filter((item) => !delivered.has(item.id));
       } else if (message.kind === "ask") {
         // 답은 문답이 온 연결로 보낸다. 그사이 끊겼으면 서버는 이미 실패로 돌려줬고, 보낸 것은 버려진다.
         const { executor, channel, message: question, recent, model, effort } = message.payload;
@@ -627,6 +638,9 @@ export async function startRunner(options: {
     try {
       const welcome = await welcomed.promise;
       live = current;
+      // 끊긴 사이에 넘겨준 것을 알린다.
+      if (delivered.size > 0)
+        current.send(encode(runnerToServer, "delivered", { ids: [...delivered] }));
       current.addEventListener("close", ({ code }) => {
         if (live === current) live = undefined;
         if (situation) situation.disconnectedAt ??= new Date().toISOString();
@@ -792,6 +806,14 @@ export async function startRunner(options: {
     const decoded = decode(cliToRunner, frame);
     if ("error" in decoded) return encode(runnerToCli, "error", decoded.error, decoded.re);
     const { message } = decoded;
+    if (message.kind === "delivered") {
+      const { ids } = message.payload;
+      for (const id of ids) delivered.add(id);
+      inbox = inbox?.filter((item) => !delivered.has(item.id));
+      // 끊겨 있으면 다시 붙을 때 보낸다.
+      if (live && ids.length > 0) live.send(encode(runnerToServer, "delivered", { ids }));
+      return encode(runnerToCli, "delivered", {}, message.id);
+    }
     if (message.kind !== "ask") {
       // 문답의 줄에 서지 않고 받아 둔 것으로 바로 답한다. 서버는 부르지 않는다.
       // 두 요청에 실린 실행기(ADR-0015)는 아직 쓰지 않는다. 작업이 어느 에이전트의 것인지 서버에 알리는 것은 다음 계약 변경에서 더한다.
@@ -808,6 +830,10 @@ export async function startRunner(options: {
         return encode(runnerToCli, "situation", { login, ...situation, mine }, message.id);
       }
       const { disconnectedAt, works } = situation;
+      if (message.kind === "inbox") {
+        const items = (inbox ?? []).filter((item) => item.branch === message.payload.branch);
+        return encode(runnerToCli, "inbox", { login, items, disconnectedAt }, message.id);
+      }
       if (message.kind === "impact") {
         const { symbol } = message.payload;
         const changing = works.flatMap((work) =>
