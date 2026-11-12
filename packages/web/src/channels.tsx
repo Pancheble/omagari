@@ -6,16 +6,15 @@ import { type FormEvent, type RefObject, useId, useState } from "react";
 export const byName = (channels: Channel[]) =>
   channels.toSorted((a, b) => a.name.localeCompare(b.name, "ko"));
 
-const COLLAPSED = "omagari.channels-collapsed";
-
 /**
- * "채팅 채널" 카테고리를 접었는지. 이 기기에 기억한다. 저장소를 막아 둔 브라우저(사생활 보호 창 등)에서는
- * 이 탭에서만 남는다. 채널 패널이 앞(옆 칸)과 서랍에 둘 다 있어서 앱 틀이 하나만 들고 둘에 나눠 준다.
+ * 무엇을 접었는지(`key`: "채팅 채널" 카테고리, 채널 패널). 이 기기에 기억하고, 처음에는 펼쳐 둔다.
+ * 저장소를 막아 둔 브라우저(사생활 보호 창 등)에서는 이 탭에서만 남는다.
+ * 채널 패널이 앞(옆 칸)과 서랍에 둘 다 있어서 앱 틀이 하나만 들고 둘에 나눠 준다.
  */
-export function useCollapsed() {
+export function useCollapsed(key: string) {
   const [collapsed, set] = useState(() => {
     try {
-      return localStorage.getItem(COLLAPSED) === "1";
+      return localStorage.getItem(key) === "1";
     } catch {
       return false;
     }
@@ -23,8 +22,8 @@ export function useCollapsed() {
   const toggle = () => {
     set(!collapsed);
     try {
-      if (collapsed) localStorage.removeItem(COLLAPSED);
-      else localStorage.setItem(COLLAPSED, "1");
+      if (collapsed) localStorage.removeItem(key);
+      else localStorage.setItem(key, "1");
     } catch {}
   };
   return [collapsed, toggle] as const;

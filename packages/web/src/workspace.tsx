@@ -12,9 +12,10 @@ import {
   type Qa,
   type Visibility,
 } from "@omagari/contract";
-import { Menu, MessageSquare, Users, X } from "lucide-react";
+import { Menu, MessageSquare, PanelLeftClose, PanelLeftOpen, Users, X } from "lucide-react";
 import {
   type ComponentProps,
+  type PointerEvent,
   type ReactNode,
   useEffect,
   useId,
@@ -32,6 +33,12 @@ import { ProfilePanel } from "./profile.tsx";
 
 /** 이 폭부터 채널 패널이 늘 보인다. 그보다 좁으면 대화만 두고 채널 패널은 서랍으로 연다(DESIGN.md 앱의 좁은 화면). */
 const WIDE = "(min-width: 834px)";
+
+/** 채널 패널을 접고 펴는 단축키. 맥은 ⌘\, 그 밖은 Ctrl+\(DESIGN.md 채널 패널 접기). */
+const MAC = /Mac|iPhone|iPad/.test(navigator.userAgent);
+const FOLD_KEY = MAC ? "⌘\\" : "Ctrl+\\";
+/** 접힌 채널 패널을 꺼내 보거나 닫기 전에 마우스가 머무는 시간. */
+const PEEK_DELAY = 300;
 
 /** 미디어 쿼리가 맞는지. 창 폭이 바뀌면 따라온다. */
 function useMedia(query: string) {
@@ -109,9 +116,77 @@ export function Workspace({
   }, []);
 
   const [channels, setChannels] = useState<Channel[]>();
-  const [collapsed, toggleCollapsed] = useCollapsed();
+  const [collapsed, toggleCollapsed] = useCollapsed("omagari.channels-collapsed");
   const [members, setMembers] = useState<MemberView[]>();
   const wide = useMedia(WIDE);
+
+  /** 채널 패널을 접었는지. 834px 이상에서만 쓰고, 좁아졌다 다시 넓어지면 기억한 대로 돌아간다. */
+  const [folded, toggleFolded] = useCollapsed("omagari.side-panel-folded");
+  const shut = wide && folded;
+  const [peek, setPeek] = useState(false);
+  /** 접힌 패널을 대화 위에 꺼내 보는 중인지. */
+  const peeking = shut && peek;
+  const sideId = useId();
+  const side = useRef<HTMLElement>(null);
+  const foldButton = useRef<HTMLButtonElement>(null);
+  const unfoldButton = useRef<HTMLButtonElement>(null);
+  const peekTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  /** 접고 편 뒤에 초점을 다른 쪽 버튼으로 옮길지. */
+  const refocus = useRef(false);
+  /** 접고 편다. 초점이 사라질 곳(접힐 패널, 펴면 없어지는 펴는 버튼)에 있었으면 다른 쪽 버튼으로 옮긴다. */
+  const toggleFold = () => {
+    const at = document.activeElement;
+    refocus.current = folded ? at === unfoldButton.current : !!side.current?.contains(at);
+    clearTimeout(peekTimer.current);
+    setPeek(false);
+    toggleFolded();
+  };
+  useEffect(() => {
+    if (!refocus.current) return;
+    refocus.current = false;
+    (folded ? unfoldButton : foldButton).current?.focus();
+  }, [folded]);
+  /** 꺼내 본 패널을 닫는다. 그 안에 초점이 있었으면 펴는 버튼으로 옮긴다. */
+  const closePeek = () => {
+    clearTimeout(peekTimer.current);
+    if (side.current?.contains(document.activeElement)) unfoldButton.current?.focus();
+    setPeek(false);
+  };
+  /** 꺼내 본 패널에서 연 상태 메뉴나 채널 만들기가 열려 있는지. 그동안은 닫지 않는다. */
+  const held = () => !!(creator.current?.open || side.current?.querySelector(".status-menu"));
+  /** 펴는 버튼이나 창 왼쪽 가장자리에 마우스가 머물면 꺼내 본다. 키보드 초점과 손가락으로는 꺼내 보지 않는다. */
+  const hoverIn = (event: PointerEvent) => {
+    clearTimeout(peekTimer.current);
+    if (!peeking && event.pointerType === "mouse") {
+      peekTimer.current = setTimeout(() => setPeek(true), PEEK_DELAY);
+    }
+  };
+  /** 마우스가 나가고 잠시 뒤 닫는다. 그때 다시 들어와 있으면 두고, 메뉴가 열려 있으면 닫힐 때까지 미룬다. */
+  const hoverOut = () => {
+    clearTimeout(peekTimer.current);
+    if (!peeking) return;
+    const later = () => {
+      peekTimer.current = setTimeout(() => {
+        if (side.current?.matches(":hover")) return;
+        if (held()) later();
+        else closePeek();
+      }, PEEK_DELAY);
+    };
+    later();
+  };
+  // ⌘\(Ctrl+\)로 접고 펴고, Esc로 꺼내 본 패널을 닫는다. 넓은 화면에서만 듣는다.
+  // 키는 자판 배열과 상관없이 같은 자리(Backslash)로 본다. 한글 자판에서는 ₩가 찍히는 자리다.
+  useEffect(() => {
+    if (!wide) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.code === "Backslash" && (MAC ? event.metaKey : event.ctrlKey)) {
+        event.preventDefault();
+        toggleFold();
+      } else if (event.key === "Escape" && peeking && !held()) closePeek();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  });
   /** 열린 오른쪽 칸: 멤버 목록이나 내 에이전트(DM). 한 번에 하나만 열린다. */
   const [right, setRight] = useState<"members" | "agent">();
   const rightId = useId();
@@ -314,9 +389,10 @@ export function Workspace({
     }
   };
 
-  const panel = (onPick?: () => void) => (
+  const panel = (onPick?: () => void, action?: ReactNode) => (
     <ChannelPanel
       me={me}
+      action={action}
       mine={members?.find((member) => member.login === me.login)}
       onLogout={onLogout}
       onPresence={setPresence}
@@ -334,9 +410,38 @@ export function Workspace({
   );
 
   return (
-    <div className={right ? "app with-panel" : "app"}>
-      <aside className="side-panel" aria-label="채널 패널">
-        {panel()}
+    <div className={["app", right && "with-panel", shut && "folded"].filter(Boolean).join(" ")}>
+      {/* 접힌 동안 창 왼쪽 가장자리(창 안쪽 여백 8px). 마우스가 머물면 꺼내 본다. */}
+      {shut && <div className="peek-edge" onPointerEnter={hoverIn} onPointerLeave={hoverOut} />}
+      <aside
+        ref={side}
+        id={sideId}
+        className={peeking ? "side-panel peek" : "side-panel"}
+        aria-label="채널 패널"
+        inert={shut && !peeking}
+        onPointerEnter={() => peeking && clearTimeout(peekTimer.current)}
+        onPointerLeave={hoverOut}
+      >
+        {panel(
+          peeking ? closePeek : undefined,
+          <button
+            ref={foldButton}
+            type="button"
+            className="fold-button"
+            aria-label={folded ? "채널 패널 펼쳐 두기" : "채널 패널 닫기"}
+            title={`${folded ? "채널 패널 펼쳐 두기" : "채널 패널 닫기"} ${FOLD_KEY}`}
+            aria-keyshortcuts={MAC ? "Meta+\\" : "Control+\\"}
+            aria-expanded={!folded}
+            aria-controls={sideId}
+            onClick={toggleFold}
+          >
+            {folded ? (
+              <PanelLeftOpen size={18} aria-hidden />
+            ) : (
+              <PanelLeftClose size={18} aria-hidden />
+            )}
+          </button>,
+        )}
       </aside>
       <main className="conversation">
         <header className="channel-header">
@@ -348,6 +453,23 @@ export function Workspace({
           >
             <Menu size={18} aria-hidden />
           </button>
+          {shut && (
+            <button
+              ref={unfoldButton}
+              type="button"
+              className="header-button"
+              aria-label="채널 패널 열기"
+              title={`채널 패널 열기 ${FOLD_KEY}`}
+              aria-keyshortcuts={MAC ? "Meta+\\" : "Control+\\"}
+              aria-expanded={false}
+              aria-controls={sideId}
+              onClick={toggleFold}
+              onPointerEnter={hoverIn}
+              onPointerLeave={hoverOut}
+            >
+              <PanelLeftOpen size={18} aria-hidden />
+            </button>
+          )}
           {current && <ChannelTitle channel={current} members={members?.length} />}
           {/* 오른쪽 칸을 여는 버튼들. 평소에는 아이콘만, 연 버튼만 이름이 붙는다. */}
           <div className="header-actions">
@@ -519,6 +641,7 @@ export function RightPanel({
 
 function ChannelPanel({
   me,
+  action,
   mine,
   onLogout,
   onPresence,
@@ -526,6 +649,8 @@ function ChannelPanel({
   children,
 }: {
   me: Me;
+  /** 워크스페이스 이름 줄 오른쪽 끝의 버튼(채널 패널 접기). 서랍에는 없다. */
+  action?: ReactNode;
   mine?: MemberView;
   onLogout: () => void;
   onPresence: (presence: ChosenPresence, duration?: PresenceDuration) => Promise<void>;
@@ -537,6 +662,7 @@ function ChannelPanel({
       {/* 워크스페이스 이름은 아직 따로 정하는 곳이 없다. 워크스페이스 하나에 레포 하나라(ADR-0012) 레포 이름을 쓴다. */}
       <div className="workspace">
         <h1>{me.repo.split("/")[1]}</h1>
+        {action}
         <p>{me.repo}</p>
       </div>
       {children}
