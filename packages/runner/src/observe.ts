@@ -1,10 +1,12 @@
 // 관측: 등록한 폴더와 그 연결된 워크트리의 Git 상태에서 작업마다 바꾼 파일과 그 내용을 읽는다(ADR-0002, ADR-0006, ADR-0007).
 // 읽기만 한다. 작업 폴더의 어떤 파일도, Git이 덤으로 하는 인덱스 갱신도 쓰지 않는다.
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { lstat, readFile, readlink } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { ObservedFile, ShareLevel, Work } from "@omagari/contract";
+import { compare, parsable, usesIn } from "./symbols.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -74,6 +76,10 @@ async function worktrees(folder: string) {
  * 읽지 못한 워크트리는 빼고 그 까닭을 `problems`에 담는다. 하나가 안 읽혀도 나머지는 올라간다.
  * `folders`는 작업(브랜치)마다 체크아웃된 폴더다. 브랜치 하나는 워크트리 하나에만 체크아웃된다.
  */
+/** 견준 정의 줄. 기준 커밋, 경로, 내용이 같으면 다시 읽지 않는다. 가장 오래 넣은 것부터 버린다. */
+const compared = new Map<string, ReturnType<typeof compare>>();
+const COMPARED_LIMIT = 2000;
+
 export async function observe(folder: string, remote: string, share: ShareLevel) {
   const works: Work[] = [];
   const problems: string[] = [];
@@ -121,7 +127,8 @@ export async function observe(folder: string, remote: string, share: ShareLevel)
       const full = join(tree, path);
       const stat = await lstat(full).catch(() => undefined);
       if (!stat) {
-        files.push({ path, deleted: true });
+        const definitions = share === "full" ? await changedDefinitions(path) : undefined;
+        files.push({ path, deleted: true, ...(definitions?.length && { definitions }) });
         continue;
       }
       // intent도 경로는 읽는다. 러너가 서버로 보낼 때 뺀다(이 기기의 훅이 내 작업의 경로를 쓴다).
@@ -150,8 +157,47 @@ export async function observe(folder: string, remote: string, share: ShareLevel)
         continue;
       }
       total += size;
-      files.push({ path, content });
+      const definitions = stat.isFile() ? await changedDefinitions(path, content) : undefined;
+      files.push({ path, content, ...(definitions?.length && { definitions }) });
     }
     return { branch, base, share, files };
+
+    /** 기준 커밋의 판과 견준 정의 줄(ADR-0026). 내용을 올리는 파일만 부른다. 읽을 수 없는 언어면 없음이다. */
+    async function changedDefinitions(path: string, content?: string) {
+      if (!parsable(path)) return;
+      const hash =
+        content === undefined ? "deleted" : createHash("sha1").update(content).digest("hex");
+      const key = `${base}\0${path}\0${hash}`;
+      let found = compared.get(key);
+      if (!found) {
+        const before = await git(tree, "cat-file", "blob", `${base}:${path}`).catch(() => ""); // 없던 새 파일
+        found = compare(path, before, content);
+        compared.set(key, found);
+        if (compared.size > COMPARED_LIMIT) compared.delete(compared.keys().next().value as string);
+      }
+      return found;
+    }
   }
+}
+
+/**
+ * 러너의 사본(등록한 폴더)에서 `symbol`을 쓰는 곳. 추적하는 파일과 추적하지 않는 새 파일 가운데 읽을 수 있는 언어의 것만 본다.
+ * 관측처럼 gitignore된 파일과 .env 계열, 파일 하나의 상한을 넘는 것은 읽지 않는다.
+ */
+// ponytail: 물을 때마다 사본을 처음부터 읽는다(이름이 들어 있는 파일만 파싱한다). 자주 물으면 색인을 남겨 두고 바뀐 파일만 다시 읽는다.
+export async function uses(folder: string, symbol: string) {
+  const listed = await git(folder, "ls-files", "--cached", "--others", "--exclude-standard", "-z");
+  const paths = [...new Set(listed.split("\0"))]
+    .filter((p) => p && parsable(p) && !secret(p))
+    .sort();
+  const found: { path: string; line: number }[] = [];
+  for (const path of paths) {
+    const full = join(folder, path);
+    const stat = await lstat(full).catch(() => undefined);
+    if (!stat?.isFile() || stat.size > FILE_LIMIT) continue; // 지운 파일, 링크, 큰 파일
+    const content = asText(await readFile(full));
+    if (content === undefined) continue;
+    for (const line of (await usesIn(path, content, symbol)) ?? []) found.push({ path, line });
+  }
+  return found;
 }
