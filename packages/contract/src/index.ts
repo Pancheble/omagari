@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 14;
+export const CONTRACT_VERSION = 15;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -376,6 +376,14 @@ export const Alert = z.strictObject({
 export type Alert = z.infer<typeof Alert>;
 
 /**
+ * 알림에 달린 포스트(문답 Q3). 알림 하나에 포스트 하나이고, 처음 열 때(`api.openPost`) 생긴다.
+ * 포스트는 채널처럼 동작한다: `channel`을 채널 자리에 넣어 글 쓰기, 지난 대화, DM, `@호출`, 채널에 올리기를 그대로 쓴다.
+ * 채널 목록(`api.channels`)에는 없다. `alert`는 알림이 선 채널 메시지의 번호, `count`는 포스트에 선 글(글과 공개된 문답)의 수다.
+ */
+export const Post = z.strictObject({ channel: z.string(), alert: z.number(), count: z.number() });
+export type Post = z.infer<typeof Post>;
+
+/**
  * 채널에 쌓인 것 하나. `id`는 워크스페이스 전체에서 늘어나기만 하는 번호라 채널 안의 순서이자,
  * 실시간 연결이 다시 붙을 때 이어 받을 자리(`webToServer.hello`의 `after`)다.
  * 사람이 쓴 글(`text`)과 공개된 문답(`qa`), Omagari가 올린 알림(`alert`)이 같은 번호 줄에 선다.
@@ -407,13 +415,17 @@ export const ChannelMessage = z.discriminatedUnion("kind", [
     text: z.string().optional(),
     qa: Qa,
   }),
-  /** Omagari가 올린 알림. 쓴 사람이 없다. 알림이 고쳐지거나 풀리면 같은 `id`의 것이 실시간 연결로 다시 온다. `at`은 처음 올린 시각이다. */
+  /**
+   * Omagari가 올린 알림. 쓴 사람이 없다. 알림이 고쳐지거나 풀리거나 포스트의 글 수가 바뀌면 같은 `id`의 것이 실시간 연결로 다시 온다.
+   * `at`은 처음 올린 시각이다. `post`는 달린 포스트의 채널과 글 수이고, 아직 아무도 열지 않았으면 null이다.
+   */
   z.strictObject({
     kind: z.literal("alert"),
     id: z.number(),
     channel: z.string(),
     at: z.string(),
     alert: Alert,
+    post: Post.omit({ alert: true }).nullable(),
   }),
 ]);
 export type ChannelMessage = z.infer<typeof ChannelMessage>;
@@ -469,7 +481,8 @@ export const serverToRunner = {
   /**
    * 문답. 러너가 받는 요청은 이것뿐이다. 물을 에이전트(`executor`), 채널, 질문, 채널 대화만 오고 도구·폴더·세션은 러너가 정한다.
    * 러너는 채널과 실행기마다 채널 세션 하나를 잇고(ADR-0015), 한 번에 한 턴만 돌리고 나머지는 온 순서대로 줄 세운다.
-   * `recent`는 그 채널의 최근 대화(오래된 것부터 `CHANNEL_CONTEXT`개까지)다. 러너는 그 채널 세션의 지난 턴 뒤의 것만
+   * 포스트도 채널로 온다(`channel.id`가 포스트의 채널). 그래서 포스트의 채널 세션은 같은 채널의 것과 따로 이어 간다.
+   * `recent`는 그 채널의 최근 대화(오래된 것부터 `CHANNEL_CONTEXT`개까지)다. 포스트면 맨 앞이 그 알림이고 뒤가 포스트의 대화다. 러너는 그 채널 세션의 지난 턴 뒤의 것만
    * 지시가 아닌 데이터로 감싸 넘긴다. 질문은 그 에이전트의 주인이 쓴 것이다.
    * `model`과 `effort`는 주인이 고른 것이다. 러너는 hello로 알린 고를 거리에 없으면 실행기를 띄우지 않고 오류로 답한다.
    */
@@ -833,7 +846,24 @@ export const api = {
     body: z.strictObject({ channel: z.string() }),
     response: z.strictObject({ qas: z.array(Qa) }),
   },
-  /** 채팅 채널 전부, 이름 순서. 멤버만 본다. */
+  /**
+   * 알림(`alert`, 알림이 선 채널 메시지의 번호)에 달린 포스트를 연다. 처음 열면 생기고, 다시 열면 같은 포스트다.
+   * 포스트 맨 위에 둘 알림 메시지(`message`)도 함께 준다. 처음 생기면 그 알림이 실시간 연결의 `message`로 모두에게 다시 간다(`post`가 붙어).
+   * 알림이 아닌 메시지면 `not_found`다.
+   */
+  openPost: {
+    method: "POST",
+    path: "/api/posts",
+    body: z.strictObject({ alert: z.number().int() }),
+    response: z.strictObject({ post: Post, message: ChannelMessage }),
+  },
+  /** 열린 포스트 전부, 알림 순서. 채널 패널이 알림 채널 아래에 줄로 둔다. */
+  posts: {
+    method: "GET",
+    path: "/api/posts",
+    response: z.strictObject({ posts: z.array(Post) }),
+  },
+  /** 채팅 채널 전부, 이름 순서. 포스트는 오지 않는다(`api.posts`). 멤버만 본다. */
   channels: {
     method: "GET",
     path: "/api/channels",
@@ -841,7 +871,7 @@ export const api = {
   },
   /**
    * 알림을 올릴 채널을 바꾼다. 그 뒤에 새로 생기는 알림이 이 채널로 간다. 이미 올라간 알림은 제자리에서 고쳐진다.
-   * 정한 적이 없으면 처음 알림을 올릴 때 "부딪힘" 채널(없으면 만든다)이 알림 채널이 된다. 없는 채널이면 `not_found`.
+   * 정한 적이 없으면 처음 알림을 올릴 때 "부딪힘" 채널(없으면 만든다)이 알림 채널이 된다. 없는 채널이나 포스트면 `not_found`.
    */
   setAlertChannel: {
     method: "POST",
