@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { networkInterfaces } from "node:os";
@@ -21,6 +22,21 @@ import { eventually, fakeExecutor, REPO, startWorld, tempRepo } from "./harness.
 const frame = (fields: object) => JSON.stringify({ v: CONTRACT_VERSION, payload: {}, ...fields });
 const tooBigFrame = "x".repeat(MAX_FRAME_BYTES + 1);
 const tooBigBody = "x".repeat(MAX_MESSAGE_BYTES + 1);
+
+/** 이 체크아웃의 버전을 Git에 직접 묻는다. 태그를 받지 못한 클론(CI의 얕은 클론)이면 커밋만 안다. */
+function gitVersion() {
+  const git = (...args: string[]) =>
+    execFileSync("git", args, {
+      cwd: import.meta.dirname,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  try {
+    return git("describe", "--tags");
+  } catch {
+    return `버전 모름(커밋 ${git("rev-parse", "--short", "HEAD")})`;
+  }
+}
 
 /** 러너인 척 서버에 붙는 날 연결. 계약을 거치지 않고 프레임을 그대로 보낸다. */
 async function rawRunner(t: TestContext, serverUrl: string) {
@@ -115,17 +131,24 @@ test("서버는 계약에 없는 종류, 내용, 키를 받지 않는다", async
   assert.deepEqual(await world.agents(world.owner), { owner: "online" });
 });
 
-test("서버는 계약 버전이 다른 메시지에 오류를 보내고 연결을 끊는다", async (t) => {
+test("서버는 계약 버전이 다른 러너를 자기 버전과 계약 버전을 실어 거절하고 연결을 끊는다", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
   const { socket, reply } = await rawRunner(t, world.server.url);
 
+  // 서버를 올렸는데 아직 올리지 않은 러너가 붙는다.
   const closed = once(socket, "close");
   assert.partialDeepStrictEqual(
-    await reply(frame({ v: CONTRACT_VERSION + 1, id: "a", kind: "hello" })),
-    { kind: "error", re: "a", payload: { code: "version_mismatch" } },
+    await reply(frame({ v: CONTRACT_VERSION - 1, id: "a", kind: "hello" })),
+    {
+      v: CONTRACT_VERSION,
+      kind: "error",
+      re: "a",
+      payload: { code: "version_mismatch", version: gitVersion(), contract: CONTRACT_VERSION },
+    },
   );
-  await closed;
+  const [{ code }] = await closed;
+  assert.equal(code, 1008);
 });
 
 test("서버는 상한을 넘는 프레임과 본문을 읽지 않는다", async (t) => {
@@ -236,6 +259,43 @@ test("러너는 계약 버전이 다른 서버를 알아보고 켜지지 않는�
   await server.closed;
 });
 
+test("러너는 계약 버전이 달라 거절되면 무엇을 올려야 하는지 알린다", async (t) => {
+  const advice = {
+    newer: "`main`을 받고(`git pull`, `npm ci`) 러너를 다시 켜세요",
+    older: "서버가 더 오래됐어요. 서버를 올려야 해요(서버를 띄운 사람에게 알리세요)",
+  };
+  for (const [contract, todo] of [
+    [CONTRACT_VERSION + 1, advice.newer],
+    [CONTRACT_VERSION - 1, advice.older],
+  ] as const) {
+    // 계약 버전이 다른 서버의 거절. 이 꼴은 계약 버전과 상관없이 굳어 있어, 뒤에 더한 키가 있어도 읽힌다.
+    const server = await fakeServer(t, (socket, hello) => {
+      socket.send(
+        JSON.stringify({
+          v: contract,
+          id: "e",
+          re: hello.id,
+          kind: "error",
+          payload: {
+            code: "version_mismatch",
+            message: `계약 버전이 다르다: 받은 것 ${CONTRACT_VERSION}, 여기는 ${contract}`,
+            version: "v0.3.0",
+            contract,
+            later: "뒤의 계약이 더한 키",
+          },
+        }),
+      );
+      socket.close(1008, "version_mismatch");
+    });
+
+    await assert.rejects(startRunner(server.runner), {
+      code: "version_mismatch",
+      message: `서버는 v0.3.0, 이 기기는 ${gitVersion()}이에요. ${todo}`,
+    });
+    await server.closed;
+  }
+});
+
 test("러너는 서버가 hello를 거절하면 연결을 닫고 켜지지 않는다", async (t) => {
   const server = await fakeServer(t, (socket, hello) => {
     socket.send(
@@ -263,9 +323,12 @@ test("CLI와 훅은 실행 파일의 입출력으로 조작한다", async (t) =>
   const world = await startWorld();
   t.after(world.stop);
 
-  const version = await world.cli("--version");
-  assert.equal(version.code, 0);
-  assert.match(version.stdout, new RegExp(`contract ${CONTRACT_VERSION}\\b`));
+  // 버전은 package.json이 아니라 이 체크아웃의 git 태그다(ADR-0019).
+  assert.deepEqual(await world.cli("--version"), {
+    code: 0,
+    stdout: `omagari ${gitVersion()} (contract ${CONTRACT_VERSION})\n`,
+    stderr: "",
+  });
 
   // 훅은 무엇을 받아도 도구 호출을 막지 않는다: 0으로 끝나고 아무것도 넣지 않는다.
   const silent = { code: 0, stdout: "", stderr: "" };

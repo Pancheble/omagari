@@ -49,6 +49,7 @@ test("멤버 목록에 사람마다 이름과 실행기마다의 에이전트, �
       name: "bob",
       presence: "offline", // 웹 창을 연 적이 없다
       message: null,
+      emoji: null,
       agents: [],
       offlineSince: null,
       works: [],
@@ -59,6 +60,7 @@ test("멤버 목록에 사람마다 이름과 실행기마다의 에이전트, �
     name: "김지은",
     presence: "offline",
     message: null,
+    emoji: null,
     agents: [{ executor: "claude-code", state: "online", choices: none }],
     offlineSince: null,
     works: [

@@ -17,6 +17,7 @@ import {
   EXECUTOR_NAMES,
   type ExecutorId,
   encode,
+  encodeVersionMismatch,
   HISTORY_PAGE,
   LIVE_SOCKET,
   MAX_FRAME_BYTES,
@@ -37,6 +38,7 @@ import {
   type WorkView,
   webToServer,
 } from "@omagari/contract";
+import { checkoutVersion } from "@omagari/contract/version";
 import type { WSContext } from "hono/ws";
 import { type WebSocket, WebSocketServer } from "ws";
 import type { GitHub } from "./github.ts";
@@ -138,6 +140,7 @@ export async function startServer(options: {
   presenceDurations?: Partial<Record<PresenceDuration, number>>;
 }) {
   const { repo, github } = options;
+  const version = checkoutVersion();
   const hostname = options.hostname ?? "127.0.0.1";
   const db = new DatabaseSync(options.database ?? ":memory:");
   // 세션은 해시로만 둔다. GitHub 토큰은 서버 밖으로 나가지 않는다.
@@ -180,13 +183,17 @@ export async function startServer(options: {
     since INTEGER NOT NULL
   ) STRICT`);
   // 사람마다 스스로 고른 접속 상태와 상태 메시지. `presence`는 계약의 ChosenPresence, `until`은 고른 것이 끝나는 시각(ms)이고
-  // NULL이면 직접 바꿀 때까지다. `message`가 빈 글이면 상태 메시지가 없다. 들어와 있는지(웹 창)는 여기 두지 않는다.
+  // NULL이면 직접 바꿀 때까지다. `message`와 `emoji`(글 앞의 이모지 한 칸)가 빈 글이면 없다. 들어와 있는지(웹 창)는 여기 두지 않는다.
   db.exec(`CREATE TABLE IF NOT EXISTS profiles (
     login TEXT PRIMARY KEY,
     presence TEXT NOT NULL,
     until INTEGER,
-    message TEXT NOT NULL
+    message TEXT NOT NULL,
+    emoji TEXT NOT NULL DEFAULT ''
   ) STRICT`);
+  // v0.1.0의 표에는 `emoji`가 없다.
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('profiles') WHERE name = 'emoji'").get())
+    db.exec("ALTER TABLE profiles ADD COLUMN emoji TEXT NOT NULL DEFAULT ''");
   // 채팅 채널. 이름은 대소문자를 가리지 않고 하나뿐이다.
   db.exec(`CREATE TABLE IF NOT EXISTS channels (
     id TEXT PRIMARY KEY,
@@ -389,7 +396,7 @@ export async function startServer(options: {
   const membersView = (works: WorkView[]): MemberView[] => {
     const people = db
       .prepare(
-        `SELECT s.login, COALESCE(p.name, s.login) AS name, o.since, f.presence, f.until, f.message
+        `SELECT s.login, COALESCE(p.name, s.login) AS name, o.since, f.presence, f.until, f.message, f.emoji
          FROM (SELECT DISTINCT login FROM sessions) s
          LEFT JOIN people p ON p.login = s.login
          LEFT JOIN offline o ON o.login = s.login
@@ -403,6 +410,7 @@ export async function startServer(options: {
       presence: ChosenPresence | null;
       until: number | null;
       message: string | null;
+      emoji: string | null;
     }[];
     const open = new Set([...watchers.values()].map((watcher) => watcher.login));
     const now = Date.now();
@@ -441,6 +449,7 @@ export async function startServer(options: {
         name,
         presence: presenceOf(login, profile.presence, profile.until),
         message: profile.message || null,
+        emoji: profile.emoji || null,
         agents,
         offlineSince: since === null ? null : new Date(since).toISOString(),
         works: (byLogin.get(login) ?? []).map(({ branch, line }) => ({ branch, executor, line })),
@@ -653,13 +662,13 @@ export async function startServer(options: {
     return { until: until === null ? null : new Date(until).toISOString() };
   });
 
-  mount(app, api.setStatusMessage, ({ message }, c) => {
+  mount(app, api.setStatusMessage, ({ message, emoji }, c) => {
     db.prepare(
-      `INSERT INTO profiles (login, presence, until, message) VALUES (?, 'online', NULL, ?)
-       ON CONFLICT (login) DO UPDATE SET message = excluded.message`,
-    ).run(c.get("login") as string, message);
+      `INSERT INTO profiles (login, presence, until, message, emoji) VALUES (?, 'online', NULL, ?, ?)
+       ON CONFLICT (login) DO UPDATE SET message = excluded.message, emoji = excluded.emoji`,
+    ).run(c.get("login") as string, message, emoji ?? "");
     shareMembers();
-    return { message: message || null };
+    return { message: message || null, emoji };
   });
 
   mount(app, api.ask, ({ agent, executor, channel, message, visibility, model, effort }, c) => {
@@ -883,8 +892,11 @@ export async function startServer(options: {
       onMessage({ data }, socket) {
         const decoded = decode(runnerToServer, data);
         if ("error" in decoded) {
-          socket.send(encode(serverToRunner, "error", decoded.error, decoded.re));
-          if (decoded.error.code === "version_mismatch") socket.close(1008, "version_mismatch");
+          // 계약 버전이 다른 러너에는 그 러너도 읽는 꼴로 이 서버의 버전을 실어 거절한다. 러너가 할 일을 알린다.
+          if (decoded.error.code === "version_mismatch") {
+            socket.send(encodeVersionMismatch(decoded.error.message, version, decoded.re));
+            socket.close(1008, "version_mismatch");
+          } else socket.send(encode(serverToRunner, "error", decoded.error, decoded.re));
           return;
         }
         const { message } = decoded;
@@ -1064,6 +1076,8 @@ export async function startServer(options: {
 
   return {
     url: `http://${hostname}:${(server.address() as AddressInfo).port}`,
+    /** 이 서버의 버전(`git describe --tags`). 계약 버전이 다른 러너를 거절할 때 싣는다. */
+    version,
     async stop() {
       stopped = true;
       clearInterval(heartbeat);
