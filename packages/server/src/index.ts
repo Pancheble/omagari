@@ -5,12 +5,15 @@ import { basename } from "node:path/posix";
 import { DatabaseSync } from "node:sqlite";
 import { serve, upgradeWebSocket } from "@hono/node-server";
 import {
+  ALERT_FILES,
+  type AlertFile,
   api,
   CHANNEL_CONTEXT,
   type ChannelMessage,
   type Choices,
   type ChosenPresence,
   CONTRACT_VERSION,
+  type ConflictPair,
   type ContractError,
   ContractFailure,
   decode,
@@ -35,6 +38,7 @@ import {
   serverToWeb,
   type Visibility,
   type Work,
+  type WorkRef,
   type WorkView,
   webToServer,
 } from "@omagari/contract";
@@ -95,11 +99,18 @@ const qaView = (row: QaRow): Qa => ({
   answer: row.answer === null ? { state: "pending" } : JSON.parse(row.answer),
 });
 
-/** 메시지를 쓴 사람의 이름과, 공개된 문답이면 그 문답과 함께 읽는다. 뒤에 WHERE와 ORDER BY를 붙여 쓴다. */
+/** 처음 알림을 올릴 때 알림 채널이 없으면 쓰거나 만드는 채널. */
+const ALERT_CHANNEL = "부딪힘";
+
+/**
+ * 메시지를 쓴 사람의 이름과, 공개된 문답이면 그 문답, 알림이면 그 알림과 함께 읽는다. 뒤에 WHERE와 ORDER BY를 붙여 쓴다.
+ */
 const MESSAGES = `SELECT m.id, m.channel, m.login, m.text, m.note, m.at, p.name,
-  q.id AS qa, q.executor, q.question, q.at AS asked, q.answer, q.visibility FROM messages m
+  q.id AS qa, q.executor, q.question, q.at AS asked, q.answer, q.visibility,
+  m.alert, a.works, a.files, a.resolved FROM messages m
   LEFT JOIN people p ON p.login = m.login
-  LEFT JOIN qas q ON q.id = m.qa`;
+  LEFT JOIN qas q ON q.id = m.qa
+  LEFT JOIN alerts a ON a.id = m.alert`;
 type MessageRow = {
   id: number;
   channel: string;
@@ -110,9 +121,29 @@ type MessageRow = {
   name: string | null;
   qa: number | null;
   asked: number;
+  alert: number | null;
+  works: string | null;
+  files: string | null;
+  resolved: number | null;
 } & Pick<QaRow, "executor" | "question" | "answer" | "visibility">;
 
 const messageView = (row: MessageRow): ChannelMessage => {
+  if (row.alert !== null) {
+    const files: AlertFile[] = JSON.parse(row.files ?? "[]");
+    return {
+      kind: "alert",
+      id: row.id,
+      channel: row.channel,
+      at: new Date(row.at).toISOString(),
+      alert: {
+        kind: "direct",
+        works: JSON.parse(row.works ?? "[]"),
+        files: files.slice(0, ALERT_FILES),
+        more: Math.max(files.length - ALERT_FILES, 0),
+        resolved: row.resolved === null ? null : new Date(row.resolved).toISOString(),
+      },
+    };
+  }
   const common = {
     id: row.id,
     channel: row.channel,
@@ -223,6 +254,27 @@ export async function startServer(options: {
   if (!db.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'note'").get())
     db.exec("ALTER TABLE messages ADD COLUMN note TEXT");
   db.exec("CREATE INDEX IF NOT EXISTS messages_by_channel ON messages (channel, id)");
+  // 알림(ADR-0023): 두 작업 한 쌍의 직접 충돌. 채널에는 messages의 한 줄(`alert`)로 선다. 그 줄의 `text`는 빈 글, `login`은 빈 이름이다
+  // (`text`의 CHECK를 바꾸려면 표를 다시 만들어야 한다). `pair`는 두 작업을 정한 순서로 적은 열쇠, `works`는 계약의 WorkRef 둘(JSON),
+  // `files`는 묶은 파일 전부(계약의 AlertFile 배열, 확인된 것부터 경로 순)다. `resolved`는 풀린 시각(ms)이고, 풀리지 않은 알림은 쌍마다 하나다.
+  // `updated`는 마지막으로 고친 시각(ms)이다. 실시간 연결이 다시 붙을 때 끊긴 사이에 고친 알림을 다시 보낸다.
+  db.exec(`CREATE TABLE IF NOT EXISTS alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pair TEXT NOT NULL,
+    works TEXT NOT NULL,
+    files TEXT NOT NULL,
+    resolved INTEGER,
+    updated INTEGER NOT NULL
+  ) STRICT`);
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS alerts_open ON alerts (pair) WHERE resolved IS NULL");
+  // v0.1.0의 표에는 `alert`가 없다.
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'alert'").get())
+    db.exec("ALTER TABLE messages ADD COLUMN alert INTEGER REFERENCES alerts (id)");
+  // 워크스페이스의 설정 하나씩. 지금은 알림 채널(`alert_channel`)뿐이다.
+  db.exec(`CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  ) STRICT`);
   // 문답. 묻는 사람(`login`)이 그 에이전트의 주인이다. 비공개면 그 사람만 보고, 공개면 messages에 한 줄이 서서 모두가 본다.
   // `answer`는 계약의 Qa.answer(JSON)이고, 답을 기다리는 동안 NULL이다. `settled`는 답이나 실패를 적은 시각(ms)이다.
   db.exec(`CREATE TABLE IF NOT EXISTS qas (
@@ -448,6 +500,7 @@ export async function startServer(options: {
       return { executor, state, choices } as const;
     };
     const byLogin = Map.groupBy(works, (work) => work.login);
+    const conflicted = conflictedWorks();
     return people.map(({ login, name, since, ...profile }) => {
       const agents = known
         .filter((agent) => agent.login === login)
@@ -463,9 +516,155 @@ export async function startServer(options: {
         emoji: profile.emoji || null,
         agents,
         offlineSince: since === null ? null : new Date(since).toISOString(),
-        works: (byLogin.get(login) ?? []).map(({ branch, line }) => ({ branch, executor, line })),
+        works: (byLogin.get(login) ?? []).map(({ branch, line }) => ({
+          branch,
+          executor,
+          line,
+          conflict: conflicted.has(JSON.stringify([login, branch])),
+        })),
       };
     });
+  };
+
+  /** 풀리지 않은 알림 가운데 줄이 부딪히는 것이 확인된 것의 작업들. 열쇠는 `[login, branch]`의 JSON이다. */
+  const conflictedWorks = () => {
+    const found = new Set<string>();
+    const open = db.prepare("SELECT works, files FROM alerts WHERE resolved IS NULL").all() as {
+      works: string;
+      files: string;
+    }[];
+    for (const row of open) {
+      if (!(JSON.parse(row.files) as AlertFile[]).some((file) => "lines" in file)) continue;
+      for (const work of JSON.parse(row.works) as WorkRef[])
+        found.add(JSON.stringify([work.login, work.branch]));
+    }
+    return found;
+  };
+
+  /** 붙어 있는 러너마다 마지막으로 올린 직접 충돌의 계산. 끊기면 지운다. 아직 올리지 않은 러너는 없다. */
+  const reports = new Map<WSContext, ConflictPair[]>();
+
+  /** 알림 채널. 정한 것이 없거나 지워졌으면 "부딪힘" 채널을 쓰고, 그것도 없으면 만든다. */
+  const alertChannel = () => {
+    const chosen = db.prepare("SELECT value FROM settings WHERE key = 'alert_channel'").get() as
+      | { value: string }
+      | undefined;
+    if (chosen && db.prepare("SELECT 1 FROM channels WHERE id = ?").get(chosen.value))
+      return chosen.value;
+    let found = db.prepare("SELECT id FROM channels WHERE name = ?").get(ALERT_CHANNEL) as
+      | { id: string }
+      | undefined;
+    if (!found) {
+      found = { id: randomBytes(8).toString("hex") };
+      db.prepare("INSERT INTO channels (id, name) VALUES (?, ?)").run(found.id, ALERT_CHANNEL);
+      broadcast(encode(serverToWeb, "channel", { id: found.id, name: ALERT_CHANNEL }));
+    }
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('alert_channel', ?)").run(
+      found.id,
+    );
+    return found.id;
+  };
+
+  /** 알림 하나의 채널 줄을 붙어 있는 웹 모두에 보낸다. */
+  const shareAlert = (alert: number) =>
+    broadcast(
+      encode(
+        serverToWeb,
+        "message",
+        messageView(db.prepare(`${MESSAGES} WHERE m.alert = ?`).get(alert) as MessageRow),
+      ),
+    );
+
+  /**
+   * 러너들의 계산을 두 작업 한 쌍마다 하나로 묶어 알림을 올리고, 고치고, 풀린 것을 닫는다(ADR-0023).
+   * 한 쌍을 양쪽 러너가 올렸으면 파일마다 줄이 확인된 쪽을 쓴다. 쌍의 어느 쪽이든 계산을 올린 러너가 붙어 있는데
+   * 그 쌍이 없으면 풀린 것이다. 양쪽 러너가 다 꺼져 있으면 알 수 없으니 그대로 둔다.
+   */
+  const reconcile = () => {
+    const name = (login: string) =>
+      (
+        db.prepare("SELECT name FROM people WHERE login = ?").get(login) as
+          | { name: string }
+          | undefined
+      )?.name ?? login;
+    const found = new Map<string, { works: [WorkRef, WorkRef]; files: Map<string, AlertFile> }>();
+    const reporting = new Set<string>();
+    for (const [socket, pairs] of reports) {
+      const login = runners.get(socket)?.login;
+      if (!login) continue;
+      reporting.add(login);
+      for (const pair of pairs) {
+        const mine = { login, branch: pair.branch };
+        const flip =
+          JSON.stringify([mine.login, mine.branch]) >
+          JSON.stringify([pair.theirs.login, pair.theirs.branch]);
+        const [a, b] = flip ? [pair.theirs, mine] : [mine, pair.theirs];
+        const key = JSON.stringify([a.login, a.branch, b.login, b.branch]);
+        const entry = found.get(key) ?? {
+          works: [
+            { ...a, name: name(a.login) },
+            { ...b, name: name(b.login) },
+          ],
+          files: new Map(),
+        };
+        found.set(key, entry);
+        for (const file of pair.files) {
+          const view: AlertFile =
+            "unknown" in file
+              ? file
+              : {
+                  path: file.path,
+                  lines: flip ? [file.theirs, file.mine] : [file.mine, file.theirs],
+                };
+          const known = entry.files.get(file.path);
+          if (!known || ("unknown" in known && "lines" in view)) entry.files.set(file.path, view);
+        }
+      }
+    }
+    const open = db
+      .prepare("SELECT id, pair, works, files FROM alerts WHERE resolved IS NULL")
+      .all() as { id: number; pair: string; works: string; files: string }[];
+    let changed = false;
+    const now = Date.now();
+    for (const row of open) {
+      if (found.has(row.pair)) continue;
+      const works = JSON.parse(row.works) as WorkRef[];
+      if (!works.some((work) => reporting.has(work.login))) continue;
+      db.prepare("UPDATE alerts SET resolved = ?, updated = ? WHERE id = ?").run(now, now, row.id);
+      shareAlert(row.id);
+      changed = true;
+    }
+    for (const [key, entry] of found) {
+      // 줄이 확인된 파일부터, 그 안에서는 경로 순이다.
+      const files = [...entry.files.values()].sort(
+        (x, y) => Number("unknown" in x) - Number("unknown" in y) || (x.path < y.path ? -1 : 1),
+      );
+      const json = JSON.stringify(files);
+      const known = open.find((row) => row.pair === key);
+      if (known?.files === json) continue;
+      changed = true;
+      if (known) {
+        db.prepare("UPDATE alerts SET files = ?, works = ?, updated = ? WHERE id = ?").run(
+          json,
+          JSON.stringify(entry.works),
+          now,
+          known.id,
+        );
+        shareAlert(known.id);
+        continue;
+      }
+      const channel = alertChannel();
+      db.exec("BEGIN");
+      const { lastInsertRowid } = db
+        .prepare("INSERT INTO alerts (pair, works, files, updated) VALUES (?, ?, ?, ?)")
+        .run(key, JSON.stringify(entry.works), json, now);
+      db.prepare(
+        "INSERT INTO messages (channel, login, text, alert, at) VALUES (?, '', '', ?, ?)",
+      ).run(channel, lastInsertRowid, now);
+      db.exec("COMMIT");
+      shareAlert(Number(lastInsertRowid));
+    }
+    if (changed) shareMembers(); // 멤버 목록의 직접 충돌 표시
   };
 
   /** 웹에 마지막으로 보낸 멤버 목록. 같은 것을 다시 보내지 않는다. */
@@ -800,6 +999,17 @@ export async function startServer(options: {
     return { channel };
   });
 
+  mount(app, api.setAlertChannel, ({ channel }) => {
+    mustExist(channel);
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('alert_channel', ?)").run(
+      channel,
+    );
+    const { name } = db.prepare("SELECT name FROM channels WHERE id = ?").get(channel) as {
+      name: string;
+    };
+    return { channel: { id: channel, name } };
+  });
+
   const mustExist = (channel: string) => {
     if (!db.prepare("SELECT 1 FROM channels WHERE id = ?").get(channel)) {
       throw new ContractFailure({ code: "not_found", message: `없는 채널이다: ${channel}` });
@@ -879,12 +1089,13 @@ export async function startServer(options: {
         socket.send(encode(serverToWeb, "welcome", { seq }, id));
         if (payload.after !== undefined) {
           // 끊긴 사이에 답이 온 공개 문답도 다시 보낸다. `after`를 받은 뒤에 끊겼으니 그 메시지가 선 뒤에 답이 온 것이면 넉넉히 덮는다.
+          // 끊긴 사이에 고친 알림도 같은 까닭으로 다시 보낸다.
           const missed = db
             .prepare(
               `${MESSAGES} WHERE m.id > ? OR q.settled >= (SELECT at FROM messages WHERE id = ?)
-               ORDER BY m.id`,
+               OR a.updated >= (SELECT at FROM messages WHERE id = ?) ORDER BY m.id`,
             )
-            .all(payload.after, payload.after) as MessageRow[];
+            .all(payload.after, payload.after, payload.after) as MessageRow[];
           for (const row of missed) socket.send(encode(serverToWeb, "message", messageView(row)));
         }
         watchers.set(socket, { hash: hash(payload.session), login });
@@ -949,6 +1160,9 @@ export async function startServer(options: {
         } else if (message.kind === "observation") {
           replaceWorks(runner.login, message.payload.works);
           shareSituation();
+        } else if (message.kind === "conflicts") {
+          reports.set(socket, message.payload.pairs);
+          reconcile();
         } else {
           // 문답의 답이나 실패. 그 문답을 보낸 연결에서 온 것만 받는다.
           const re = message.re ?? "";
@@ -965,6 +1179,7 @@ export async function startServer(options: {
       onClose(_, socket) {
         const runner = runners.get(socket);
         runners.delete(socket);
+        if (reports.delete(socket) && !stopped) reconcile();
         // 그 멤버의 러너가 다 떨어졌으면 오프라인이다. 마지막 관측과 상태 한 줄은 이 시각 기준으로 남는다.
         if (runner && !stopped && ![...runners.values()].some((r) => r.login === runner.login)) {
           db.prepare("INSERT OR REPLACE INTO offline (login, since) VALUES (?, ?)").run(

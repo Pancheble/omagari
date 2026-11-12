@@ -216,13 +216,15 @@ export function Conversation({
           <div className="log" role="log" aria-label={`# ${channel.name}의 메시지`}>
             {view.older && <SkeletonRow />}
             {view.messages.map((message, i) => {
+              // 알림의 줄은 아직 그리지 않는다. 시안을 고른 뒤 따로 그린다(PRD #78 웹 앱).
+              if (message.kind === "alert") return null;
               const previous = view.messages[i - 1];
               const newDay = !previous || dayOf(previous.at) !== dayOf(message.at);
               // 문답은 묶지 않고, 문답 다음의 글은 머리를 다시 단다.
               const grouped =
                 !newDay &&
                 message.kind === "text" &&
-                previous.kind === "text" &&
+                previous?.kind === "text" &&
                 previous.login === message.login &&
                 Date.parse(message.at) - Date.parse(previous.at) < GROUP_MS;
               return (
@@ -392,7 +394,7 @@ function Message({
   grouped,
   state,
 }: {
-  message: ChannelMessage;
+  message: Exclude<ChannelMessage, { kind: "alert" }>;
   grouped: boolean;
   state?: MemberView["agents"][number]["state"];
 }) {

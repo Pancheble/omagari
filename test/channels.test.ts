@@ -63,7 +63,7 @@ test("채널에 쓴 메시지를 다른 멤버가 새로 고침 없이 받는다
   const mine = await world.live(alice);
   const reply = (await call(alice, api.send, { channel: channel.id, text: "payment.ts요" }))
     .message;
-  assert.equal(reply.name, "앨리스");
+  assert.equal(reply.kind === "text" && reply.name, "앨리스");
   await eventually(() => assert.deepEqual(watching.messages(), [message, reply]));
   await eventually(() => assert.deepEqual(mine.messages(), [reply]));
 });
