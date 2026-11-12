@@ -256,11 +256,31 @@ export function Composer({
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: 글이 바뀔 때마다 높이를 다시 잰다
   useLayoutEffect(() => {
+    if (area.current) fitHeight(area.current);
+  }, [value]);
+
+  // 폭이 바뀌어도 다시 잰다. 처음 그릴 때 칸이 좁거나 숨겨져 있었으면 안내 글이 접힌 채 높이가 잡혀 있다.
+  // 높이를 바꾸면 다시 불리니 같은 폭이면 넘어간다. 불린 자리에서 바로 높이를 바꾸면 브라우저가
+  // "ResizeObserver loop" 오류를 내므로 다음 프레임에 잰다.
+  // ponytail: field-sizing: content가 Baseline 널리 쓰임이 되면(Vite 기본 빌드 대상이 받치면) 이 감시와 fitHeight를 CSS 한 줄로 바꾼다.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 열릴 때 한 번만 건다
+  useLayoutEffect(() => {
     const element = area.current;
     if (!element) return;
-    element.style.height = "auto";
-    element.style.height = `${element.scrollHeight}px`;
-  }, [value]);
+    let width = element.clientWidth;
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      if (element.clientWidth === width) return;
+      width = element.clientWidth;
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => fitHeight(element));
+    });
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+    };
+  }, []);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: 열릴 때 한 번만 초점을 둔다
   useEffect(() => {
@@ -304,6 +324,12 @@ export function Composer({
       </button>
     </form>
   );
+}
+
+/** 입력 칸 높이를 글에 맞춘다. 최대 높이는 CSS가 막는다. */
+function fitHeight(element: HTMLTextAreaElement) {
+  element.style.height = "auto";
+  element.style.height = `${element.scrollHeight}px`;
 }
 
 /** 메시지 한 줄. 글은 React가 글자로만 넣는다. 든 HTML이나 스크립트는 실행되지 않고 그대로 보인다. */
