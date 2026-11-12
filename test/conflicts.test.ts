@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { type Alert, api, type ContractFailure, call } from "@omagari/contract";
-import { eventually, startWorld, writer } from "./harness.ts";
+import { eventually, fakeExecutor, said, startWorld, writer } from "./harness.ts";
 
 type World = Awaited<ReturnType<typeof startWorld>>;
 type As = { url: string; session: string };
@@ -252,4 +252,95 @@ test("상대의 내용을 읽을 수 없으면 부딪힐 수 있음으로 알리
     (await call(world.owner, api.channels)).channels.some((c) => c.name === "부딪힘"),
     false,
   );
+});
+
+test("알림에 달린 포스트: 열면 생기고 다시 열면 같고, 글과 DM·@호출이 채널처럼 돌며 그 대화는 포스트의 것이다", async (t) => {
+  const fake = fakeExecutor(() => "답");
+  const world = await startWorld({ observeMs: 50, executor: fake.executor });
+  t.after(world.stop);
+  await base(world, ["src/pay.ts"]);
+  const { as: alice, desk } = await clone(world, "alice", "refund");
+  t.after(desk.remove);
+  await payment(world);
+  await writer(world.repo.folder)("src/pay.ts", text(edit(3, "owner")));
+  await writer(desk.folder)("src/pay.ts", text(edit(3, "alice")));
+  const alert = await theAlert(world.owner, () => {});
+  const room = (await call(world.owner, api.channels)).channels.find((c) => c.name === "부딪힘");
+  assert.ok(room);
+  await call(world.owner, api.send, { channel: room.id, text: "채널의 말" });
+  const web = await world.live(alice);
+  /** 실시간 연결로 마지막에 받은 그 알림 줄의 포스트. */
+  const postOf = () =>
+    web
+      .messages()
+      .flatMap((m) => (m.kind === "alert" && m.id === alert.id ? [m.post] : []))
+      .at(-1);
+
+  // 처음 열면 포스트가 생기고, 알림 줄에 글 수 0의 포스트가 붙어 모두에게 간다. 다시 열어도 같은 포스트다.
+  const opened = await call(world.owner, api.openPost, { alert: alert.id });
+  assert.deepEqual(opened.post, { channel: opened.post.channel, alert: alert.id, count: 0 });
+  assert.equal(opened.message.id, alert.id);
+  assert.deepEqual((await call(alice, api.openPost, { alert: alert.id })).post, opened.post);
+  const post = opened.post.channel;
+  await eventually(() => assert.deepEqual(postOf(), { channel: post, count: 0 }));
+  assert.deepEqual((await call(alice, api.posts)).posts, [opened.post]);
+  // 포스트는 채널 목록에 없고, 알림이 아닌 메시지에는 포스트를 열지 못한다.
+  assert.deepEqual(
+    (await call(alice, api.channels)).channels.map((c) => c.name),
+    ["부딪힘"],
+  );
+  await assert.rejects(call(alice, api.openPost, { alert: alert.id + 1 }), {
+    code: "not_found",
+  } satisfies Partial<ContractFailure>);
+
+  // 포스트에 쓴 글은 다른 멤버에게 실시간으로 가고 지난 대화로 다시 읽힌다. 알림 줄의 글 수가 따라 바뀐다.
+  await call(world.owner, api.send, { channel: post, text: "이 줄은 제가 고칠게요" });
+  await eventually(() =>
+    assert.ok(
+      web.messages().some((m) => m.channel === post && said(m) === "이 줄은 제가 고칠게요"),
+    ),
+  );
+  assert.deepEqual((await call(alice, api.history, { channel: post })).messages.map(said), [
+    "이 줄은 제가 고칠게요",
+  ]);
+  await eventually(() => assert.deepEqual(postOf(), { channel: post, count: 1 }));
+
+  // 같은 채널의 채널 세션과 포스트의 채널 세션은 따로 이어 간다.
+  await world.settled(world.owner, await world.ask(world.owner, room.id, "채널에서 묻기"));
+  const dm = await world.ask(world.owner, post, "포스트에서 묻기");
+  await world.settled(world.owner, dm);
+  await world.settled(world.owner, await world.ask(world.owner, post, "포스트에서 또 묻기"));
+  const [inRoom, inPost, again] = fake.calls;
+  assert.equal(inRoom?.resume, undefined);
+  assert.equal(inPost?.resume, undefined, "포스트는 채널의 세션을 잇지 않는다");
+  assert.equal(again?.resume, "session-2", "포스트의 세션을 잇는다");
+  // 러너에 넘어간 대화는 포스트의 것이고 맨 위에 알림이 있다. 채널의 말은 없다.
+  const given = inPost?.message ?? "";
+  assert.match(given, /<channel_messages channel="부딪힘의 알림 \d+번 포스트">/);
+  assert.match(given, /<alert kind="직접 충돌"[^>]*>\n[^<]*src\/pay\.ts: 3 \/ 3/);
+  assert.match(given, /이 줄은 제가 고칠게요/);
+  assert.doesNotMatch(given, /채널의 말/);
+  assert.ok(given.indexOf("<alert") < given.indexOf("이 줄은 제가 고칠게요"));
+
+  // 포스트의 DM을 포스트에 올리고, `@호출`도 포스트에 선다. 둘 다 글 수에 든다.
+  const shared = await call(world.owner, api.postQa, { qa: dm.id, text: "근거" });
+  assert.equal(shared.message.channel, post);
+  const called = await call(world.owner, api.ask, {
+    agent: "owner",
+    executor: "claude-code",
+    channel: post,
+    message: "모두 보게 묻기",
+    visibility: "public",
+  });
+  assert.equal(called.message?.channel, post);
+  await world.settled(world.owner, called.qa);
+  assert.deepEqual(
+    (await call(alice, api.history, { channel: post })).messages.map((m) => m.kind),
+    ["text", "qa", "qa"],
+  );
+  await eventually(() => assert.deepEqual(postOf(), { channel: post, count: 3 }));
+  const [atRoom] = (await call(alice, api.history, { channel: room.id })).messages.filter(
+    (m) => m.kind === "alert",
+  );
+  assert.deepEqual(atRoom?.kind === "alert" && atRoom.post, { channel: post, count: 3 });
 });
