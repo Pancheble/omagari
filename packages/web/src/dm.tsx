@@ -6,11 +6,12 @@ import {
   EXECUTOR_NAMES,
   type ExecutorId,
   type MemberView,
+  type ModelChoice,
   type ModelPick,
   type Qa,
 } from "@omagari/contract";
-import { ChevronDown } from "lucide-react";
-import { type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
+import { Check, ChevronDown, ChevronRight, Forward } from "lucide-react";
+import { type KeyboardEvent, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Composer, fullTime, SkeletonRow, timeOf } from "./conversation.tsx";
@@ -57,9 +58,7 @@ function useMenu() {
   };
   const onKeyDown = (event: KeyboardEvent) => {
     if (!open) return;
-    const items = [
-      ...(wrap.current?.querySelectorAll<HTMLElement>('[role="menuitemradio"]') ?? []),
-    ];
+    const items = [...(wrap.current?.querySelectorAll<HTMLElement>('[role^="menuitem"]') ?? [])];
     const at = items.indexOf(document.activeElement as HTMLElement);
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
@@ -87,6 +86,7 @@ export function DmPanel({
   channel,
   agents,
   dm,
+  messages = [],
   picks,
   onPick,
   onAsk,
@@ -100,6 +100,8 @@ export function DmPanel({
   /** 내 에이전트 전부. 꺼진 것도 온다. */
   agents: Agent[];
   dm?: Dm;
+  /** 채널에 불러 둔 메시지. 공개 문답의 채널 줄("보기")을 여기서 찾는다. */
+  messages?: ChannelMessage[];
   /** 에이전트마다 기억해 둔 모델과 effort. 고른 값으로 묻는 것은 `onAsk`를 부른 쪽이 한다. */
   picks: Picks;
   onPick: (executor: ExecutorId, pick: ModelPick) => void;
@@ -150,6 +152,31 @@ export function DmPanel({
     connected.some((agent) => agent.executor === qa.executor)
       ? () => void ask(qa.executor, qa.question).catch(() => {})
       : undefined;
+  const lines = messages.filter((message) => message.kind === "qa");
+
+  // 열 때와 답이 올 때: 마지막 문답이 목록보다 길면 그 질문의 머리를 목록 위에 두고(답의 끝이 아니라 질문부터 읽게), 짧으면 맨 아래에 붙인다.
+  const last = qas.at(-1);
+  const settled = last?.answer.state === "pending" ? undefined : last?.id;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 마지막 문답의 답이 올 때마다 다시 맞춘다
+  useLayoutEffect(() => {
+    const box = scroller.current;
+    const item = box?.querySelector(".dm-qa:last-child");
+    if (!box || !item) return;
+    if (item.clientHeight <= box.clientHeight)
+      box.scrollTo({ top: 0 }); // 거꾸로 쌓는 목록이라 0이 맨 아래다
+    else box.scrollBy({ top: item.getBoundingClientRect().top - box.getBoundingClientRect().top });
+  }, [settled]);
+
+  /** 공개 문답의 "보기": 채널에서 그 문답 줄로 스크롤하고 잠깐 칠한다. 시트는 대화를 덮으니 닫는다. */
+  const show = (qa: Qa) => {
+    const row = document.querySelector<HTMLElement>(`[data-qa="${qa.id}"]`);
+    if (!row) return;
+    if (sheet) onClose();
+    row.scrollIntoView({ block: "center" });
+    row.classList.remove("highlight");
+    void row.offsetWidth; // 다시 누르면 처음부터 칠한다
+    row.classList.add("highlight");
+  };
 
   return (
     <RightPanel
@@ -176,9 +203,17 @@ export function DmPanel({
         </div>
       ) : qas.length > 0 ? (
         <div className="scroller" ref={scroller}>
-          <div className="qa-list" role="log" aria-label={`# ${channel.name}의 내 문답`}>
+          <div className="dm-list" role="log" aria-label={`# ${channel.name}의 내 문답`}>
             {qas.map((qa) => (
-              <QaCard key={qa.id} qa={qa} onRetry={retry(qa)} onPost={() => onPost(qa)} />
+              <DmQa
+                key={qa.id}
+                qa={qa}
+                channel={channel.name}
+                line={lines.find((line) => line.qa.id === qa.id)}
+                onRetry={retry(qa)}
+                onPost={() => onPost(qa)}
+                onShow={() => show(qa)}
+              />
             ))}
           </div>
         </div>
@@ -317,13 +352,16 @@ function Chips({
 }) {
   const model = choices.models.find((m) => m.id === pick.model);
   const efforts = (model ?? choices).efforts;
+  const { latest, older } = splitModels(choices.models);
+  const row = (m: ModelChoice) => ({ value: m.id, label: m.name });
   return (
     <>
       {choices.models.length > 0 && (
         <ChoiceChip
           name="모델"
           face={model?.name ?? "기본 모델"}
-          options={choices.models.map((m) => ({ value: m.id, label: m.name }))}
+          options={latest.map(row)}
+          older={older.map(row)}
           value={pick.model}
           // effort는 그대로 둔다. 새 모델에 없는 값이면 "기본"으로 보이고, 있는 모델로 돌아오면 다시 쓰인다.
           onPick={(id) => onPick({ ...pick, model: id })}
@@ -342,24 +380,84 @@ function Chips({
   );
 }
 
-/** 칩 하나와 그 위에 열리는 메뉴. 맨 위 줄은 "기본"(실행기 자기 설정)이다. */
+/**
+ * 실행기는 지난 판까지 모두 알린다. 이름 끝의 판 번호를 뗀 같은 이름("Opus 5.5"와 "Opus 4.8") 가운데 먼저 알린 것만 위에 두고
+ * 나머지는 "이전 모델"로 접는다. 판 번호가 없는 이름은 모두 위에 둔다.
+ */
+function splitModels(models: ModelChoice[]) {
+  const seen = new Set<string>();
+  const latest: ModelChoice[] = [];
+  const older: ModelChoice[] = [];
+  for (const model of models) {
+    const family = model.name.replace(/[\d.]+$/, "");
+    if (family !== model.name && seen.has(family)) older.push(model);
+    else latest.push(model);
+    seen.add(family);
+  }
+  return { latest, older };
+}
+
+/**
+ * 칩 메뉴를 입력 칸 위 4px에 둔다(DESIGN.md "메뉴 자리"). 왼쪽은 누른 칩에 맞추되 입력 칸(칸 안쪽 8px) 오른쪽을 넘지 않게 당기고,
+ * 높이는 칸 몸통의 위 끝까지 남은 만큼이다. 넘치면 메뉴 안에서 스크롤한다.
+ */
+function place(menu: HTMLElement | null, chip: HTMLElement | null) {
+  const form = menu?.offsetParent; // 입력 칸(.composer)
+  const body = form?.closest(".panel-body");
+  if (!menu || !chip || !(form instanceof HTMLElement) || !body) return;
+  const box = form.getBoundingClientRect();
+  menu.style.maxHeight = `${box.top - 4 - body.getBoundingClientRect().top}px`;
+  const left = Math.min(chip.getBoundingClientRect().left, box.right - menu.offsetWidth);
+  menu.style.left = `${Math.max(left, box.left) - box.left - form.clientLeft}px`;
+}
+
+/** 메뉴의 줄. 값이 없는 줄은 "기본"이다. */
+type Row = { value?: string; label: string };
+
+/**
+ * 칩 하나와 입력 칸 위에 열리는 메뉴. 맨 위 줄은 "기본"(실행기 자기 설정)이다.
+ * `older`가 있으면 맨 아래 "이전 모델 N개" 줄로 접어 두고 누르면 같은 메뉴 안에서 펼친다. 고른 것이 그 안에 있으면 펼친 채로 연다.
+ */
 function ChoiceChip({
   name,
   face,
   options,
+  older = [],
   value,
   onPick,
 }: {
   name: string;
   face: string;
-  options: { value: string; label: string }[];
+  options: Row[];
+  older?: Row[];
   /** 고른 것. 없으면 "기본"이다. */
   value?: string;
   onPick: (value: string | undefined) => void;
 }) {
   const { open, setOpen, close, wrap, button, onKeyDown } = useMenu();
   const menu = useId();
-  const rows = [{ value: undefined, label: "기본" }, ...options];
+  const list = useRef<HTMLDivElement>(null);
+  const [unfolded, setUnfolded] = useState(false);
+  const rows: Row[] = [{ label: "기본" }, ...options];
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 열 때와 펼쳐 폭이 바뀔 때 다시 둔다
+  useLayoutEffect(() => place(list.current, button.current), [open, unfolded]);
+  const item = (row: Row) => (
+    <button
+      key={row.value ?? ""}
+      type="button"
+      role="menuitemradio"
+      aria-checked={row.value === value}
+      className="menu-item"
+      tabIndex={-1}
+      onClick={() => {
+        onPick(row.value);
+        close();
+      }}
+    >
+      <span>{row.label}</span>
+      {row.value === undefined && <span className="menu-note">설정값</span>}
+    </button>
+  );
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: 안에 든 메뉴와 버튼의 키를 한곳에서 받는다
     <div className="chip-picker" ref={wrap} onKeyDown={onKeyDown}>
@@ -370,31 +468,32 @@ function ChoiceChip({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menu : undefined}
-        aria-label={`${name}: ${rows.find((row) => row.value === value)?.label ?? "기본"}`}
-        onClick={() => setOpen(!open)}
+        aria-label={`${name}: ${[...rows, ...older].find((row) => row.value === value)?.label ?? "기본"}`}
+        onClick={() => {
+          if (!open) setUnfolded(older.some((row) => row.value === value));
+          setOpen(!open);
+        }}
       >
         {face}
         <ChevronDown size={12} aria-hidden />
       </button>
       {open && (
-        <div className="menu chip-menu" id={menu} role="menu" aria-label={name}>
-          {rows.map((row) => (
+        <div ref={list} className="menu chip-menu" id={menu} role="menu" aria-label={name}>
+          {rows.map(item)}
+          {older.length > 0 && (
             <button
-              key={row.value ?? ""}
               type="button"
-              role="menuitemradio"
-              aria-checked={row.value === value}
+              role="menuitem"
+              aria-expanded={unfolded}
               className="menu-item"
               tabIndex={-1}
-              onClick={() => {
-                onPick(row.value);
-                close();
-              }}
+              onClick={() => setUnfolded(!unfolded)}
             >
-              <span>{row.label}</span>
-              {row.value === undefined && <span className="menu-note">설정값</span>}
+              <span>이전 모델 {older.length}개</span>
+              <ChevronRight size={14} className="older-chevron" aria-hidden />
             </button>
-          ))}
+          )}
+          {unfolded && older.map(item)}
         </div>
       )}
     </div>
@@ -415,8 +514,6 @@ function subject(name: string) {
   if (code < 0 || code > 11171) return name;
   return `${name}${code % 28 ? "이" : "가"}`;
 }
-
-const VISIBILITY = { private: "비공개", public: "공개" } as const;
 
 /**
  * 채널에 올라온 문답(DESIGN.md "문답"): 접힌 한 줄(app-qa-line)이 기본이고, 누르면 펼친 카드(app-qa-card)가 된다.
@@ -439,7 +536,7 @@ export function QaLine({ message, state }: { message: QaMessage; state: Agent["s
   const agent = { executor: qa.executor, state };
   const owner = `${message.name}의 ${EXECUTOR_NAMES[qa.executor]}`;
   return (
-    <div className="qa-row" ref={row}>
+    <div className="qa-row" ref={row} data-qa={qa.id}>
       {open ? (
         <QaCard qa={qa} agent={agent} posted={message} onFold={() => toggle(false)} />
       ) : (
@@ -462,27 +559,81 @@ export function QaLine({ message, state }: { message: QaMessage; state: Agent["s
 }
 
 /**
- * 문답 하나(app-qa-card): 질문, 답하는 중이나 답(마크다운)과 본 브랜치·커밋, 또는 끊긴 답.
- * DM에서는 공개 범위 배지와 시각을 머리에 두고, 비공개이고 답이 왔으면 아래에 "채널에 올리기"를 둔다.
- * 채널에 올라온 것(`posted`)은 머리에 누구의 에이전트인지와 누가 올렸는지, 아래에 "본 코드"와 "접기"를 둔다.
- * "다시 묻기"는 DM에서 그 에이전트가 연결되어 있을 때만 있다.
+ * 채널에 펼친 문답(app-qa-card): 머리에 누구의 에이전트인지와 누가 올렸는지, 질문, 답, 아래에 "본 코드"와 "접기".
+ * 채널의 카드에는 "다시 묻기"가 없다.
  */
 function QaCard({
   qa,
   agent,
   posted,
-  onRetry,
-  onPost,
   onFold,
 }: {
   qa: Qa;
-  agent?: Pick<Agent, "executor" | "state">;
-  posted?: QaMessage;
-  onRetry?: () => void;
-  onPost?: () => Promise<void>;
-  onFold?: () => void;
+  agent: Pick<Agent, "executor" | "state">;
+  posted: QaMessage;
+  onFold: () => void;
 }) {
-  const name = EXECUTOR_NAMES[qa.executor];
+  const { answer } = qa;
+  return (
+    <article className="qa-card">
+      <div className="qa-head posted">
+        <Mark agent={agent} aria-hidden />
+        <p className="qa-owner">
+          <strong className="qa-owner-name">
+            {posted.name}의 {EXECUTOR_NAMES[qa.executor]}
+          </strong>
+          <span className="qa-owner-meta">
+            {subject(posted.name)} 올림 ·{" "}
+            <time dateTime={posted.at} title={fullTime(posted.at)}>
+              {timeOf(posted.at)}
+            </time>
+          </span>
+        </p>
+        <span className="badge outline">공개</span>
+      </div>
+      <p className="qa-question">{qa.question}</p>
+      <Reply qa={qa} />
+      <div className="qa-source posted">
+        {answer.state === "answered" && (
+          <>
+            <span className="qa-source-label">본 코드</span>
+            <Source answer={answer} />
+          </>
+        )}
+        <button
+          type="button"
+          className="button quiet qa-action"
+          aria-expanded={true}
+          onClick={onFold}
+        >
+          접기
+        </button>
+      </div>
+    </article>
+  );
+}
+
+/**
+ * DM의 문답 하나(DESIGN.md "DM 칸"): 오른쪽 말풍선의 질문(app-dm-question)과 칸 바탕에 바로 놓은 답(app-dm-answer).
+ * 답 아래에 본 브랜치·커밋과 배지, 그 아래 동작 줄에 비공개면 "채널에 올리기"(app-post-action), 공개면 어디에 올랐는지와 "보기".
+ * "다시 묻기"는 그 에이전트가 연결되어 있을 때만 있다.
+ */
+function DmQa({
+  qa,
+  channel,
+  line,
+  onRetry,
+  onPost,
+  onShow,
+}: {
+  qa: Qa;
+  channel: string;
+  /** 채널에 불러 둔 그 문답의 줄. 없으면 "보기"가 없다. */
+  line?: QaMessage;
+  onRetry?: () => void;
+  onPost: () => Promise<void>;
+  onShow: () => void;
+}) {
   const { answer } = qa;
   const [posting, setPosting] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -490,61 +641,29 @@ function QaCard({
     setPosting(true);
     setFailed(false);
     try {
-      await onPost?.();
+      await onPost();
     } catch {
       setFailed(true);
     } finally {
       setPosting(false);
     }
   };
-  const canPost = onPost && qa.visibility === "private" && answer.state === "answered";
-  const badge = (
-    <span className={qa.visibility === "public" ? "badge outline" : "badge chip"}>
-      {VISIBILITY[qa.visibility]}
-    </span>
-  );
+  // `@호출`은 물을 때 채널에 서서 줄의 시각이 물은 시각이다. 올린 것은 답이 온 뒤라 늦다.
+  // ponytail: 채널에 불러 두지 않은 지난 `@호출`은 "올렸어요"로 보인다. 계약이 가르는 값을 주면 그것을 쓴다.
+  const called = answer.state === "pending" || line?.at === qa.at;
   return (
-    <article className="qa-card">
-      {posted ? (
-        <div className="qa-head posted">
-          <Mark agent={agent ?? { executor: qa.executor, state: "offline" }} aria-hidden />
-          <p className="qa-owner">
-            <strong className="qa-owner-name">
-              {posted.name}의 {name}
-            </strong>
-            <span className="qa-owner-meta">
-              {subject(posted.name)} 올림 ·{" "}
-              <time dateTime={posted.at} title={fullTime(posted.at)}>
-                {timeOf(posted.at)}
-              </time>
-            </span>
-          </p>
-          {badge}
-        </div>
-      ) : (
-        <p className="qa-head">
-          {badge}
-          <time dateTime={qa.at} title={fullTime(qa.at)}>
-            {timeOf(qa.at)}
-          </time>
-        </p>
-      )}
-      <p className="qa-question">{qa.question}</p>
-      {answer.state === "pending" ? (
-        <p className="qa-pending" role="status">
-          <Mark agent={{ executor: qa.executor, state: "answering" }} aria-hidden />
-          {name}가 답하는 중…
-        </p>
-      ) : answer.state === "answered" ? (
-        <Answer text={answer.text} />
-      ) : (
-        <div className={answer.error.code === "turn_timeout" ? "banner warning" : "banner error"}>
-          {FAILED[answer.error.code] ?? `${name}가 답하지 못했어요`}
-          {onRetry && (
-            <button type="button" className="banner-action" onClick={onRetry}>
-              다시 묻기
-            </button>
-          )}
+    <article className="dm-qa">
+      <div className="dm-ask">
+        <p className="dm-question">{qa.question}</p>
+        <time className="dm-time" dateTime={qa.at} title={fullTime(qa.at)}>
+          {timeOf(qa.at)}
+        </time>
+      </div>
+      <Reply qa={qa} onRetry={onRetry} />
+      {answer.state === "answered" && (
+        <div className="qa-source">
+          <span className="sr-only">본 코드</span>
+          <Source answer={answer} />
         </div>
       )}
       {failed && (
@@ -555,45 +674,76 @@ function QaCard({
           </button>
         </div>
       )}
-      {(answer.state === "answered" || posted) && (
-        <div className={posted ? "qa-source posted" : "qa-source"}>
-          {answer.state === "answered" && (
-            <>
-              <span className={posted ? "qa-source-label" : "sr-only"}>본 코드</span>
-              <span className="source-ref" title={answer.source.commit}>
-                {answer.source.branch ?? "브랜치 아님"} · {answer.source.commit.slice(0, 7)}
-              </span>
-              {answer.source.dirty && <span className="badge warning">작업 중 변경 포함</span>}
-              {answer.model && (
-                <span className="badge outline" title="답한 모델">
-                  {answer.effort ? `${answer.model} · ${answer.effort}` : answer.model}
-                </span>
-              )}
-            </>
-          )}
-          {canPost && (
-            <button
-              type="button"
-              className="button outline qa-action"
-              disabled={posting}
-              onClick={() => void post()}
-            >
-              {posting ? "올리는 중…" : "채널에 올리기"}
-            </button>
-          )}
-          {onFold && (
-            <button
-              type="button"
-              className="button quiet qa-action"
-              aria-expanded={true}
-              onClick={onFold}
-            >
-              접기
+      {qa.visibility === "public" ? (
+        <div className="dm-actions">
+          <p className="dm-shared">
+            <Check size={16} aria-hidden />
+            {called ? `# ${channel}에서 @호출로 물었어요` : `# ${channel}에 올렸어요`}
+          </p>
+          {line && (
+            <button type="button" className="dm-show" onClick={onShow}>
+              보기
             </button>
           )}
         </div>
+      ) : (
+        answer.state === "answered" && (
+          <div className="dm-actions">
+            <button
+              type="button"
+              className="post-action"
+              disabled={posting}
+              onClick={() => void post()}
+            >
+              <Forward size={16} aria-hidden />
+              {posting ? "올리는 중…" : "채널에 올리기"}
+            </button>
+          </div>
+        )
       )}
     </article>
+  );
+}
+
+/** 답하는 중, 답(마크다운), 또는 끊긴 답의 알림. `onRetry`가 있으면 알림에 "다시 묻기"를 둔다. */
+function Reply({ qa, onRetry }: { qa: Qa; onRetry?: () => void }) {
+  const name = EXECUTOR_NAMES[qa.executor];
+  const { answer } = qa;
+  if (answer.state === "pending") {
+    return (
+      <p className="qa-pending" role="status">
+        <Mark agent={{ executor: qa.executor, state: "answering" }} aria-hidden />
+        {name}가 답하는 중…
+      </p>
+    );
+  }
+  if (answer.state === "answered") return <Answer text={answer.text} />;
+  return (
+    <div className={answer.error.code === "turn_timeout" ? "banner warning" : "banner error"}>
+      {FAILED[answer.error.code] ?? `${name}가 답하지 못했어요`}
+      {onRetry && (
+        <button type="button" className="banner-action" onClick={onRetry}>
+          다시 묻기
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** 답이 본 브랜치·커밋(app-source-ref), 작업 중 변경이 있으면 그 배지, 답한 모델 배지. */
+function Source({ answer }: { answer: Extract<Qa["answer"], { state: "answered" }> }) {
+  return (
+    <>
+      <span className="source-ref" title={answer.source.commit}>
+        {answer.source.branch ?? "브랜치 아님"} · {answer.source.commit.slice(0, 7)}
+      </span>
+      {answer.source.dirty && <span className="badge warning">작업 중 변경 포함</span>}
+      {answer.model && (
+        <span className="badge outline" title="답한 모델">
+          {answer.effort ? `${answer.model} · ${answer.effort}` : answer.model}
+        </span>
+      )}
+    </>
   );
 }
 

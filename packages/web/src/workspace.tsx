@@ -537,6 +537,7 @@ export function Workspace({
           channel={current}
           agents={members?.find((member) => member.login === me.login)?.agents ?? []}
           dm={dms[current.id]}
+          messages={views[current.id]?.messages}
           picks={picks}
           onPick={(executor, pick) => {
             const next = { ...picks, [executor]: pick };

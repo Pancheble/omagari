@@ -1356,10 +1356,6 @@ svg.lucide {
   margin-left: -8px;
 }
 
-.chip-picker {
-  position: relative;
-}
-
 /* app-composer-chip */
 .composer-chip {
   display: inline-flex;
@@ -1386,14 +1382,23 @@ svg.lucide {
   background: var(--selected);
 }
 
-/* 칩 바로 위에 열리는 메뉴. 모델이 많으면 메뉴 안에서 스크롤한다. */
+/* 칩 메뉴는 칩이 아니라 입력 칸 위(선 바깥 4px)에 열어 쓰던 글을 덮지 않는다. 왼쪽과 높이는 dm.tsx의 place()가 잰다. */
 .chip-menu {
   right: auto;
-  bottom: calc(100% + 4px);
+  bottom: calc(100% + 5px);
   width: max-content;
   min-width: 200px;
-  max-height: min(420px, 60vh);
   overflow-y: auto;
+}
+
+/* "이전 모델 N개": 접히면 오른쪽, 펼치면 아래를 가리킨다. */
+.older-chevron {
+  color: var(--text-secondary);
+  transition: transform 150ms ease-out;
+}
+
+[aria-expanded="true"] > .older-chevron {
+  transform: rotate(90deg);
 }
 
 .chip-menu .menu-item {
@@ -1773,10 +1778,6 @@ button.member-row:active {
   color: var(--text-secondary);
 }
 
-.badge.chip {
-  background: var(--chip);
-}
-
 .badge.warning {
   background: var(--warning-bg);
   color: var(--warning);
@@ -1882,14 +1883,121 @@ button.dm-head:active {
   color: var(--primary);
 }
 
-/* DM의 문답 목록: 메시지처럼 거꾸로 쌓아 맨 아래가 먼저 보인다. */
-.qa-list {
-  display: grid;
-  gap: 10px;
-  padding: 4px 0 8px;
+/* DM의 문답 목록(DESIGN.md "DM 칸"): 메시지처럼 거꾸로 쌓아 맨 아래가 먼저 보인다. 문답은 카드가 아니라 대화 모양이다. */
+.dm-list {
+  --mark-ring: var(--parchment);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 0 4px 12px;
 }
 
-/* app-qa-card의 DM 모습: 비공개 배지와 시각, 질문, 답이나 답하는 중, 본 코드 */
+/* 답의 코드 바탕은 칸의 파치먼트와 겹치지 않게 흰색이다. */
+.dm-qa {
+  --code-bg: var(--canvas);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* 질문(app-dm-question)은 오른쪽 말풍선, 물은 시각은 그 왼쪽 아래. */
+.dm-ask {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.dm-question {
+  max-width: 80%;
+  padding: 8px 12px;
+  border-radius: var(--rounded-lg);
+  background: var(--canvas);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.dm-time {
+  order: -1;
+  padding-bottom: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.33;
+  white-space: nowrap;
+}
+
+.dm-qa .banner {
+  flex-wrap: wrap;
+}
+
+/* 동작 줄: 비공개면 "채널에 올리기"(app-post-action), 공개면 어디에 올랐는지와 "보기". */
+.dm-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+}
+
+.post-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  margin-left: -8px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--rounded-sm);
+  background: transparent;
+  color: var(--primary);
+  font-size: 13px;
+  line-height: 1.38;
+  cursor: pointer;
+  transition:
+    transform 120ms ease-out,
+    background-color 120ms ease-out;
+}
+
+.post-action:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.post-action:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+.post-action:disabled {
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+.dm-shared {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.33;
+}
+
+.dm-show {
+  align-self: stretch;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--primary);
+  font-size: 12px;
+  line-height: 1.33;
+  cursor: pointer;
+}
+
+.dm-show:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* 채널에 펼친 문답(app-qa-card): 누가 올렸는지, 질문, 답, 본 코드 */
 .qa-card {
   --mark-ring: var(--canvas);
   display: grid;
@@ -1967,7 +2075,7 @@ button.dm-head:active {
   line-height: 1.33;
 }
 
-/* 아래 구분선 위에 "본 코드", 브랜치·커밋, 오른쪽에 "접기"(DM에서는 "채널에 올리기") */
+/* 아래 구분선 위에 "본 코드", 브랜치·커밋, 오른쪽에 "접기" */
 .qa-source.posted {
   padding-top: 10px;
   border-top: 1px solid var(--divider);
@@ -1986,6 +2094,24 @@ button.dm-head:active {
 /* 채널에 올라온 문답(app-qa-line): 메시지 본문 위치(안쪽 20px + 아바타 36px + 12px)에 맞춰 들인다. */
 .qa-row {
   padding: 4px 20px 4px 68px;
+  border-radius: var(--rounded-md);
+}
+
+/* DM의 "보기"로 간 줄(app-message-highlight): 칠했다가 2초 동안 걷어 낸다. 움직임 줄이기 설정이면 2초 뒤에 바로 걷는다. */
+.highlight {
+  animation: highlight 2s step-end;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .highlight {
+    animation-timing-function: ease-in;
+  }
+}
+
+@keyframes highlight {
+  from {
+    background: var(--selected);
+  }
 }
 
 .qa-row > * {
@@ -2167,7 +2293,7 @@ button.dm-head:active {
 .answer code {
   padding: 1px 5px;
   border-radius: var(--rounded-xs);
-  background: var(--parchment);
+  background: var(--code-bg, var(--parchment));
   font-family: var(--mono);
   font-size: 13px;
 }
@@ -2177,7 +2303,7 @@ button.dm-head:active {
   padding: 12px 14px;
   overflow-x: auto;
   border-radius: var(--rounded-md);
-  background: var(--parchment);
+  background: var(--code-bg, var(--parchment));
   line-height: 1.55;
 }
 
@@ -2376,6 +2502,11 @@ button.dm-head:active {
 
   .composer-chip {
     height: 40px;
+  }
+
+  .dm-actions,
+  .post-action {
+    min-height: 44px;
   }
 
   .message,
