@@ -14,6 +14,7 @@ import {
   EXECUTOR_NAMES,
   ShareLevel,
 } from "@omagari/contract";
+import { checkoutVersion } from "@omagari/contract/version";
 import {
   callRunner,
   observationNotice,
@@ -22,11 +23,10 @@ import {
   runnerPaths,
   startRunner,
 } from "@omagari/runner";
-import manifest from "../package.json" with { type: "json" };
 import { install } from "./install.ts";
 
 const USAGE = `사용법:
-  omagari --version
+  omagari --version             이 체크아웃의 버전(git 태그)과 계약 버전을 본다
   omagari runner [--share <수준>]
                                 레포 폴더에서 러너를 켠다. 처음이면 GitHub 기기 인증으로 로그인한다
                                 공유 수준은 full(기본), declared(경로만), intent(상태 한 줄만). 고른 것은 이 레포에 남는다
@@ -52,7 +52,7 @@ const sessionsFile = join(
 const [command, sub, ...rest] = process.argv.slice(2);
 try {
   if (command === "--version") {
-    console.log(`omagari ${manifest.version} (contract ${CONTRACT_VERSION})`);
+    console.log(`omagari ${checkoutVersion()} (contract ${CONTRACT_VERSION})`);
   } else if (command === "runner" && (sub === undefined || sub.startsWith("--"))) {
     const { values } = parseArgs({
       args: process.argv.slice(3),

@@ -16,6 +16,7 @@ import {
   EXECUTOR_NAMES,
   type ExecutorId,
   encode,
+  encodeVersionMismatch,
   HISTORY_PAGE,
   LIVE_SOCKET,
   MAX_FRAME_BYTES,
@@ -36,6 +37,7 @@ import {
   type WorkView,
   webToServer,
 } from "@omagari/contract";
+import { checkoutVersion } from "@omagari/contract/version";
 import type { WSContext } from "hono/ws";
 import { type WebSocket, WebSocketServer } from "ws";
 import type { GitHub } from "./github.ts";
@@ -137,6 +139,7 @@ export async function startServer(options: {
   presenceDurations?: Partial<Record<PresenceDuration, number>>;
 }) {
   const { repo, github } = options;
+  const version = checkoutVersion();
   const hostname = options.hostname ?? "127.0.0.1";
   const db = new DatabaseSync(options.database ?? ":memory:");
   // 세션은 해시로만 둔다. GitHub 토큰은 서버 밖으로 나가지 않는다.
@@ -869,8 +872,11 @@ export async function startServer(options: {
       onMessage({ data }, socket) {
         const decoded = decode(runnerToServer, data);
         if ("error" in decoded) {
-          socket.send(encode(serverToRunner, "error", decoded.error, decoded.re));
-          if (decoded.error.code === "version_mismatch") socket.close(1008, "version_mismatch");
+          // 계약 버전이 다른 러너에는 그 러너도 읽는 꼴로 이 서버의 버전을 실어 거절한다. 러너가 할 일을 알린다.
+          if (decoded.error.code === "version_mismatch") {
+            socket.send(encodeVersionMismatch(decoded.error.message, version, decoded.re));
+            socket.close(1008, "version_mismatch");
+          } else socket.send(encode(serverToRunner, "error", decoded.error, decoded.re));
           return;
         }
         const { message } = decoded;
@@ -1050,6 +1056,8 @@ export async function startServer(options: {
 
   return {
     url: `http://${hostname}:${(server.address() as AddressInfo).port}`,
+    /** 이 서버의 버전(`git describe --tags`). 계약 버전이 다른 러너를 거절할 때 싣는다. */
+    version,
     async stop() {
       stopped = true;
       clearInterval(heartbeat);
