@@ -10,11 +10,11 @@ import {
   type ModelPick,
   type Qa,
 } from "@omagari/contract";
-import { Check, ChevronDown, ChevronRight, Forward } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, CornerDownLeft, Forward } from "lucide-react";
 import { type KeyboardEvent, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Composer, fullTime, SkeletonRow, timeOf } from "./conversation.tsx";
+import { Composer, flash, fullTime, SkeletonRow, timeOf } from "./conversation.tsx";
 import { Mark } from "./members.tsx";
 import { RightPanel } from "./workspace.tsx";
 
@@ -88,9 +88,10 @@ export function DmPanel({
   dm,
   messages = [],
   picks,
+  attached,
   onPick,
   onAsk,
-  onPost,
+  onAttach,
   onReload,
   onClose,
 }: {
@@ -104,10 +105,12 @@ export function DmPanel({
   messages?: ChannelMessage[];
   /** 에이전트마다 기억해 둔 모델과 effort. 고른 값으로 묻는 것은 `onAsk`를 부른 쪽이 한다. */
   picks: Picks;
+  /** 채널 입력 칸에 붙어 있는 문답의 번호. */
+  attached?: number;
   onPick: (executor: ExecutorId, pick: ModelPick) => void;
   onAsk: (executor: ExecutorId, question: string) => Promise<void>;
-  /** 문답을 채널에 올린다. 질문과 답이 함께 올라간다. */
-  onPost: (qa: Qa) => Promise<void>;
+  /** 문답을 채널 입력 칸에 붙인다. 보내면 질문과 답이 함께 올라간다. */
+  onAttach: (qa: Qa) => void;
   onReload: () => void;
   onClose: () => void;
 }) {
@@ -167,15 +170,10 @@ export function DmPanel({
     else box.scrollBy({ top: item.getBoundingClientRect().top - box.getBoundingClientRect().top });
   }, [settled]);
 
-  /** 공개 문답의 "보기": 채널에서 그 문답 줄로 스크롤하고 잠깐 칠한다. 시트는 대화를 덮으니 닫는다. */
+  /** 공개 문답의 "보기": 채널에서 그 문답의 메시지로 스크롤하고 잠깐 칠한다. 시트는 대화를 덮으니 닫는다. */
   const show = (qa: Qa) => {
-    const row = document.querySelector<HTMLElement>(`[data-qa="${qa.id}"]`);
-    if (!row) return;
     if (sheet) onClose();
-    row.scrollIntoView({ block: "center" });
-    row.classList.remove("highlight");
-    void row.offsetWidth; // 다시 누르면 처음부터 칠한다
-    row.classList.add("highlight");
+    flash(qa.id);
   };
 
   return (
@@ -210,8 +208,9 @@ export function DmPanel({
                 qa={qa}
                 channel={channel.name}
                 line={lines.find((line) => line.qa.id === qa.id)}
+                attached={qa.id === attached}
                 onRetry={retry(qa)}
-                onPost={() => onPost(qa)}
+                onAttach={() => onAttach(qa)}
                 onShow={() => show(qa)}
               />
             ))}
@@ -517,7 +516,7 @@ function subject(name: string) {
 
 /**
  * 채널에 올라온 문답(DESIGN.md "문답"): 접힌 한 줄(app-qa-line)이 기본이고, 누르면 펼친 카드(app-qa-card)가 된다.
- * 사람의 대화를 덮지 않게 메시지 본문 위치에 맞춰 들인다. `state`는 그 에이전트의 지금 상태(러너가 붙어 있는지)다.
+ * 올린 사람의 메시지 본문 안에 둔다. `state`는 그 에이전트의 지금 상태(러너가 붙어 있는지)다.
  */
 export function QaLine({ message, state }: { message: QaMessage; state: Agent["state"] }) {
   const [open, setOpen] = useState(false);
@@ -536,7 +535,7 @@ export function QaLine({ message, state }: { message: QaMessage; state: Agent["s
   const agent = { executor: qa.executor, state };
   const owner = `${message.name}의 ${EXECUTOR_NAMES[qa.executor]}`;
   return (
-    <div className="qa-row" ref={row} data-qa={qa.id}>
+    <div className="qa-row" ref={row}>
       {open ? (
         <QaCard qa={qa} agent={agent} posted={message} onFold={() => toggle(false)} />
       ) : (
@@ -615,39 +614,29 @@ function QaCard({
 
 /**
  * DM의 문답 하나(DESIGN.md "DM 칸"): 오른쪽 말풍선의 질문(app-dm-question)과 칸 바탕에 바로 놓은 답(app-dm-answer).
- * 답 아래에 본 브랜치·커밋과 배지, 그 아래 동작 줄에 비공개면 "채널에 올리기"(app-post-action), 공개면 어디에 올랐는지와 "보기".
- * "다시 묻기"는 그 에이전트가 연결되어 있을 때만 있다.
+ * 답 아래에 본 브랜치·커밋과 배지, 그 아래 동작 줄에 비공개면 "채널에 올리기"(app-post-action, 누르면 채널 입력 칸에 붙는다)나
+ * 붙어 있는 동안의 "채널 입력 칸에 넣었어요", 공개면 어디에 올랐는지와 "보기". "다시 묻기"는 그 에이전트가 연결되어 있을 때만 있다.
  */
 function DmQa({
   qa,
   channel,
   line,
+  attached,
   onRetry,
-  onPost,
+  onAttach,
   onShow,
 }: {
   qa: Qa;
   channel: string;
   /** 채널에 불러 둔 그 문답의 줄. 없으면 "보기"가 없다. */
   line?: QaMessage;
+  /** 채널 입력 칸에 붙어 있다. */
+  attached: boolean;
   onRetry?: () => void;
-  onPost: () => Promise<void>;
+  onAttach: () => void;
   onShow: () => void;
 }) {
   const { answer } = qa;
-  const [posting, setPosting] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const post = async () => {
-    setPosting(true);
-    setFailed(false);
-    try {
-      await onPost();
-    } catch {
-      setFailed(true);
-    } finally {
-      setPosting(false);
-    }
-  };
   // `@호출`은 물을 때 채널에 서서 줄의 시각이 물은 시각이다. 올린 것은 답이 온 뒤라 늦다.
   // ponytail: 채널에 불러 두지 않은 지난 `@호출`은 "올렸어요"로 보인다. 계약이 가르는 값을 주면 그것을 쓴다.
   const called = answer.state === "pending" || line?.at === qa.at;
@@ -666,14 +655,6 @@ function DmQa({
           <Source answer={answer} />
         </div>
       )}
-      {failed && (
-        <div className="banner error" role="alert">
-          채널에 올리지 못했어요
-          <button type="button" className="banner-action" onClick={() => void post()}>
-            다시 시도
-          </button>
-        </div>
-      )}
       {qa.visibility === "public" ? (
         <div className="dm-actions">
           <p className="dm-shared">
@@ -689,15 +670,17 @@ function DmQa({
       ) : (
         answer.state === "answered" && (
           <div className="dm-actions">
-            <button
-              type="button"
-              className="post-action"
-              disabled={posting}
-              onClick={() => void post()}
-            >
-              <Forward size={16} aria-hidden />
-              {posting ? "올리는 중…" : "채널에 올리기"}
-            </button>
+            {attached ? (
+              <p className="dm-shared">
+                <CornerDownLeft size={16} aria-hidden />
+                채널 입력 칸에 넣었어요
+              </p>
+            ) : (
+              <button type="button" className="post-action" onClick={onAttach}>
+                <Forward size={16} aria-hidden />
+                채널에 올리기
+              </button>
+            )}
           </div>
         )
       )}

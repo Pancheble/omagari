@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 11;
+export const CONTRACT_VERSION = 12;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -233,6 +233,13 @@ export type Channel = z.infer<typeof Channel>;
 export const MAX_CHANNEL_NAME_CHARS = 80;
 /** 메시지 하나의 길이 상한. 앞뒤 공백은 뗀다. */
 export const MAX_MESSAGE_CHARS = 4000;
+/** 문답을 채널에 올리며 함께 쓰는 글. 글 메시지처럼 앞뒤 공백을 떼고 길이를 막되, 비면 없는 것이다. */
+const Note = z
+  .string()
+  .trim()
+  .max(MAX_MESSAGE_CHARS)
+  .optional()
+  .transform((text) => text || undefined);
 /** 지난 대화를 한 번에 읽는 수. */
 export const HISTORY_PAGE = 50;
 
@@ -311,6 +318,7 @@ export const ChannelMessage = z.discriminatedUnion("kind", [
   /**
    * 공개된 문답: 채널에 올린 DM이나 `@호출`. 질문과 답이 늘 함께 있다. `login`과 `name`은 그 에이전트의 주인(올린 사람)이고,
    * `at`은 채널에 올라온 시각(`@호출`이면 물은 시각)이다. 답이 오면 같은 `id`의 것이 실시간 연결로 다시 온다.
+   * `text`는 올린 사람이 함께 쓴 글이다. 글 없이 올렸거나 `@호출`이면 없다. 글 메시지의 `text`처럼 웹은 글자로만 보인다.
    */
   z.strictObject({
     kind: z.literal("qa"),
@@ -319,6 +327,7 @@ export const ChannelMessage = z.discriminatedUnion("kind", [
     login: z.string(),
     name: z.string(),
     at: z.string(),
+    text: z.string().optional(),
     qa: Qa,
   }),
 ]);
@@ -683,13 +692,14 @@ export const api = {
   },
   /**
    * 내 DM의 문답 하나를 채널에 올린다. 질문과 답이 함께 올라가고, 답만 올릴 수는 없다. 공개를 비공개로 되돌리지는 않는다.
+   * `text`는 함께 쓰는 한마디다. 채널에는 올린 사람의 메시지 하나(글과 문답)로 선다. 비우거나 공백뿐이면 글 없이 올린다.
    * 답이 온 문답만 올린다(`invalid_request`). 이미 올렸으면 `conflict`. 내 문답이 아니면 있어도 `not_found`다.
    * 채널에 선 문답이 실시간 연결의 `message`로 모두에게, 공개가 된 문답이 `qa`로 나에게 간다.
    */
   postQa: {
     method: "POST",
     path: "/api/qas/post",
-    body: z.strictObject({ qa: z.number().int() }),
+    body: z.strictObject({ qa: z.number().int(), text: Note }),
     response: z.strictObject({ message: ChannelMessage }),
   },
   /**

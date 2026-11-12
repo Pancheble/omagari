@@ -7,6 +7,7 @@ import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import type {
@@ -332,16 +333,24 @@ export async function startWorld(
     forgetMs?: number;
     /** 고른 접속 상태가 온라인으로 돌아오기까지의 시간. 줄여서 만료를 본다. */
     presenceDurations?: Partial<Record<PresenceDuration, number>>;
+    /** 서버가 처음 뜨기 전에 DB에 넣을 SQL. 예전 판이 만든 DB로 띄울 때 쓴다. */
+    seed?: string;
   } = {},
 ) {
   const repo = await tempRepo();
   const data = await mkdtemp(join(tmpdir(), "omagari-server-")); // 서버의 DB와 CLI의 설정
   const cleanup = () => Promise.all([repo.remove(), rm(data, { recursive: true, force: true })]);
   const fake = fakeGitHub();
+  const database = join(data, "omagari.db");
+  if (options.seed) {
+    const db = new DatabaseSync(database);
+    db.exec(options.seed);
+    db.close();
+  }
   const serverOptions = {
     repo: REPO,
     github: fake.github,
-    database: join(data, "omagari.db"),
+    database,
     recheckMs: options.recheckMs,
     heartbeatMs: options.heartbeatMs,
     followMs: options.followMs,
