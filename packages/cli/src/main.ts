@@ -11,6 +11,7 @@ import {
   CONTRACT_VERSION,
   ContractFailure,
   call,
+  DEFINITION_KINDS,
   EXECUTOR_NAMES,
   ShareLevel,
 } from "@omagari/contract";
@@ -34,6 +35,8 @@ const USAGE = `사용법:
   omagari runner log            러너가 실행한 것을 본다
   omagari status                지금 상황을 본다: 멤버, 작업, 상태 한 줄, 바뀐 파일
   omagari status set <한 줄>    지금 브랜치의 작업에 상태 한 줄을 쓴다
+  omagari impact <심볼>          그 심볼을 내 사본에서 쓰는 곳과, 그 정의 줄을 바꾸고 있는 다른 멤버의 작업을 본다
+                                메서드는 클래스.메서드나 메서드 이름으로 묻는다. 이름으로 이어 같은 이름의 다른 심볼도 잡힌다
   omagari metrics [--days <날 수>]
                                 지난 날들(기본 14일) 날마다 들어온 멤버 수와 문답 수를 본다
   omagari install               이 기기의 에이전트(Claude Code, Codex)에 세션 시작 훅, 편집 전 훅, 상태 한 줄 스킬을 깐다
@@ -67,6 +70,8 @@ try {
     await status();
   } else if (command === "status" && sub === "set" && rest.length > 0) {
     await setStatus(rest.join(" "));
+  } else if (command === "impact" && sub !== undefined && rest.length === 0) {
+    await impact(sub);
   } else if (command === "metrics" && (sub === undefined || sub.startsWith("--"))) {
     const { values } = parseArgs({
       args: process.argv.slice(3),
@@ -236,6 +241,31 @@ async function setStatus(text: string) {
     });
   const written = await call(await member(), api.setStatus, { branch, text });
   console.log(`${branch}의 상태 한 줄을 썼다: ${written.text}`);
+}
+
+/** 심볼을 쓰는 곳과 그 정의 줄을 바꾸는 다른 멤버의 작업을 보인다. 러너가 답한다. */
+async function impact(symbol: string) {
+  const reply = await callRunner(process.cwd(), "impact", { symbol }).catch((error) => {
+    if (error instanceof ContractFailure) throw new Error(`러너가 답하지 못했다: ${error.message}`);
+    throw error;
+  });
+  if (reply.kind !== "impact") throw new Error(`러너가 묻지 않은 것으로 답했다: ${reply.kind}`);
+  const { uses, works, disconnectedAt } = reply.payload;
+  const CHANGE = { added: "새로 만듦", changed: "정의 줄을 바꿈", removed: "없앰" } as const;
+  console.log(`심볼 ${symbol}\n쓰는 곳(내 사본, 이름으로 이어 다른 심볼일 수 있다):`);
+  if (uses.length === 0) console.log("  없음");
+  for (const { path, line } of uses) console.log(`  ${path}:${line}`);
+  console.log("정의 줄을 바꾸고 있는 다른 멤버의 작업:");
+  if (works.length === 0) console.log("  없음");
+  for (const { login, branch, offlineSince, path, definition: d } of works) {
+    const away = offlineSince ? ` · ${ago(offlineSince)} 기준` : "";
+    const change = d.change ? CHANGE[d.change] : "";
+    console.log(
+      `  ${login} · ${branch} · ${path}:${d.line} ${DEFINITION_KINDS[d.kind]} ${d.name} ${change}${away}`,
+    );
+  }
+  if (disconnectedAt)
+    console.log(`러너가 ${ago(disconnectedAt)}부터 서버와 끊겨 있어, 그때까지 받은 것이다.`);
 }
 
 /** 날마다 들어온 멤버 수와 문답 수를 오래된 날부터 한 줄에 하루씩 보인다. */

@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 13;
+export const CONTRACT_VERSION = 14;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -59,16 +59,50 @@ export type ShareLevel = z.infer<typeof ShareLevel>;
  * `too_large`는 파일 하나의 상한이나 합계의 상한을 넘은 것(ADR-0007),
  * `share`는 공유 수준이 내용을 내보내지 않는 것이다.
  */
+/**
+ * 정의 줄 하나: 이름 붙은 심볼을 선언하는 줄(GLOSSARY). 러너가 tree-sitter로 TypeScript, TSX, JavaScript 파일에서 뽑는다(ADR-0026).
+ * 메서드의 이름은 `클래스.메서드`다. `line`은 그 작업의 사본에서의 줄(1부터)이고, `removed`면 기준 커밋의 판에서의 줄이다.
+ * `change`는 기준 커밋의 판과 견준 것이다: 새로 생겼다(`added`), 정의 줄이 바뀌었다(`changed`), 없어졌다(`removed`).
+ * 없으면 정의 줄이 그대로다(본문만 바뀐 것 포함).
+ */
+export const Definition = z.strictObject({
+  name: z.string(),
+  kind: z.enum(["function", "method", "class", "interface", "type", "enum"]),
+  line: z.number().int().positive(),
+  change: z.enum(["added", "changed", "removed"]).optional(),
+});
+export type Definition = z.infer<typeof Definition>;
+
+/** 사람이 읽는 정의의 종류. */
+export const DEFINITION_KINDS = {
+  function: "함수",
+  method: "메서드",
+  class: "클래스",
+  interface: "인터페이스",
+  type: "타입",
+  enum: "열거형",
+} as const satisfies Record<Definition["kind"], string>;
+
 export const ObservedFile = z.union([
-  z.strictObject({ path: z.string(), content: z.string() }),
-  z.strictObject({ path: z.string(), deleted: z.literal(true) }),
+  z.strictObject({
+    path: z.string(),
+    content: z.string(),
+    /** 이 파일의 정의 줄. 내용을 올리는 파일 가운데 읽을 수 있는 언어이고 정의가 있을 때만 있다. */
+    definitions: z.array(Definition).optional(),
+  }),
+  z.strictObject({
+    path: z.string(),
+    deleted: z.literal(true),
+    /** 기준 커밋의 판에 있던 정의 줄(모두 `removed`). 내용을 올리는 수준(full)일 때만 있다. */
+    definitions: z.array(Definition).optional(),
+  }),
   z.strictObject({ path: z.string(), omitted: z.enum(["binary", "too_large", "share"]) }),
 ]);
 export type ObservedFile = z.infer<typeof ObservedFile>;
 
 /**
  * 작업 하나(멤버 + 브랜치)의 관측. 기준 커밋 이후 그 브랜치가 바꾼 파일이다: 커밋한 것, 안 한 것, 추적하지 않는 새 파일.
- * 경로는 그 작업 폴더(등록한 폴더나 연결된 워크트리)의 최상위에서 본 것이다. 정의 줄은 싣지 않는다(ADR-0009).
+ * 경로는 그 작업 폴더(등록한 폴더나 연결된 워크트리)의 최상위에서 본 것이다. 정의 줄은 내용과 같은 규칙으로 싣는다(ADR-0026).
  */
 export const Work = z.strictObject({
   branch: z.string(),
@@ -585,6 +619,11 @@ export const cliToRunner = {
    * `situation`처럼 받아 둔 것으로 바로 답하고, 그 파일을 바꾼 다른 멤버의 작업만 준다.
    */
   nearby: z.strictObject({ path: z.string().min(1), executor: ExecutorId }),
+  /**
+   * 심볼 하나(`omagari impact <심볼>`)를 누가 쓰고 누가 고치는지 묻는다. 메서드는 `클래스.메서드`나 메서드 이름으로 묻는다.
+   * 쓰는 곳은 러너의 사본에서 찾고, 고치는 작업은 받아 둔 상황에서 찾는다.
+   */
+  impact: z.strictObject({ symbol: z.string().min(1) }),
 } satisfies Payloads;
 
 /** 러너가 CLI와 훅에 보내는 것. */
@@ -604,6 +643,23 @@ export const runnerToCli = {
   /** `nearby`의 답. 근처 작업이 없으면 `works`가 비어 있다. 받아 둔 것이 아직 없으면 `error`(`runner_offline`)다. */
   nearby: z.strictObject({
     works: z.array(NearbyWork),
+    /** `situation`의 것과 같다. */
+    disconnectedAt: z.string().nullable(),
+  }),
+  /** `impact`의 답. 받아 둔 것이 아직 없으면 `error`(`runner_offline`)다. */
+  impact: z.strictObject({
+    /** 러너의 사본에서 그 이름을 쓰는 곳(정의하는 자리는 뺀다). 이름으로 이어 같은 이름의 다른 심볼도 잡힌다. */
+    uses: z.array(z.strictObject({ path: z.string(), line: z.number() })),
+    /** 그 이름의 정의 줄을 바꾸고 있는(새로 만들거나 바꾸거나 없앤) 다른 멤버의 작업. */
+    works: z.array(
+      z.strictObject({
+        login: z.string(),
+        branch: z.string(),
+        offlineSince: z.string().nullable(),
+        path: z.string(),
+        definition: Definition,
+      }),
+    ),
     /** `situation`의 것과 같다. */
     disconnectedAt: z.string().nullable(),
   }),
