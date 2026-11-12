@@ -33,6 +33,8 @@ import { ProfilePanel } from "./profile.tsx";
 
 /** 이 폭부터 채널 패널이 늘 보인다. 그보다 좁으면 대화만 두고 채널 패널은 서랍으로 연다(DESIGN.md 앱의 좁은 화면). */
 const WIDE = "(min-width: 834px)";
+/** 이 폭부터 오른쪽 칸이 대화 옆에 선다. 그보다 좁으면 대화 위에 뜨고, 833px 이하는 시트다. */
+const BESIDE = "(min-width: 1069px)";
 
 /** 채널 패널을 접고 펴는 단축키. 맥은 ⌘\, 그 밖은 Ctrl+\(DESIGN.md 채널 패널 접기). */
 const MAC = /Mac|iPhone|iPad/.test(navigator.userAgent);
@@ -208,12 +210,19 @@ export function Workspace({
   }, [right]);
   /** 채널마다 불러 둔 내 DM. 연 적 없는 채널은 없고, DM 칸을 처음 열 때 읽는다. */
   const [dms, setDms] = useState<Record<string, Dm>>({});
+  /**
+   * 채널 입력 칸에 붙인 DM 문답(DESIGN.md "채널에 올리기"). DM 칸과 채널 입력 칸이 함께 본다.
+   * 입력 칸의 글처럼 그 채널에만 있어서 채널을 옮기면 빠진다.
+   */
+  const [attached, setAttached] = useState<Qa>();
   /** 에이전트마다 고른 모델과 effort. 이 브라우저에 남아 새로 고쳐도 그대로다. DM과 `@호출`이 같이 쓴다. */
   const [picks, setPicks] = useState<Picks>(() => savedPicks(me.login));
   /** 채널마다 불러 둔 대화. 연 적 없는 채널은 없고, 처음 열 때 지난 대화를 읽는다. */
   const [views, setViews] = useState<Record<string, View>>({});
   const hash = useHash();
   const current = channels?.find((channel) => channel.id === hash) ?? channels?.[0];
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 채널을 옮기면 붙인 문답을 뺀다
+  useEffect(() => setAttached(undefined), [current?.id]);
 
   /** 세션이 끝났으면 로그인으로 돌아간다. 그 밖의 실패는 부른 쪽이 보인다. */
   const check = (error: unknown) => {
@@ -288,10 +297,19 @@ export function Workspace({
     }
   };
 
-  /** DM의 문답을 채널에 올린다. 채널에 선 줄과, 공개가 된 DM의 문답을 바로 넣는다. */
-  const post = async (qa: Qa) => {
+  /**
+   * DM의 문답을 채널 입력 칸에 붙인다. 초점은 입력 칸이 가져간다. 오른쪽 칸이 대화 위에 뜨는 폭이면 오른쪽 칸을 닫는다.
+   * 그때는 연 버튼으로 초점을 돌리지 않는다(`closeRight`를 쓰지 않는다).
+   */
+  const attach = (qa: Qa) => {
+    setAttached(qa);
+    if (!matchMedia(BESIDE).matches) setRight(undefined);
+  };
+
+  /** DM의 문답을 함께 쓴 글과 채널에 올린다. 채널에 선 메시지와, 공개가 된 DM의 문답을 바로 넣는다. */
+  const post = async (qa: Qa, text: string) => {
     try {
-      const { message } = await call(server(session), api.postQa, { qa: qa.id });
+      const { message } = await call(server(session), api.postQa, { qa: qa.id, text });
       receive(message);
       if (message.kind === "qa") receiveQa(message.qa);
     } catch (error) {
@@ -517,10 +535,13 @@ export function Workspace({
             live={live}
             members={members}
             me={me.login}
+            attached={attached?.channel === current?.id ? attached : undefined}
+            onAttach={setAttached}
             onSend={(text) => send((current as Channel).id, text)}
             onCall={(executor, question) =>
               ask((current as Channel).id, executor, question, "public")
             }
+            onPost={post}
             onRetry={() => current && void load(current.id)}
             onOlder={() => {
               const view = current && views[current.id];
@@ -539,13 +560,14 @@ export function Workspace({
           dm={dms[current.id]}
           messages={views[current.id]?.messages}
           picks={picks}
+          attached={attached?.id}
           onPick={(executor, pick) => {
             const next = { ...picks, [executor]: pick };
             setPicks(next);
             savePicks(me.login, next);
           }}
           onAsk={(executor, question) => ask(current.id, executor, question)}
-          onPost={post}
+          onAttach={attach}
           onReload={() => void loadDm(current.id)}
           onClose={closeRight}
         />

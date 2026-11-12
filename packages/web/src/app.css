@@ -1958,17 +1958,12 @@ button.dm-head:active {
     background-color 120ms ease-out;
 }
 
-.post-action:hover:not(:disabled) {
+.post-action:hover {
   background: var(--hover);
 }
 
-.post-action:active:not(:disabled) {
+.post-action:active {
   transform: scale(0.95);
-}
-
-.post-action:disabled {
-  color: var(--text-secondary);
-  cursor: default;
 }
 
 .dm-shared {
@@ -2091,14 +2086,14 @@ button.dm-head:active {
   margin-left: auto;
 }
 
-/* 채널에 올라온 문답(app-qa-line): 메시지 본문 위치(안쪽 20px + 아바타 36px + 12px)에 맞춰 들인다. */
+/* 채널에 올라온 문답(app-qa-line): 올린 사람의 메시지 본문 안, 함께 쓴 글 아래에 둔다. */
 .qa-row {
-  padding: 4px 20px 4px 68px;
-  border-radius: var(--rounded-md);
+  padding-block: 4px;
 }
 
-/* DM의 "보기"로 간 줄(app-message-highlight): 칠했다가 2초 동안 걷어 낸다. 움직임 줄이기 설정이면 2초 뒤에 바로 걷는다. */
+/* DM의 "보기"나 올린 뒤에 간 메시지(app-message-highlight): 칠했다가 2초 동안 걷어 낸다. 움직임 줄이기 설정이면 2초 뒤에 바로 걷는다. */
 .highlight {
+  border-radius: var(--rounded-md);
   animation: highlight 2s step-end;
 }
 
@@ -2240,6 +2235,53 @@ button.dm-head:active {
 .call-token-remove:hover {
   background: var(--hover);
   color: var(--ink);
+}
+
+/* 채널 입력 칸에 붙인 DM 문답(app-qa-attachment): 입력 칸 맨 위 줄에 서고 글은 그 아래 줄에 쓴다. */
+.composer:has(> .qa-attachment) {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.qa-attachment {
+  --mark-ring: var(--parchment);
+  display: flex;
+  /* 왼쪽으로 당긴 만큼 넓혀 한 줄을 다 차지한다. 남는 틈이 있으면 글 칸이 그 틈에 끼어 아주 좁아진다. */
+  flex-basis: calc(100% + 10px);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: max(36px, var(--control));
+  margin-left: -10px;
+  padding: 4px 4px 4px 8px;
+  border-radius: var(--pill);
+  background: var(--parchment);
+  font-size: 13px;
+  line-height: 1.38;
+}
+
+.qa-attachment-owner {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qa-attachment-question {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qa-attachment-remove {
+  flex: none;
+  width: calc(max(36px, var(--control)) - 8px);
+  height: calc(max(36px, var(--control)) - 8px);
 }
 
 /* DM 칸 안의 입력 칸과 알림: 패널 안쪽 여백(8px)에 맞춘다. */
