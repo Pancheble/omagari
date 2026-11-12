@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "omagari-demo",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["test/demo.ts"],
+      "port": 5180
+    }
+  ]
+}
