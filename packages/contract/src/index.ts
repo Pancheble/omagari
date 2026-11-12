@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 9;
+export const CONTRACT_VERSION = 10;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -145,6 +145,15 @@ export const PRESENCE_DURATIONS = {
  */
 export const MAX_STATUS_MESSAGE_CHARS = 100;
 
+const graphemes = new Intl.Segmenter();
+/**
+ * 상태 메시지의 이모지 칸에 들어갈 수 있는지: 글자 묶음(grapheme) 하나이고 그림 문자다(국기와 키캡 포함).
+ * `\p{RGI_Emoji}`는 런타임의 유니코드 판보다 새 이모지를 모르지만, 그림 문자 자리는 미리 잡혀 있어 새 이모지도 받는다.
+ */
+export const isEmoji = (text: string) =>
+  [...graphemes.segment(text)].length === 1 &&
+  /\p{Extended_Pictographic}|\p{Regional_Indicator}|\u20E3/u.test(text);
+
 /**
  * 멤버 목록의 한 사람: 이름, 접속 상태와 상태 메시지, 실행기마다의 에이전트, 작업마다의 상태 한 줄. 웹의 멤버 목록이 이것만으로 그린다.
  * 작업의 바뀐 파일과 내용은 싣지 않는다. 그것은 `api.works`에 있다.
@@ -156,6 +165,8 @@ export const MemberView = z.strictObject({
   presence: Presence,
   /** 사람이 쓴 상태 메시지. 쓴 그대로이고(HTML이 들어 있어도 바꾸지 않는다) 접속 상태와 상관없이 보인다. 없으면 null. */
   message: z.string().nullable(),
+  /** 상태 메시지의 이모지 한 칸. 글과 따로 두고, 화면은 글 앞에 쓴다. 없으면 null. */
+  emoji: z.string().nullable(),
   /**
    * 러너가 붙을 때 알린 실행기마다 에이전트 하나. 러너를 켠 적이 없으면 비어 있다.
    * 러너가 붙어 있으면 online, 그중 받은 문답에 아직 답하지 않았으면(줄을 선 것 포함) answering("답하는 중")이다.
@@ -584,7 +595,10 @@ export const api = {
     body: z.strictObject({ presence: ChosenPresence, duration: PresenceDuration.optional() }),
     response: z.strictObject({ until: z.string().nullable() }),
   },
-  /** 내 상태 메시지를 쓴다. 빈 글이면 지운다. 따로 만료는 없다. 멤버 목록이 실시간 연결로 모두에게 간다. */
+  /**
+   * 내 상태 메시지를 글과 이모지 한 칸으로 쓴다. 둘을 함께 보내고, 빈 글이면 글을, null이면 이모지를 지운다.
+   * 이모지 칸에는 이모지 하나(글자 묶음 하나)만 받는다. 따로 만료는 없다. 멤버 목록이 실시간 연결로 모두에게 간다.
+   */
   setStatusMessage: {
     method: "POST",
     path: "/api/status-message",
@@ -595,8 +609,9 @@ export const api = {
         .refine((text) => Array.from(text).length <= MAX_STATUS_MESSAGE_CHARS, {
           message: `상태 메시지는 ${MAX_STATUS_MESSAGE_CHARS}자까지다`,
         }),
+      emoji: z.string().refine(isEmoji, { message: "이모지 칸에는 이모지 하나만 쓴다" }).nullable(),
     }),
-    response: z.strictObject({ message: z.string().nullable() }),
+    response: z.strictObject({ message: z.string().nullable(), emoji: z.string().nullable() }),
   },
   /**
    * 채널 안에서 `agent`(멤버의 로그인)의 `executor` 에이전트에게 묻는다. 에이전트는 주인만 부른다(`forbidden`).
