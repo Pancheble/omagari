@@ -30,6 +30,7 @@ import {
   MAX_FRAME_BYTES,
   type MemberView,
   type ObservedFile,
+  type Post,
   PRESENCE_DURATIONS,
   type Presence,
   type PresenceDuration,
@@ -106,15 +107,20 @@ const qaView = (row: QaRow): Qa => ({
 /** 처음 알림을 올릴 때 알림 채널이 없으면 쓰거나 만드는 채널. */
 const ALERT_CHANNEL = "부딪힘";
 
+/** 포스트(채널 줄)의 글 수. `c`가 포스트의 채널이다. */
+const POST_COUNT = "(SELECT COUNT(*) FROM messages WHERE channel = c.id)";
+
 /**
- * 메시지를 쓴 사람의 이름과, 공개된 문답이면 그 문답, 알림이면 그 알림과 함께 읽는다. 뒤에 WHERE와 ORDER BY를 붙여 쓴다.
+ * 메시지를 쓴 사람의 이름과, 공개된 문답이면 그 문답, 알림이면 그 알림과 달린 포스트와 함께 읽는다. 뒤에 WHERE와 ORDER BY를 붙여 쓴다.
  */
 const MESSAGES = `SELECT m.id, m.channel, m.login, m.text, m.note, m.at, p.name,
   q.id AS qa, q.executor, q.question, q.at AS asked, q.answer, q.visibility,
-  m.alert, a.works, a.files, a.resolved FROM messages m
+  m.alert, a.works, a.files, a.resolved,
+  c.id AS post, CASE WHEN c.id IS NULL THEN 0 ELSE ${POST_COUNT} END AS count FROM messages m
   LEFT JOIN people p ON p.login = m.login
   LEFT JOIN qas q ON q.id = m.qa
-  LEFT JOIN alerts a ON a.id = m.alert`;
+  LEFT JOIN alerts a ON a.id = m.alert
+  LEFT JOIN channels c ON c.alert = m.id AND m.alert IS NOT NULL`;
 type MessageRow = {
   id: number;
   channel: string;
@@ -129,6 +135,8 @@ type MessageRow = {
   works: string | null;
   files: string | null;
   resolved: number | null;
+  post: string | null;
+  count: number;
 } & Pick<QaRow, "executor" | "question" | "answer" | "visibility">;
 
 /** 알림 표의 한 줄을 계약의 알림으로. 파일은 `ALERT_FILES`개까지 이름을 적고 나머지는 센다. */
@@ -155,6 +163,7 @@ const messageView = (row: MessageRow): ChannelMessage => {
       channel: row.channel,
       at: new Date(row.at).toISOString(),
       alert: alertView(row),
+      post: row.post === null ? null : { channel: row.post, count: row.count },
     };
   }
   const common = {
@@ -269,6 +278,12 @@ export async function startServer(options: {
   if (!db.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'note'").get())
     db.exec("ALTER TABLE messages ADD COLUMN note TEXT");
   db.exec("CREATE INDEX IF NOT EXISTS messages_by_channel ON messages (channel, id)");
+  // 알림에 달린 포스트(문답 Q3)는 채널의 한 줄이다. 그래서 글, 지난 대화, DM, `@호출`, 채널에 올리기가 채널과 같은 길로 돈다.
+  // `alert`는 알림이 선 메시지의 번호이고, 채팅 채널이면 NULL이다. 포스트의 `name`은 사람이 지을 수 없는 이름(줄바꿈으로 시작)이라
+  // 채팅 채널의 이름과 겹치지 않는다. 사람이 읽는 이름은 `postName`이 짓는다. v0.1.0의 표에는 `alert`가 없다.
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('channels') WHERE name = 'alert'").get())
+    db.exec("ALTER TABLE channels ADD COLUMN alert INTEGER REFERENCES messages (id)");
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS channels_by_alert ON channels (alert)");
   // 알림(ADR-0023): 두 작업 한 쌍의 직접 충돌. 채널에는 messages의 한 줄(`alert`)로 선다. 그 줄의 `text`는 빈 글, `login`은 빈 이름이다
   // (`text`의 CHECK를 바꾸려면 표를 다시 만들어야 한다). `pair`는 두 작업을 정한 순서로 적은 열쇠, `works`는 계약의 WorkRef 둘(JSON),
   // `files`는 묶은 파일 전부(계약의 AlertFile 배열, 확인된 것부터 경로 순)다. `resolved`는 풀린 시각(ms)이고, 풀리지 않은 알림은 쌍마다 하나다.
@@ -599,6 +614,28 @@ export async function startServer(options: {
         messageView(db.prepare(`${MESSAGES} WHERE m.alert = ?`).get(alert) as MessageRow),
       ),
     );
+
+  /** 채널에 메시지가 섰다. 포스트면 그 알림의 글 수가 바뀌었으니 알림 줄을 모두에게 다시 보낸다. */
+  const posted = (channel: string) => {
+    const row = db
+      .prepare("SELECT a.alert FROM channels c JOIN messages a ON a.id = c.alert WHERE c.id = ?")
+      .get(channel) as { alert: number } | undefined;
+    if (row) shareAlert(row.alert);
+  };
+
+  /** 포스트의 알림 메시지. 채팅 채널이면 없다. */
+  const postAlert = (channel: string) =>
+    db.prepare(`${MESSAGES} WHERE m.id = (SELECT alert FROM channels WHERE id = ?)`).get(channel) as
+      | MessageRow
+      | undefined;
+
+  /** 러너에 넘기는 채널의 이름. 포스트면 알림이 선 채널의 이름으로 짓는다. */
+  const channelName = (channel: string) => {
+    const alert = postAlert(channel);
+    const name = (id: string) =>
+      (db.prepare("SELECT name FROM channels WHERE id = ?").get(id) as { name: string }).name;
+    return alert ? `${name(alert.channel)}의 알림 ${alert.id}번 포스트` : name(channel);
+  };
 
   /**
    * 러너들의 계산을 두 작업 한 쌍마다 하나로 묶어 알림을 올리고, 고치고, 풀린 것을 닫는다(ADR-0023).
@@ -988,16 +1025,18 @@ export async function startServer(options: {
     }
     const [socket] = found;
     // 채널 대화는 이 문답이 채널에 서기 전에 읽는다. `@호출`의 질문이 데이터로 한 번 더 들어가지 않는다.
-    const recent = (
-      db
-        .prepare(`${MESSAGES} WHERE m.channel = ? ORDER BY m.id DESC LIMIT ?`)
-        .all(channel, CHANNEL_CONTEXT) as MessageRow[]
-    )
-      .reverse()
-      .map(messageView);
-    const { name } = db.prepare("SELECT name FROM channels WHERE id = ?").get(channel) as {
-      name: string;
-    };
+    // 포스트면 맨 앞에 그 알림을 둔다. 알림의 번호가 포스트의 글보다 앞이라 러너는 첫 턴에만 넘긴다.
+    // ponytail: 첫 턴 뒤에 알림이 고쳐져도 그 채널 세션에는 다시 넘기지 않는다. 고친 알림이 필요해지면 러너가 알림만 따로 다시 넘긴다.
+    const alert = postAlert(channel);
+    const recent = [
+      ...(alert ? [alert] : []),
+      ...(
+        db
+          .prepare(`${MESSAGES} WHERE m.channel = ? ORDER BY m.id DESC LIMIT ?`)
+          .all(channel, CHANNEL_CONTEXT - (alert ? 1 : 0)) as MessageRow[]
+      ).reverse(),
+    ].map(messageView);
+    const name = channelName(channel);
     const at = Date.now();
     const { lastInsertRowid } = db
       .prepare(
@@ -1024,6 +1063,7 @@ export async function startServer(options: {
     asks.set((JSON.parse(frame) as { id: string }).id, { socket, login: agent, executor, qa: id });
     socket.send(frame);
     const shared = shareQa(id); // 같은 멤버의 다른 화면에도, `@호출`이면 채널의 모두에게
+    if (visibility === "public") posted(channel);
     shareMembers(); // 답하는 중
     return shared;
   });
@@ -1052,7 +1092,9 @@ export async function startServer(options: {
       Date.now(),
     );
     db.exec("COMMIT");
-    return { message: shareQa(qa).message as ChannelMessage };
+    const { message } = shareQa(qa);
+    posted(row.channel);
+    return { message: message as ChannelMessage };
   });
 
   mount(app, api.dms, ({ channel }, c) => {
@@ -1067,7 +1109,7 @@ export async function startServer(options: {
 
   mount(app, api.channels, () => ({
     channels: (
-      db.prepare("SELECT id, name FROM channels ORDER BY name").all() as {
+      db.prepare("SELECT id, name FROM channels WHERE alert IS NULL ORDER BY name").all() as {
         id: string;
         name: string;
       }[]
@@ -1104,7 +1146,9 @@ export async function startServer(options: {
     return { news };
   });
   mount(app, api.setAlertChannel, ({ channel }) => {
-    mustExist(channel);
+    if (!db.prepare("SELECT 1 FROM channels WHERE id = ? AND alert IS NULL").get(channel)) {
+      throw new ContractFailure({ code: "not_found", message: `없는 채널이다: ${channel}` });
+    }
     db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('alert_channel', ?)").run(
       channel,
     );
@@ -1113,6 +1157,43 @@ export async function startServer(options: {
     };
     return { channel: { id: channel, name } };
   });
+
+  /** 포스트 하나. 글 수와 함께 읽는다. */
+  const postView = (channel: string) =>
+    db
+      .prepare(
+        `SELECT c.id AS channel, c.alert, ${POST_COUNT} AS count FROM channels c WHERE c.id = ?`,
+      )
+      .get(channel) as Post;
+
+  mount(app, api.openPost, ({ alert }, c) => {
+    visit(c.get("login") as string);
+    const row = db.prepare(`${MESSAGES} WHERE m.id = ? AND m.alert IS NOT NULL`).get(alert) as
+      | MessageRow
+      | undefined;
+    if (!row) throw new ContractFailure({ code: "not_found", message: `없는 알림이다: ${alert}` });
+    if (row.post !== null) return { post: postView(row.post), message: messageView(row) };
+    const channel = randomBytes(8).toString("hex");
+    db.prepare("INSERT INTO channels (id, name, alert) VALUES (?, ?, ?)").run(
+      channel,
+      `\n${channel}`,
+      alert,
+    );
+    shareAlert(row.alert as number); // 알림 줄에 포스트가 붙었다
+    return {
+      post: postView(channel),
+      message: messageView(db.prepare(`${MESSAGES} WHERE m.id = ?`).get(alert) as MessageRow),
+    };
+  });
+
+  mount(app, api.posts, () => ({
+    posts: db
+      .prepare(
+        `SELECT c.id AS channel, c.alert, ${POST_COUNT} AS count FROM channels c
+         WHERE c.alert IS NOT NULL ORDER BY c.alert`,
+      )
+      .all() as Post[],
+  }));
 
   const mustExist = (channel: string) => {
     if (!db.prepare("SELECT 1 FROM channels WHERE id = ?").get(channel)) {
@@ -1139,6 +1220,7 @@ export async function startServer(options: {
       db.prepare(`${MESSAGES} WHERE m.id = ?`).get(lastInsertRowid) as MessageRow,
     );
     broadcast(encode(serverToWeb, "message", message));
+    posted(channel);
     return { message };
   });
 
@@ -1193,13 +1275,16 @@ export async function startServer(options: {
         socket.send(encode(serverToWeb, "welcome", { seq }, id));
         if (payload.after !== undefined) {
           // 끊긴 사이에 답이 온 공개 문답도 다시 보낸다. `after`를 받은 뒤에 끊겼으니 그 메시지가 선 뒤에 답이 온 것이면 넉넉히 덮는다.
-          // 끊긴 사이에 고친 알림도 같은 까닭으로 다시 보낸다.
+          // 끊긴 사이에 고친 알림과, 끊긴 사이에 포스트가 열리거나 글 수가 바뀐 알림도 다시 보낸다.
+          // ponytail: 끊긴 사이에 열기만 하고 글이 없는 포스트는 다시 보내지 않는다. 웹은 다시 붙으면 `api.posts`를 읽는다.
           const missed = db
             .prepare(
               `${MESSAGES} WHERE m.id > ? OR q.settled >= (SELECT at FROM messages WHERE id = ?)
-               OR a.updated >= (SELECT at FROM messages WHERE id = ?) ORDER BY m.id`,
+               OR a.updated >= (SELECT at FROM messages WHERE id = ?)
+               OR (c.id IS NOT NULL AND EXISTS (SELECT 1 FROM messages WHERE channel = c.id AND id > ?))
+               ORDER BY m.id`,
             )
-            .all(payload.after, payload.after, payload.after) as MessageRow[];
+            .all(payload.after, payload.after, payload.after, payload.after) as MessageRow[];
           for (const row of missed) socket.send(encode(serverToWeb, "message", messageView(row)));
         }
         watchers.set(socket, { hash: hash(payload.session), login });
