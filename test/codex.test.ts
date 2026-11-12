@@ -226,7 +226,7 @@ test("omagari install이 Codex에도 두 훅과 상태 한 줄 스킬을 깔고 
     await readFile(join(world.claude, "skills", "omagari-status", "SKILL.md"), "utf8"),
   );
 
-  // Codex의 matcher는 정규식이다. 세션 시작은 어떻게 시작했든, 편집 전 훅은 apply_patch에만 걸린다(셸 명령에는 안 걸린다).
+  // Codex의 matcher는 정규식이다. 세션 시작은 어떻게 시작했든, 편집 전 훅은 apply_patch와 셸 명령(편지함을 넘기려고)에만 걸린다.
   const { hooks }: { hooks: Record<string, Group[]> } = JSON.parse(
     await readFile(hooksFile, "utf8"),
   );
@@ -237,8 +237,10 @@ test("omagari install이 Codex에도 두 훅과 상태 한 줄 스킬을 깔고 
   for (const source of ["startup", "resume", "clear", "compact", "fork"]) {
     assert.equal(matching("SessionStart", source).length, 1, source);
   }
-  assert.equal(matching("PreToolUse", "apply_patch").length, 1);
-  for (const tool of ["Bash", "exec_command", "mcp__fs__apply_patch", "update_plan"]) {
+  for (const tool of ["apply_patch", "Bash", "exec_command"]) {
+    assert.equal(matching("PreToolUse", tool).length, 1, tool);
+  }
+  for (const tool of ["mcp__fs__apply_patch", "update_plan", "Bashful"]) {
     assert.deepEqual(matching("PreToolUse", tool), [], tool);
   }
   const [start] = matching("SessionStart", "startup");

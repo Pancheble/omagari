@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { serve, upgradeWebSocket } from "@hono/node-server";
 import {
   ALERT_FILES,
+  type Alert,
   type AlertFile,
   api,
   CHANNEL_CONTEXT,
@@ -21,7 +22,10 @@ import {
   type ExecutorId,
   encode,
   encodeVersionMismatch,
+  FEED_PAGE,
   HISTORY_PAGE,
+  INBOX_MS,
+  type InboxItem,
   LIVE_SOCKET,
   MAX_FRAME_BYTES,
   type MemberView,
@@ -127,21 +131,30 @@ type MessageRow = {
   resolved: number | null;
 } & Pick<QaRow, "executor" | "question" | "answer" | "visibility">;
 
+/** 알림 표의 한 줄을 계약의 알림으로. 파일은 `ALERT_FILES`개까지 이름을 적고 나머지는 센다. */
+const alertView = (row: {
+  works: string | null;
+  files: string | null;
+  resolved: number | null;
+}): Alert => {
+  const files: AlertFile[] = JSON.parse(row.files ?? "[]");
+  return {
+    kind: "direct",
+    works: JSON.parse(row.works ?? "[]"),
+    files: files.slice(0, ALERT_FILES),
+    more: Math.max(files.length - ALERT_FILES, 0),
+    resolved: row.resolved === null ? null : new Date(row.resolved).toISOString(),
+  };
+};
+
 const messageView = (row: MessageRow): ChannelMessage => {
   if (row.alert !== null) {
-    const files: AlertFile[] = JSON.parse(row.files ?? "[]");
     return {
       kind: "alert",
       id: row.id,
       channel: row.channel,
       at: new Date(row.at).toISOString(),
-      alert: {
-        kind: "direct",
-        works: JSON.parse(row.works ?? "[]"),
-        files: files.slice(0, ALERT_FILES),
-        more: Math.max(files.length - ALERT_FILES, 0),
-        resolved: row.resolved === null ? null : new Date(row.resolved).toISOString(),
-      },
+      alert: alertView(row),
     };
   }
   const common = {
@@ -173,6 +186,8 @@ export async function startServer(options: {
   heartbeatMs?: number;
   followMs?: number;
   forgetMs?: number;
+  /** 편지함의 소식을 남겨 두는 시간. 기본 14일(`INBOX_MS`). 테스트가 줄여 쓴다. 만료는 `followMs`마다 치운다. */
+  inboxMs?: number;
   /** 고른 접속 상태가 온라인으로 돌아오기까지의 시간. 테스트가 줄여 쓴다. 주지 않은 것은 계약의 시간이다. */
   presenceDurations?: Partial<Record<PresenceDuration, number>>;
 }) {
@@ -270,6 +285,16 @@ export async function startServer(options: {
   // v0.1.0의 표에는 `alert`가 없다.
   if (!db.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'alert'").get())
     db.exec("ALTER TABLE messages ADD COLUMN alert INTEGER REFERENCES alerts (id)");
+  // 편지함(2단계 질문 A5~A7): 작업(`login` + `branch`)마다 넘겨줄 소식. 지금은 알림(`alert`)뿐이다. `at`은 들어온 시각(ms)이다.
+  // 작업과 알림마다 넘겨주지 않은 것은 하나다. 넘겨준 확인이 오면 지우고, `inboxMs`가 지나면 만료로 지운다.
+  db.exec(`CREATE TABLE IF NOT EXISTS inbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    login TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    alert INTEGER NOT NULL REFERENCES alerts (id),
+    at INTEGER NOT NULL,
+    UNIQUE (login, branch, alert)
+  ) STRICT`);
   // 워크스페이스의 설정 하나씩. 지금은 알림 채널(`alert_channel`)뿐이다.
   db.exec(`CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
@@ -632,6 +657,7 @@ export async function startServer(options: {
       if (!works.some((work) => reporting.has(work.login))) continue;
       db.prepare("UPDATE alerts SET resolved = ?, updated = ? WHERE id = ?").run(now, now, row.id);
       shareAlert(row.id);
+      deliver(row.id, works, now);
       changed = true;
     }
     for (const [key, entry] of found) {
@@ -651,6 +677,7 @@ export async function startServer(options: {
           known.id,
         );
         shareAlert(known.id);
+        deliver(known.id, entry.works, now);
         continue;
       }
       const channel = alertChannel();
@@ -663,8 +690,67 @@ export async function startServer(options: {
       ).run(channel, lastInsertRowid, now);
       db.exec("COMMIT");
       shareAlert(Number(lastInsertRowid));
+      deliver(Number(lastInsertRowid), entry.works, now);
     }
-    if (changed) shareMembers(); // 멤버 목록의 직접 충돌 표시
+    if (changed) {
+      shareMembers(); // 멤버 목록의 직접 충돌 표시
+      shareInbox();
+    }
+  };
+
+  /** 알림이 생기거나 바뀌거나 풀렸다. 두 작업의 편지함에 넣는다. 아직 넘겨주지 않은 같은 알림의 소식은 새 것으로 바꾼다. */
+  const deliver = (alert: number, works: WorkRef[], now: number) => {
+    for (const { login, branch } of works) {
+      db.prepare("DELETE FROM inbox WHERE login = ? AND branch = ? AND alert = ?").run(
+        login,
+        branch,
+        alert,
+      );
+      db.prepare("INSERT INTO inbox (login, branch, alert, at) VALUES (?, ?, ?, ?)").run(
+        login,
+        branch,
+        alert,
+        now,
+      );
+    }
+  };
+
+  const inboxMs = options.inboxMs ?? INBOX_MS;
+  /** 멤버의 편지함 전부: 만료되지 않은 것을 들어온 순서로. */
+  const inboxOf = (login: string): InboxItem[] =>
+    (
+      db
+        .prepare(
+          `SELECT i.id, i.branch, i.at, a.works, a.files, a.resolved FROM inbox i
+           JOIN alerts a ON a.id = i.alert WHERE i.login = ? AND i.at > ? ORDER BY i.id`,
+        )
+        .all(login, Date.now() - inboxMs) as {
+        id: number;
+        branch: string;
+        at: number;
+        works: string;
+        files: string;
+        resolved: number | null;
+      }[]
+    ).map((row) => ({
+      id: row.id,
+      branch: row.branch,
+      at: new Date(row.at).toISOString(),
+      kind: "alert",
+      alert: alertView(row),
+    }));
+  /** 러너마다 마지막으로 보낸 편지함. 같은 것을 다시 보내지 않는다. */
+  const sentInbox = new Map<WSContext, string>();
+  /** 편지함이 달라진 러너에 그 멤버의 편지함을 보낸다. `to`(막 붙은 러너)에는 같아도 보낸다. */
+  const shareInbox = (to?: WSContext) => {
+    for (const [socket, { login }] of runners) {
+      if (socket.readyState !== 1) continue; // OPEN
+      const items = inboxOf(login);
+      const json = JSON.stringify(items);
+      if (socket !== to && sentInbox.get(socket) === json) continue;
+      sentInbox.set(socket, json);
+      socket.send(encode(serverToRunner, "inbox", { items }));
+    }
   };
 
   /** 웹에 마지막으로 보낸 멤버 목록. 같은 것을 다시 보내지 않는다. */
@@ -999,6 +1085,24 @@ export async function startServer(options: {
     return { channel };
   });
 
+  mount(app, api.feed, (_, c) => {
+    const login = c.get("login");
+    const rows = db
+      .prepare(
+        "SELECT works, files, resolved, updated FROM alerts WHERE updated > ? ORDER BY updated DESC, id DESC",
+      )
+      .all(Date.now() - inboxMs) as {
+      works: string;
+      files: string;
+      resolved: number | null;
+      updated: number;
+    }[];
+    const news = rows
+      .map((row) => ({ at: new Date(row.updated).toISOString(), alert: alertView(row) }))
+      .filter(({ alert }) => !alert.works.some((work) => work.login === login))
+      .slice(0, FEED_PAGE);
+    return { news };
+  });
   mount(app, api.setAlertChannel, ({ channel }) => {
     mustExist(channel);
     db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('alert_channel', ?)").run(
@@ -1151,6 +1255,7 @@ export async function startServer(options: {
           for (const executor of executors) known.run(login, executor);
           socket.send(encode(serverToRunner, "welcome", { login, repo }, message.id));
           shareSituation(socket);
+          shareInbox(socket);
           return;
         }
         const runner = runners.get(socket);
@@ -1163,6 +1268,10 @@ export async function startServer(options: {
         } else if (message.kind === "conflicts") {
           reports.set(socket, message.payload.pairs);
           reconcile();
+        } else if (message.kind === "delivered") {
+          const drop = db.prepare("DELETE FROM inbox WHERE id = ? AND login = ?");
+          for (const id of message.payload.ids) drop.run(id, runner.login);
+          shareInbox();
         } else {
           // 문답의 답이나 실패. 그 문답을 보낸 연결에서 온 것만 받는다.
           const re = message.re ?? "";
@@ -1179,6 +1288,7 @@ export async function startServer(options: {
       onClose(_, socket) {
         const runner = runners.get(socket);
         runners.delete(socket);
+        sentInbox.delete(socket);
         if (reports.delete(socket) && !stopped) reconcile();
         // 그 멤버의 러너가 다 떨어졌으면 오프라인이다. 마지막 관측과 상태 한 줄은 이 시각 기준으로 남는다.
         if (runner && !stopped && ![...runners.values()].some((r) => r.login === runner.login)) {
@@ -1258,7 +1368,9 @@ export async function startServer(options: {
       db.prepare(`DELETE FROM works WHERE login IN (${forgotten})`).run(cutoff);
       db.prepare(`DELETE FROM lines WHERE login IN (${forgotten})`).run(cutoff);
       db.prepare("DELETE FROM offline WHERE since < ?").run(cutoff);
+      db.prepare("DELETE FROM inbox WHERE at <= ?").run(Date.now() - inboxMs);
       db.exec("COMMIT");
+      shareInbox(); // 만료된 소식이 빠진다
 
       const branches = db
         .prepare(

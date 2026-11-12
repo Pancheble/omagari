@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 14;
+export const CONTRACT_VERSION = 15;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -276,6 +276,8 @@ const Note = z
   .max(MAX_MESSAGE_CHARS)
   .optional()
   .transform((text) => text || undefined);
+/** 피드에서 한 번에 읽는 최근 소식의 수. */
+export const FEED_PAGE = 20;
 /** 지난 대화를 한 번에 읽는 수. */
 export const HISTORY_PAGE = 50;
 
@@ -376,6 +378,26 @@ export const Alert = z.strictObject({
 export type Alert = z.infer<typeof Alert>;
 
 /**
+ * 편지함에 넣어 둔 소식을 넘겨준 것이 확인되지 않아도 남겨 두는 시간. 지나면 만료한다(Room의 14일, 2단계 질문 A7).
+ * 묻기의 답(ADR-0024)도 같은 시간을 쓴다.
+ */
+export const INBOX_MS = 14 * 24 * 60 * 60_000;
+
+/**
+ * 편지함의 소식 하나(GLOSSARY): 작업(`branch`, 받는 러너의 멤버의 것)의 에이전트에게 직접 넘겨줄 것. 지금 종류는 내 작업과의 부딪힘 알림뿐이다.
+ * 알림이 생기고, 바뀌고, 풀릴 때마다 두 작업의 편지함에 들어간다. 아직 넘겨주지 않은 같은 알림의 소식은 새 것으로 바뀐다(`id`도 새로 받는다).
+ * `id`는 서버 전체에서 늘어나기만 하는 번호이고 넘겨준 확인(`delivered`)이 가리킨다. `at`은 들어온 시각, `alert`는 들어온 때의 알림이다.
+ */
+export const InboxItem = z.strictObject({
+  id: z.number(),
+  branch: z.string(),
+  at: z.string(),
+  kind: z.literal("alert"),
+  alert: Alert,
+});
+export type InboxItem = z.infer<typeof InboxItem>;
+
+/**
  * 채널에 쌓인 것 하나. `id`는 워크스페이스 전체에서 늘어나기만 하는 번호라 채널 안의 순서이자,
  * 실시간 연결이 다시 붙을 때 이어 받을 자리(`webToServer.hello`의 `after`)다.
  * 사람이 쓴 글(`text`)과 공개된 문답(`qa`), Omagari가 올린 알림(`alert`)이 같은 번호 줄에 선다.
@@ -457,6 +479,11 @@ export const runnerToServer = {
    * 서버는 이 러너의 계산을 이것으로 바꾼다. 붙을 때마다 한 번(비어 있어도), 그 뒤로는 달라질 때마다 보낸다. 공유 수준이 intent인 작업은 싣지 않는다.
    */
   conflicts: z.strictObject({ pairs: z.array(ConflictPair) }),
+  /**
+   * 편지함의 소식을 작업 세션이나 CLI에 넘겼다(`inbox`의 `id`들). 서버는 그 멤버의 것만 지운다.
+   * 서버와 끊긴 사이에 넘긴 것은 다시 붙자마자 보낸다. 서브에이전트에게 보여 준 것은 넘긴 것으로 치지 않아 싣지 않는다.
+   */
+  delivered: z.strictObject({ ids: z.array(z.number()) }),
   /** `ask`(`re`)에 러너 세션이 답했다. 답하지 못했으면 `error`를 `re`를 붙여 보낸다. */
   answer: Reply,
   error: ContractError,
@@ -485,6 +512,11 @@ export const serverToRunner = {
    * welcome 바로 뒤에 보내고, 그 뒤로는 달라질 때마다 다시 보낸다. 러너는 받아 두고 훅에 내준다(ADR-0005).
    */
   situation: z.strictObject({ works: z.array(WorkView) }),
+  /**
+   * 이 러너의 멤버의 편지함 전부(작업마다, 넘겨준 확인이 없고 만료되지 않은 것). welcome 바로 뒤에 보내고, 달라질 때마다 다시 보낸다.
+   * 러너는 받아 두고 훅과 CLI에 내준다.
+   */
+  inbox: z.strictObject({ items: z.array(InboxItem) }),
   error: ContractError,
 } satisfies Payloads;
 
@@ -624,6 +656,13 @@ export const cliToRunner = {
    * 쓰는 곳은 러너의 사본에서 찾고, 고치는 작업은 받아 둔 상황에서 찾는다.
    */
   impact: z.strictObject({ symbol: z.string().min(1) }),
+  /**
+   * 작업(`branch`)의 편지함을 묻는다. 훅과 모든 `omagari` 명령이 부른다. 받아 둔 것으로 바로 답하고, 넘긴 것으로 치지 않는다.
+   * 에이전트에게 넘긴 뒤에 `delivered`로 알린다.
+   */
+  inbox: z.strictObject({ branch: z.string().min(1) }),
+  /** 편지함의 소식(`id`들)을 에이전트에게 넘겼다. 러너는 다시 내주지 않고 서버에 알린다. 서브에이전트에게 보여 준 것은 보내지 않는다. */
+  delivered: z.strictObject({ ids: z.array(z.number()) }),
 } satisfies Payloads;
 
 /** 러너가 CLI와 훅에 보내는 것. */
@@ -663,6 +702,16 @@ export const runnerToCli = {
     /** `situation`의 것과 같다. */
     disconnectedAt: z.string().nullable(),
   }),
+  /** `inbox`의 답: 그 작업의 소식, 들어온 순서. 받아 둔 것이 아직 없으면 `error`(`runner_offline`)다. */
+  inbox: z.strictObject({
+    /** 이 러너의 멤버 */
+    login: z.string(),
+    items: z.array(InboxItem),
+    /** `situation`의 것과 같다. */
+    disconnectedAt: z.string().nullable(),
+  }),
+  /** `delivered`를 받았다. */
+  delivered: z.strictObject({}),
   error: ContractError,
 } satisfies Payloads;
 
@@ -832,6 +881,17 @@ export const api = {
     path: "/api/dms",
     body: z.strictObject({ channel: z.string() }),
     response: z.strictObject({ qas: z.array(Qa) }),
+  },
+  /**
+   * 피드: 최근 소식(`INBOX_MS` 안에 생기거나 바뀐 알림) 가운데 부른 멤버의 작업이 걸리지 않은 것. 걸린 것은 그 작업의 편지함으로 간다.
+   * 새것부터 `FEED_PAGE`개다. `omagari status`의 최근 소식이 이것이다. `at`은 알림이 마지막으로 바뀐 시각이다.
+   */
+  feed: {
+    method: "GET",
+    path: "/api/feed",
+    response: z.strictObject({
+      news: z.array(z.strictObject({ at: z.string(), alert: Alert })),
+    }),
   },
   /** 채팅 채널 전부, 이름 순서. 멤버만 본다. */
   channels: {

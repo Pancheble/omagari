@@ -336,6 +336,8 @@ export async function startWorld(
     share?: ShareLevel;
     followMs?: number;
     forgetMs?: number;
+    /** 편지함의 소식을 남겨 두는 시간. 줄여서 만료를 본다. 만료는 `followMs`마다 치운다. */
+    inboxMs?: number;
     /** 고른 접속 상태가 온라인으로 돌아오기까지의 시간. 줄여서 만료를 본다. */
     presenceDurations?: Partial<Record<PresenceDuration, number>>;
     /** 서버가 처음 뜨기 전에 DB에 넣을 SQL. 예전 판이 만든 DB로 띄울 때 쓴다. */
@@ -360,6 +362,7 @@ export async function startWorld(
     heartbeatMs: options.heartbeatMs,
     followMs: options.followMs,
     forgetMs: options.forgetMs,
+    inboxMs: options.inboxMs,
     presenceDurations: options.presenceDurations,
   };
   let server = await startServer(serverOptions).catch(async (error) => {
