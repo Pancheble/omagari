@@ -22,3 +22,6 @@ jobs:
             ci
             perf
           requireScope: false
+          subjectPattern: ^.{0,49}[^.]$
+          subjectPatternError: |
+            요약 "{subject}"은 50자 안쪽이어야 하고, 끝에 마침표가 없어야 해요.
