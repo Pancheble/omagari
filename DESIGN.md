@@ -433,6 +433,13 @@ components:
     rounded: "{rounded.lg}"
     padding: 14px 8px 8px
     width: 240px
+  app-side-panel-peek:
+    backgroundColor: "{colors.canvas-parchment}"
+    borderColor: "{colors.hairline}"
+    shadow: 0 8px 24px #0000001f
+    rounded: "{rounded.lg}"
+    padding: 14px 8px 8px
+    width: 240px
   app-right-panel:
     backgroundColor: "{colors.canvas-parchment}"
     borderColor: "{colors.selected}"
@@ -962,6 +969,7 @@ Apple's whitespace is the product's pedestal. Every tile begins with at least 64
 - **창**: 창 바탕은 `{colors.canvas}`이고, 안쪽 8px 여백과 8px 간격으로 세 칸을 둔다. 왼쪽 채널 패널 240px, 가운데 대화 칸(남는 폭), 오른쪽 칸 300px이다.
 - **떠 있는 패널**: 채널 패널과 오른쪽 칸은 `{component.app-side-panel}`, `{component.app-right-panel}`이다. 파치먼트 바탕, `{rounded.lg}` 18px, 안쪽 1px 선(검정 6%)을 쓴다. 대화 칸은 패널이 아니라 창 바탕 위에 바로 놓는다.
 - **오른쪽 칸은 하나만**: 멤버 목록과 내 에이전트(DM) 가운데 하나만 열린다. 채널 머리 띠의 두 버튼으로 열고, 같은 버튼을 다시 누르면 닫힌다. 닫히면 대화 칸이 넓어진다.
+- **채널 패널은 접힌다**(834px 이상): 접으면 패널이 자리째 빠지고 대화 칸이 창 왼쪽 8px까지 넓어진다. 접힌 동안에는 창 왼쪽 가장자리에서 잠깐 꺼내 볼 수 있다. 처음에는 펼쳐 둔다. 자세한 것은 "채널 패널 접기"에 있다.
 - **대화 칸**: 위에서부터 머리 띠(52px, 아래에 `{colors.divider}` 선), 메시지 목록(아래로 쌓임), 입력 칸이다. 메시지 글줄은 720px을 넘지 않는다.
 
 ## Elevation & Depth
@@ -971,7 +979,7 @@ Apple's whitespace is the product's pedestal. Every tile begins with at least 64
 | Flat | No shadow, no border | Full-bleed tiles, global nav, footer, body sections |
 | Soft hairline | 1px `{colors.hairline}` border | Utility cards, inputs, chips, the Q&A card |
 | Backdrop blur | `backdrop-filter: saturate(180%) blur(20px)` on Parchment 80% | Sub-nav and the iPhone buy floating sticky bar |
-| Floating layer (앱) | 1px `{colors.hairline}` + `0 8px 24px rgba(0, 0, 0, 0.12)` | 메뉴, 상태 메뉴의 시간 고르기, 대화 상자 |
+| Floating layer (앱) | 1px `{colors.hairline}` + `0 8px 24px rgba(0, 0, 0, 0.12)` | 메뉴, 상태 메뉴의 시간 고르기, 대화 상자, 꺼내 본 채널 패널 |
 | Product shadow | `rgba(0, 0, 0, 0.22) 3px 5px 30px 0` | Product renders resting on a surface |
 
 **Shadow philosophy.** Apple uses exactly one drop-shadow, and it is applied to photographic product imagery — never to cards, never to buttons, never to text. Elevation in the UI comes from (a) surface-color change (light tile ↔ dark tile) and (b) backdrop-blur on sticky bars. The single shadow is about giving the product weight, not about UI hierarchy.
@@ -1082,6 +1090,26 @@ Apple's whitespace is the product's pedestal. Every tile begins with at least 64
   - 올렸을 때 `{component.app-nav-item-hover}`, 고른 채널은 `{component.app-nav-item-selected}`(바탕 6%, 이름 600, 아이콘만 강조색).
   - 채널 줄에는 초대나 설정 버튼을 두지 않는다. 1단계에는 채널마다의 멤버나 설정이 없다. 생기면 줄에 올렸을 때 보이는 버튼으로 더한다.
 - 좁은 화면(833px 이하)에서는 줄과 카테고리 머리 높이를 44px로 올린다.
+
+#### 채널 패널 접기
+
+넓은 화면(834px 이상)에서 채널 패널을 접어 대화 칸을 넓힌다. 접으면 다 숨기고, 필요할 때 창 왼쪽 가장자리에서 잠깐 꺼내 본다(Notion의 사이드바처럼).
+
+- **접는 버튼**: 워크스페이스 이름 줄 오른쪽 끝의 28px 버튼이다. `{rounded.sm}`, 18px Lucide `panel-left-close`, 보조 글씨 색이고 늘 보인다. 올렸을 때 `{colors.hover}`, 툴팁은 "채널 패널 닫기 ⌘\". 833px 이하의 서랍에서는 숨긴다.
+- **접은 모습**: 패널이 그 안의 프로필 패널까지 다 빠지고, 대화 칸이 창 왼쪽 8px까지 넓어진다. 아이콘 줄은 남기지 않는다.
+  - 채널 머리 띠 왼쪽 끝(좁은 화면의 메뉴 버튼 자리)에 32px 펴는 버튼(`{component.app-header-button}`, Lucide `panel-left-open`)이 생긴다. 툴팁은 "채널 패널 열기 ⌘\"이고, 누르면 펼친다.
+  - 펴는 버튼이 있는 동안 머리 띠 왼쪽 안쪽 여백은 4px이다.
+- **꺼내 보기**: 접혀 있을 때 펴는 버튼이나 창 왼쪽 가장자리(창 안쪽 여백 8px)에 마우스를 0.3초 두면, 패널이 대화 위에 떠서 보인다(`{component.app-side-panel-peek}`).
+  - 자리는 펼친 패널과 같다(위·왼쪽·아래 8px, 폭 240px). 대화 칸은 밀리지 않고, 뒤 덮개도 없다.
+  - 왼쪽에서 240ms로 미끄러져 들어온다(서랍과 같은 `cubic-bezier(0.16, 1, 0.3, 1)`).
+  - 마우스가 패널 밖으로 나가 0.3초가 지나거나, 채널을 고르거나, Esc를 누르면 닫힌다. 패널에서 연 메뉴나 대화 상자(상태 메뉴, 채널 만들기)가 열려 있는 동안은 닫히지 않는다.
+  - 꺼내 본 패널의 오른쪽 위 버튼은 Lucide `panel-left-open`, "채널 패널 펼쳐 두기"가 된다. 누르면 펼친 상태로 돌아간다.
+  - 키보드로 펴는 버튼에 가는 것만으로는 꺼내 보지 않는다. 키보드로는 버튼을 눌러 펼친다.
+- **단축키**: 맥은 ⌘\, 그 밖은 Ctrl+\로 접고 편다(Notion과 같다). 834px 이상에서만 듣는다.
+- **움직임**: 접고 펼 때 패널 칸 폭이 240ms(`cubic-bezier(0.16, 1, 0.3, 1)`)로 줄고 는다. 움직임 줄이기 설정이면 꺼내 보기와 함께 바로 바뀐다.
+- **초점**: 접는 버튼으로 접으면 초점이 머리 띠의 펴는 버튼으로, 펴는 버튼으로 펼치면 패널의 접는 버튼으로 간다. 접힌 패널은 초점과 화면 읽기에서 빠진다(`inert`). 두 버튼에 `aria-expanded`와 `aria-controls`를 단다.
+- **기억**: 접힌 상태는 카테고리 접기처럼 기기마다 기억한다. 처음에는 펼쳐 둔다.
+- 833px 이하에서는 접기가 없다. 머리 띠 왼쪽 메뉴 버튼이 지금처럼 서랍을 연다. 다시 넓어지면 기억한 상태로 돌아간다.
 
 #### 프로필 패널과 상태 메뉴
 
@@ -1276,6 +1304,7 @@ Apple's whitespace is the product's pedestal. Every tile begins with at least 64
 - 앱: 한글에 음수 자간을 주지 않는다.
 - 앱: 회사 로고나 이모지를 아이콘으로 쓰지 않는다.
 - 앱: 오른쪽 칸에 멤버 목록과 DM을 함께 열지 않는다.
+- 앱: 채널 패널을 처음부터 접어 두지 않는다. 처음 보는 사람이 채널을 찾지 못한다.
 
 ## Responsive Behavior
 
@@ -1311,8 +1340,8 @@ The structural breakpoints that matter for agents: 1440px (content lock), 1068px
 
 | 폭 | 앱 틀 |
 | --- | --- |
-| 1069px 이상 | 세 칸(채널 패널, 대화, 오른쪽 칸) |
-| 834–1068px | 채널 패널과 대화 두 칸. 오른쪽 칸은 대화 위에 겹쳐 열린다(폭 320px, 떠 있는 층) |
+| 1069px 이상 | 세 칸(채널 패널, 대화, 오른쪽 칸). 채널 패널을 접으면 대화와 오른쪽 칸 두 칸 |
+| 834–1068px | 채널 패널과 대화 두 칸. 오른쪽 칸은 대화 위에 겹쳐 열린다(폭 320px, 떠 있는 층). 채널 패널을 접으면 대화만 |
 | 833px 이하 | 대화만. 머리 띠 왼쪽 메뉴 버튼이 채널 패널(프로필 포함)을 왼쪽 서랍으로 열고, 오른쪽 두 버튼이 내 에이전트와 멤버 목록을 아래에서 올라오는 전체 높이 시트로 연다. 버튼과 줄은 44px |
 
 ### Image Behavior
