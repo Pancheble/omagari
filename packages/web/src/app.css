@@ -37,6 +37,10 @@
     "IBM Plex Sans KR", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic",
     system-ui, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  /* 이모지는 색 이모지 글꼴로 그린다. 본문 글꼴이 ©나 ↔를 흑백 글자로 그리지 않게. emoji.tsx의 EMOJI_FONT와 같다. */
+  --emoji:
+    "Apple Color Emoji", "Noto Color Emoji", "Segoe UI Emoji", "Twemoji Mozilla", "Android Emoji",
+    sans-serif;
   /* 버튼, 머리 띠 버튼, 메뉴 줄의 높이. 좁은 화면에서는 44px로 키운다. */
   --control: 32px;
   scrollbar-color: #0000003d transparent;
@@ -127,7 +131,9 @@ svg.lucide {
 .category-add:active,
 .emoji-button:active,
 .clear-button:active,
-.emoji-grid button:active,
+.tone-button:active,
+.emoji-row button:active,
+.emoji-bar button:active:not(:disabled),
 .send-button:active:not(:disabled) {
   transform: scale(0.95);
 }
@@ -731,33 +737,185 @@ svg.lucide {
   color: var(--ink);
 }
 
-.emoji-grid {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 2px;
-  min-width: 0;
-  margin: 0;
-  padding: 4px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--rounded-md);
+.emoji {
+  font-family: var(--emoji);
 }
 
-.emoji-grid button {
+.emoji-button .emoji {
+  font-size: 18px;
+  line-height: 1;
+}
+
+/*
+ * 이모지 팔레트(DESIGN.md "이모지 팔레트"): 상태 메뉴 오른쪽 옆에 폭 474px로 열리고 아래 끝을 상태 메뉴에 맞춘다.
+ * 위에서부터 찾기 줄, 이모지 목록(316px, 칸 안에서 스크롤), 분류 막대.
+ */
+.emoji-palette {
+  top: auto;
+  right: auto;
+  bottom: -1px;
+  left: calc(100% + 7px);
+  display: flex;
+  flex-direction: column;
+  width: 474px;
+  padding: 0;
+}
+
+.palette-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 10px 8px;
+}
+
+.palette-find {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
   height: 32px;
+  padding: 0 10px;
+  border-radius: var(--rounded-sm);
+  background: var(--selected);
+  color: var(--text-secondary);
+}
+
+.palette-find:focus-within {
+  outline: 2px solid var(--primary-focus);
+  outline-offset: -2px;
+}
+
+.palette-find input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+}
+
+.palette-find input:focus-visible {
+  outline: 0;
+}
+
+.palette-search .button {
+  height: 32px;
+}
+
+.tone-button,
+.emoji-row button,
+.emoji-bar button {
+  display: grid;
+  flex: none;
+  place-items: center;
   padding: 0;
   border: 0;
   border-radius: var(--rounded-sm);
   background: transparent;
-  font-size: 18px;
-  line-height: 1;
   cursor: pointer;
   transition:
     transform 120ms ease-out,
     background-color 120ms ease-out;
 }
 
-.emoji-grid button:hover {
+.tone-button {
+  width: 32px;
+  height: 32px;
+  font: 18px / 1 var(--emoji);
+}
+
+.tone-button:hover,
+.emoji-row button:hover {
   background: var(--hover);
+}
+
+.emoji-list {
+  --cell: 34px;
+  position: relative;
+  height: 316px;
+  padding: 0 10px 8px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.emoji-section h3 {
+  margin: 0;
+  padding: 8px 2px 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.33;
+}
+
+.emoji-row {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 2px;
+}
+
+.emoji-row button {
+  width: var(--cell);
+  height: var(--cell);
+  font: 22px / 1 var(--emoji);
+}
+
+.emoji-row button[aria-selected="true"] {
+  background: var(--selected);
+}
+
+.emoji-empty {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+/* 분류 막대: "최근 사용"과 분류 아홉. 지금 보이는 분류는 고른 줄 바탕에 본문 색. */
+.emoji-bar {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 8px calc(4px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--divider);
+}
+
+.emoji-bar button {
+  width: 36px;
+  height: 32px;
+  color: var(--text-secondary);
+}
+
+.emoji-bar button:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.emoji-bar button[aria-current] {
+  background: var(--selected);
+  color: var(--ink);
+}
+
+.emoji-bar button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* 좁은 화면: 상태 메뉴 위에 겹쳐 아래에서 올라오는 시트. 칸은 44px, 열 수는 폭에 맞춘다. */
+@media (max-width: 833px) {
+  .emoji-palette {
+    position: fixed;
+    inset: auto 0 0;
+    z-index: 2;
+    width: auto;
+    border-radius: var(--rounded-lg) var(--rounded-lg) 0 0;
+  }
+
+  .emoji-list {
+    --cell: 44px;
+  }
 }
 
 /* 접속 상태 줄: 점, 이름(설명이 붙으면 40px), 시간을 정하는 줄은 오른쪽 꺾쇠. 지금 상태는 고른 줄 바탕. */

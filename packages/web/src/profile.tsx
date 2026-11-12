@@ -4,13 +4,14 @@ import {
   type MemberView,
   type PresenceDuration,
 } from "@omagari/contract";
-import { ChevronRight, Smile, X } from "lucide-react";
+import { ChevronRight, SmilePlus, X } from "lucide-react";
 import { type KeyboardEvent, type RefObject, useEffect, useId, useRef, useState } from "react";
 import type { Me } from "./api.ts";
+import { EmojiPalette, loadEmoji } from "./emoji.tsx";
 import { Avatar, Dot } from "./workspace.tsx";
 
 type SetPresence = (presence: ChosenPresence, duration?: PresenceDuration) => Promise<void>;
-type SetMessage = (message: string) => Promise<void>;
+type SetMessage = (message: string, emoji: string | null) => Promise<void>;
 
 /** 나에게 보이는 내 접속 상태의 이름. 창을 연 채 오프라인이면 "오프라인으로 보이기"를 고른 것이다. */
 const MINE = {
@@ -38,37 +39,19 @@ const DURATIONS: [PresenceDuration | undefined, string][] = [
   [undefined, "직접 바꿀 때까지"],
 ];
 
-/** 이모지 고르기에 놓는 것. 상태 메시지에 자주 쓰는 것만 둔다. 그 밖의 것은 운영체제의 이모지 입력으로 쓴다. */
-// ponytail: 고정된 24개다. 찾아 고르는 전체 목록이 필요해지면 frimousse 같은 작은 고르기를 데이터와 함께 직접 호스팅해 붙인다.
-const EMOJI = [
-  "💬",
-  "🎯",
-  "🚀",
-  "🔥",
-  "✅",
-  "🐛",
-  "🔧",
-  "🧪",
-  "📦",
-  "📝",
-  "👀",
-  "🤔",
-  "☕",
-  "🍽️",
-  "🏠",
-  "🚗",
-  "✈️",
-  "🤒",
-  "🌴",
-  "🎧",
-  "📅",
-  "🎉",
-  "😴",
-  "🙏",
-];
-
 /** 서버가 접는 대로 접는다: 줄바꿈과 겹친 공백은 공백 하나, 앞뒤 공백은 뗀다. */
 const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
+
+/** 상태 메시지: 이모지 한 칸을 글 앞에 한 칸 띄어 쓴다. 이모지만 있으면 이모지만 보인다. */
+export const StatusText = ({ emoji, message }: Pick<MemberView, "emoji" | "message">) => (
+  <>
+    {emoji && <span className="emoji">{emoji}</span>}
+    {emoji && message && " "}
+    {message}
+  </>
+);
+const hasStatus = (member?: MemberView): member is MemberView =>
+  member !== undefined && (member.emoji !== null || member.message !== null);
 
 /**
  * 채널 패널 맨 아래의 프로필 패널(DESIGN.md "프로필 패널과 상태 메뉴"). 패널 전체가 버튼 하나이고, 누르면 바로 위에 상태 메뉴가 열린다.
@@ -129,7 +112,9 @@ export function ProfilePanel({
         <Avatar name={me.name} size={36} presence={mine?.presence} />
         <span className="names">
           <strong>{me.name}</strong>
-          <span>{mine?.message ?? (chosen ? MINE[chosen] : me.login)}</span>
+          <span>
+            {hasStatus(mine) ? <StatusText {...mine} /> : chosen ? MINE[chosen] : me.login}
+          </span>
         </span>
       </button>
       {/* 메뉴는 버튼 뒤에 둔다. 위에 떠 보여도 Tab은 버튼에서 메뉴로 간다. */}
@@ -150,7 +135,7 @@ export function ProfilePanel({
 
 /**
  * 상태 메뉴. 위에서부터 나, 상태 메시지 칸, 온라인, 시간을 정해 거는 셋, 설정과 로그아웃이다.
- * 상태 메시지는 Enter, 칸을 떠날 때, 메뉴가 닫힐 때 저장한다. 칸에서 Esc를 누르면 쓰던 것을 버리고 닫는다.
+ * 상태 메시지(글과 이모지 한 칸)는 Enter, 칸을 떠날 때, 메뉴가 닫힐 때 저장한다. 칸에서 Esc를 누르면 쓰던 것을 버리고 닫는다.
  */
 function StatusMenu({
   id,
@@ -171,10 +156,13 @@ function StatusMenu({
 }) {
   const chosen = chosenOf(mine);
   const [draft, setDraft] = useState(mine?.message ?? "");
-  const [emoji, setEmoji] = useState(false);
+  const [emoji, setEmoji] = useState(mine?.emoji ?? null);
+  const [palette, setPalette] = useState(false);
   const [flyout, setFlyout] = useState<ChosenPresence>();
   const [failure, setFailure] = useState<string>();
   const input = useRef<HTMLInputElement>(null);
+  const emojiButton = useRef<HTMLButtonElement>(null);
+  const paletteRef = useRef<HTMLDivElement>(null);
   const editor = useRef<HTMLDivElement>(null);
   const flyoutRef = useRef<HTMLDivElement>(null);
   /** 키보드로 시간 메뉴를 열었으면 그 첫 줄로 간다. 마우스로 열면 초점을 옮기지 않는다(쓰던 칸을 빼앗지 않는다). */
@@ -183,29 +171,42 @@ function StatusMenu({
   const over = Array.from(normalize(draft)).length > MAX_STATUS_MESSAGE_CHARS;
 
   /** 마지막으로 저장한(보낸) 상태 메시지. 같은 것은 다시 보내지 않는다. */
-  const saved = useRef(mine?.message ?? "");
-  const save = async (text: string) => {
+  const saved = useRef({ message: mine?.message ?? "", emoji: mine?.emoji ?? null });
+  const save = async (text: string, picked: string | null) => {
     const message = normalize(text);
-    if (message === saved.current || Array.from(message).length > MAX_STATUS_MESSAGE_CHARS) return;
-    saved.current = message;
+    if (Array.from(message).length > MAX_STATUS_MESSAGE_CHARS) return;
+    if (message === saved.current.message && picked === saved.current.emoji) return;
+    saved.current = { message, emoji: picked };
     setFailure(undefined);
     try {
-      await onMessage(message);
+      await onMessage(message, picked);
     } catch {
-      saved.current = "";
+      saved.current = { message: "", emoji: null };
       setFailure("상태 메시지를 저장하지 못했어요");
     }
   };
   // 바깥을 눌러 닫혀도 쓰던 것을 저장한다. 칸에서 Esc로 닫으면 버린다.
-  const latest = useRef({ save, draft, cancelled: false });
-  latest.current = { ...latest.current, save, draft };
-  useEffect(
-    () => () => {
-      const { save, draft, cancelled } = latest.current;
-      if (!cancelled) void save(draft).catch(() => {});
-    },
-    [],
-  );
+  const latest = useRef({ save, draft, emoji, cancelled: false });
+  latest.current = { ...latest.current, save, draft, emoji };
+  useEffect(() => {
+    void loadEmoji(); // 팔레트를 열기 전에 데이터를 받아 둔다
+    return () => {
+      const { save, draft, emoji, cancelled } = latest.current;
+      if (!cancelled) void save(draft, emoji).catch(() => {});
+    };
+  }, []);
+
+  // 팔레트 바깥(이모지 버튼 말고)을 누르면 팔레트만 닫힌다.
+  useEffect(() => {
+    if (!palette) return;
+    const outside = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!paletteRef.current?.contains(target) && !emojiButton.current?.contains(target))
+        setPalette(false);
+    };
+    document.addEventListener("pointerdown", outside);
+    return () => document.removeEventListener("pointerdown", outside);
+  }, [palette]);
 
   useEffect(() => {
     if (!flyout || !focusFlyout.current) return;
@@ -223,23 +224,18 @@ function StatusMenu({
     }
   };
 
-  const insert = (picked: string) => {
-    const field = input.current;
-    const start = field?.selectionStart ?? draft.length;
-    const end = field?.selectionEnd ?? draft.length;
-    setDraft(draft.slice(0, start) + picked + draft.slice(end));
-    setEmoji(false);
-    requestAnimationFrame(() => {
-      field?.focus();
-      field?.setSelectionRange(start + picked.length, start + picked.length);
-    });
+  /** 팔레트에서 고르거나 지우면 이모지 칸이 바뀌고(글에 이어 붙지 않는다) 팔레트가 닫혀 글 칸으로 돌아간다. */
+  const choose = (picked: string | null) => {
+    setEmoji(picked);
+    setPalette(false);
+    input.current?.focus();
   };
 
   const onFieldKey = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Enter" && !event.nativeEvent.isComposing) {
       event.preventDefault();
       if (over) return;
-      void save(draft);
+      void save(draft, emoji);
       onDone();
     } else if (event.key === "Escape") {
       latest.current.cancelled = true; // 메뉴를 닫는 것은 프로필 패널이 한다
@@ -279,18 +275,20 @@ function StatusMenu({
         className="status-editor"
         ref={editor}
         onBlur={(event) => {
-          if (!editor.current?.contains(event.relatedTarget as Node)) void save(draft);
+          if (!editor.current?.contains(event.relatedTarget as Node)) void save(draft, emoji);
         }}
       >
         <div className="status-field" data-invalid={over || undefined}>
           <button
+            ref={emojiButton}
             type="button"
             className="emoji-button"
-            aria-label="이모지 넣기"
-            aria-expanded={emoji}
-            onClick={() => setEmoji(!emoji)}
+            aria-label={emoji ? `상태 이모지 ${emoji} 바꾸기` : "상태 이모지 고르기"}
+            aria-haspopup="dialog"
+            aria-expanded={palette}
+            onClick={() => setPalette(!palette)}
           >
-            <Smile size={18} aria-hidden />
+            {emoji ? <span className="emoji">{emoji}</span> : <SmilePlus size={18} aria-hidden />}
           </button>
           <input
             ref={input}
@@ -303,14 +301,15 @@ function StatusMenu({
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={onFieldKey}
           />
-          {draft && (
+          {(draft || emoji) && (
             <button
               type="button"
               className="clear-button"
               aria-label="상태 메시지 지우기"
               onClick={() => {
                 setDraft("");
-                void save("");
+                setEmoji(null);
+                void save("", null);
                 input.current?.focus();
               }}
             >
@@ -318,23 +317,18 @@ function StatusMenu({
             </button>
           )}
         </div>
-        {emoji && (
-          <fieldset
-            className="emoji-grid"
-            onKeyDown={(event) => {
-              if (event.key !== "Escape") return;
-              event.stopPropagation();
-              setEmoji(false);
-              input.current?.focus();
-            }}
-          >
-            <legend className="sr-only">이모지</legend>
-            {EMOJI.map((picked) => (
-              <button key={picked} type="button" onClick={() => insert(picked)}>
-                {picked}
-              </button>
-            ))}
-          </fieldset>
+        {palette && (
+          <div ref={paletteRef}>
+            <EmojiPalette
+              current={emoji}
+              onPick={choose}
+              onClear={() => choose(null)}
+              onClose={() => {
+                setPalette(false);
+                emojiButton.current?.focus();
+              }}
+            />
+          </div>
         )}
         {over && (
           <p id={help} className="help error">

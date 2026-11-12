@@ -1,6 +1,7 @@
 import { ago, EXECUTOR_NAMES, type ExecutorId, type MemberView } from "@omagari/contract";
 import { ChevronRight, Clock } from "lucide-react";
 import { type ComponentProps, useEffect, useId, useReducer, useState } from "react";
+import { StatusText } from "./profile.tsx";
 import { Avatar, PRESENCE_WORDS } from "./workspace.tsx";
 
 /** 에이전트 표시에 쓰는 실행기 약자(DESIGN.md 에이전트 표시). */
@@ -75,11 +76,8 @@ function MemberRow({ member, me }: { member: Member; me: boolean }) {
       member.agents.length > 1 ? `${EXECUTOR_NAMES[agent.executor]} 답하는 중` : "답하는 중",
     );
   const word = member.presence === "online" ? undefined : PRESENCE_WORDS[member.presence];
-  const rest = [
-    member.message === null && word,
-    ...answering,
-    count > 0 ? `작업 ${count}개` : "작업 없음",
-  ]
+  const status = member.message !== null || member.emoji !== null;
+  const rest = [!status && word, ...answering, count > 0 ? `작업 ${count}개` : "작업 없음"]
     .filter(Boolean)
     .join(" · ");
   const head = (
@@ -91,8 +89,12 @@ function MemberRow({ member, me }: { member: Member; me: boolean }) {
           {me && <span className="me">나</span>}
         </strong>
         <span className="member-status">
-          {member.message !== null && <span className="status-message">{member.message}</span>}
-          <span className="status-rest">{member.message === null ? rest : `\u00a0· ${rest}`}</span>
+          {status && (
+            <span className="status-message">
+              <StatusText {...member} />
+            </span>
+          )}
+          <span className="status-rest">{status ? `\u00a0· ${rest}` : rest}</span>
         </span>
       </span>
       {count > 0 && <ChevronRight size={14} className="chevron" aria-hidden />}

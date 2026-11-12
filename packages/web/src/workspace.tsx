@@ -300,9 +300,9 @@ export function Workspace({
       throw check(error);
     }
   };
-  const setMessage = async (message: string) => {
+  const setMessage = async (message: string, emoji: string | null) => {
     try {
-      await call(server(session), api.setStatusMessage, { message });
+      await call(server(session), api.setStatusMessage, { message, emoji });
     } catch (error) {
       throw check(error);
     }
@@ -517,7 +517,7 @@ function ChannelPanel({
   mine?: MemberView;
   onLogout: () => void;
   onPresence: (presence: ChosenPresence, duration?: PresenceDuration) => Promise<void>;
-  onMessage: (message: string) => Promise<void>;
+  onMessage: (message: string, emoji: string | null) => Promise<void>;
   children: ReactNode;
 }) {
   return (

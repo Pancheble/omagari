@@ -98,8 +98,8 @@ test("오프라인으로 보이기를 고르면 다른 멤버의 API와 실시�
   const watching = await world.live(world.owner);
   const seen = () => watching.members().find((member) => member.login === "alice");
   await eventually(() => assert.equal(seen()?.presence, "online"));
-  await call(alice, api.setStatusMessage, { message: "회의 중" });
-  await call(bob, api.setStatusMessage, { message: "회의 중" });
+  await call(alice, api.setStatusMessage, { message: "회의 중", emoji: null });
+  await call(bob, api.setStatusMessage, { message: "회의 중", emoji: null });
 
   await call(alice, api.setPresence, { presence: "invisible" });
   await eventually(() => assert.equal(seen()?.presence, "offline"));
@@ -127,25 +127,95 @@ test("상태 메시지는 이모지를 쓸 수 있고, HTML은 쓴 그대로 글
   const seen = () => watching.members().find((member) => member.login === "alice")?.message;
 
   const text = "🚀 배포 중 <script>alert(1)</script>";
-  assert.deepEqual(await call(alice, api.setStatusMessage, { message: ` ${text}\n` }), {
-    message: text,
-  });
+  assert.deepEqual(
+    await call(alice, api.setStatusMessage, { message: ` ${text}\n`, emoji: null }),
+    {
+      message: text,
+      emoji: null,
+    },
+  );
   await eventually(() => assert.equal(seen(), text));
   assert.equal((await memberOf(world.owner, "alice"))?.message, text);
 
   // 한도는 코드 포인트로 센다. 이모지 100개(UTF-16으로는 200)까지 된다.
   const full = "🎉".repeat(MAX_STATUS_MESSAGE_CHARS);
-  assert.deepEqual(await call(alice, api.setStatusMessage, { message: full }), { message: full });
+  assert.deepEqual(await call(alice, api.setStatusMessage, { message: full, emoji: null }), {
+    message: full,
+    emoji: null,
+  });
   await assert.rejects(
-    call(alice, api.setStatusMessage, { message: `${full}!` }),
+    call(alice, api.setStatusMessage, { message: `${full}!`, emoji: null }),
     failsWith("invalid_request"),
   );
   assert.equal((await memberOf(world.owner, "alice"))?.message, full);
 
-  assert.deepEqual(await call(alice, api.setStatusMessage, { message: "  \n " }), {
+  assert.deepEqual(await call(alice, api.setStatusMessage, { message: "  \n ", emoji: null }), {
     message: null,
+    emoji: null,
   });
   await eventually(() => assert.equal(seen(), null));
+});
+
+test("상태 메시지의 이모지는 글과 따로 두는 한 칸이다. 이모지 하나(글자 묶음 하나)만 받고, 바뀌면 새로 고침 없이 따라오고, 서버가 다시 떠도 남는다", async (t) => {
+  const world = await startWorld();
+  t.after(world.stop);
+  world.github.grant("alice");
+  const alice = await world.login("alice");
+  const watching = await world.live(world.owner);
+  const seen = () => {
+    const member = watching.members().find((member) => member.login === "alice");
+    return member && { emoji: member.emoji, message: member.message };
+  };
+
+  assert.deepEqual(await call(alice, api.setStatusMessage, { message: "회의 중", emoji: "📅" }), {
+    message: "회의 중",
+    emoji: "📅",
+  });
+  await eventually(() => assert.deepEqual(seen(), { emoji: "📅", message: "회의 중" }));
+
+  // 다른 이모지를 고르면 그 칸이 바뀐다. 글에 이어 붙지 않는다.
+  await call(alice, api.setStatusMessage, { message: "회의 중", emoji: "🌴" });
+  await eventually(() => assert.deepEqual(seen(), { emoji: "🌴", message: "회의 중" }));
+
+  // 피부색, ZWJ 묶음, 깃발, 키캡, 이 런타임의 유니코드 판보다 새 이모지(🫫, Emoji 18)도 글자 묶음 하나라 받는다.
+  for (const emoji of ["👋🏽", "👩‍💻", "🇰🇷", "1️⃣", "🏴󠁧󠁢󠁳󠁣󠁴󠁿", "🫫"]) {
+    const saved = await call(alice, api.setStatusMessage, { message: "회의 중", emoji });
+    assert.equal(saved.emoji, emoji);
+  }
+
+  // 이모지가 아니거나 둘 이상이면 거절하고, 있던 것은 그대로다.
+  await call(alice, api.setStatusMessage, { message: "회의 중", emoji: "🌴" });
+  for (const emoji of ["", " ", "a", "가", "😀😀", "🌴 휴가", " 🌴"]) {
+    await assert.rejects(
+      call(alice, api.setStatusMessage, { message: "회의 중", emoji }),
+      failsWith("invalid_request"),
+      JSON.stringify(emoji),
+    );
+  }
+  assert.equal((await memberOf(world.owner, "alice"))?.emoji, "🌴");
+
+  // 이모지만 둘 수 있다. 서버가 다시 떠도 남는다.
+  assert.deepEqual(await call(alice, api.setStatusMessage, { message: " ", emoji: "🎧" }), {
+    message: null,
+    emoji: "🎧",
+  });
+  await eventually(() => assert.deepEqual(seen(), { emoji: "🎧", message: null }));
+  await world.restartServer();
+  // 꺼진 서버와의 연결이 끊긴 채 남아 있어 첫 요청이 실패할 수 있다.
+  await eventually(async () => assert.equal((await memberOf(world.owner, "alice"))?.emoji, "🎧"));
+
+  // 이모지만 지우면 글은 남고, 둘 다 비우면 상태 메시지가 없다.
+  await call(alice, api.setStatusMessage, { message: "점심", emoji: "🍜" });
+  assert.deepEqual(await call(alice, api.setStatusMessage, { message: "점심", emoji: null }), {
+    message: "점심",
+    emoji: null,
+  });
+  await call(alice, api.setStatusMessage, { message: "", emoji: null });
+  const view = await memberOf(world.owner, "alice");
+  assert.deepEqual(view && { emoji: view.emoji, message: view.message }, {
+    emoji: null,
+    message: null,
+  });
 });
 
 test("멤버가 아니면 다른 사람의 접속 상태와 상태 메시지를 읽지도 바꾸지도 못한다. 권한을 잃으면 목록에서도 빠진다", async (t) => {
@@ -153,7 +223,7 @@ test("멤버가 아니면 다른 사람의 접속 상태와 상태 메시지를 
   t.after(world.stop);
   world.github.grant("alice");
   const alice = await world.login("alice");
-  await call(alice, api.setStatusMessage, { message: "비밀 작업 중" });
+  await call(alice, api.setStatusMessage, { message: "비밀 작업 중", emoji: null });
   const window = await world.live(alice);
 
   // push 권한이 없는 계정은 들어오지 못한다.
@@ -166,7 +236,7 @@ test("멤버가 아니면 다른 사람의 접속 상태와 상태 메시지를 
       failsWith("unauthorized"),
     );
     await assert.rejects(
-      call(as, api.setStatusMessage, { message: "끼어들기" }),
+      call(as, api.setStatusMessage, { message: "끼어들기", emoji: null }),
       failsWith("unauthorized"),
     );
   }
