@@ -251,6 +251,8 @@ export const MemberView = z.strictObject({
       /** 이 작업의 에이전트. 모르면 null이고, 작업은 에이전트 없이 사람 아래에 둔다(ADR-0015). */
       executor: ExecutorId.nullable(),
       line: StatusLine.nullable(),
+      /** 이 작업에 직접 충돌(줄이 부딪히는 것이 확인된 알림)이 걸려 있다. 풀리면 false로 돌아온다. */
+      conflict: z.boolean(),
     }),
   ),
 });
@@ -332,10 +334,51 @@ export const Qa = z.strictObject({
 });
 export type Qa = z.infer<typeof Qa>;
 
+/** 줄 범위 하나. 1부터 세고 끝을 포함한다. 지운 줄만 있는 곳은 그 앞 줄로 적는다. */
+export const LineRange = z.strictObject({ from: z.number(), to: z.number() });
+export type LineRange = z.infer<typeof LineRange>;
+
+/**
+ * 남의 파일 내용을 읽을 수 없는 까닭: 공유 수준과 빠진 파일(`ObservedFile.omitted`), 또는 그 사람의 기준 커밋이 이 기기에 없다(`base`).
+ */
+export const Unreadable = z.enum(["share", "binary", "too_large", "base"]);
+export type Unreadable = z.infer<typeof Unreadable>;
+
+/** 알림이 가리키는 작업 하나. `name`은 그 멤버의 GitHub 프로필 이름이다(비워 두었으면 `login`). */
+export const WorkRef = z.strictObject({ login: z.string(), name: z.string(), branch: z.string() });
+export type WorkRef = z.infer<typeof WorkRef>;
+
+/**
+ * 알림에 묶인 파일 하나. `lines`는 합치면 부딪히는 줄이고 `works`와 같은 순서로 두 작업 각자의 사본 기준이다.
+ * 한쪽이 지우고 다른 쪽이 고쳤으면 줄 없이 부딪힌다. 상대의 내용을 읽을 수 없으면 `unknown`과 까닭이고, "부딪힐 수 있음"이다.
+ */
+export const AlertFile = z.union([
+  z.strictObject({ path: z.string(), lines: z.tuple([z.array(LineRange), z.array(LineRange)]) }),
+  z.strictObject({ path: z.string(), unknown: Unreadable }),
+]);
+export type AlertFile = z.infer<typeof AlertFile>;
+
+/** 알림 하나에 이름을 적는 파일의 수. 넘는 것은 `more`로 센다(Room과 같다). */
+export const ALERT_FILES = 8;
+
+/**
+ * 알림: 두 작업 한 쌍과 부딪힘의 종류마다 하나(ADR-0023). 지금 종류는 직접 충돌(`direct`)뿐이다.
+ * 러너들이 계산해 올린 것을 서버가 묶는다. 부딪힘이 바뀌면 같은 알림이 고쳐지고, 다 풀리면 `resolved`(풀린 시각)가 한 번 적히고 닫힌다.
+ * 닫힌 뒤 다시 부딪히면 새 알림이다. `files`는 부딪히는 것이 확인된 파일부터 경로 순으로 `ALERT_FILES`개까지, 나머지는 `more`다.
+ */
+export const Alert = z.strictObject({
+  kind: z.literal("direct"),
+  works: z.tuple([WorkRef, WorkRef]),
+  files: z.array(AlertFile).max(ALERT_FILES),
+  more: z.number(),
+  resolved: z.string().nullable(),
+});
+export type Alert = z.infer<typeof Alert>;
+
 /**
  * 채널에 쌓인 것 하나. `id`는 워크스페이스 전체에서 늘어나기만 하는 번호라 채널 안의 순서이자,
  * 실시간 연결이 다시 붙을 때 이어 받을 자리(`webToServer.hello`의 `after`)다.
- * 사람이 쓴 글(`text`)과 공개된 문답(`qa`)이 같은 번호 줄에 선다.
+ * 사람이 쓴 글(`text`)과 공개된 문답(`qa`), Omagari가 올린 알림(`alert`)이 같은 번호 줄에 선다.
  */
 export const ChannelMessage = z.discriminatedUnion("kind", [
   z.strictObject({
@@ -364,8 +407,30 @@ export const ChannelMessage = z.discriminatedUnion("kind", [
     text: z.string().optional(),
     qa: Qa,
   }),
+  /** Omagari가 올린 알림. 쓴 사람이 없다. 알림이 고쳐지거나 풀리면 같은 `id`의 것이 실시간 연결로 다시 온다. `at`은 처음 올린 시각이다. */
+  z.strictObject({
+    kind: z.literal("alert"),
+    id: z.number(),
+    channel: z.string(),
+    at: z.string(),
+    alert: Alert,
+  }),
 ]);
 export type ChannelMessage = z.infer<typeof ChannelMessage>;
+
+/** 러너가 계산한 직접 충돌의 한 쌍: 이 러너의 작업(`branch`)과 다른 멤버의 작업(`theirs`), 부딪히거나 읽을 수 없는 파일들. */
+export const ConflictPair = z.strictObject({
+  branch: z.string(),
+  theirs: z.strictObject({ login: z.string(), branch: z.string() }),
+  /** `mine`은 이 러너의 사본, `theirs`는 상대의 사본 기준 줄이다. */
+  files: z.array(
+    z.union([
+      z.strictObject({ path: z.string(), mine: z.array(LineRange), theirs: z.array(LineRange) }),
+      z.strictObject({ path: z.string(), unknown: Unreadable }),
+    ]),
+  ),
+});
+export type ConflictPair = z.infer<typeof ConflictPair>;
 
 /** 러너가 서버에 보내는 것. 이후의 이슈는 자기 메시지를 여기에 더한다. */
 export const runnerToServer = {
@@ -386,6 +451,12 @@ export const runnerToServer = {
    * 붙을 때마다, 그리고 관측이 달라질 때마다 보낸다. 브랜치가 아니면(detached HEAD) 작업이 없다.
    */
   observation: z.strictObject({ works: z.array(Work) }),
+  /**
+   * 직접 충돌의 계산(ADR-0023). 이 러너의 작업과 다른 멤버의 작업이 함께 바꾼 파일을, 두 작업의 기준 커밋이 갈라진 지점의 판을 조상으로
+   * `git merge-file`로 합쳐 본 결과다. 줄이 부딪히거나 상대 내용을 읽을 수 없는 파일이 있는 쌍만 싣는다. 실리지 않은 쌍은 깨끗하다.
+   * 서버는 이 러너의 계산을 이것으로 바꾼다. 붙을 때마다 한 번(비어 있어도), 그 뒤로는 달라질 때마다 보낸다. 공유 수준이 intent인 작업은 싣지 않는다.
+   */
+  conflicts: z.strictObject({ pairs: z.array(ConflictPair) }),
   /** `ask`(`re`)에 러너 세션이 답했다. 답하지 못했으면 `error`를 `re`를 붙여 보낸다. */
   answer: Reply,
   error: ContractError,
@@ -530,15 +601,9 @@ export const NearbyWork = z.strictObject({
   branch: z.string(),
   offlineSince: z.string().nullable(),
   change: z.discriminatedUnion("kind", [
-    z.strictObject({
-      kind: z.literal("lines"),
-      ranges: z.array(z.strictObject({ from: z.number(), to: z.number() })),
-    }),
+    z.strictObject({ kind: z.literal("lines"), ranges: z.array(LineRange) }),
     z.strictObject({ kind: z.literal("deleted") }),
-    z.strictObject({
-      kind: z.literal("unknown"),
-      reason: z.enum(["share", "binary", "too_large", "base"]),
-    }),
+    z.strictObject({ kind: z.literal("unknown"), reason: Unreadable }),
   ]),
 });
 export type NearbyWork = z.infer<typeof NearbyWork>;
@@ -773,6 +838,16 @@ export const api = {
     method: "GET",
     path: "/api/channels",
     response: z.strictObject({ channels: z.array(Channel) }),
+  },
+  /**
+   * 알림을 올릴 채널을 바꾼다. 그 뒤에 새로 생기는 알림이 이 채널로 간다. 이미 올라간 알림은 제자리에서 고쳐진다.
+   * 정한 적이 없으면 처음 알림을 올릴 때 "부딪힘" 채널(없으면 만든다)이 알림 채널이 된다. 없는 채널이면 `not_found`.
+   */
+  setAlertChannel: {
+    method: "POST",
+    path: "/api/alert-channel",
+    body: z.strictObject({ channel: z.string() }),
+    response: z.strictObject({ channel: Channel }),
   },
   /**
    * 채팅 채널을 만든다. 같은 이름(대소문자를 가리지 않는다)이 있으면 `conflict`다.
