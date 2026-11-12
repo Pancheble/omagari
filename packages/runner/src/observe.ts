@@ -72,20 +72,25 @@ async function worktrees(folder: string) {
  * full이 아니면 내용 없이 경로만 읽는다. intent의 경로는 서버로 나가지 않는다(러너가 뺀다).
  * 기준 커밋은 HEAD와 `remote`의 기본 브랜치(`refs/remotes/<remote>/HEAD`)가 갈라진 지점이다.
  * 읽지 못한 워크트리는 빼고 그 까닭을 `problems`에 담는다. 하나가 안 읽혀도 나머지는 올라간다.
+ * `folders`는 작업(브랜치)마다 체크아웃된 폴더다. 브랜치 하나는 워크트리 하나에만 체크아웃된다.
  */
 export async function observe(folder: string, remote: string, share: ShareLevel) {
   const works: Work[] = [];
   const problems: string[] = [];
+  const folders = new Map<string, string>();
   let total = 0;
   for (const tree of await worktrees(folder)) {
     try {
       const work = await observeTree(tree);
-      if (work) works.push(work);
+      if (work) {
+        works.push(work);
+        folders.set(work.branch, tree);
+      }
     } catch (error) {
       problems.push(`${tree}: ${error instanceof Error ? error.message : error}`);
     }
   }
-  return { works, problems };
+  return { works, problems, folders };
 
   async function observeTree(tree: string): Promise<Work | undefined> {
     const branch = await git(tree, "symbolic-ref", "--quiet", "--short", "HEAD").then(

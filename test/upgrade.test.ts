@@ -20,7 +20,7 @@ test("v0.1.0이 만든 DB로도 뜨고, 예전 메시지는 그대로 읽히며,
 
   const qa = await world.settled(world.owner, await world.ask(world.owner, "c0", "새 질문"));
   const { message } = await call(world.owner, api.postQa, { qa: qa.id, text: "같이 봐 주세요" });
-  assert.equal(message.text, "같이 봐 주세요");
+  assert.equal(message.kind === "qa" && message.text, "같이 봐 주세요");
   assert.deepEqual((await call(alice, api.history, { channel: "c0" })).messages, [
     ...before,
     message,
