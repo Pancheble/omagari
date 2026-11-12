@@ -45,7 +45,7 @@ test("커밋한 것, 커밋하지 않은 것, 추적하지 않는 새 파일이 
         branch: "feat",
         base,
         share: "full",
-        // 경로, 내용, 지웠는지만 온다. 정의 줄 같은 다른 것은 없다.
+        // 경로, 내용, 지웠는지가 온다. 정의가 없는 파일이라 정의 줄은 없다.
         files: [
           { path: "committed.ts", content: "committed\n" },
           { path: "gone.ts", deleted: true },

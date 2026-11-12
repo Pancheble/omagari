@@ -35,7 +35,8 @@ import {
 } from "@omagari/contract";
 import { checkoutVersion } from "@omagari/contract/version";
 import { nearby } from "./nearby.ts";
-import { observe } from "./observe.ts";
+import { observe, uses } from "./observe.ts";
+import { named } from "./symbols.ts";
 
 export { observationNotice } from "./observe.ts";
 
@@ -774,7 +775,7 @@ export async function startRunner(options: {
     const decoded = decode(cliToRunner, frame);
     if ("error" in decoded) return encode(runnerToCli, "error", decoded.error, decoded.re);
     const { message } = decoded;
-    if (message.kind === "situation" || message.kind === "nearby") {
+    if (message.kind !== "ask") {
       // 문답의 줄에 서지 않고 받아 둔 것으로 바로 답한다. 서버는 부르지 않는다.
       // 두 요청에 실린 실행기(ADR-0015)는 아직 쓰지 않는다. 작업이 어느 에이전트의 것인지 서버에 알리는 것은 다음 계약 변경에서 더한다.
       if (!situation || !login) {
@@ -790,6 +791,26 @@ export async function startRunner(options: {
         return encode(runnerToCli, "situation", { login, ...situation, mine }, message.id);
       }
       const { disconnectedAt, works } = situation;
+      if (message.kind === "impact") {
+        const { symbol } = message.payload;
+        const changing = works.flatMap((work) =>
+          work.login === login
+            ? []
+            : work.files.flatMap((file) =>
+                ("definitions" in file ? (file.definitions ?? []) : [])
+                  .filter((d) => d.change && named(d.name, symbol))
+                  .map((definition) => ({
+                    login: work.login,
+                    branch: work.branch,
+                    offlineSince: work.offlineSince,
+                    path: file.path,
+                    definition,
+                  })),
+              ),
+        );
+        const payload = { uses: await uses(folder, symbol), works: changing, disconnectedAt };
+        return encode(runnerToCli, "impact", payload, message.id);
+      }
       return encode(
         runnerToCli,
         "nearby",

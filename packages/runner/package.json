@@ -5,6 +5,7 @@
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
-    "@omagari/contract": "*"
+    "@omagari/contract": "*",
+    "@vscode/tree-sitter-wasm": "0.3.1"
   }
 }
