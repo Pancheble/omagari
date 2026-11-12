@@ -96,7 +96,7 @@ const qaView = (row: QaRow): Qa => ({
 });
 
 /** 메시지를 쓴 사람의 이름과, 공개된 문답이면 그 문답과 함께 읽는다. 뒤에 WHERE와 ORDER BY를 붙여 쓴다. */
-const MESSAGES = `SELECT m.id, m.channel, m.login, m.text, m.at, p.name,
+const MESSAGES = `SELECT m.id, m.channel, m.login, m.text, m.note, m.at, p.name,
   q.id AS qa, q.executor, q.question, q.at AS asked, q.answer, q.visibility FROM messages m
   LEFT JOIN people p ON p.login = m.login
   LEFT JOIN qas q ON q.id = m.qa`;
@@ -105,6 +105,7 @@ type MessageRow = {
   channel: string;
   login: string;
   text: string | null;
+  note: string | null;
   at: number;
   name: string | null;
   qa: number | null;
@@ -120,7 +121,12 @@ const messageView = (row: MessageRow): ChannelMessage => {
     at: new Date(row.at).toISOString(),
   };
   if (row.qa === null) return { kind: "text", ...common, text: row.text ?? "" };
-  return { kind: "qa", ...common, qa: qaView({ ...row, id: row.qa, at: row.asked }) };
+  return {
+    kind: "qa",
+    ...common,
+    ...(row.note !== null && { text: row.note }),
+    qa: qaView({ ...row, id: row.qa, at: row.asked }),
+  };
 };
 
 export async function startServer(options: {
@@ -202,6 +208,7 @@ export async function startServer(options: {
   // 채널의 메시지. `id`는 워크스페이스 전체에서 늘어나기만 한다(AUTOINCREMENT라 지워도 다시 쓰지 않는다).
   // 웹이 다시 붙을 때 이 번호 뒤의 것을 이어 받는다. `at`은 쓴 시각(ms)이다.
   // 사람이 쓴 글이면 `text`, 공개된 문답이면 `qa`(문답 번호) 가운데 하나만 있다. 문답의 `login`은 그 에이전트의 주인이다.
+  // `note`는 문답을 올린 사람이 함께 쓴 글이다(없으면 NULL). `text`의 CHECK를 바꾸려면 표를 다시 만들어야 해서 따로 둔다.
   db.exec(`CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     channel TEXT NOT NULL REFERENCES channels (id),
@@ -209,8 +216,12 @@ export async function startServer(options: {
     text TEXT,
     qa INTEGER UNIQUE REFERENCES qas (id),
     at INTEGER NOT NULL,
+    note TEXT,
     CHECK ((text IS NULL) != (qa IS NULL))
   ) STRICT`);
+  // v0.1.0의 표에는 `note`가 없다.
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'note'").get())
+    db.exec("ALTER TABLE messages ADD COLUMN note TEXT");
   db.exec("CREATE INDEX IF NOT EXISTS messages_by_channel ON messages (channel, id)");
   // 문답. 묻는 사람(`login`)이 그 에이전트의 주인이다. 비공개면 그 사람만 보고, 공개면 messages에 한 줄이 서서 모두가 본다.
   // `answer`는 계약의 Qa.answer(JSON)이고, 답을 기다리는 동안 NULL이다. `settled`는 답이나 실패를 적은 시각(ms)이다.
@@ -732,7 +743,7 @@ export async function startServer(options: {
     return shared;
   });
 
-  mount(app, api.postQa, ({ qa }, c) => {
+  mount(app, api.postQa, ({ qa, text }, c) => {
     const login = c.get("login") as string;
     // 남의 문답은 있어도 없는 것으로 답한다. 비공개 DM이 있다는 것도 새지 않는다.
     const row = db.prepare(`${QAS} WHERE id = ? AND login = ?`).get(qa, login) as QaRow | undefined;
@@ -748,10 +759,11 @@ export async function startServer(options: {
     }
     db.exec("BEGIN");
     db.prepare("UPDATE qas SET visibility = 'public' WHERE id = ?").run(qa);
-    db.prepare("INSERT INTO messages (channel, login, qa, at) VALUES (?, ?, ?, ?)").run(
+    db.prepare("INSERT INTO messages (channel, login, qa, note, at) VALUES (?, ?, ?, ?, ?)").run(
       row.channel,
       login,
       qa,
+      text ?? null,
       Date.now(),
     );
     db.exec("COMMIT");
