@@ -4,6 +4,8 @@
 
 찾아본 곳은 AGENTS.md 순서 그대로다: 기획·구현 문서, `GLOSSARY.md`, `docs/adr/`, `docs/stage1-questions.md` 4장(2단계를 열 때 물을 것), `docs/room-behavior.md`와 `../room-reference`(커밋 `917b8d4`), 지금 코드(러너의 근처 작업, 서버의 GitHub 연결).
 
+정해진 것으로 PRD #78을 쓰고 이슈 #79~#91로 쪼갰다(2026-11-12).
+
 ## 0. 정해진 것
 
 1라운드(2026-11-12): Q1, Q2, Q4~Q7, Q10은 아래대로 정해졌다. Q3, Q8, Q9는 설명을 더해 2라운드에서 다시 물었다.
