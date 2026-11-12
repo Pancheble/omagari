@@ -102,8 +102,13 @@ function launch(file: string, args: string[], options: { cwd: string; env?: obje
   };
 }
 
-/** 채널에 선 것 하나를 글로: 사람이 쓴 글은 그대로, 공개된 문답은 "문답: <질문>"이다. */
-export const said = (m: ChannelMessage) => (m.kind === "text" ? m.text : `문답: ${m.qa.question}`);
+/** 채널에 선 것 하나를 글로: 사람이 쓴 글은 그대로, 공개된 문답은 "문답: <질문>", 알림은 "알림: <두 작업>"이다. */
+export const said = (m: ChannelMessage) =>
+  m.kind === "text"
+    ? m.text
+    : m.kind === "qa"
+      ? `문답: ${m.qa.question}`
+      : `알림: ${m.alert.works.map((w) => `${w.login}/${w.branch}`).join(" ")}`;
 
 /** `check`가 던지지 않을 때까지 되풀이한다. 기다려야 보이는 것(연결, 재확인)을 확인할 때 쓴다. */
 export async function eventually<T>(check: () => T | Promise<T>, timeoutMs = 10_000): Promise<T> {
