@@ -38,7 +38,7 @@
 - 브랜치는 `dev`(기본, 작업이 모이는 곳)와 `main`(릴리즈한 판. 멤버와 서버가 받아 쓴다) 두 갈래다(ADR-0019).
 - 작업 브랜치는 `dev`에서 따고, PR은 `dev`로 연다. 머지는 스쿼시만 한다.
 - 커밋과 PR 제목은 `접두사(범위): 요약` 형식이다. 접두사는 feat, fix, docs, refactor, test, chore, ci, perf. 커밋은 `.githooks/commit-msg`가, PR 제목은 "PR 제목 검사" 워크플로가 검사한다.
-- 릴리즈는 손으로 한다(ADR-0019). 멤버나 서버가 받아야 할 feat나 fix가 `dev`에 쌓였을 때 하고, 문서·테스트·CI만 바뀌었으면 하지 않는다.
+- 릴리즈는 손으로 한다(ADR-0019). 1인 개발이라 주인이 기능이 어느 정도 갖춰졌다고 할 때만 한다(ADR-0022). feat나 fix가 쌓였다고 먼저 권하지 않는다.
   1. `main`에는 PR을 열지 않는다. 빨리 감기로 올린다: `git push origin dev:main`. 빨리 감기가 안 되면 멈추고 사람에게 알린다.
   2. 그 커밋에 `vX.Y.Z` 태그를 찍는다. feat는 Y, fix는 Z, 깨지는 변경(`!`)은 X를 올린다. 1.0 전에는 깨지는 변경도 Y를 올린다.
   3. `gh release create vX.Y.Z --generate-notes`로 노트를 만든다. 노트는 PR의 `type:*` 라벨로 묶인다(`.github/release.yml`). 제목은 버전만 쓴다. `--title`을 주지 않으면 태그 이름이 제목이 된다. 지난 릴리즈 뒤로 `CONTRACT_VERSION`이 바뀌었으면 노트 맨 위에 "러너도 업데이트해야 해요"를 적는다.
