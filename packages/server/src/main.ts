@@ -1,3 +1,4 @@
+import { CONTRACT_VERSION } from "@omagari/contract";
 import { realGitHub, startServer } from "./index.ts";
 
 const { OMAGARI_REPO, GITHUB_CLIENT_ID } = process.env;
@@ -16,4 +17,6 @@ const server = await startServer({
   port: Number(process.env.PORT ?? 3000),
   hostname: process.env.HOST,
 });
-console.log(`Omagari 서버: ${server.url} (${OMAGARI_REPO})`);
+console.log(
+  `Omagari 서버 ${server.version} (contract ${CONTRACT_VERSION}): ${server.url} (${OMAGARI_REPO})`,
+);
