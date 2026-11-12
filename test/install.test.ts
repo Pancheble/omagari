@@ -10,7 +10,7 @@ type Group = { matcher?: string; hooks: Handler[] };
 type Settings = Record<string, unknown> & { hooks: Record<string, Group[]> };
 
 const SESSION = "11111111-2222-3333-4444-555555555555";
-const EDIT_MATCHER = "Edit|Write|MultiEdit|NotebookEdit";
+const EDIT_MATCHER = "Edit|Write|MultiEdit|NotebookEdit|Bash";
 
 const settingsFile = (world: World) => join(world.claude, "settings.json");
 const readSettings = async (world: World): Promise<Settings> =>
@@ -69,7 +69,7 @@ test("omagari install 하나로 Claude Code에 두 훅과 상태 한 줄 스킬�
   assert.ok(installed.stdout.startsWith(`Claude Code: ${settingsFile(world)}에`), installed.stdout);
   assert.ok(installed.stdout.includes(skillFile), installed.stdout);
 
-  // 새 세션의 Claude Code가 읽는 설정. 세션 시작은 어떻게 시작했든(비우기와 컴팩트도) 걸리고, 편집 전 훅은 파일을 고치는 도구에만 걸린다.
+  // 새 세션의 Claude Code가 읽는 설정. 세션 시작은 어떻게 시작했든(비우기와 컴팩트도) 걸리고, 편집 전 훅은 파일을 고치는 도구와 셸 명령에만 걸린다.
   const settings = await readSettings(world);
   for (const source of ["startup", "resume", "clear", "compact"]) {
     assert.equal(matching(settings, "SessionStart", source).length, 1, source);
@@ -77,7 +77,6 @@ test("omagari install 하나로 Claude Code에 두 훅과 상태 한 줄 스킬�
   for (const tool of EDIT_MATCHER.split("|")) {
     assert.equal(matching(settings, "PreToolUse", tool).length, 1, tool);
   }
-  assert.deepEqual(matching(settings, "PreToolUse", "Bash"), []);
   assert.deepEqual(matching(settings, "PreToolUse", "Read"), []);
 
   const [startCommand] = matching(settings, "SessionStart", "startup");

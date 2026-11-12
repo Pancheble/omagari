@@ -17,7 +17,9 @@ import {
 } from "@omagari/contract";
 import { checkoutVersion } from "@omagari/contract/version";
 import {
+  alertLine,
   callRunner,
+  inboxNotice,
   observationNotice,
   type RunRecord,
   readRepo,
@@ -33,7 +35,7 @@ const USAGE = `사용법:
                                 공유 수준은 full(기본), declared(경로만), intent(상태 한 줄만). 고른 것은 이 레포에 남는다
   omagari runner ask <메시지>   이 레포의 러너 세션에 묻는다. 다음 질문은 같은 세션으로 이어진다
   omagari runner log            러너가 실행한 것을 본다
-  omagari status                지금 상황을 본다: 멤버, 작업, 상태 한 줄, 바뀐 파일
+  omagari status                지금 상황을 본다: 멤버, 작업, 상태 한 줄, 바뀐 파일, 최근 소식(피드)
   omagari status set <한 줄>    지금 브랜치의 작업에 상태 한 줄을 쓴다
   omagari impact <심볼>          그 심볼을 내 사본에서 쓰는 곳과, 그 정의 줄을 바꾸고 있는 다른 멤버의 작업을 본다
                                 메서드는 클래스.메서드나 메서드 이름으로 묻는다. 이름으로 이어 같은 이름의 다른 심볼도 잡힌다
@@ -42,7 +44,8 @@ const USAGE = `사용법:
   omagari install               이 기기의 에이전트(Claude Code, Codex)에 세션 시작 훅, 편집 전 훅, 상태 한 줄 스킬을 깐다
                                 이미 있는 설정은 그대로 두고, 다시 돌려도 하나만 깔린다
 
-서버는 OMAGARI_SERVER로 준다(기본 http://127.0.0.1:3000).`;
+서버는 OMAGARI_SERVER로 준다(기본 http://127.0.0.1:3000).
+러너를 켜는 것 말고 모든 명령은 응답 끝에 지금 브랜치의 편지함에 밀린 소식을 싣는다.`;
 
 const server = process.env.OMAGARI_SERVER ?? "http://127.0.0.1:3000";
 // 서버마다의 세션. GitHub 토큰은 여기에 없다. 서버만 든다.
@@ -87,6 +90,26 @@ try {
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);
   process.exitCode = 1;
+}
+// 러너를 켜는 명령은 끝날 때까지 돌므로 싣지 않는다.
+if (!(command === "runner" && (sub === undefined || sub.startsWith("--")))) await mailbox();
+
+/**
+ * 응답 끝에 지금 브랜치의 편지함에 밀린 소식을 싣고, 실은 것을 러너에 넘겼다고 알린다. 훅이 없는 에이전트도 받는다.
+ * 레포 밖이거나, 브랜치가 아니거나, 러너가 꺼져 있거나, 밀린 것이 없으면 아무것도 싣지 않는다.
+ */
+async function mailbox() {
+  const branch = await promisify(execFile)("git", ["symbolic-ref", "--quiet", "--short", "HEAD"])
+    .then(({ stdout }) => stdout.trim())
+    .catch(() => undefined);
+  if (!branch) return;
+  const reply = await callRunner(process.cwd(), "inbox", { branch }).catch(() => undefined);
+  if (reply?.kind !== "inbox") return;
+  const { login, items, disconnectedAt } = reply.payload;
+  const notice = inboxNotice(items, { login, branch }, disconnectedAt);
+  if (!notice) return;
+  console.log(`\n${notice.text}`);
+  await callRunner(process.cwd(), "delivered", { ids: notice.ids }).catch(() => {});
 }
 
 async function readSessions(): Promise<Record<string, string>> {
@@ -201,7 +224,11 @@ async function member() {
 async function status() {
   const AGENT = { online: "온라인", answering: "답하는 중", offline: "오프라인" } as const;
   const as = await member();
-  const [{ members }, { works }] = await Promise.all([call(as, api.members), call(as, api.works)]);
+  const [{ members }, { works }, { news }] = await Promise.all([
+    call(as, api.members),
+    call(as, api.works),
+    call(as, api.feed),
+  ]);
   for (const { login, agents } of members) {
     const own = works.filter((work) => work.login === login);
     const since = own[0]?.offlineSince;
@@ -230,6 +257,9 @@ async function status() {
       }
     }
   }
+  // 피드: 내 작업이 걸리지 않은 소식. 내 작업의 것은 편지함으로 온다.
+  if (news.length > 0) console.log("최근 소식(내 작업이 걸리지 않은 것, 새것부터):");
+  for (const { at, alert } of news) console.log(`  ${alertLine(alert).slice(2)} (${ago(at)})`);
 }
 
 /** 이 폴더에 체크아웃된 브랜치의 작업에 상태 한 줄을 쓴다. */
