@@ -593,6 +593,35 @@ components:
     lineHeight: "{typography.app-answer.lineHeight}"
     rounded: "{rounded.lg}"
     padding: 16px
+  app-dm-question:
+    backgroundColor: "{colors.canvas}"
+    textColor: "{colors.ink}"
+    fontFamily: "{typography.app-body.fontFamily}"
+    fontSize: "{typography.app-body.fontSize}"
+    fontWeight: "{typography.app-body.fontWeight}"
+    lineHeight: "{typography.app-body.lineHeight}"
+    rounded: "{rounded.lg}"
+    padding: 8px 12px
+    maxWidth: 80%
+  app-dm-answer:
+    backgroundColor: transparent
+    textColor: "{colors.ink}"
+    fontFamily: "{typography.app-answer.fontFamily}"
+    fontSize: "{typography.app-answer.fontSize}"
+    fontWeight: "{typography.app-answer.fontWeight}"
+    lineHeight: "{typography.app-answer.lineHeight}"
+  app-post-action:
+    backgroundColor: transparent
+    textColor: "{colors.primary}"
+    fontFamily: "{typography.app-caption.fontFamily}"
+    fontSize: "{typography.app-caption.fontSize}"
+    fontWeight: "{typography.app-caption.fontWeight}"
+    rounded: "{rounded.sm}"
+    height: 28px
+    padding: 0 8px
+  app-message-highlight:
+    backgroundColor: "{colors.selected}"
+    rounded: "{rounded.md}"
   app-composer:
     backgroundColor: "{colors.canvas}"
     borderColor: "{colors.hairline}"
@@ -729,6 +758,15 @@ components:
     fontWeight: 600
     rounded: "{rounded.pill}"
     height: 28px
+  app-qa-attachment:
+    backgroundColor: "{colors.canvas-parchment}"
+    textColor: "{colors.ink}"
+    fontFamily: "{typography.app-caption.fontFamily}"
+    fontSize: "{typography.app-caption.fontSize}"
+    fontWeight: "{typography.app-caption.fontWeight}"
+    rounded: "{rounded.pill}"
+    height: 36px
+    padding: 4px 4px 4px 8px
   app-composer-chip:
     backgroundColor: transparent
     textColor: "{colors.text-secondary}"
@@ -859,7 +897,7 @@ Store and shop surfaces retain the same chassis but switch modes. The product co
 - **줄 상태**: 올렸을 때 `{colors.hover}`(검정 4%), 고른 것 `{colors.selected}`(검정 6%). 투명 위에 겹치는 색이라, 겹친 결과를 한 색으로 써야 할 때(접속 점 둘레 고리)는 `{colors.selected-solid}`를 쓴다.
 - **접속 상태**: 온라인 `{colors.online}` #248a3d, 자리 비움 `{colors.away}` #c27c0e, 방해 금지 `{colors.dnd}` #d70015, 오프라인 `{colors.offline}` #8e8e93. 색만이 아니라 점의 모양으로도 가른다(부품 "접속 점").
 - **오류와 경고**: 오류 `{colors.error}` #d70015 / 바탕 `{colors.error-bg}`, 경고 `{colors.warning}` #b25000 / 바탕 `{colors.warning-bg}`. 둘 다 바탕 위 글씨가 4.5:1을 넘는다.
-- **칩과 뼈대**: `{colors.chip}` #e8e8ed는 아바타 바탕, 비공개 배지, 막힌 버튼, 불러오는 중의 회색 막대에 쓴다.
+- **칩과 뼈대**: `{colors.chip}` #e8e8ed는 아바타 바탕, 막힌 버튼, 불러오는 중의 회색 막대에 쓴다.
 - **덮개와 고리**: 대화 상자 뒤 덮개 `{colors.overlay}`(검정 32%), 입력 칸 포커스 고리 `{colors.focus-ring}`(Focus Blue 24%).
 - **강조색은 그대로 하나다.** 접속 상태와 오류·경고의 색은 상태를 알리는 색이고, 누를 수 있다는 신호는 여전히 `{colors.primary}`만 낸다.
 
@@ -1186,10 +1224,21 @@ Apple's whitespace is the product's pedestal. Every tile begins with at least 64
   - 0개면 입력 칸 대신 빈 상태를 보인다: "연결된 에이전트가 없어요" / "이 기기에서 러너를 켜면 여기서 물을 수 있어요."
   - 고른 에이전트의 러너가 끊기면 남은 연결된 에이전트 가운데 첫째로 바뀐다. 남은 것이 없으면 빈 상태가 된다.
 - 문답 목록은 고른 에이전트의 것만 보인다. 채널 세션이 채널과 에이전트마다 하나라서(ADR-0015) 에이전트를 바꾸면 그 에이전트와의 문답으로 바뀐다. 채널에 올린 문답과 `@호출`도 같은 채널 세션의 문답이라 공개 배지를 달고 함께 남는다. 머리의 "나만 보여요"는 칸 전체가 아니라 여기서 묻는 문답의 기본 공개 범위를 말한다.
+- **문답은 대화 모양으로 놓는다**(2026-11-12 시안 12-A). 300px 칸에서 카드의 테두리와 안쪽 여백을 빼 답을 칸 폭 그대로 읽게 한다. 채널의 문답은 그대로 접힌 줄과 카드다(아래 "문답").
+  - **질문**은 오른쪽에 붙은 말풍선(`{component.app-dm-question}`)이다. 흰 바탕, `{rounded.lg}`, 안쪽 8px 12px, 폭은 목록의 80%까지. 물은 시각(12px 보조)은 말풍선 왼쪽 아래에 둔다.
+  - **답**(`{component.app-dm-answer}`)은 그 아래 칸 바탕에 바로 놓고 목록 폭을 다 쓴다. 마크다운은 "에이전트 답의 마크다운"을 따르되, 인라인 코드와 코드 블록의 바탕은 칸의 파치먼트와 겹치지 않게 `{colors.canvas}`로 바꾼다.
+  - 답 아래 한 줄에 본 브랜치·커밋(`{component.app-source-ref}`), "작업 중 변경 포함" 배지, 답한 모델 배지를 둔다. 좁으면 줄을 바꾼다.
+  - 그 아래 동작 줄(높이 28px)에 "채널에 올리기"(`{component.app-post-action}`: 강조색 글자, 앞에 16px Lucide `forward`, 올렸을 때 `{colors.hover}`)를 둔다. 답이 온 비공개 문답에만 있다. 누르면 무엇을 하는지는 "채널에 올리기"에 있다.
+  - 공개 문답은 동작 줄에 버튼 대신 16px Lucide `check`와 "# 결제에 올렸어요"(올린 것) 또는 "# 결제에서 @호출로 물었어요"(`@호출`)를 12px 보조 글씨로, 그 뒤에 "보기" 링크(강조색, 올리면 밑줄)를 둔다. "보기"는 채널에서 그 문답 줄로 스크롤하고 `{component.app-message-highlight}`로 잠깐 칠한다.
+  - 답하는 중이면 말풍선 아래에 "답하는 중"(아래 "상태")을, 끊긴 답이면 같은 자리에 알림 띠와 "다시 묻기"를 둔다.
+  - 문답마다 "비공개" 배지를 달지 않는다. 머리의 "나만 보여요"가 이미 말하고, 공개인 것만 위의 줄로 가른다.
+  - 문답 사이는 20px이다. 목록은 아래로 쌓는다. 칸을 열 때와 답이 올 때, 마지막 문답이 목록보다 길면 그 질문의 머리가 목록 위에 오게 스크롤한다(답의 끝이 아니라 질문부터 읽게). 짧으면 맨 아래에 붙인다.
 - 입력 칸의 안내 글은 "Claude Code에게 묻기"처럼 고른 에이전트 이름을 쓴다.
 - **모델과 effort**는 입력 칸 안에서 고른다. 보낼 때마다 눈에 보이는 자리라서다.
   - DM 칸의 `{component.app-composer}`는 두 줄이 된다. 위는 글, 아래 줄 왼쪽에 모델 칩과 effort 칩(`{component.app-composer-chip}`), 오른쪽 끝에 보내기 버튼이다. 칩은 "Opus ⌄", "effort high ⌄"처럼 고른 값과 12px 꺾쇠를 쓴다. 좁은 화면에서는 칩 높이가 40px이다.
-  - 칩을 누르면 칩 바로 위에 `{component.app-popover}` 메뉴가 열린다(`aria-haspopup="menu"`). 줄은 `{component.app-menu-item}`이고 고른 줄은 `aria-checked`와 `{colors.selected}` 바탕이다. 열린 칩도 `{colors.selected}` 바탕이다.
+  - 칩을 누르면 `{component.app-popover}` 메뉴가 열린다(`aria-haspopup="menu"`). 줄은 `{component.app-menu-item}`이고 고른 줄은 `aria-checked`와 `{colors.selected}` 바탕이다. 열린 칩도 `{colors.selected}` 바탕이다.
+  - **메뉴 자리**: 칩 위가 아니라 입력 칸 위(입력 칸 위 끝에서 4px)에 열어, 쓰던 글을 덮지 않는다. 왼쪽은 누른 칩에 맞추되, 오른쪽이 칸 안쪽 8px을 넘으면 오른쪽을 거기에 맞춘다. 오른쪽 칸 가장자리에 잘리지 않는다. 높이는 입력 칸 위부터 DM 머리 아래까지 남은 만큼이고, 넘치면 메뉴 안에서 스크롤한다.
+  - **모델이 많을 때**: 실행기는 지난 판까지 모두 알려 준다(Claude Code는 14개). 이름 끝의 판 번호를 뗀 같은 이름(Opus, Sonnet, Haiku…) 가운데 실행기가 먼저 알린 하나만 "기본" 아래에 두고, 나머지는 맨 아래 "이전 모델 N개" 줄(오른쪽 14px 꺾쇠, `aria-expanded`)로 접는다. 누르면 같은 메뉴 안에서 펼친다. 고른 모델이 이전 모델이면 펼친 채로 연다. 판 번호가 없는 이름은 모두 위에 둔다. (ChatGPT도 지난 모델을 고르기 목록에서 따로 둔다.)
   - 고를 거리는 고른 에이전트의 실행기가 러너를 거쳐 알려 준 것만 보인다. 실행기마다 다르고, 모델에 따라 effort 값도 다르다. 맨 위 줄은 "기본"(오른쪽 보조 글씨 "설정값")이고, 실행기 자기 설정을 그대로 따른다는 뜻이다. 실행기가 effort를 알려 주지 않으면 effort 칩을 두지 않는다.
   - 고른 값은 에이전트마다 기억하고 그 에이전트의 다음 질문부터 쓴다. 에이전트를 바꾸면 칩도 그 에이전트의 값으로 바뀐다. `@호출`은 칩을 따로 두지 않고 그 에이전트에 기억된 값으로 묻는다.
   - 답한 문답 카드에는 어느 모델로 답했는지 배지를 단다(아래 배지).
@@ -1203,14 +1252,15 @@ Apple's whitespace is the product's pedestal. Every tile begins with at least 64
 
 #### 문답
 
-- **`app-qa-line`** 채널에 올라온 문답의 접힌 한 줄. 파치먼트, `{rounded.pill}`, 최소 높이 36px, 메시지 본문 위치에 맞춰 들인다. 에이전트 표시, "지은의 Claude Code"(600), 질문(보조 글씨, 말줄임), 오른쪽에 "펼치기". `@호출`이 아직 답하는 중이면 "펼치기" 자리에 "답하는 중…"(강조색)을 쓰고, 답이 오면 같은 줄이 바뀐다.
+- **채널의 문답은 올린 사람의 메시지다.** 올린 문답과 `@호출` 모두 `{component.app-message}`처럼 아바타, 이름, 시각을 단 머리 아래에 놓인다. 머리 아래에는 함께 쓴 글(있으면, "채널에 올리기"), 그 아래 접힌 줄이 온다. 줄만 두면 바로 위 메시지를 쓴 사람의 것처럼 보여서다. 문답 메시지는 앞 메시지와 묶지 않고 늘 머리를 단다.
+- **`app-qa-line`** 채널에 올라온 문답의 접힌 한 줄. 파치먼트, `{rounded.pill}`, 최소 높이 36px, 메시지 본문 안에 둔다. 에이전트 표시, "지은의 Claude Code"(600), 질문(보조 글씨, 말줄임), 오른쪽에 "펼치기". `@호출`이 아직 답하는 중이면 "펼치기" 자리에 "답하는 중…"(강조색)을 쓰고, 답이 오면 같은 줄이 바뀐다.
 - **`app-qa-card`** 펼친 모습. 흰 바탕, 1px `{colors.hairline}`, `{rounded.lg}`, 안쪽 16px.
   - 머리: 에이전트 표시, 이름, "김지은이 올림 · 시각", 오른쪽에 공개 배지. 조사는 이름의 끝 글자 받침을 따른다("김지은이", "박민수가"). 한글로 끝나지 않는 이름은 조사 없이 "owner 올림"으로 쓴다.
   - 질문(15px/600), 답(`{typography.app-answer}` 마크다운)
   - 아래 구분선 위에 "본 코드", 브랜치·커밋(`{component.app-source-ref}`), 작업 중 변경이 있으면 "작업 중 변경 포함" 배지, 답한 모델 배지, 오른쪽에 "접기"
   - 채널의 카드에는 "다시 묻기"가 없다. 끊긴 `@호출`은 알림만 보이고, 다시 물으려면 주인이 입력 칸에서 다시 `@호출`한다.
 - 접힌 줄과 카드의 에이전트 표시 점은 그 에이전트의 지금 상태(러너가 붙어 있는지)다.
-- DM 안의 문답은 같은 카드에 비공개 배지를 달고, 답이 왔으면 아래에 "채널에 올리기"(테두리 버튼)를 둔다. 올리면 배지가 공개로 바뀌고 버튼이 사라진다. 공개를 비공개로 되돌리지는 않는다.
+- DM 안의 문답은 카드가 아니라 대화 모양이다("DM 칸"). 공개를 비공개로 되돌리지는 않는다.
 
 #### 입력
 
@@ -1233,6 +1283,21 @@ Apple's whitespace is the product's pedestal. Every tile begins with at least 64
 - **보내기 실패**: 글과 토큰을 입력 칸에 되돌리고 알림 띠를 띄운다. 러너가 꺼졌으면 "Claude Code 러너가 꺼져 있어 지금은 물을 수 없어요", 그 밖에는 "질문을 보내지 못했어요".
 - **키보드**: WAI-ARIA 콤보박스(목록) 패턴이다. 초점은 입력 칸에 두고(`aria-activedescendant`), 위아래 화살표로 고르고, Enter나 Tab으로 넣고, Esc로 닫는다. 한글을 조합하는 중의 Enter는 고르지 않는다.
 
+#### 채널에 올리기
+
+DM의 문답을 채널 입력 칸에 붙여, 내 말과 함께 보낸다(2026-11-12 시안 13-C). 질문과 답이 함께 올라가고(답만 골라 올릴 수 없다), 올린 뒤에는 비공개로 되돌리지 않는다.
+
+- **붙이기**: DM 문답의 "채널에 올리기"를 누르면 그 문답이 그 채널의 입력 칸에 붙고, 초점이 입력 칸의 글 줄로 간다.
+  - 입력 칸 맨 위 줄에 `{component.app-qa-attachment}`가 선다: 파치먼트 알약, 높이 36px(좁은 화면 44px), 에이전트 표시 20px, "지은의 Claude Code"(13px/600), 질문(13px 보조 글씨, 말줄임), 오른쪽에 28px 빼기(×) 버튼("올릴 문답 빼기"). 글은 그 아래 줄에 쓴다.
+  - 한 번에 한 문답만 붙는다. 다른 문답의 "채널에 올리기"를 누르면 붙은 것이 바뀐다. 커서가 글 맨 앞일 때 Backspace도 붙은 문답을 뺀다.
+  - `@호출` 토큰과 함께 두지 않는다. 문답을 붙이면 토큰을 지우고(친 글은 둔다), 문답이 붙어 있는 동안은 `@`로 메뉴가 열리지 않는다.
+  - 안내 글은 "한마디 덧붙이기 (선택)"이다. 글 없이 문답만 보내도 된다. 문답이 붙어 있으면 보내기 버튼이 켜진다.
+  - 붙어 있는 동안 DM의 그 문답은 버튼 자리에 16px Lucide `corner-down-left`와 "채널 입력 칸에 넣었어요"(12px 보조)를 보인다. 빼면 버튼이 돌아온다.
+  - 붙인 문답은 입력 칸의 글처럼 그 채널에만 있다. 다른 채널로 가면 빠진다.
+- **좁은 화면**: 오른쪽 칸이 대화 위에 떠 있는 폭(1068px 이하)에서는 누르면 오른쪽 칸(833px 이하는 시트)을 닫고 채널 입력 칸으로 간다.
+- **보내기**: Enter나 보내기 버튼. 채널에 내 메시지 하나로 올라간다: 머리, 쓴 글, 접힌 문답 줄(위 "문답"). 채널은 그 메시지로 스크롤하고 `{component.app-message-highlight}`(`{colors.selected}` 바탕, `{rounded.md}`)로 칠했다가 2초 동안 걷어 낸다. 움직임 줄이기 설정이면 2초 뒤에 바로 걷는다. DM의 문답은 "# 결제에 올렸어요 · 보기"로 바뀐다.
+- **보내기 실패**: 글과 붙인 문답을 입력 칸에 되돌리고 알림 띠 "채널에 올리지 못했어요"를 띄운다.
+
 #### 버튼
 
 - **`app-button`** 높이 32px, `{rounded.pill}`, 14px. 기본은 파란 바탕이다.
@@ -1241,9 +1306,8 @@ Apple's whitespace is the product's pedestal. Every tile begins with at least 64
 
 #### 배지
 
-- **`app-badge`** 높이 20px, `{rounded.pill}`, 12px. 쓰임은 다섯이다.
-  - 비공개: 칩 바탕
-  - 공개: `{component.app-badge-outline}`
+- **`app-badge`** 높이 20px, `{rounded.pill}`, 12px. 쓰임은 넷이다.
+  - 공개: `{component.app-badge-outline}`. 채널에서 펼친 문답 카드의 머리에만 단다. DM에는 공개 범위 배지가 없다("DM 칸").
   - 작업 중 변경 포함: `{component.app-badge-warning}`
   - N시간 전 기준: 테두리 배지 앞에 11px 시계 아이콘
   - 답한 모델: `{component.app-badge-outline}`에 "Opus · high"처럼 모델과 effort. "기본"으로 물었으면 실행기가 알려 준 실제 모델 이름을 쓰고, 모르면 배지를 달지 않는다.
@@ -1305,6 +1369,7 @@ Apple's whitespace is the product's pedestal. Every tile begins with at least 64
 - 앱: 회사 로고나 이모지를 아이콘으로 쓰지 않는다.
 - 앱: 오른쪽 칸에 멤버 목록과 DM을 함께 열지 않는다.
 - 앱: 채널 패널을 처음부터 접어 두지 않는다. 처음 보는 사람이 채널을 찾지 못한다.
+- 앱: 떠 있는 메뉴를 패널 가장자리에서 자르거나, 쓰던 글 위에 열지 않는다.
 
 ## Responsive Behavior
 
