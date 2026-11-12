@@ -1315,7 +1315,7 @@ svg.lucide {
 .composer textarea {
   flex: 1;
   min-width: 0;
-  /* 잰 높이가 화면 폭이 바뀌기 전의 것이어도 보내기 버튼 높이보다 작아지지 않는다. */
+  /* 숨겨진 채로 재서 높이가 0이어도 다시 잴 때까지 보내기 버튼 높이보다 작아지지 않는다. */
   min-height: var(--control);
   /* 칸 200px에서 위아래 안쪽 12px과 선 2px을 뺀 것 */
   max-height: 186px;
