@@ -106,11 +106,20 @@ test("omagari install 하나로 Claude Code에 두 훅과 상태 한 줄 스킬�
     "끝낼 때",
     `"끝: "`,
     "omagari status`로 본다",
+    "omagari ask",
+    "omagari wait",
   ]) {
     assert.ok(description.includes(said), `설명에 ${said}가 없다: ${description}`);
   }
   assert.match(body, /\*\*끝낼 때\*\*: `끝: <요약>`으로 쓴다/);
   assert.match(body, /^omagari status set "끝: .+"$/m);
+  // 묻기와 기다리기: 언제 묻고 언제 기다리는지, 답 없음은 답이나 승인이 아니다.
+  assert.match(body, /^## 묻기와 기다리기$/m);
+  assert.match(body, /\*\*언제 묻나\*\*/);
+  assert.match(body, /\*\*언제 기다리나\*\*/);
+  assert.match(body, /답이나 승인으로 치지 않는다/);
+  assert.match(body, /^omagari ask \S+ ".+"$/m);
+  assert.match(body, /^omagari wait \d+$/m);
 });
 
 test("이미 있는 설정과 훅은 그대로 두고 Omagari 훅만 더하며, 두 번 깔아도 경로가 바뀌어 다시 깔아도 하나만 남는다", async (t) => {

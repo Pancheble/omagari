@@ -39,6 +39,7 @@ import {
   type Presence,
   type PresenceDuration,
   type Qa,
+  type Question,
   type ReplyOf,
   RUNNER_SOCKET,
   runnerToServer,
@@ -432,6 +433,20 @@ export async function startServer(options: {
     settled INTEGER
   ) STRICT`);
   db.exec("CREATE INDEX IF NOT EXISTS qas_by_asker ON qas (login, channel, id)");
+  // 묻기(ADR-0024). 묻는 작업(`login` + `branch`)이 받는 멤버(`target`)에게 보낸 질문. `executor`는 받는 쪽 실행기이고 고르지 않았으면 보낼 때 정한다.
+  // `answer`는 편지함에 넣은 답이나 실패(JSON)이고, 답을 기다리는 동안 NULL이다. `at`은 물은 시각(ms)이고 `inboxMs`가 지나면 지운다.
+  db.exec(`CREATE TABLE IF NOT EXISTS questions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    login TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    target TEXT NOT NULL,
+    executor TEXT,
+    text TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    answer TEXT
+  ) STRICT`);
+  // 남의 질문에 답하지 않게 스위치를 끈 멤버(ADR-0024). 기본은 켜짐이라 없으면 켜짐이다.
+  db.exec("CREATE TABLE IF NOT EXISTS ask_off (login TEXT PRIMARY KEY) STRICT");
   // 날마다 들어온 멤버(ADR-0018). 날은 `TIME_ZONE`의 날짜다. 지표가 남기는 것은 이것뿐이고, 문답 수는 `qas`에서 센다.
   db.exec(`CREATE TABLE IF NOT EXISTS visits (
     day TEXT NOT NULL,
@@ -527,6 +542,8 @@ export async function startServer(options: {
     string,
     { socket: WSContext; login: string; executor: ExecutorId; qa: number }
   >();
+  /** 받는 쪽 러너에 보내고 답을 기다리는 질문(묻기). 키는 보낸 `question`의 id다. 연결이 끊기거나 서버가 다시 뜨면 잃고, 러너가 붙을 때 다시 보낸다. */
+  const questionsSent = new Map<string, { socket: WSContext; executor: ExecutorId; id: number }>();
   /**
    * 문답이 생기거나 바뀌었다. 묻는 사람의 연결에 보내고, 공개된 문답이면 채널에 선 줄을 모두에게 다시 보낸다.
    * 채널에 선 줄이 있으면 돌려준다.
@@ -734,7 +751,7 @@ export async function startServer(options: {
         ([, runner]) => runner.login === login && runner.executors.includes(executor),
       );
       const sockets = live.map(([socket]) => socket);
-      const busy = [...asks.values(), ...drafting.values()].some(
+      const busy = [...asks.values(), ...drafting.values(), ...questionsSent.values()].some(
         (ask) => ask.executor === executor && sockets.includes(ask.socket),
       );
       // 고를 거리는 묻는 문답이 갈 러너(마지막에 붙은 것)의 것이다.
@@ -1050,6 +1067,97 @@ export async function startServer(options: {
     }
   };
 
+  type QuestionRow = {
+    id: number;
+    login: string;
+    branch: string;
+    target: string;
+    executor: ExecutorId | null;
+    text: string;
+    at: number;
+  };
+  const questionView = (row: QuestionRow): Question => ({
+    id: row.id,
+    to: row.target,
+    executor: row.executor,
+    text: row.text,
+    at: new Date(row.at).toISOString(),
+  });
+  /** 질문에 답이나 실패를 적고 묻는 작업의 편지함에 넣는다. 이미 적은 것(만료로 지운 것 포함)이면 그대로 둔다. */
+  const settleQuestion = (
+    id: number,
+    answer: Extract<InboxItem, { kind: "answer" }>["answer"],
+    executor?: ExecutorId,
+  ) => {
+    if (stopped) return;
+    const row = db.prepare("SELECT * FROM questions WHERE id = ? AND answer IS NULL").get(id) as
+      | QuestionRow
+      | undefined;
+    if (!row) return;
+    const now = Date.now();
+    const question = questionView({ ...row, executor: executor ?? row.executor });
+    db.prepare("UPDATE questions SET answer = ?, executor = ? WHERE id = ?").run(
+      JSON.stringify(answer),
+      question.executor,
+      id,
+    );
+    db.prepare("INSERT INTO inbox (login, branch, news, at) VALUES (?, ?, ?, ?)").run(
+      row.login,
+      row.branch,
+      JSON.stringify({ kind: "answer", question, answer }),
+      now,
+    );
+    shareInbox();
+  };
+  /** 멤버의 이 연결이 그 실행기(고르지 않았으면 첫째 실행기)로 답할 수 있으면 그 실행기. */
+  const answererOf = (target: string, executor: ExecutorId | null) => {
+    const found = [...runners].findLast(
+      ([, runner]) =>
+        runner.login === target && (executor === null || runner.executors.includes(executor)),
+    );
+    if (!found) return undefined;
+    const [socket, runner] = found;
+    return { socket, executor: executor ?? (runner.executors[0] as ExecutorId) };
+  };
+  /**
+   * 멤버(`target`)에게 남은 질문(답이 없고 만료되지 않았고 아직 보내지 않은 것)을 그 멤버의 러너에 보낸다. 묻는 순서대로다.
+   * 스위치가 꺼져 있으면 보내지 않고 실패로 묻는 쪽 편지함에 넣는다. 받을 러너가 없으면 남겨 둔다.
+   */
+  const dispatchQuestions = (target: string) => {
+    const rows = db
+      .prepare("SELECT * FROM questions WHERE target = ? AND answer IS NULL AND at > ? ORDER BY id")
+      .all(target, Date.now() - inboxMs) as QuestionRow[];
+    const sent = new Set([...questionsSent.values()].map((q) => q.id));
+    for (const row of rows) {
+      if (sent.has(row.id)) continue;
+      if (db.prepare("SELECT 1 FROM ask_off WHERE login = ?").get(target)) {
+        settleQuestion(row.id, {
+          state: "failed",
+          error: { code: "refused", message: `${target}이 남의 질문에 답하지 않게 해 두었다` },
+        });
+        continue;
+      }
+      const answerer = answererOf(target, row.executor);
+      if (!answerer) continue;
+      const frame = encode(serverToRunner, "question", {
+        id: row.id,
+        from: { login: row.login, name: nameOf(row.login), branch: row.branch },
+        executor: answerer.executor,
+        text: row.text,
+      });
+      questionsSent.set((JSON.parse(frame) as { id: string }).id, { ...answerer, id: row.id });
+      answerer.socket.send(frame);
+    }
+    shareMembers(); // 답하는 중
+  };
+  /** 멤버의 GitHub 프로필 이름. 모르면 `login`이다. */
+  const nameOf = (login: string) =>
+    (
+      db.prepare("SELECT name FROM people WHERE login = ?").get(login) as
+        | { name: string }
+        | undefined
+    )?.name ?? login;
+
   /** 웹에 마지막으로 보낸 멤버 목록. 같은 것을 다시 보내지 않는다. */
   let sentMembers: string | undefined;
   /**
@@ -1263,6 +1371,13 @@ export async function startServer(options: {
     ).run(c.get("login") as string, message, emoji ?? "");
     shareMembers();
     return { message: message || null, emoji };
+  });
+
+  mount(app, api.setAskSwitch, ({ on }, c) => {
+    const login = c.get("login") as string;
+    if (on) db.prepare("DELETE FROM ask_off WHERE login = ?").run(login);
+    else db.prepare("INSERT OR IGNORE INTO ask_off (login) VALUES (?)").run(login);
+    return { on };
   });
 
   /** 에이전트는 주인만 부른다. */
@@ -1685,6 +1800,7 @@ export async function startServer(options: {
           socket.send(encode(serverToRunner, "welcome", { login, repo }, message.id));
           shareSituation(socket);
           shareInbox(socket);
+          dispatchQuestions(login); // 오프라인 사이에 남겨 둔 질문
           return;
         }
         const runner = runners.get(socket);
@@ -1758,6 +1874,38 @@ export async function startServer(options: {
           socket.send(encode(serverToRunner, "claimed", { claim }, message.id));
           shareSituation();
           shareInbox();
+        } else if (message.kind === "question") {
+          const { branch, to, executor, text } = message.payload;
+          const reply = (
+            payload: Parameters<typeof encode<typeof serverToRunner, "questioned">>[2],
+          ) => socket.send(encode(serverToRunner, "questioned", payload, message.id));
+          const fail = (code: ContractError["code"], text: string) =>
+            socket.send(encode(serverToRunner, "error", { code, message: text }, message.id));
+          if (to === runner.login)
+            return fail("invalid_request", "자기 에이전트에게는 묻지 않는다");
+          if (!db.prepare("SELECT 1 FROM sessions WHERE login = ?").get(to))
+            return fail("not_found", `워크스페이스의 멤버가 아니다: ${to}`);
+          if (
+            executor &&
+            !db.prepare("SELECT 1 FROM agents WHERE login = ? AND executor = ?").get(to, executor)
+          ) {
+            return fail("not_found", `${to}에게 ${EXECUTOR_NAMES[executor]} 에이전트가 없다`);
+          }
+          if (db.prepare("SELECT 1 FROM ask_off WHERE login = ?").get(to))
+            return reply({ state: "refused" });
+          const { lastInsertRowid } = db
+            .prepare(
+              "INSERT INTO questions (login, branch, target, executor, text, at) VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .run(runner.login, branch, to, executor ?? null, text, Date.now());
+          const id = Number(lastInsertRowid);
+          dispatchQuestions(to);
+          const sending = [...questionsSent.values()].find((q) => q.id === id);
+          const row = db.prepare("SELECT * FROM questions WHERE id = ?").get(id) as QuestionRow;
+          reply({
+            state: sending ? "sent" : "offline",
+            question: questionView({ ...row, executor: sending?.executor ?? row.executor }),
+          });
         } else if (message.kind === "release") {
           const { branch, path, symbol, lines } = message.payload;
           const where = ["login = ?", "branch = ?"];
@@ -1780,7 +1928,23 @@ export async function startServer(options: {
         } else {
           // 문답이나 초안의 답, 실패. 그것을 보낸 연결에서 온 것만 받는다.
           const re = message.re ?? "";
-          if (drafting.get(re)?.socket === socket) {
+          const question = questionsSent.get(re);
+          if (question?.socket === socket) {
+            questionsSent.delete(re);
+            settleQuestion(
+              question.id,
+              message.kind === "answer"
+                ? { state: "answered", ...message.payload }
+                : message.kind === "error"
+                  ? { state: "failed", error: message.payload }
+                  : {
+                      state: "failed",
+                      error: { code: "invalid_message", message: "질문에 답 대신 초안이 왔다" },
+                    },
+              question.executor,
+            );
+            shareMembers();
+          } else if (drafting.get(re)?.socket === socket) {
             if (message.kind === "drafted")
               settleDraft(re, { state: "drafted", ...message.payload });
             else if (message.kind === "error")
@@ -1808,6 +1972,9 @@ export async function startServer(options: {
           );
           shareSituation();
         }
+        // 떨어진 러너에 보낸 질문은 남겨 두고, 그 멤버의 러너가 다시 붙으면 다시 보낸다.
+        for (const [id, question] of questionsSent)
+          if (question.socket === socket) questionsSent.delete(id);
         // 떨어진 러너의 답은 오지 않는다. 기다리던 초안과 문답을 실패로 둔다.
         for (const [id, { socket: to, login }] of drafting) {
           if (to !== socket) continue;
@@ -1897,6 +2064,7 @@ export async function startServer(options: {
       db.prepare("DELETE FROM claims WHERE stale < ?").run(now - (options.forgetMs ?? FORGET_MS));
       db.prepare("DELETE FROM inbox WHERE at <= ?").run(now - inboxMs);
       db.prepare("DELETE FROM feed WHERE at <= ?").run(now - inboxMs);
+      db.prepare("DELETE FROM questions WHERE at <= ?").run(now - inboxMs); // 답이 없으면 만료
       db.exec("COMMIT");
       shareInbox(); // 만료된 소식이 빠진다
 

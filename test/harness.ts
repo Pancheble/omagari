@@ -526,14 +526,21 @@ export async function startWorld(
       server = await startServer({ ...serverOptions, port: Number(port) });
       serverDown = false;
     },
-    /** 멤버 `as`의 레포 폴더 하나와 그 폴더에서 켠 러너. 멤버마다 기기가 따로다. 관측은 짧게 돈다. */
-    async desk(as: { session: string }, share?: ShareLevel) {
+    /**
+     * 멤버 `as`의 레포 폴더 하나와 그 폴더에서 켠 러너. 멤버마다 기기가 따로다. 관측은 짧게 돈다.
+     * `executors`를 주지 않으면 늘 실패하는 Claude Code 실행기가 꽂힌다.
+     */
+    async desk(
+      as: { session: string },
+      share?: ShareLevel,
+      executors: Partial<Record<ExecutorId, Executor>> = { "claude-code": noExecutor },
+    ) {
       const repo = await tempRepo();
       const options = {
         serverUrl: server.url,
         folder: repo.folder,
         session: as.session,
-        executors: { "claude-code": noExecutor },
+        executors,
         observeMs: 50,
         share,
       };

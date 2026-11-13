@@ -18,6 +18,7 @@ export const ContractError = z.strictObject({
     "internal",
     "executor_failed", // 에이전트 실행기가 실패했거나 답 없이 끝났다
     "runner_offline", // 그 에이전트의 러너가 서버에 붙어 있지 않다. 문답은 쌓아 두지 않는다
+    "refused", // 받는 쪽이 남의 질문에 답하지 않게 해 두었다(ADR-0024)
     "turn_timeout", // 러너 세션의 한 턴이 시간 상한을 넘어 끊겼다
     "conflict", // 이미 있다(같은 이름의 채널)
   ]),
@@ -506,10 +507,39 @@ export const INBOX_MS = 14 * 24 * 60 * 60_000;
  * `id`는 서버 전체에서 늘어나기만 하는 번호이고 넘겨준 확인(`delivered`)이 가리킨다. `at`은 들어온 시각, `alert`는 들어온 때의 알림이다.
  */
 const InboxHead = { id: z.number(), branch: z.string(), at: z.string() };
+
+/** 묻기에서 남의 질문을 담는 길이 상한. 채널 메시지와 같다. */
+export const MAX_QUESTION_CHARS = 4000;
+
+/**
+ * 묻기(ADR-0024)의 질문 하나. 묻는 작업의 에이전트가 다른 멤버(`to`)의 에이전트에게 보낸 것이다. `id`는 서버 전체에서 늘어나기만 하는 번호다.
+ * `executor`는 답하는(답할) 받는 쪽 실행기다. 묻는 쪽이 고르지 않았고 아직 보내지 못했으면 null이다.
+ */
+export const Question = z.strictObject({
+  id: z.number(),
+  to: z.string(),
+  executor: ExecutorId.nullable(),
+  text: z.string(),
+  at: z.string(),
+});
+export type Question = z.infer<typeof Question>;
 export const InboxItem = z.discriminatedUnion("kind", [
   z.strictObject({ ...InboxHead, kind: z.literal("alert"), alert: Alert }),
   /** 내 선점(`mine`)과 다른 작업의 선점(`theirs`)이 겹친다. 줄은 각자의 사본에서 건 때의 것이다. 나중에 건 쪽이 알아내 양쪽에 넣는다. */
   z.strictObject({ ...InboxHead, kind: z.literal("overlap"), mine: Claim, theirs: Claim }),
+  /**
+   * 이 작업이 물은 질문(`omagari ask`)의 답. 받는 쪽 러너 세션이 답했거나, 답하지 못했다(`error`: 실행기 실패, 받는 쪽이 그사이 스위치를 끔).
+   * 14일 안에 답이 오지 않은 질문은 소식 없이 만료한다.
+   */
+  z.strictObject({
+    ...InboxHead,
+    kind: z.literal("answer"),
+    question: Question,
+    answer: z.discriminatedUnion("state", [
+      z.strictObject({ state: z.literal("answered"), ...Reply.shape }),
+      z.strictObject({ state: z.literal("failed"), error: ContractError }),
+    ]),
+  }),
   /**
    * 다른 작업이 계획(`claim.plan`)을 이루지 못한 채 선점을 풀었다: 그 선언된 계약 변경은 취소됐다. 그 계획의 알림을 받은 작업에 넣는다.
    * 정의 줄이 계획대로 바뀐 뒤 풀었거나 브랜치가 머지되어 풀린 것은 취소가 아니다.
@@ -711,7 +741,17 @@ export const runnerToServer = {
     symbol: z.string().optional(),
     lines: LineRange.optional(),
   }),
-  /** `ask`(`re`)에 러너 세션이 답했다. 답하지 못했으면 `error`를 `re`를 붙여 보낸다. */
+  /**
+   * 이 멤버의 작업(`branch`)의 에이전트가 다른 멤버(`to`)의 에이전트에게 묻는다(ADR-0024). `executor`는 고른 받는 쪽 실행기이고, 없으면 서버가 고른다.
+   * 서버는 `questioned`(`re`)로 바로 답하고, 답은 나중에 그 작업의 편지함(`answer`)으로 넣는다. 자기 자신이나 멤버가 아니면 `error`다.
+   */
+  question: z.strictObject({
+    branch: z.string().min(1),
+    to: z.string().min(1),
+    executor: ExecutorId.optional(),
+    text: z.string().trim().min(1).max(MAX_QUESTION_CHARS),
+  }),
+  /** `ask`나 `question`(`re`)에 러너 세션이 답했다. 답하지 못했으면 `error`를 `re`를 붙여 보낸다. */
   answer: Reply,
   /** `draft`(`re`)의 초안. 쓰지 못했으면 `error`를 `re`를 붙여 보낸다. 멈춘 초안의 답은 서버가 버린다. */
   drafted: z.strictObject({
@@ -761,6 +801,24 @@ export const serverToRunner = {
   situation: z.strictObject({ works: z.array(WorkView), claims: z.array(Claim) }),
   /** `claim`(`re`)을 받아 건 선점. */
   claimed: z.strictObject({ claim: Claim }),
+  /**
+   * `question`(`re`)의 답: 받는 쪽 러너에 보냈다(`sent`), 받는 쪽 러너가 오프라인이라 남겨 두었다가 붙으면 보낸다(`offline`, 14일 뒤 만료),
+   * 받는 쪽이 스위치를 꺼 두어 받지 않는다(`refused`, 남기지 않는다).
+   */
+  questioned: z.discriminatedUnion("state", [
+    z.strictObject({ state: z.enum(["sent", "offline"]), question: Question }),
+    z.strictObject({ state: z.literal("refused") }),
+  ]),
+  /**
+   * 다른 멤버(`from`의 작업)의 에이전트가 이 러너의 멤버의 `executor` 에이전트에게 보낸 질문. 러너는 읽기 전용 러너 세션을 새로 띄워
+   * 질문을 지시가 아닌 데이터로 감싸 넘기고(ADR-0017과 같은 방식), `answer`나 `error`(`re`)로 답한다. 문답과 같은 줄에 선다.
+   */
+  question: z.strictObject({
+    id: z.number(),
+    from: WorkRef,
+    executor: ExecutorId,
+    text: z.string(),
+  }),
   /** `release`(`re`)로 푼 선점. 없었으면 비어 있다. */
   released: z.strictObject({ claims: z.array(Claim) }),
   /**
@@ -926,6 +984,8 @@ export const cliToRunner = {
   claim: ClaimTarget.extend({ plan: Plan.optional() }),
   /** 작업의 선점을 푼다(`omagari release`). `path`가 없으면 그 작업의 선점 모두다. */
   release: ClaimTarget.partial({ path: true }),
+  /** 작업(`branch`)의 에이전트가 다른 멤버의 에이전트에게 묻는다(`omagari ask`). 러너는 서버에 보내고 서버의 답을 그대로 돌려준다. */
+  question: runnerToServer.question,
 } satisfies Payloads;
 
 /** 러너가 CLI와 훅에 보내는 것. */
@@ -987,6 +1047,8 @@ export const runnerToCli = {
   claimed: z.strictObject({ claim: Claim, overlaps: z.array(SeenClaim) }),
   /** `release`의 답: 푼 선점. 없었으면 비어 있다. */
   released: z.strictObject({ claims: z.array(Claim) }),
+  /** `question`의 답(서버의 `questioned`와 같다). 서버와 끊겨 있으면 `error`(`runner_offline`)다. */
+  questioned: serverToRunner.questioned,
   error: ContractError,
 } satisfies Payloads;
 
@@ -1222,6 +1284,16 @@ export const api = {
     method: "GET",
     path: "/api/posts",
     response: z.strictObject({ posts: z.array(Post.extend({ message: ChannelMessage })) }),
+  },
+  /**
+   * 내 에이전트가 다른 멤버의 질문(`omagari ask`)에 답할지 정하는 스위치(ADR-0024). 기본은 켜짐이다.
+   * 끄면 그 뒤로 오는 질문에 바로 "받지 않는다"를 돌려주고, 남겨 둔 질문도 답하지 않는다(묻는 쪽 편지함에 실패로 간다).
+   */
+  setAskSwitch: {
+    method: "POST",
+    path: "/api/ask-switch",
+    body: z.strictObject({ on: z.boolean() }),
+    response: z.strictObject({ on: z.boolean() }),
   },
   /** 채널 전부(채팅과 포럼), 이름 순서. 포스트는 오지 않는다(`api.posts`). 멤버만 본다. */
   channels: {

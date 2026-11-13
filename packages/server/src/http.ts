@@ -19,6 +19,7 @@ const STATUS = {
   invalid_request: 400,
   unauthorized: 401,
   forbidden: 403,
+  refused: 403,
   not_found: 404,
   internal: 500,
   executor_failed: 500,
