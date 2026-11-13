@@ -102,13 +102,18 @@ function launch(file: string, args: string[], options: { cwd: string; env?: obje
   };
 }
 
-/** 채널에 선 것 하나를 글로: 사람이 쓴 글은 그대로, 공개된 문답은 "문답: <질문>", 알림은 "알림: <두 작업>"이다. */
+/**
+ * 채널에 선 것 하나를 글로: 사람이 쓴 글은 그대로, 공개된 문답은 "문답: <질문>", 알림은 "알림: <두 작업>",
+ * 결정 PR의 줄은 "결정 <일>: <제목>"(막혔으면 뒤에 " (<까닭>)")이다.
+ */
 export const said = (m: ChannelMessage) =>
   m.kind === "text"
     ? m.text
     : m.kind === "qa"
       ? `문답: ${m.qa.question}`
-      : `알림: ${m.alert.works.map((w) => `${w.login}/${w.branch}`).join(" ")}`;
+      : m.kind === "decision"
+        ? `결정 ${m.event}: ${m.decision.title}${m.reason ? ` (${m.reason})` : ""}`
+        : `알림: ${m.alert.works.map((w) => `${w.login}/${w.branch}`).join(" ")}`;
 
 /** `check`가 던지지 않을 때까지 되풀이한다. 기다려야 보이는 것(연결, 재확인)을 확인할 때 쓴다. */
 export async function eventually<T>(check: () => T | Promise<T>, timeoutMs = 10_000): Promise<T> {
@@ -169,10 +174,33 @@ export async function tempRepo(repo = REPO) {
  * push 권한은 `grant`와 `revoke`로 준다. 내준 GitHub 토큰은 `tokens`에 남는다.
  * 프로필 이름은 `names`에 적은 사람만 있다.
  * 브랜치의 PR은 `openPull`로 열고, 돌려받은 PR을 고치거나 `merge`해 바꾼다.
+ * 레포의 파일은 브랜치마다 `files`에 있다. 기본 브랜치는 main이고, 커밋은 브랜치 이름을 그대로 쓴다.
+ * 서버가 연 PR(결정 PR)도 `pulls`에 쌓이고, 연 토큰의 주인이 `author`다. `block`으로 머지를 막는다.
+ * 토큰을 무효로 하려면 `tokens`에서 지운다.
  */
 export function fakeGitHub() {
   const pushers = new Set<string>();
-  const pulls: (Pull & { branch: string })[] = [];
+  const pulls: (Pull & {
+    branch: string;
+    number?: number;
+    base?: string;
+    body?: string;
+    author?: string;
+  })[] = [];
+  const files = new Map([["main", new Map<string, string>()]]);
+  const commits: { branch: string; message: string; author: string; paths: string[] }[] = [];
+  let blocked: string | undefined;
+  /** 토큰이 이 레포에 쓸 수 있으면 그 주인. 아니면 GitHub처럼 던진다. */
+  const owner = (token: string, repo: string) => {
+    const login = tokens.get(token);
+    if (repo !== REPO || !login) throw new Error("HTTP 401 Bad credentials");
+    return login;
+  };
+  const tree = (ref: string) => {
+    const found = files.get(ref);
+    if (!found) throw new Error(`HTTP 404 No commit found for the ref ${ref}`);
+    return found;
+  };
   const devices = new Map<string, { userCode: string; login?: string }>();
   const tokens = new Map<string, string>();
   const names = new Map<string, string>();
@@ -207,8 +235,67 @@ export function fakeGitHub() {
     },
     async pulls(token, repo, branch) {
       if (repo !== REPO || !tokens.has(token)) return undefined;
-      return pulls.filter((pull) => pull.branch === branch).map(({ branch: _, ...pull }) => pull);
+      return pulls
+        .filter((pull) => pull.branch === branch)
+        .map(({ title, draft, open, mergedAt }) => ({ title, draft, open, mergedAt }));
     },
+    async defaultBranch(token, repo) {
+      owner(token, repo);
+      return { name: "main", sha: "main" };
+    },
+    async read(token, repo, ref, path) {
+      owner(token, repo);
+      return tree(ref).get(path) ?? null;
+    },
+    async list(token, repo, ref, folder) {
+      owner(token, repo);
+      return [...tree(ref).keys()].flatMap((path) => {
+        const name = path.startsWith(`${folder}/`) ? path.slice(folder.length + 1) : "";
+        return name && !name.includes("/") ? [name] : [];
+      });
+    },
+    async commit(token, repo, { branch, base, message, files: changed }) {
+      const author = owner(token, repo);
+      if (files.has(branch)) throw new Error("HTTP 422 Reference already exists");
+      files.set(
+        branch,
+        new Map([...tree(base), ...changed.map((f) => [f.path, f.content] as const)]),
+      );
+      commits.push({ branch, message, author, paths: changed.map((f) => f.path) });
+    },
+    async openPull(token, repo, { head, base, title, body }) {
+      const author = owner(token, repo);
+      tree(head);
+      const number = pulls.length + 1;
+      pulls.push({ branch: head, base, title, body, author, number, draft: false, open: true });
+      return { number, url: `https://github.com/${REPO}/pull/${number}` };
+    },
+    async pull(token, repo, number) {
+      if (repo !== REPO || !tokens.has(token)) return undefined;
+      const found = pulls.find((pull) => pull.number === number);
+      return (
+        found && {
+          title: found.title,
+          draft: found.draft,
+          open: found.open,
+          mergedAt: found.mergedAt,
+        }
+      );
+    },
+    async merge(token, repo, number) {
+      if (repo !== REPO || !tokens.has(token)) return { reason: "HTTP 401 Bad credentials" };
+      if (blocked) return { reason: blocked };
+      const found = pulls.find((pull) => pull.number === number && pull.open);
+      if (!found) return { reason: "HTTP 405 Pull Request is not mergeable" };
+      merge(found);
+      return { merged: true };
+    },
+  };
+  /** 열린 PR을 머지한다. 그 브랜치의 파일이 있으면 main에 들어간다. */
+  const merge = (pull: Pull & { branch?: string }) => {
+    Object.assign(pull, { open: false, mergedAt: new Date().toISOString() });
+    for (const [path, content] of files.get(pull.branch ?? "") ?? [])
+      tree("main").set(path, content);
   };
   return {
     github,
@@ -228,9 +315,21 @@ export function fakeGitHub() {
       pulls.push(pull);
       return pull;
     },
-    /** 열린 PR을 머지한다. */
-    merge(pull: Pull) {
-      Object.assign(pull, { open: false, mergedAt: new Date().toISOString() });
+    /** 열린 PR을 머지한다. 사람이 GitHub에서 머지한 것과 같다. */
+    merge,
+    /** 열린 PR을 머지하지 않고 닫는다. */
+    close(pull: Pull) {
+      pull.open = false;
+    },
+    /** 레포의 파일. 브랜치 이름마다 경로와 내용이다. */
+    files,
+    /** 서버가 만든 커밋. */
+    commits,
+    /** 서버가 연 PR까지 모든 PR. */
+    pulls,
+    /** GitHub이 머지를 막는다(리뷰 필수 등). 까닭을 주지 않으면 막지 않는다. */
+    block(reason?: string) {
+      blocked = reason;
     },
   };
 }

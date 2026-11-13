@@ -449,6 +449,11 @@ function channelLine(m: ChannelMessage) {
     const state = alert.resolved === null ? "" : ` resolved="${alert.resolved}"`;
     return `<alert kind="${ALERT_KINDS[alert.kind]}" at="${m.at}"${state}>\n${escapeXml(`${who}\n${what.join("\n")}`)}\n</alert>`;
   }
+  if (m.kind === "decision") {
+    const { decision } = m;
+    const reason = m.reason === undefined ? "" : `\n${m.reason}`;
+    return `<decision event="${m.event}" state="${decision.state}" pull="${escapeXml(decision.pull.url)}" at="${m.at}">\n${escapeXml(`${decision.title} (${decision.path}, 정리한 사람 ${decision.name} (${decision.login}))${reason}`)}\n</decision>`;
+  }
   if (m.kind === "text") {
     return `<message from="${escapeXml(`${m.name} (${m.login})`)}" at="${m.at}">\n${escapeXml(m.text)}\n</message>`;
   }

@@ -19,6 +19,8 @@ import {
   type ConflictPair,
   type ContractError,
   ContractFailure,
+  type Decision,
+  type DecisionWindow,
   decode,
   EXECUTOR_NAMES,
   type ExecutorId,
@@ -110,8 +112,23 @@ const qaView = (row: QaRow): Qa => ({
 /** 처음 알림을 올릴 때 알림 채널이 없으면 쓰거나 만드는 채널. */
 const ALERT_CHANNEL = "부딪힘";
 
-/** 포스트(채널 줄)의 글 수. `c`가 포스트의 채널이다. */
-const POST_COUNT = "(SELECT COUNT(*) FROM messages WHERE channel = c.id)";
+/** 포스트(채널 줄)의 글 수. `c`가 포스트의 채널이다. 결정 PR의 줄은 세지 않는다. */
+const POST_COUNT = "(SELECT COUNT(*) FROM messages WHERE channel = c.id AND decision IS NULL)";
+
+/** 결정 파일을 두는 레포의 폴더(구현 8장). */
+const DECISIONS = "docs/decisions";
+/** 레포의 AGENTS.md가 결정 폴더를 가리키지 않으면 첫 결정 PR이 더하는 한 줄. */
+const AGENTS_LINE = `결정 기록은 \`${DECISIONS}/\`에 있다. 일을 시작하기 전에 관련 결정을 읽는다.`;
+const WINDOW_NAMES: Record<DecisionWindow, string> = { now: "바로", day: "하루" };
+
+/** 결정 하나를 계약의 꼴로 읽는 JSON. `d`가 decisions, `dp`가 정리한 사람의 people이다. 시각은 `decisionView`가 고친다. */
+const DECISION = `json_object('id', d.id, 'post', d.post, 'login', d.login, 'name', COALESCE(dp.name, d.login),
+  'title', d.title, 'path', d.path, 'pull', json_object('number', d.pull, 'url', d.url),
+  'window', d.span, 'state', d.state, 'at', d.at)`;
+const decisionView = (json: string): Decision => {
+  const decision = JSON.parse(json);
+  return { ...decision, at: new Date(decision.at).toISOString() };
+};
 
 /**
  * 메시지를 쓴 사람의 이름과, 공개된 문답이면 그 문답, 알림이면 그 알림과 달린 포스트와 함께 읽는다. 뒤에 WHERE와 ORDER BY를 붙여 쓴다.
@@ -119,11 +136,14 @@ const POST_COUNT = "(SELECT COUNT(*) FROM messages WHERE channel = c.id)";
 const MESSAGES = `SELECT m.id, m.channel, m.login, m.text, m.note, m.at, p.name,
   q.id AS qa, q.executor, q.question, q.at AS asked, q.answer, q.visibility,
   m.alert, a.kind, a.works, a.files, a.resolved,
-  c.id AS post, CASE WHEN c.id IS NULL THEN 0 ELSE ${POST_COUNT} END AS count FROM messages m
+  c.id AS post, CASE WHEN c.id IS NULL THEN 0 ELSE ${POST_COUNT} END AS count,
+  CASE WHEN d.id IS NULL THEN NULL ELSE ${DECISION} END AS decision FROM messages m
   LEFT JOIN people p ON p.login = m.login
   LEFT JOIN qas q ON q.id = m.qa
   LEFT JOIN alerts a ON a.id = m.alert
-  LEFT JOIN channels c ON c.alert = m.id AND m.alert IS NOT NULL`;
+  LEFT JOIN channels c ON c.alert = m.id AND m.alert IS NOT NULL
+  LEFT JOIN decisions d ON d.id = m.decision
+  LEFT JOIN people dp ON dp.login = d.login`;
 type MessageRow = {
   id: number;
   channel: string;
@@ -141,6 +161,7 @@ type MessageRow = {
   resolved: number | null;
   post: string | null;
   count: number;
+  decision: string | null;
 } & Pick<QaRow, "executor" | "question" | "answer" | "visibility">;
 
 /**
@@ -194,6 +215,17 @@ const messageView = (row: MessageRow): ChannelMessage => {
       post: row.post === null ? null : { channel: row.post, count: row.count },
     };
   }
+  if (row.decision !== null) {
+    return {
+      kind: "decision",
+      id: row.id,
+      channel: row.channel,
+      at: new Date(row.at).toISOString(),
+      event: row.text as Extract<ChannelMessage, { kind: "decision" }>["event"],
+      ...(row.note !== null && { reason: row.note }),
+      decision: decisionView(row.decision),
+    };
+  }
   const common = {
     id: row.id,
     channel: row.channel,
@@ -227,6 +259,8 @@ export async function startServer(options: {
   inboxMs?: number;
   /** 고른 접속 상태가 온라인으로 돌아오기까지의 시간. 테스트가 줄여 쓴다. 주지 않은 것은 계약의 시간이다. */
   presenceDurations?: Partial<Record<PresenceDuration, number>>;
+  /** 사람이 웹을 여는 주소. 결정 파일의 출처(포스트 링크)에 쓴다. 주지 않으면 서버가 듣는 주소다. */
+  publicUrl?: string;
 }) {
   const { repo, github } = options;
   const version = checkoutVersion();
@@ -312,6 +346,23 @@ export async function startServer(options: {
   if (!db.prepare("SELECT 1 FROM pragma_table_info('channels') WHERE name = 'alert'").get())
     db.exec("ALTER TABLE channels ADD COLUMN alert INTEGER REFERENCES messages (id)");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS channels_by_alert ON channels (alert)");
+  // 포스트에서 정리한 결정과 그 결정 PR(ADR-0025). `login`은 정리한 멤버, `pull`과 `url`은 PR의 번호와 주소, `span`은 이의 창,
+  // `state`는 PR에서 읽은 상태(proposed, accepted, closed), `at`은 정리한 시각(ms)이다.
+  db.exec(`CREATE TABLE IF NOT EXISTS decisions (
+    id INTEGER PRIMARY KEY,
+    post TEXT NOT NULL REFERENCES channels (id),
+    login TEXT NOT NULL,
+    title TEXT NOT NULL,
+    path TEXT NOT NULL,
+    pull INTEGER NOT NULL,
+    url TEXT NOT NULL,
+    span TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'proposed',
+    at INTEGER NOT NULL
+  ) STRICT`);
+  // 결정 PR의 줄은 `decision`(결정 번호)이 있고, `text`가 일어난 일, `note`가 막힌 까닭이다.
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'decision'").get())
+    db.exec("ALTER TABLE messages ADD COLUMN decision INTEGER REFERENCES decisions (id)");
   // 알림(ADR-0023): 두 작업 한 쌍과 종류(`kind`)마다 하나. 채널에는 messages의 한 줄(`alert`)로 선다. 그 줄의 `text`는 빈 글, `login`은 빈 이름이다
   // (`text`의 CHECK를 바꾸려면 표를 다시 만들어야 한다). `pair`는 두 작업을 정한 순서로 적은 열쇠, `works`는 계약의 WorkRef 둘(JSON),
   // `files`는 묶은 것 전부(직접 충돌이면 계약의 AlertFile 배열로 확인된 것부터 경로 순, 나머지 종류면 AlertSymbol 배열로 이름 순)다. `resolved`는 풀린 시각(ms)이고, 풀리지 않은 알림은 쌍마다 하나다.
@@ -1022,6 +1073,9 @@ export async function startServer(options: {
     shareSituation(); // 세션이 하나도 남지 않은 멤버의 작업은 보이지 않는다
   };
 
+  /** 서버가 듣는 주소. 뜬 뒤에 정해진다. */
+  let url = "";
+
   const app = createApp((authorization) => {
     const session = bearer(authorization);
     return session && sessionLogin(session);
@@ -1350,6 +1404,180 @@ export async function startServer(options: {
       message: messageView(db.prepare(`${MESSAGES} WHERE m.id = ?`).get(alert) as MessageRow),
     };
   });
+
+  /** 결정 하나를 읽는다. */
+  const decisionOf = (id: number | bigint) =>
+    decisionView(
+      (
+        db
+          .prepare(
+            `SELECT ${DECISION} AS decision FROM decisions d LEFT JOIN people dp ON dp.login = d.login WHERE d.id = ?`,
+          )
+          .get(id) as { decision: string }
+      ).decision,
+    );
+
+  /** 결정 PR에 일어난 일을 결정의 포스트와 알림 채널에 한 줄씩 올린다. */
+  const announce = (
+    decision: number | bigint,
+    event: Extract<ChannelMessage, { kind: "decision" }>["event"],
+    reason?: string,
+  ) => {
+    const { post } = db.prepare("SELECT post FROM decisions WHERE id = ?").get(decision) as {
+      post: string;
+    };
+    for (const channel of [post, alertChannel()]) {
+      const { lastInsertRowid } = db
+        .prepare(
+          "INSERT INTO messages (channel, login, text, note, decision, at) VALUES (?, '', ?, ?, ?, ?)",
+        )
+        .run(channel, event, reason ?? null, decision, Date.now());
+      broadcast(
+        encode(
+          serverToWeb,
+          "message",
+          messageView(db.prepare(`${MESSAGES} WHERE m.id = ?`).get(lastInsertRowid) as MessageRow),
+        ),
+      );
+    }
+  };
+
+  /** 열린 결정 PR이 머지되거나 닫혔다. 이미 알았으면 아무것도 하지 않는다. */
+  const settleDecision = (decision: number | bigint, state: "accepted" | "closed") => {
+    const { changes } = db
+      .prepare("UPDATE decisions SET state = ? WHERE id = ? AND state = 'proposed'")
+      .run(state, decision);
+    if (changes > 0) announce(decision, state === "accepted" ? "merged" : "closed");
+  };
+
+  /**
+   * 정리한 멤버의 토큰으로 결정 PR을 연다(ADR-0025): 기본 브랜치에서 새 브랜치를 따 결정 파일(과 필요하면 AGENTS.md 한 줄)을
+   * 커밋 하나로 올리고, 기본 브랜치로 PR을 연다. 번호는 기본 브랜치의 결정 파일과 아직 열린 결정 PR의 것 다음이다.
+   */
+  mount(
+    app,
+    api.proposeDecision,
+    async ({ post, title, context, decision, consequences, window }, c) => {
+      const login = c.get("login") as string;
+      visit(login);
+      if (!postAlert(post))
+        throw new ContractFailure({ code: "not_found", message: `없는 포스트다: ${post}` });
+      const { github_token: token } = db
+        .prepare("SELECT github_token FROM sessions WHERE hash = ?")
+        .get(hash(bearer(c.req.header("authorization")) as string)) as { github_token: string };
+      // 결정자: 그 포스트에서 말한 멤버(글과 공개된 문답)와, 정리해 결정 줄을 세우는 멤버.
+      const deciders = db
+        .prepare(
+          `SELECT m.login, COALESCE(p.name, m.login) AS name FROM messages m
+           LEFT JOIN people p ON p.login = m.login
+           WHERE m.channel = ? AND m.login != '' GROUP BY m.login ORDER BY MIN(m.id)`,
+        )
+        .all(post) as { login: string; name: string }[];
+      if (!deciders.some((d) => d.login === login)) {
+        const me = db.prepare("SELECT name FROM people WHERE login = ?").get(login) as
+          | { name: string }
+          | undefined;
+        deciders.push({ login, name: me?.name ?? login });
+      }
+      const name = deciders.find((d) => d.login === login)?.name ?? login;
+      const source = `${options.publicUrl ?? url}/#${post}`;
+      let opened: { number: number; url: string };
+      let path: string;
+      try {
+        const base = await github.defaultBranch(token, repo);
+        const numbers = [
+          ...(await github.list(token, repo, base.sha, DECISIONS)),
+          ...(
+            db.prepare("SELECT path FROM decisions WHERE state = 'proposed'").all() as {
+              path: string;
+            }[]
+          ).map((row) => basename(row.path)),
+        ].map((file) => Number(/^(\d+)-/.exec(file)?.[1] ?? 0));
+        const number = String(Math.max(0, ...numbers) + 1).padStart(4, "0");
+        const slug =
+          title
+            .toLowerCase()
+            .replace(/[^\p{L}\p{N}]+/gu, "-")
+            .replace(/^-+|-+$/g, "")
+            .slice(0, 60) || "decision";
+        path = `${DECISIONS}/${number}-${slug}.md`;
+        const files = [
+          {
+            path,
+            content: [
+              `# ${number}. ${title}`,
+              "",
+              `- 결정자: ${deciders.map((d) => `${d.name} (@${d.login})`).join(", ")}`,
+              `- 출처: ${source}`,
+              "",
+              "## 맥락",
+              "",
+              context,
+              "",
+              "## 결정",
+              "",
+              decision,
+              "",
+              "## 결과",
+              "",
+              consequences,
+              "",
+            ].join("\n"),
+          },
+        ];
+        const agents = await github.read(token, repo, base.sha, "AGENTS.md");
+        if (!agents?.includes(DECISIONS)) {
+          const before = agents ? `${agents.replace(/\n*$/, "")}\n\n` : "";
+          files.push({ path: "AGENTS.md", content: `${before}${AGENTS_LINE}\n` });
+        }
+        const branch = `omagari/decision-${number}-${randomBytes(3).toString("hex")}`;
+        const subject = `docs(decisions): ${title}`;
+        await github.commit(token, repo, { branch, base: base.sha, message: subject, files });
+        opened = await github.openPull(token, repo, {
+          head: branch,
+          base: base.name,
+          title: subject,
+          body: [
+            `Omagari 포스트에서 정리한 결정이다. 이 PR이 머지되면 결정이 수락된다.`,
+            "",
+            `- 결정 파일: \`${path}\``,
+            `- 정리한 사람: ${name} (@${login})`,
+            `- 출처: ${source}`,
+            `- 이의 창: ${WINDOW_NAMES[window]}`,
+          ].join("\n"),
+        });
+      } catch (error) {
+        throw new ContractFailure({
+          code: "github_failed",
+          message: `${login}의 GitHub 토큰으로 결정 PR을 열지 못했다: ${(error as Error).message}`,
+        });
+      }
+      const { lastInsertRowid: id } = db
+        .prepare(
+          "INSERT INTO decisions (post, login, title, path, pull, url, span, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(post, login, title, path, opened.number, opened.url, window, Date.now());
+      announce(id, "opened");
+      if (window === "now") {
+        const merged = await github.merge(token, repo, opened.number).catch((error: Error) => ({
+          reason: error.message,
+        }));
+        if ("merged" in merged) settleDecision(id, "accepted");
+        else announce(id, "blocked", merged.reason);
+      }
+      return { decision: decisionOf(id) };
+    },
+  );
+
+  mount(app, api.decisions, () => ({
+    decisions: (
+      db
+        .prepare(
+          `SELECT ${DECISION} AS decision FROM decisions d LEFT JOIN people dp ON dp.login = d.login ORDER BY d.id`,
+        )
+        .all() as { decision: string }[]
+    ).map((row) => decisionView(row.decision)),
+  }));
 
   mount(app, api.posts, () => ({
     posts: db
@@ -1720,6 +1948,22 @@ export async function startServer(options: {
       }
       drafts = next;
       shareSituation();
+
+      // 열린 결정 PR이 머지되거나 닫혔는지 읽는다. 정리한 멤버의 토큰으로, 그 멤버의 세션이 없으면 다른 멤버의 것으로 읽는다.
+      const open = db
+        .prepare(
+          `SELECT d.id, d.pull, COALESCE(
+             (SELECT github_token FROM sessions WHERE login = d.login),
+             (SELECT github_token FROM sessions)) AS token
+           FROM decisions d WHERE d.state = 'proposed'`,
+        )
+        .all() as { id: number; pull: number; token: string | null }[];
+      for (const { id, pull: number, token } of open) {
+        if (!token) continue;
+        const pull = await github.pull(token, repo, number);
+        if (stopped) return;
+        if (pull && !pull.open) settleDecision(id, pull.mergedAt ? "accepted" : "closed");
+      }
     } catch (error) {
       console.error("상태 한 줄을 따라가지 못했다:", error);
     } finally {
@@ -1734,9 +1978,10 @@ export async function startServer(options: {
     websocket: { server: sockets },
   });
   await once(server, "listening");
+  url = `http://${hostname}:${(server.address() as AddressInfo).port}`;
 
   return {
-    url: `http://${hostname}:${(server.address() as AddressInfo).port}`,
+    url,
     /** 이 서버의 버전(`git describe --tags`). 계약 버전이 다른 러너를 거절할 때 싣는다. */
     version,
     async stop() {
