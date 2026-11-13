@@ -1424,7 +1424,7 @@ DM의 문답을 채널 입력 칸에 붙여, 내 말과 함께 보낸다(2026-11
   3. 16px 말풍선 아이콘과 글 수, "· 2분 전"(12px 보조)
   - 브랜치, 파일, 줄 번호는 줄에 두지 않는다. 포스트의 첫 글(알림)에 있다.
   - 풀린 포스트는 70% 흐리게 하고 제목 앞에 "풀렸어요" 테두리 배지를 단다.
-- **카드 보기**: 2열 격자, 사이 12px. `{component.app-forum-card}` 위쪽에 부딪힌 줄 미리 보기(12px 고정폭, 줄 높이 1.55, 안쪽 14px 16px, 직접 충돌은 `{colors.warning-bg}` 바탕에 두 사람의 줄을 `{colors.warning}`, 정의 줄 변경은 `{colors.selected}` 바탕에 -/+ 두 줄), 아래에 목록 보기의 세 줄.
+- **카드 보기**: 2열 격자, 사이 12px. `{component.app-forum-card}`에 목록 보기의 세 줄을 둔다. 2단계에서는 위쪽의 부딪힌 줄 미리 보기 칸을 두지 않는다(2026-11-13 주인, 까닭과 명세는 Known Gaps).
 - **제목**은 "지은 ↔ 민수 · refund.ts"처럼 두 사람과 부딪힌 파일(또는 심볼)이다.
 
 #### 포스트
@@ -1629,5 +1629,6 @@ The structural breakpoints that matter for agents: 1440px (content lock), 1068px
 - Atmospheric photography (environment page mountain vista) is a content asset, not a design token; the documented `{component.environment-quote-card}` describes the structural surface only.
 - 앱: 결정함과 결정 보기는 아직 부품이 없다(2단계 문답 Q9). "기록 보기"가 여는 답한 기록 화면도 아직 없다.
 - 앱: 사람이 포럼 채널을 따로 만들 수 있게 할지는 정하지 않았다. 지금 포럼 채널은 부딪힘 하나다.
+- 앱: 포럼 카드 보기의 부딪힌 줄 미리 보기는 나중에 한다(2026-11-13 주인이 2단계에서 뺌). 알림에는 줄 번호만 있고, 줄 내용을 실으려면 러너가 공유 수준(ADR-0007)대로 내용을 싣는 계약 변경이 필요하다. 카드 보기는 기본 보기도 아니다. 넣을 때의 명세: 카드 위쪽, 12px 고정폭, 줄 높이 1.55, 안쪽 14px 16px. 직접 충돌은 `{colors.warning-bg}` 바탕에 두 사람의 줄을 `{colors.warning}`, 정의 줄 변경은 `{colors.selected}` 바탕에 -/+ 두 줄.
 - 앱: 실행기가 늘어나면 `app-agent-mark`의 약자를 여기에 더한다(지금은 `CC`, `CX`).
 - 앱: 컴포넌트에 쓴 `borderColor`, `iconColor`, `shadow`, `backdropFilter`, `maxWidth` 같은 속성과 글자 값 하나씩 가리키기(`fontSize` 등)는 design.md 규격 검사기에서 "모르는 속성" 경고로 나온다. 오류가 아니라 경고이고, gstack 검사기가 모든 참조를 풀 수 있게 하려고 이렇게 쓴다.

@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 20;
+export const CONTRACT_VERSION = 24;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -18,6 +18,7 @@ export const ContractError = z.strictObject({
     "internal",
     "executor_failed", // 에이전트 실행기가 실패했거나 답 없이 끝났다
     "runner_offline", // 그 에이전트의 러너가 서버에 붙어 있지 않다. 문답은 쌓아 두지 않는다
+    "refused", // 받는 쪽이 남의 질문에 답하지 않게 해 두었다(ADR-0024)
     "turn_timeout", // 러너 세션의 한 턴이 시간 상한을 넘어 끊겼다
     "conflict", // 이미 있다(같은 이름의 채널)
     "github_failed", // GitHub이 요청을 받지 않았다(멤버의 토큰이 무효, 권한 없음, GitHub이 답하지 못함)
@@ -263,8 +264,14 @@ export type MemberView = z.infer<typeof MemberView>;
 /** 멤버 목록 전부, 이름 순. `api.members`의 답이고, 실시간 연결의 `members`로도 온다. */
 export const Members = z.strictObject({ members: z.array(MemberView) });
 
-/** 채팅 채널. 1단계의 채널은 채팅 채널뿐이고(포럼 채널은 없다), 워크스페이스의 멤버 모두가 읽고 쓴다. */
-export const Channel = z.strictObject({ id: z.string(), name: z.string() });
+/**
+ * 채널의 종류(ADR-0027). 채팅 채널은 멤버 모두가 읽고 쓴다. 포럼 채널에는 Omagari가 알림 하나를 포스트 하나로 올리고,
+ * 사람은 포럼에 쓰지 못하고 포스트 안에서만 쓴다. 사람이 만드는 채널은 채팅이고, 지금 포럼은 "부딪힘" 하나다.
+ */
+export const ChannelKind = z.enum(["chat", "forum"]);
+export type ChannelKind = z.infer<typeof ChannelKind>;
+/** 채널. 워크스페이스의 멤버 모두가 읽는다. */
+export const Channel = z.strictObject({ id: z.string(), name: z.string(), kind: ChannelKind });
 export type Channel = z.infer<typeof Channel>;
 
 /** 채널 이름의 길이 상한. 앞뒤 공백은 떼고, 줄바꿈과 겹친 공백은 공백 하나로 접는다. */
@@ -501,10 +508,39 @@ export const INBOX_MS = 14 * 24 * 60 * 60_000;
  * `id`는 서버 전체에서 늘어나기만 하는 번호이고 넘겨준 확인(`delivered`)이 가리킨다. `at`은 들어온 시각, `alert`는 들어온 때의 알림이다.
  */
 const InboxHead = { id: z.number(), branch: z.string(), at: z.string() };
+
+/** 묻기에서 남의 질문을 담는 길이 상한. 채널 메시지와 같다. */
+export const MAX_QUESTION_CHARS = 4000;
+
+/**
+ * 묻기(ADR-0024)의 질문 하나. 묻는 작업의 에이전트가 다른 멤버(`to`)의 에이전트에게 보낸 것이다. `id`는 서버 전체에서 늘어나기만 하는 번호다.
+ * `executor`는 답하는(답할) 받는 쪽 실행기다. 묻는 쪽이 고르지 않았고 아직 보내지 못했으면 null이다.
+ */
+export const Question = z.strictObject({
+  id: z.number(),
+  to: z.string(),
+  executor: ExecutorId.nullable(),
+  text: z.string(),
+  at: z.string(),
+});
+export type Question = z.infer<typeof Question>;
 export const InboxItem = z.discriminatedUnion("kind", [
   z.strictObject({ ...InboxHead, kind: z.literal("alert"), alert: Alert }),
   /** 내 선점(`mine`)과 다른 작업의 선점(`theirs`)이 겹친다. 줄은 각자의 사본에서 건 때의 것이다. 나중에 건 쪽이 알아내 양쪽에 넣는다. */
   z.strictObject({ ...InboxHead, kind: z.literal("overlap"), mine: Claim, theirs: Claim }),
+  /**
+   * 이 작업이 물은 질문(`omagari ask`)의 답. 받는 쪽 러너 세션이 답했거나, 답하지 못했다(`error`: 실행기 실패, 받는 쪽이 그사이 스위치를 끔).
+   * 14일 안에 답이 오지 않은 질문은 소식 없이 만료한다.
+   */
+  z.strictObject({
+    ...InboxHead,
+    kind: z.literal("answer"),
+    question: Question,
+    answer: z.discriminatedUnion("state", [
+      z.strictObject({ state: z.literal("answered"), ...Reply.shape }),
+      z.strictObject({ state: z.literal("failed"), error: ContractError }),
+    ]),
+  }),
   /**
    * 다른 작업이 계획(`claim.plan`)을 이루지 못한 채 선점을 풀었다: 그 선언된 계약 변경은 취소됐다. 그 계획의 알림을 받은 작업에 넣는다.
    * 정의 줄이 계획대로 바뀐 뒤 풀었거나 브랜치가 머지되어 풀린 것은 취소가 아니다.
@@ -514,7 +550,7 @@ export const InboxItem = z.discriminatedUnion("kind", [
 export type InboxItem = z.infer<typeof InboxItem>;
 
 /**
- * 알림에 달린 포스트(문답 Q3). 알림 하나에 포스트 하나이고, 처음 열 때(`api.openPost`) 생긴다.
+ * 알림의 포스트(ADR-0027). 알림 하나에 포스트 하나이고, 알림이 포럼에 올라올 때 함께 생긴다. 포스트의 첫 글이 그 알림이다.
  * 포스트는 채널처럼 동작한다: `channel`을 채널 자리에 넣어 글 쓰기, 지난 대화, DM, `@호출`, 채널에 올리기를 그대로 쓴다.
  * 채널 목록(`api.channels`)에는 없다. `alert`는 알림이 선 채널 메시지의 번호, `count`는 포스트에 선 글(글과 공개된 문답)의 수다.
  */
@@ -578,7 +614,7 @@ export const ChannelMessage = z.discriminatedUnion("kind", [
   }),
   /**
    * Omagari가 올린 알림. 쓴 사람이 없다. 알림이 고쳐지거나 풀리거나 포스트의 글 수가 바뀌면 같은 `id`의 것이 실시간 연결로 다시 온다.
-   * `at`은 처음 올린 시각이다. `post`는 달린 포스트의 채널과 글 수이고, 아직 아무도 열지 않았으면 null이다.
+   * `channel`은 올린 포럼이고, `at`은 처음 올린 시각이다. `post`는 이 알림의 포스트의 채널과 글 수다.
    */
   z.strictObject({
     kind: z.literal("alert"),
@@ -586,7 +622,7 @@ export const ChannelMessage = z.discriminatedUnion("kind", [
     channel: z.string(),
     at: z.string(),
     alert: Alert,
-    post: Post.omit({ alert: true }).nullable(),
+    post: Post.omit({ alert: true }),
   }),
   /**
    * Omagari가 올린 결정 PR의 한 줄. 결정의 포스트와 알림 채널에 같은 것이 하나씩 선다. 쓴 사람이 없다.
@@ -604,6 +640,41 @@ export const ChannelMessage = z.discriminatedUnion("kind", [
   }),
 ]);
 export type ChannelMessage = z.infer<typeof ChannelMessage>;
+
+/**
+ * 결정 초안의 네 칸(ADR-0028). 결정 기록(Nygard의 ADR)의 꼴을 따른다. 무엇을 담는지는 러너가 실행기에 주는 지시문에 있다.
+ */
+export const DraftFields = z.strictObject({
+  title: z.string(),
+  context: z.string(),
+  decision: z.string(),
+  consequences: z.string(),
+});
+export type DraftFields = z.infer<typeof DraftFields>;
+
+/**
+ * 결정 초안 하나: 포스트(`post`, 포스트의 채널)의 글과 문답을 내 에이전트가 읽고 쓴 것(ADR-0028). 저장하지 않는 제안이라 서버가 꺼지면 잃는다.
+ * `id`는 서버가 정한 것이고 멈출 때(`api.stopDraft`) 쓴다. `read`는 에이전트에 넘긴 포스트의 글(`texts`)과 공개된 문답(`qas`)의 수다.
+ * `state`는 쓰는 중, 다 씀(`drafted`, 답한 모델과 effort가 붙는다, `Reply`와 같다), 멈춤, 쓰지 못함이다.
+ */
+export const Draft = z.strictObject({
+  id: z.string(),
+  post: z.string(),
+  executor: ExecutorId,
+  read: z.strictObject({ texts: z.number(), qas: z.number() }),
+  state: z.discriminatedUnion("state", [
+    z.strictObject({ state: z.literal("pending") }),
+    z.strictObject({
+      state: z.literal("drafted"),
+      ...DraftFields.shape,
+      model: z.string().optional(),
+      effort: z.string().optional(),
+    }),
+    z.strictObject({ state: z.literal("stopped") }),
+    z.strictObject({ state: z.literal("failed"), error: ContractError }),
+  ]),
+});
+export type Draft = z.infer<typeof Draft>;
 
 const pairCommon = {
   branch: z.string(),
@@ -700,8 +771,24 @@ export const runnerToServer = {
     symbol: z.string().optional(),
     lines: LineRange.optional(),
   }),
-  /** `ask`(`re`)에 러너 세션이 답했다. 답하지 못했으면 `error`를 `re`를 붙여 보낸다. */
+  /**
+   * 이 멤버의 작업(`branch`)의 에이전트가 다른 멤버(`to`)의 에이전트에게 묻는다(ADR-0024). `executor`는 고른 받는 쪽 실행기이고, 없으면 서버가 고른다.
+   * 서버는 `questioned`(`re`)로 바로 답하고, 답은 나중에 그 작업의 편지함(`answer`)으로 넣는다. 자기 자신이나 멤버가 아니면 `error`다.
+   */
+  question: z.strictObject({
+    branch: z.string().min(1),
+    to: z.string().min(1),
+    executor: ExecutorId.optional(),
+    text: z.string().trim().min(1).max(MAX_QUESTION_CHARS),
+  }),
+  /** `ask`나 `question`(`re`)에 러너 세션이 답했다. 답하지 못했으면 `error`를 `re`를 붙여 보낸다. */
   answer: Reply,
+  /** `draft`(`re`)의 초안. 쓰지 못했으면 `error`를 `re`를 붙여 보낸다. 멈춘 초안의 답은 서버가 버린다. */
+  drafted: z.strictObject({
+    ...DraftFields.shape,
+    model: z.string().optional(),
+    effort: z.string().optional(),
+  }),
   error: ContractError,
 } satisfies Payloads;
 
@@ -710,7 +797,7 @@ export const serverToRunner = {
   /** hello를 받아들였다. 러너는 이 멤버의 에이전트로, 이 레포에 짝지어졌다. */
   welcome: z.strictObject({ login: z.string(), repo: z.string() }),
   /**
-   * 문답. 러너가 받는 요청은 이것뿐이다. 물을 에이전트(`executor`), 채널, 질문, 채널 대화만 오고 도구·폴더·세션은 러너가 정한다.
+   * 문답. 러너가 받는 요청은 이것과 결정 초안(`draft`)뿐이다. 물을 에이전트(`executor`), 채널, 질문, 채널 대화만 오고 도구·폴더·세션은 러너가 정한다.
    * 러너는 채널과 실행기마다 채널 세션 하나를 잇고(ADR-0015), 한 번에 한 턴만 돌리고 나머지는 온 순서대로 줄 세운다.
    * 포스트도 채널로 온다(`channel.id`가 포스트의 채널). 그래서 포스트의 채널 세션은 같은 채널의 것과 따로 이어 간다.
    * `recent`는 그 채널의 최근 대화(오래된 것부터 `CHANNEL_CONTEXT`개까지)다. 포스트면 맨 앞이 그 알림이고 뒤가 포스트의 대화다. 러너는 그 채널 세션의 지난 턴 뒤의 것만
@@ -719,11 +806,24 @@ export const serverToRunner = {
    */
   ask: z.strictObject({
     executor: ExecutorId,
-    channel: Channel,
+    channel: Channel.omit({ kind: true }),
     message: z.string().min(1),
     recent: z.array(ChannelMessage).max(CHANNEL_CONTEXT),
     ...ModelPick.shape,
   }),
+  /**
+   * 결정 초안을 써 달라(ADR-0028). `messages`는 포스트의 대화(맨 앞이 그 알림, 오래된 것부터 `CHANNEL_CONTEXT`개까지)다.
+   * 러너는 채널 세션을 잇지 않고 새 러너 세션 하나로, 문답과 같은 줄에 서서 읽기 전용으로 돌린다. 대화는 지시가 아닌 데이터로 감싼다(ADR-0017).
+   * 답은 `drafted`(`re`)다. `model`과 `effort`는 `ask`와 같다.
+   */
+  draft: z.strictObject({
+    executor: ExecutorId,
+    post: Channel.omit({ kind: true }),
+    messages: z.array(ChannelMessage).max(CHANNEL_CONTEXT),
+    ...ModelPick.shape,
+  }),
+  /** `draft`(보낸 것의 `id`)를 멈춘다. 줄에 서 있으면 돌리지 않고, 돌고 있으면 실행기를 끈다. 답하지 않는다. */
+  stopDraft: z.strictObject({ id: z.string() }),
   /**
    * 지금 상황: 워크스페이스의 작업 전부(받는 러너의 멤버 것도 포함, `api.works`와 같은 것)와 선점 전부. 선점은 작업이 관측되지 않아도(브랜치를 바꿔 체크아웃해도) 남는다.
    * welcome 바로 뒤에 보내고, 그 뒤로는 달라질 때마다 다시 보낸다. 러너는 받아 두고 훅에 내준다(ADR-0005).
@@ -731,6 +831,24 @@ export const serverToRunner = {
   situation: z.strictObject({ works: z.array(WorkView), claims: z.array(Claim) }),
   /** `claim`(`re`)을 받아 건 선점. */
   claimed: z.strictObject({ claim: Claim }),
+  /**
+   * `question`(`re`)의 답: 받는 쪽 러너에 보냈다(`sent`), 받는 쪽 러너가 오프라인이라 남겨 두었다가 붙으면 보낸다(`offline`, 14일 뒤 만료),
+   * 받는 쪽이 스위치를 꺼 두어 받지 않는다(`refused`, 남기지 않는다).
+   */
+  questioned: z.discriminatedUnion("state", [
+    z.strictObject({ state: z.enum(["sent", "offline"]), question: Question }),
+    z.strictObject({ state: z.literal("refused") }),
+  ]),
+  /**
+   * 다른 멤버(`from`의 작업)의 에이전트가 이 러너의 멤버의 `executor` 에이전트에게 보낸 질문. 러너는 읽기 전용 러너 세션을 새로 띄워
+   * 질문을 지시가 아닌 데이터로 감싸 넘기고(ADR-0017과 같은 방식), `answer`나 `error`(`re`)로 답한다. 문답과 같은 줄에 선다.
+   */
+  question: z.strictObject({
+    id: z.number(),
+    from: WorkRef,
+    executor: ExecutorId,
+    text: z.string(),
+  }),
   /** `release`(`re`)로 푼 선점. 없었으면 비어 있다. */
   released: z.strictObject({ claims: z.array(Claim) }),
   /**
@@ -896,6 +1014,8 @@ export const cliToRunner = {
   claim: ClaimTarget.extend({ plan: Plan.optional() }),
   /** 작업의 선점을 푼다(`omagari release`). `path`가 없으면 그 작업의 선점 모두다. */
   release: ClaimTarget.partial({ path: true }),
+  /** 작업(`branch`)의 에이전트가 다른 멤버의 에이전트에게 묻는다(`omagari ask`). 러너는 서버에 보내고 서버의 답을 그대로 돌려준다. */
+  question: runnerToServer.question,
 } satisfies Payloads;
 
 /** 러너가 CLI와 훅에 보내는 것. */
@@ -957,6 +1077,8 @@ export const runnerToCli = {
   claimed: z.strictObject({ claim: Claim, overlaps: z.array(SeenClaim) }),
   /** `release`의 답: 푼 선점. 없었으면 비어 있다. */
   released: z.strictObject({ claims: z.array(Claim) }),
+  /** `question`의 답(서버의 `questioned`와 같다). 서버와 끊겨 있으면 `error`(`runner_offline`)다. */
+  questioned: serverToRunner.questioned,
   error: ContractError,
 } satisfies Payloads;
 
@@ -1106,6 +1228,33 @@ export const api = {
     response: z.strictObject({ qa: Qa, message: ChannelMessage.optional() }),
   },
   /**
+   * 포스트(`post`, 포스트의 채널)로 내 `executor` 에이전트에게 결정 초안을 쓰게 한다(ADR-0028). 에이전트는 주인만 부른다(`forbidden`).
+   * 답을 기다리지 않고 쓰는 중인 초안(읽을 글과 문답의 수가 붙는다)을 돌려준다. 다 쓰거나, 멈추거나, 쓰지 못하면
+   * 실시간 연결의 `draft`로 요청한 사람에게만 온다. 초안은 저장하지 않는다.
+   * 러너가 꺼져 있으면 쌓아 두지 않고 바로 `runner_offline`이다. 포스트가 아니면 `not_found`. `model`과 `effort`는 `ask`와 같다.
+   */
+  draftDecision: {
+    method: "POST",
+    path: "/api/drafts",
+    body: z.strictObject({
+      agent: z.string(),
+      executor: ExecutorId,
+      post: z.string(),
+      ...ModelPick.shape,
+    }),
+    response: z.strictObject({ draft: Draft }),
+  },
+  /**
+   * 쓰는 중인 내 초안(`draft`, `Draft.id`)을 멈춘다("그만 쓰기"). 멈춘 초안을 돌려주고 실시간 연결의 `draft`로도 보낸다.
+   * 내 것이 아니거나 이미 끝났으면 `not_found`다.
+   */
+  stopDraft: {
+    method: "POST",
+    path: "/api/drafts/stop",
+    body: z.strictObject({ draft: z.string() }),
+    response: z.strictObject({ draft: Draft }),
+  },
+  /**
    * 내 DM의 문답 하나를 채널에 올린다. 질문과 답이 함께 올라가고, 답만 올릴 수는 없다. 공개를 비공개로 되돌리지는 않는다.
    * `text`는 함께 쓰는 한마디다. 채널에는 올린 사람의 메시지 하나(글과 문답)로 선다. 비우거나 공백뿐이면 글 없이 올린다.
    * 답이 온 문답만 올린다(`invalid_request`). 이미 올렸으면 `conflict`. 내 문답이 아니면 있어도 `not_found`다.
@@ -1147,9 +1296,8 @@ export const api = {
     }),
   },
   /**
-   * 알림(`alert`, 알림이 선 채널 메시지의 번호)에 달린 포스트를 연다. 처음 열면 생기고, 다시 열면 같은 포스트다.
-   * 포스트 맨 위에 둘 알림 메시지(`message`)도 함께 준다. 처음 생기면 그 알림이 실시간 연결의 `message`로 모두에게 다시 간다(`post`가 붙어).
-   * 알림이 아닌 메시지면 `not_found`다.
+   * 알림(`alert`, 포럼에 선 알림 메시지의 번호)의 포스트와, 그 첫 글인 알림 메시지(`message`)를 읽는다.
+   * 포스트는 알림이 올라올 때 이미 생겼다. 알림이 아닌 메시지면 `not_found`다.
    */
   openPost: {
     method: "POST",
@@ -1157,7 +1305,7 @@ export const api = {
     body: z.strictObject({ alert: z.number().int() }),
     response: z.strictObject({ post: Post, message: ChannelMessage }),
   },
-  /** 열린 포스트 전부, 알림 순서. 채널 패널이 알림 채널 아래에 줄로 둔다. */
+  /** 포스트 전부, 알림 순서. */
   posts: {
     method: "GET",
     path: "/api/posts",
@@ -1192,15 +1340,26 @@ export const api = {
     path: "/api/decisions",
     response: z.strictObject({ decisions: z.array(Decision) }),
   },
-  /** 채팅 채널 전부, 이름 순서. 포스트는 오지 않는다(`api.posts`). 멤버만 본다. */
+  /**
+   * 내 에이전트가 다른 멤버의 질문(`omagari ask`)에 답할지 정하는 스위치(ADR-0024). 기본은 켜짐이다.
+   * 끄면 그 뒤로 오는 질문에 바로 "받지 않는다"를 돌려주고, 남겨 둔 질문도 답하지 않는다(묻는 쪽 편지함에 실패로 간다).
+   */
+  setAskSwitch: {
+    method: "POST",
+    path: "/api/ask-switch",
+    body: z.strictObject({ on: z.boolean() }),
+    response: z.strictObject({ on: z.boolean() }),
+  },
+  /** 채널 전부(채팅과 포럼), 이름 순서. 포스트는 오지 않는다(`api.posts`). 멤버만 본다. */
   channels: {
     method: "GET",
     path: "/api/channels",
     response: z.strictObject({ channels: z.array(Channel) }),
   },
   /**
-   * 알림을 올릴 채널을 바꾼다. 그 뒤에 새로 생기는 알림이 이 채널로 간다. 이미 올라간 알림은 제자리에서 고쳐진다.
-   * 정한 적이 없으면 처음 알림을 올릴 때 "부딪힘" 채널(없으면 만든다)이 알림 채널이 된다. 없는 채널이나 포스트면 `not_found`.
+   * 알림을 올릴 포럼을 바꾼다. 그 뒤에 새로 생기는 알림이 이 포럼에 포스트로 간다. 지난 포스트는 제자리에 있다.
+   * 정한 적이 없으면 처음 알림을 올릴 때 "부딪힘" 포럼(없으면 만든다)이 알림을 올릴 포럼이 된다.
+   * 없는 채널이나 포스트면 `not_found`, 채팅 채널이면 `invalid_request`다.
    */
   setAlertChannel: {
     method: "POST",
@@ -1209,7 +1368,7 @@ export const api = {
     response: z.strictObject({ channel: Channel }),
   },
   /**
-   * 채팅 채널을 만든다. 같은 이름(대소문자를 가리지 않는다)이 있으면 `conflict`다.
+   * 채팅 채널을 만든다. 같은 이름(대소문자를 가리지 않는다)이 있거나 "부딪힘"(포럼의 이름)이면 `conflict`다.
    * 실시간 연결이 붙어 있는 웹 모두에 `channel`이 간다.
    */
   createChannel: {
@@ -1233,7 +1392,10 @@ export const api = {
     body: z.strictObject({ channel: z.string(), before: z.number().optional() }),
     response: z.strictObject({ messages: z.array(ChannelMessage) }),
   },
-  /** 채널에 글을 쓴다. 실시간 연결이 붙어 있는 웹 모두(쓴 사람 것 포함)에 `message`가 간다. */
+  /**
+   * 채널이나 포스트에 글을 쓴다. 실시간 연결이 붙어 있는 웹 모두(쓴 사람 것 포함)에 `message`가 간다.
+   * 포럼에는 쓰지 못한다(`invalid_request`). DM과 `@호출`(`api.ask`)도 같다.
+   */
   send: {
     method: "POST",
     path: "/api/channels/messages",
@@ -1301,6 +1463,8 @@ export const serverToWeb = {
    * 공개된 문답은 채널의 모두에게 `message`(kind `qa`)로도 간다. 끊긴 사이의 것은 다시 보내지 않으니, 다시 붙으면 `api.dms`를 읽는다.
    */
   qa: Qa,
+  /** 내 결정 초안이 끝났다(다 씀, 멈춤, 쓰지 못함). 요청한 사람의 연결에만 간다. 끊긴 사이의 것은 다시 보내지 않는다. */
+  draft: Draft,
   error: ContractError,
 } satisfies Payloads;
 

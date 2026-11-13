@@ -13,6 +13,7 @@ import {
   call,
   DEFINITION_KINDS,
   EXECUTOR_NAMES,
+  ExecutorId,
   PLAN_KINDS,
   Plan,
   ShareLevel,
@@ -52,6 +53,13 @@ const USAGE = `사용법:
                                 지금 브랜치의 작업의 선점을 푼다. 경로가 없으면 모두 푼다
   omagari impact <심볼>          그 심볼을 내 사본에서 쓰는 곳과, 그 정의 줄을 바꾸고 있거나 바꾸겠다고 선언한 다른 멤버의 작업을 본다
                                 메서드는 클래스.메서드나 메서드 이름으로 묻는다. 이름으로 이어 같은 이름의 다른 심볼도 잡힌다
+  omagari ask <멤버> <질문> [--executor claude-code|codex]
+                                지금 브랜치의 작업에서 다른 멤버의 에이전트에게 묻고 바로 돌아온다. 답은 이 작업의 편지함으로 온다
+                                받는 쪽 러너가 읽기 전용으로 자기 폴더를 읽고 답한다. 실행기를 고르지 않으면 그 멤버의 에이전트 하나가 답한다
+                                받는 쪽이 꺼 두었으면 "받지 않는다", 러너가 오프라인이면 남겨 두었다가 돌아오면 답한다(14일 뒤 만료)
+  omagari wait <질문 번호> | --path <경로> [--timeout <초>]
+                                질문의 답이 편지함에 오거나, 그 경로에 걸린 다른 멤버의 선점이 풀리기를 기다린다. 한 번에 하나다
+                                기본 30초, 최대 100초. 시간이 다 되면 "답 없음"이고, 답이나 승인이 아니다
   omagari metrics [--days <날 수>]
                                 지난 날들(기본 14일) 날마다 들어온 멤버 수와 문답 수를 본다
   omagari install               이 기기의 에이전트(Claude Code, Codex)에 세션 시작 훅, 편집 전 훅, 상태 한 줄 스킬을 깐다
@@ -92,6 +100,10 @@ try {
     await release(sub?.startsWith("--") ? undefined : sub);
   } else if (command === "impact" && sub !== undefined && rest.length === 0) {
     await impact(sub);
+  } else if (command === "ask" && sub !== undefined && !sub.startsWith("--")) {
+    process.exitCode = await askMember(sub);
+  } else if (command === "wait") {
+    await wait();
   } else if (command === "metrics" && (sub === undefined || sub.startsWith("--"))) {
     const { values } = parseArgs({
       args: process.argv.slice(3),
@@ -223,7 +235,7 @@ async function log() {
   if (!lines) return console.log("러너가 실행한 것이 아직 없다");
   for (const line of lines.trimEnd().split("\n")) {
     const run: RunRecord = JSON.parse(line);
-    const outcome = run.error ? `실패: ${run.error}` : "답함";
+    const outcome = run.error ? `실패: ${run.error}` : `답함 ${JSON.stringify(run.answer ?? "")}`;
     console.log(
       `${run.at}  세션 ${run.session ?? "(새 세션)"}  도구 ${run.tools.join(",")}  받은 것 ${JSON.stringify(run.message)}  ${outcome}`,
     );
@@ -427,4 +439,120 @@ async function metrics(days: string | undefined) {
   });
   console.log(`날짜(${reply.timeZone})  들어온 멤버  문답`);
   for (const { day, members, qas } of reply.days) console.log(`${day}  ${members}  ${qas}`);
+}
+
+/** 이 폴더에 체크아웃된 브랜치. 브랜치가 아니면 던진다. */
+async function currentBranch() {
+  return promisify(execFile)("git", ["symbolic-ref", "--quiet", "--short", "HEAD"]).then(
+    ({ stdout }) => stdout.trim(),
+    () => {
+      throw new Error("브랜치에 있지 않다. 작업의 브랜치를 체크아웃한 폴더에서 써라");
+    },
+  );
+}
+
+/**
+ * 지금 브랜치의 작업에서 다른 멤버(`to`)의 에이전트에게 묻는다(ADR-0024). 러너가 서버에 보내고 바로 돌아온다. 답은 편지함으로 온다.
+ * 받는 쪽이 받지 않으면 1로 끝난다.
+ */
+async function askMember(to: string) {
+  const { values, positionals } = parseArgs({
+    args: process.argv.slice(4),
+    allowPositionals: true,
+    options: { executor: { type: "string" } },
+  });
+  const text = positionals.join(" ");
+  if (!text) throw new Error(USAGE);
+  const executor = values.executor && ExecutorId.safeParse(values.executor).data;
+  if (values.executor !== undefined && !executor)
+    throw new Error(`실행기는 claude-code나 codex다: ${values.executor}`);
+  const branch = await currentBranch();
+  const reply = await callRunner(process.cwd(), "question", {
+    branch,
+    to,
+    text,
+    ...(executor && { executor }),
+  }).catch((error) => {
+    if (error instanceof ContractFailure) throw new Error(`묻지 못했다: ${error.message}`);
+    throw error;
+  });
+  if (reply.kind !== "questioned") throw new Error(`러너가 묻지 않은 것으로 답했다: ${reply.kind}`);
+  const result = reply.payload;
+  if (result.state === "refused") {
+    console.log(`${to}는 남의 질문을 받지 않는다(스위치를 꺼 두었다). 보내지 않았다.`);
+    return 1;
+  }
+  const { id, executor: answerer } = result.question;
+  const agent = `${to}의 ${answerer ? EXECUTOR_NAMES[answerer] : "에이전트"}`;
+  console.log(
+    result.state === "sent"
+      ? `질문 #${id}를 ${agent}에게 보냈다. 답은 ${branch}의 편지함으로 온다.`
+      : `${to}의 러너가 오프라인이라 질문 #${id}를 남겨 두었다. 돌아오면 답하고, 답은 ${branch}의 편지함으로 온다. 14일 안에 돌아오지 않으면 만료한다.`,
+  );
+  console.log(`기다리려면: omagari wait ${id}`);
+  return 0;
+}
+
+/**
+ * 질문의 답이 지금 브랜치의 편지함에 오거나, 경로에 걸린 다른 멤버의 선점이 풀리기를 기다린다. 한 번에 하나다.
+ * 러너에 받아 둔 것을 짧게 되풀이해 묻는다. 시간이 다 되면 "답 없음"이고, 답이나 승인으로 치지 않는다.
+ * 온 답은 끝에 싣는 편지함(`mailbox`)으로 넘긴다. 이미 넘겨받은 답은 기다리지 않는다.
+ */
+async function wait() {
+  const { values, positionals } = parseArgs({
+    args: process.argv.slice(3),
+    allowPositionals: true,
+    options: { path: { type: "string" }, timeout: { type: "string" } },
+  });
+  // 기본 시간과 상한(초). Room의 기다리기와 같다(2단계 질문 A14). 위의 명령이 먼저 돌아 모듈 상수로 두지 않는다.
+  const [WAIT_SECONDS, MAX_WAIT_SECONDS] = [30, 100];
+  const seconds = values.timeout === undefined ? WAIT_SECONDS : Number(values.timeout);
+  if (!(seconds > 0 && seconds <= MAX_WAIT_SECONDS)) {
+    throw new Error(
+      `기다리는 시간은 ${MAX_WAIT_SECONDS}초까지다(기본 ${WAIT_SECONDS}초): ${values.timeout}`,
+    );
+  }
+  if (positionals.length + (values.path === undefined ? 0 : 1) !== 1) {
+    throw new Error(
+      "한 번에 하나만 기다린다: omagari wait <질문 번호> 또는 omagari wait --path <경로>",
+    );
+  }
+  const id = Number(positionals[0]);
+  if (values.path === undefined && !Number.isInteger(id))
+    throw new Error(`질문 번호가 아니다: ${positionals[0]}`);
+  const branch = await currentBranch();
+  const top = (await promisify(execFile)("git", ["rev-parse", "--show-toplevel"])).stdout.trim();
+  const path =
+    values.path === undefined
+      ? undefined
+      : relative(top, resolve(values.path)) + (values.path.endsWith("/") ? "/" : "");
+  const deadline = Date.now() + seconds * 1000;
+  for (;;) {
+    if (path === undefined) {
+      const reply = await callRunner(process.cwd(), "inbox", { branch });
+      if (
+        reply.kind === "inbox" &&
+        reply.payload.items.some((item) => item.kind === "answer" && item.question.id === id)
+      ) {
+        return console.log(`질문 #${id}의 답이 왔다. 아래 편지함에 있다.`);
+      }
+    } else {
+      // 근처 작업 묻기의 실행기는 러너가 아직 쓰지 않는다(ADR-0015).
+      const reply = await callRunner(process.cwd(), "nearby", {
+        path,
+        branch,
+        executor: "claude-code",
+      });
+      if (reply.kind === "nearby" && reply.payload.claims.length === 0) {
+        return console.log(`${path}에 걸린 다른 멤버의 선점이 없다(풀렸다).`);
+      }
+    }
+    if (Date.now() >= deadline) {
+      const what = path === undefined ? `질문 #${id}의 답을` : `${path}의 선점이 풀리기를`;
+      return console.log(
+        `답 없음: ${seconds}초 동안 ${what} 기다렸지만 오지 않았다. 답이나 승인으로 치지 않는다. 나중에 다시 기다리거나 다른 일을 한다.`,
+      );
+    }
+    await sleep(Math.min(200, Math.max(0, deadline - Date.now())));
+  }
 }
