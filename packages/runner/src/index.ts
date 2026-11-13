@@ -14,6 +14,7 @@ import {
   type Channel,
   type ChannelMessage,
   type Choices,
+  type Claim,
   CONTRACT_VERSION,
   type ContractError,
   ContractFailure,
@@ -25,6 +26,7 @@ import {
   type InboxItem,
   type LineRange,
   MAX_FRAME_BYTES,
+  type Message,
   type ModelChoice,
   PLACE_ROLES,
   RUNNER_SOCKET,
@@ -39,12 +41,13 @@ import {
   type WorkView,
 } from "@omagari/contract";
 import { checkoutVersion } from "@omagari/contract/version";
+import { covers, overlap, resolve, see } from "./claims.ts";
 import { conflicts, newMemo, symbolConflicts } from "./conflicts.ts";
-import { nearby } from "./nearby.ts";
+import { gitIn, nearby } from "./nearby.ts";
 import { observe, uses } from "./observe.ts";
 import { named } from "./symbols.ts";
 
-export { alertLine, inboxNotice } from "./inbox.ts";
+export { alertLine, claimNews, claimOwner, claimPlace, inboxNotice } from "./inbox.ts";
 export { observationNotice } from "./observe.ts";
 
 const execFileAsync = promisify(execFile);
@@ -116,6 +119,9 @@ async function converse<T>(
   }
   throw new Error(`${command}가 고를 거리를 알려 주지 않았다`);
 }
+
+/** 선점과 풀기를 서버에 보내고 답을 기다리는 시간. */
+const CLAIM_TIMEOUT_MS = 5000;
 
 /** 관측을 다시 읽는 주기. Room의 기준 커밋 확인 주기(3초)에서 시작한다. */
 const OBSERVE_MS = 3000;
@@ -576,7 +582,7 @@ export async function startRunner(options: {
   /** welcome이 알려 준 이 러너의 멤버. */
   let login: string | undefined;
   /** 서버에서 받아 둔 지금 상황. 훅이 서버 대신 이것을 읽는다. 끊기면 지우지 않고 끊긴 시각을 단다. */
-  let situation: { works: WorkView[]; disconnectedAt: string | null } | undefined;
+  let situation: { works: WorkView[]; claims: Claim[]; disconnectedAt: string | null } | undefined;
   /** 마지막으로 관측한 내 작업. 공유 수준과 상관없이 바뀐 파일의 경로가 있다. */
   let mine: Work[] = [];
   /** 내 작업마다 체크아웃된 폴더. 직접 충돌을 계산할 때 내 내용을 여기서 읽는다. */
@@ -585,6 +591,42 @@ export async function startRunner(options: {
   let inbox: InboxItem[] | undefined;
   /** 넘겨줬지만 서버가 아직 지우지 않은 소식. 받은 편지함에서 빼고, 다시 붙으면 서버에 다시 알린다. */
   const delivered = new Set<number>();
+  /** 서버에 보내고 답(`re`)을 기다리는 요청(선점과 풀기). 끊기면 시간 상한에서 실패한다. */
+  const pending = new Map<string, (message: Message<typeof serverToRunner>) => void>();
+
+  /** 서버에 요청 하나를 보내고 그 답을 받는다. 붙어 있지 않거나 상한 안에 답이 없으면 던진다. */
+  async function request<K extends "claim" | "release">(
+    kind: K,
+    payload: Parameters<typeof encode<typeof runnerToServer, K>>[2],
+  ) {
+    const to = live;
+    if (!to)
+      throw new ContractFailure({ code: "runner_offline", message: "러너가 서버와 끊겨 있다" });
+    const frame = encode(runnerToServer, kind, payload);
+    const { id } = JSON.parse(frame) as { id: string };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const answered = new Promise<Message<typeof serverToRunner>>((done, fail) => {
+      pending.set(id, done);
+      timer = setTimeout(
+        () => fail(new ContractFailure({ code: "internal", message: "서버가 답하지 않았다" })),
+        CLAIM_TIMEOUT_MS,
+      );
+    });
+    to.send(frame);
+    try {
+      const reply = await answered;
+      if (reply.kind === "error") throw new ContractFailure(reply.payload);
+      return reply;
+    } finally {
+      clearTimeout(timer);
+      pending.delete(id);
+    }
+  }
+
+  /** 이 멤버의 작업(`branch`)이 그 경로를 선점했다. declared가 내용을 올리는 경로다. */
+  const claimedBy = (branch: string, path: string) =>
+    !!login &&
+    !!situation?.claims.some((c) => c.login === login && c.branch === branch && covers(c, path));
 
   async function connect() {
     const current = new WebSocket(url);
@@ -618,11 +660,15 @@ export async function startRunner(options: {
         return;
       }
       const { message } = decoded;
-      if (message.kind === "welcome") {
+      const waiting = message.re === undefined ? undefined : pending.get(message.re);
+      if (waiting) waiting(message);
+      else if (message.kind === "claimed" || message.kind === "released") {
+        // 기다리는 요청이 없는 답(저절로 푼 것, 상한을 넘긴 것)은 버린다. 상황으로 다시 온다.
+      } else if (message.kind === "welcome") {
         login = message.payload.login;
         welcomed.resolve(message.payload);
       } else if (message.kind === "situation") {
-        situation = { works: message.payload.works, disconnectedAt: null };
+        situation = { ...message.payload, disconnectedAt: null };
       } else if (message.kind === "inbox") {
         const ids = new Set(message.payload.items.map((item) => item.id));
         // 서버가 지운 것은 더 기억하지 않는다.
@@ -824,6 +870,23 @@ export async function startRunner(options: {
       if (live && ids.length > 0) live.send(encode(runnerToServer, "delivered", { ids }));
       return encode(runnerToCli, "delivered", {}, message.id);
     }
+    if (message.kind === "claim" || message.kind === "release") {
+      return claimOrRelease(message).catch((error) => {
+        const failure =
+          error instanceof ContractFailure
+            ? error
+            : new ContractFailure({
+                code: "invalid_request",
+                message: String(error.message ?? error),
+              });
+        return encode(
+          runnerToCli,
+          "error",
+          { code: failure.code, message: failure.message },
+          message.id,
+        );
+      });
+    }
     if (message.kind !== "ask") {
       // 문답의 줄에 서지 않고 받아 둔 것으로 바로 답한다. 서버는 부르지 않는다.
       // 두 요청에 실린 실행기(ADR-0015)는 아직 쓰지 않는다. 작업이 어느 에이전트의 것인지 서버에 알리는 것은 다음 계약 변경에서 더한다.
@@ -839,7 +902,7 @@ export async function startRunner(options: {
         // ponytail: 받아 둔 것을 내용까지 통째로 준다. 세션을 시작할 때 한 번이라 견딘다. 편집마다 부르는 훅은 nearby로 거른다.
         return encode(runnerToCli, "situation", { login, ...situation, mine }, message.id);
       }
-      const { disconnectedAt, works } = situation;
+      const { disconnectedAt, works, claims } = situation;
       if (message.kind === "inbox") {
         const items = (inbox ?? []).filter((item) => item.branch === message.payload.branch);
         return encode(runnerToCli, "inbox", { login, items, disconnectedAt }, message.id);
@@ -865,10 +928,24 @@ export async function startRunner(options: {
         const payload = { uses: found, works: changing, disconnectedAt };
         return encode(runnerToCli, "impact", payload, message.id);
       }
+      const { path, branch } = message.payload;
+      const me = login;
+      const tree = (branch && folders.get(branch)) || folder;
+      const seen = await Promise.all(
+        claims
+          .filter((c) => c.login !== me && covers(c, path))
+          .map((c) => see(folder, tree, works, c)),
+      );
+      const claimed = branch !== undefined && claimedBy(branch, path);
       return encode(
         runnerToCli,
         "nearby",
-        { works: await nearby(folder, works, login, message.payload.path), disconnectedAt },
+        {
+          works: await nearby(folder, works, login, path),
+          claims: seen,
+          claimed,
+          disconnectedAt,
+        },
         message.id,
       );
     }
@@ -877,6 +954,40 @@ export async function startRunner(options: {
       question: message.payload.message,
     });
     return encode(runnerToCli, kind, payload, message.id);
+  }
+
+  /**
+   * 선점을 건다: 이 사본에서 걸 곳을 정하고, 남의 선점을 이 사본의 줄로 옮겨 겹침을 찾아 함께 보낸다. 겹쳐도 건다(ADR-0008).
+   * 풀기는 서버가 그 작업의 것 가운데 맞는 것을 푼다.
+   */
+  async function claimOrRelease(
+    message: Extract<Message<typeof cliToRunner>, { kind: "claim" | "release" }>,
+  ) {
+    if (message.kind === "release") {
+      const reply = await request("release", message.payload);
+      const claims = reply.kind === "released" ? reply.payload.claims : [];
+      return encode(runnerToCli, "released", { claims }, message.id);
+    }
+    const { branch, ...target } = message.payload;
+    const tree = folders.get(branch);
+    const base = mine.find((work) => work.branch === branch)?.base;
+    if (!tree || !base)
+      throw new Error(`브랜치 ${branch}가 체크아웃된 폴더를 아직 관측하지 못했다`);
+    const place = await resolve(tree, base, target);
+    const me = login;
+    const others = await Promise.all(
+      (situation?.claims ?? [])
+        .filter((c) => c.login !== me)
+        .map((c) => see(folder, tree, situation?.works ?? [], c)),
+    );
+    const overlaps = others.filter((c) => overlap(place, c));
+    const reply = await request("claim", {
+      branch,
+      ...place,
+      overlaps: overlaps.map((c) => c.id),
+    });
+    if (reply.kind !== "claimed") throw new Error(`서버가 다른 것으로 답했다: ${reply.kind}`);
+    return encode(runnerToCli, "claimed", { claim: reply.payload.claim, overlaps }, message.id);
   }
 
   // 같은 레포(워크트리 포함)에 러너는 하나다. 소켓에 누가 답하면 이미 켜진 러너가 있다.
@@ -932,10 +1043,12 @@ export async function startRunner(options: {
     let reported: { to?: WebSocket; pairs?: string } = {};
     let memo = newMemo();
     let problem: string | undefined;
+    /** 지워진 것을 보고 풀기를 보낸 브랜치. 상황에서 그 선점이 빠지면 잊는다. */
+    const releasing = new Set<string>();
     while (!stopping.signal.aborted) {
       let problems: string[];
       try {
-        const observed = await observe(folder, remote, options.share ?? "full");
+        const observed = await observe(folder, remote, options.share ?? "full", claimedBy);
         mine = observed.works;
         folders = observed.folders;
         problems = observed.problems;
@@ -951,6 +1064,26 @@ export async function startRunner(options: {
           }
           live.send(frame);
           sent = { to: live, works: json };
+        }
+        // 브랜치가 지워지면 그 작업의 선점을 푼다. 체크아웃만 바꾼 브랜치(아직 있는 것)의 선점은 남는다.
+        const claimedBranches = new Set(
+          (situation?.claims ?? []).filter((c) => c.login === login).map((c) => c.branch),
+        );
+        for (const branch of releasing) if (!claimedBranches.has(branch)) releasing.delete(branch);
+        for (const branch of claimedBranches) {
+          if (!live || releasing.has(branch)) continue;
+          const exists = await gitIn(folder)(
+            "show-ref",
+            "--verify",
+            "--quiet",
+            `refs/heads/${branch}`,
+          ).then(
+            () => true,
+            () => false,
+          );
+          if (exists) continue;
+          releasing.add(branch);
+          live.send(encode(runnerToServer, "release", { branch }));
         }
         // 부딪힘: 서버에서 받은 상황과 지금 내 작업으로 다시 계산하고, 이 연결로 지난번에 보낸 것과 다를 때만 보낸다.
         // ponytail: 주기마다 함께 바꾼 파일을 다 다시 본다. 같은 내용은 memo로 건너뛴다. 무거워지면 바뀐 작업만 다시 본다.

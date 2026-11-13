@@ -2,7 +2,7 @@
 import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs, promisify } from "node:util";
 import {
@@ -19,6 +19,9 @@ import { checkoutVersion } from "@omagari/contract/version";
 import {
   alertLine,
   callRunner,
+  claimNews,
+  claimOwner,
+  claimPlace,
   inboxNotice,
   observationNotice,
   type RunRecord,
@@ -37,6 +40,11 @@ const USAGE = `사용법:
   omagari runner log            러너가 실행한 것을 본다
   omagari status                지금 상황을 본다: 멤버, 작업, 상태 한 줄, 바뀐 파일, 최근 소식(피드)
   omagari status set <한 줄>    지금 브랜치의 작업에 상태 한 줄을 쓴다
+  omagari claim <경로> [--symbol <이름> | --lines <시작>-<끝>]
+                                지금 브랜치의 작업이 고칠 곳을 선점한다. 경로가 폴더(끝이 /)면 그 아래 전부, 새로 만든 파일은 파일 전체다
+                                남의 선점과 겹쳐도 걸리고, 겹치면 양쪽 작업의 편지함에 들어간다. 아무것도 막지 않는다
+  omagari release [<경로> [--symbol <이름> | --lines <시작>-<끝>]]
+                                지금 브랜치의 작업의 선점을 푼다. 경로가 없으면 모두 푼다
   omagari impact <심볼>          그 심볼을 내 사본에서 쓰는 곳과, 그 정의 줄을 바꾸고 있는 다른 멤버의 작업을 본다
                                 메서드는 클래스.메서드나 메서드 이름으로 묻는다. 이름으로 이어 같은 이름의 다른 심볼도 잡힌다
   omagari metrics [--days <날 수>]
@@ -73,6 +81,10 @@ try {
     await status();
   } else if (command === "status" && sub === "set" && rest.length > 0) {
     await setStatus(rest.join(" "));
+  } else if (command === "claim" && sub !== undefined && !sub.startsWith("--")) {
+    await claim(sub);
+  } else if (command === "release") {
+    await release(sub?.startsWith("--") ? undefined : sub);
   } else if (command === "impact" && sub !== undefined && rest.length === 0) {
     await impact(sub);
   } else if (command === "metrics" && (sub === undefined || sub.startsWith("--"))) {
@@ -259,7 +271,15 @@ async function status() {
   }
   // 피드: 내 작업이 걸리지 않은 소식. 내 작업의 것은 편지함으로 온다.
   if (news.length > 0) console.log("최근 소식(내 작업이 걸리지 않은 것, 새것부터):");
-  for (const { at, alert } of news) console.log(`  ${alertLine(alert).slice(2)} (${ago(at)})`);
+  for (const item of news) {
+    const line =
+      "alert" in item
+        ? alertLine(item.alert)
+        : "claim" in item
+          ? claimNews(item.claim, false)
+          : claimNews(item.released, true);
+    console.log(`  ${line.slice(2)} (${ago(item.at)})`);
+  }
 }
 
 /** 이 폴더에 체크아웃된 브랜치의 작업에 상태 한 줄을 쓴다. */
@@ -271,6 +291,73 @@ async function setStatus(text: string) {
     });
   const written = await call(await member(), api.setStatus, { branch, text });
   console.log(`${branch}의 상태 한 줄을 썼다: ${written.text}`);
+}
+
+/**
+ * 선점과 풀기의 대상: 지금 브랜치와, 레포 최상위에서 본 경로, `--symbol`이나 `--lines`. 경로는 지금 폴더에서 본 것으로 받는다.
+ * 폴더는 끝의 `/`를 남긴다.
+ */
+async function target(path: string | undefined) {
+  const { values } = parseArgs({
+    args: process.argv.slice(path === undefined ? 3 : 4),
+    options: { symbol: { type: "string" }, lines: { type: "string" } },
+  });
+  const git = (...args: string[]) =>
+    promisify(execFile)("git", args).then(({ stdout }) => stdout.trim());
+  const branch = await git("symbolic-ref", "--quiet", "--short", "HEAD").catch(() => {
+    throw new Error("브랜치에 있지 않다. 작업의 브랜치를 체크아웃한 폴더에서 써라");
+  });
+  const top = await git("rev-parse", "--show-toplevel");
+  let lines: { from: number; to: number } | undefined;
+  if (values.lines !== undefined) {
+    const match = /^(\d+)(?:-(\d+))?$/.exec(values.lines);
+    if (!match) throw new Error(`줄 범위는 <시작>-<끝>이나 <줄>로 준다: ${values.lines}`);
+    lines = { from: Number(match[1]), to: Number(match[2] ?? match[1]) };
+  }
+  const relativePath =
+    path === undefined ? undefined : relative(top, resolve(path)) + (path.endsWith("/") ? "/" : "");
+  if (relativePath?.startsWith("..")) throw new Error(`레포 밖의 경로다: ${path}`);
+  return {
+    branch,
+    ...(relativePath !== undefined && { path: relativePath }),
+    ...(values.symbol !== undefined && { symbol: values.symbol }),
+    ...(lines && { lines }),
+  };
+}
+
+/** 지금 브랜치의 작업에 선점을 건다. 러너가 서버에 건다. 겹친 남의 선점이 있으면 함께 보인다. */
+async function claim(path: string) {
+  const { branch, path: at, ...rest } = await target(path);
+  const reply = await callRunner(process.cwd(), "claim", {
+    branch,
+    path: at ?? path,
+    ...rest,
+  }).catch((error) => {
+    if (error instanceof ContractFailure) throw new Error(`선점을 걸지 못했다: ${error.message}`);
+    throw error;
+  });
+  if (reply.kind !== "claimed") throw new Error(`러너가 묻지 않은 것으로 답했다: ${reply.kind}`);
+  const { claim, overlaps } = reply.payload;
+  console.log(`${branch}의 선점을 걸었다: ${claimPlace(claim)}`);
+  if (overlaps.length === 0) return;
+  console.log(
+    "겹친 다른 멤버의 선점(줄은 내 사본 기준). 양쪽 편지함에 들어갔다. 겹친 곳은 기다리거나 물어본다:",
+  );
+  for (const other of overlaps) console.log(`  ${claimOwner(other)} · ${claimPlace(other)}`);
+}
+
+/** 지금 브랜치의 작업의 선점을 푼다. 경로가 없으면 모두 푼다. */
+async function release(path: string | undefined) {
+  const found = await target(path);
+  const reply = await callRunner(process.cwd(), "release", found).catch((error) => {
+    if (error instanceof ContractFailure) throw new Error(`선점을 풀지 못했다: ${error.message}`);
+    throw error;
+  });
+  if (reply.kind !== "released") throw new Error(`러너가 묻지 않은 것으로 답했다: ${reply.kind}`);
+  const { claims } = reply.payload;
+  if (claims.length === 0) return console.log(`${found.branch}에 풀 선점이 없다`);
+  console.log(`${found.branch}의 선점 ${claims.length}개를 풀었다:`);
+  for (const claim of claims) console.log(`  ${claimPlace(claim)}`);
 }
 
 /** 심볼을 쓰는 곳과 그 정의 줄을 바꾸는 다른 멤버의 작업을 보인다. 러너가 답한다. */

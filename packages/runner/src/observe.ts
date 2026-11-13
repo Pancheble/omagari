@@ -24,8 +24,9 @@ export function observationNotice(share: ShareLevel) {
     full: `이 폴더와 연결된 워크트리의 브랜치마다, 기본 브랜치와 갈라진 뒤 바꾼 파일의 경로와 내용이 서버로 나가 멤버들이 본다.
 ${ALWAYS}
   경로만 나가는 것: 바이너리, ${FILE_LIMIT / 1024}KiB를 넘는 파일, 합계 ${TOTAL_LIMIT / 1024 / 1024}MiB를 넘는 몫.`,
-    declared: `이 폴더와 연결된 워크트리의 브랜치마다, 기본 브랜치와 갈라진 뒤 바꾼 파일의 경로가 서버로 나가 멤버들이 본다. 파일 내용은 나가지 않는다.
-${ALWAYS}`,
+    declared: `이 폴더와 연결된 워크트리의 브랜치마다, 기본 브랜치와 갈라진 뒤 바꾼 파일의 경로가 서버로 나가 멤버들이 본다. 내용은 그 브랜치가 선점(omagari claim)한 경로 안의 파일만 나간다.
+${ALWAYS}
+  경로만 나가는 것: 선점한 경로 밖의 파일, 바이너리, ${FILE_LIMIT / 1024}KiB를 넘는 파일, 합계 ${TOTAL_LIMIT / 1024 / 1024}MiB를 넘는 몫.`,
     intent: `이 폴더와 연결된 워크트리의 브랜치 이름과 기준 커밋, 에이전트가 쓴 상태 한 줄만 서버로 나간다. 바꾼 파일의 경로도 내용도 나가지 않는다.`,
   }[share];
   return `관측(공유 수준 ${share}): ${what}
@@ -71,7 +72,7 @@ async function worktrees(folder: string) {
 
 /**
  * `folder`(등록한 폴더)와 그 연결된 워크트리마다 체크아웃된 작업을 공유 수준대로 읽는다. 브랜치가 아니면(detached HEAD) 작업이 없다.
- * full이 아니면 내용 없이 경로만 읽는다. intent의 경로는 서버로 나가지 않는다(러너가 뺀다).
+ * full은 내용을, declared는 그 작업이 선점한 경로(`claimed`) 안의 것만 내용을 읽고, 나머지는 경로만 읽는다. intent의 경로는 서버로 나가지 않는다(러너가 뺀다).
  * 기준 커밋은 HEAD와 `remote`의 기본 브랜치(`refs/remotes/<remote>/HEAD`)가 갈라진 지점이다.
  * 읽지 못한 워크트리는 빼고 그 까닭을 `problems`에 담는다. 하나가 안 읽혀도 나머지는 올라간다.
  * `folders`는 작업(브랜치)마다 체크아웃된 폴더다. 브랜치 하나는 워크트리 하나에만 체크아웃된다.
@@ -80,7 +81,12 @@ async function worktrees(folder: string) {
 const compared = new Map<string, ReturnType<typeof compare>>();
 const COMPARED_LIMIT = 2000;
 
-export async function observe(folder: string, remote: string, share: ShareLevel) {
+export async function observe(
+  folder: string,
+  remote: string,
+  share: ShareLevel,
+  claimed: (branch: string, path: string) => boolean = () => false,
+) {
   const works: Work[] = [];
   const problems: string[] = [];
   const folders = new Map<string, string>();
@@ -126,13 +132,14 @@ export async function observe(folder: string, remote: string, share: ShareLevel)
     for (const path of paths) {
       const full = join(tree, path);
       const stat = await lstat(full).catch(() => undefined);
+      const open = share === "full" || (share === "declared" && claimed(branch, path));
       if (!stat) {
-        const definitions = share === "full" ? await changedDefinitions(path) : undefined;
+        const definitions = open ? await changedDefinitions(path) : undefined;
         files.push({ path, deleted: true, ...(definitions?.length && { definitions }) });
         continue;
       }
       // intent도 경로는 읽는다. 러너가 서버로 보낼 때 뺀다(이 기기의 훅이 내 작업의 경로를 쓴다).
-      if (share !== "full") {
+      if (!open) {
         files.push({ path, omitted: "share" });
         continue;
       }

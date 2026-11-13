@@ -76,7 +76,7 @@ test("주인이 러너마다 공유 수준을 고르고 다시 켜도 그 수준
   let { stdout } = await runner.stop();
   assert.match(stdout, /관측\(공유 수준 full\)/);
 
-  // declared로 낮추면 경로만 남고, 이미 올라간 내용은 서버에서 내려간다.
+  // declared로 낮추면 경로만 남고(선점한 경로가 없다), 이미 올라간 내용은 서버에서 내려간다. 선점한 경로의 내용은 claims.test가 본다.
   runner = await launch("--share", "declared");
   const declared = [
     { path: "committed.ts", omitted: "share" },
@@ -88,7 +88,7 @@ test("주인이 러너마다 공유 수준을 고르고 다시 켜도 그 수준
   ({ stdout } = await runner.stop());
   assert.match(
     stdout,
-    /관측\(공유 수준 declared\): .*바꾼 파일의 경로가 서버로 나가 멤버들이 본다\. 파일 내용은 나가지 않는다/,
+    /관측\(공유 수준 declared\): .*바꾼 파일의 경로가 서버로 나가 멤버들이 본다\. 내용은 그 브랜치가 선점\(omagari claim\)한 경로 안의 파일만 나간다/,
   );
 
   // 고르지 않고 다시 켜도 고른 수준이 남는다. 꺼진 동안 쓴 파일도 경로만 올라간다.
