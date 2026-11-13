@@ -136,10 +136,15 @@ const decisionView = (json: string): Decision => {
 /**
  * 메시지를 쓴 사람의 이름과, 공개된 문답이면 그 문답, 알림이면 그 알림과 달린 포스트와 함께 읽는다. 뒤에 WHERE와 ORDER BY를 붙여 쓴다.
  */
+const POST_LAST = `(SELECT json_object('login', x.login, 'name', COALESCE(pp.name, x.login),
+  'line', COALESCE(x.note, x.text, qq.question, ''), 'at', x.at) FROM messages x
+  LEFT JOIN people pp ON pp.login = x.login LEFT JOIN qas qq ON qq.id = x.qa
+  WHERE x.channel = c.id AND x.decision IS NULL ORDER BY x.id DESC LIMIT 1)`;
+
 const MESSAGES = `SELECT m.id, m.channel, m.login, m.text, m.note, m.at, p.name,
   q.id AS qa, q.executor, q.question, q.at AS asked, q.answer, q.visibility,
   m.alert, a.kind, a.works, a.files, a.resolved,
-  c.id AS post, CASE WHEN c.id IS NULL THEN 0 ELSE ${POST_COUNT} END AS count,
+  c.id AS post, CASE WHEN c.id IS NULL THEN 0 ELSE ${POST_COUNT} END AS count, ${POST_LAST} AS last,
   CASE WHEN d.id IS NULL THEN NULL ELSE ${DECISION} END AS decision FROM messages m
   LEFT JOIN people p ON p.login = m.login
   LEFT JOIN qas q ON q.id = m.qa
@@ -165,6 +170,7 @@ type MessageRow = {
   post: string | null;
   count: number;
   decision: string | null;
+  last: string | null;
 } & Pick<QaRow, "executor" | "question" | "answer" | "visibility">;
 
 /**
@@ -210,6 +216,22 @@ const computedBy = (kind: Alert["kind"], item: AlertFile | AlertSymbol, works: W
     ? [works[usingSide(item)]?.login]
     : works.map((work) => work.login);
 
+/** 포스트 요약(`Post`에서 `alert`만 뺀 것). `row`는 알림 줄이다. 한 줄은 줄바꿈을 접고 `POST_LINE`자까지만 준다. */
+const POST_LINE = 200;
+const postSummary = (row: MessageRow): Omit<Post, "alert"> => {
+  const last = row.last === null ? null : JSON.parse(row.last);
+  return {
+    channel: row.post as string,
+    count: row.count,
+    last: last && {
+      login: last.login,
+      name: last.name,
+      line: last.line.replace(/\s+/g, " ").trim().slice(0, POST_LINE),
+    },
+    activity: new Date(last ? last.at : row.at).toISOString(),
+  };
+};
+
 const messageView = (row: MessageRow): ChannelMessage => {
   if (row.alert !== null) {
     return {
@@ -218,7 +240,7 @@ const messageView = (row: MessageRow): ChannelMessage => {
       channel: row.channel,
       at: new Date(row.at).toISOString(),
       alert: alertView(row),
-      post: { channel: row.post as string, count: row.count },
+      post: postSummary(row),
     };
   }
   if (row.decision !== null) {
@@ -1647,21 +1669,26 @@ export async function startServer(options: {
     return { channel: { id: channel, name: found.name, kind: found.kind } };
   });
 
-  /** 포스트 하나. 글 수와 함께 읽는다. */
-  const postView = (channel: string) =>
-    db
-      .prepare(
-        `SELECT c.id AS channel, c.alert, ${POST_COUNT} AS count FROM channels c WHERE c.id = ?`,
-      )
-      .get(channel) as Post;
+  /** 알림 줄(`WHERE` 뒤에 붙인다)로 포스트와 그 알림 메시지를 읽는다. */
+  const postsWhere = (where: string, ...args: number[]) =>
+    (
+      db
+        .prepare(`${MESSAGES} WHERE m.alert IS NOT NULL${where} ORDER BY m.id`)
+        .all(...args) as MessageRow[]
+    ).map((row) => {
+      const message = messageView(row);
+      return {
+        message,
+        post: { ...(message.kind === "alert" && message.post), alert: row.id } as Post,
+      };
+    });
 
   mount(app, api.openPost, ({ alert }, c) => {
     visit(c.get("login") as string);
-    const row = db.prepare(`${MESSAGES} WHERE m.id = ? AND m.alert IS NOT NULL`).get(alert) as
-      | MessageRow
-      | undefined;
-    if (!row) throw new ContractFailure({ code: "not_found", message: `없는 알림이다: ${alert}` });
-    return { post: postView(row.post as string), message: messageView(row) };
+    const [found] = postsWhere(" AND m.id = ?", alert);
+    if (!found)
+      throw new ContractFailure({ code: "not_found", message: `없는 알림이다: ${alert}` });
+    return found;
   });
 
   /** 결정 하나를 읽는다. */
@@ -1839,12 +1866,7 @@ export async function startServer(options: {
   }));
 
   mount(app, api.posts, () => ({
-    posts: db
-      .prepare(
-        `SELECT c.id AS channel, c.alert, ${POST_COUNT} AS count FROM channels c
-         WHERE c.alert IS NOT NULL ORDER BY c.alert`,
-      )
-      .all() as Post[],
+    posts: postsWhere("").map(({ post, message }) => ({ ...post, message })),
   }));
 
   const mustExist = (channel: string) => {

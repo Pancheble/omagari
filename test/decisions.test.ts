@@ -146,7 +146,9 @@ test("포스트에서 결정을 정리하면 정리한 멤버 이름으로 결�
       ],
     ),
   );
-  assert.equal((await call(world.owner, api.posts)).posts[0]?.count, 2);
+  const [summary] = (await call(world.owner, api.posts)).posts;
+  assert.equal(summary?.count, 2);
+  assert.equal(summary?.last?.line, "좋아요, 환불은 그 뒤에");
 
   // 첫 결정 PR이 열린 채 두 번째를 정리하면 다음 번호다. owner가 정리해 owner의 이름이다.
   const second = (
