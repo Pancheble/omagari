@@ -176,6 +176,7 @@ export async function tempRepo(repo = REPO) {
  * 브랜치의 PR은 `openPull`로 열고, 돌려받은 PR을 고치거나 `merge`해 바꾼다.
  * 레포의 파일은 브랜치마다 `files`에 있다. 기본 브랜치는 main이고, 커밋은 브랜치 이름을 그대로 쓴다.
  * 서버가 연 PR(결정 PR)도 `pulls`에 쌓이고, 연 토큰의 주인이 `author`다. `block`으로 머지를 막고, `review`로 리뷰를 단다.
+ * 서버가 연 이슈(포스트의 이슈)는 `issues`에 쌓이고, 사람이 GitHub에서 하는 일은 그 이슈를 고치거나 `comment`로 댓글을 단다.
  * 토큰을 무효로 하려면 `tokens`에서 지운다.
  */
 export function fakeGitHub() {
@@ -188,6 +189,21 @@ export function fakeGitHub() {
     author?: string;
   })[] = [];
   const files = new Map([["main", new Map<string, string>()]]);
+  const issues: {
+    number: number;
+    title: string;
+    body: string;
+    labels: string[];
+    open: boolean;
+    author: string;
+    comments: { id: number; login: string; body: string }[];
+  }[] = [];
+  let commentId = 1000;
+  const issueOf = (number: number) => {
+    const found = issues.find((issue) => issue.number === number);
+    if (!found) throw new Error("HTTP 404 Not Found");
+    return found;
+  };
   const commits: { branch: string; message: string; author: string; paths: string[] }[] = [];
   let blocked: string | undefined;
   /** PR 번호마다 리뷰어의 마지막 리뷰 상태. */
@@ -310,6 +326,32 @@ export function fakeGitHub() {
       merge(found);
       return { merged: true };
     },
+    async openIssue(token, repo, { title, body, labels }) {
+      const author = owner(token, repo);
+      // GitHub은 PR과 이슈가 번호를 함께 쓰지만, 가짜는 PR 번호가 테스트에 박혀 있어 이슈를 101부터 따로 센다.
+      const number = 101 + issues.length;
+      issues.push({ number, title, body, labels, open: true, author, comments: [] });
+      return { number, url: `https://github.com/${REPO}/issues/${number}` };
+    },
+    async issue(token, repo, number) {
+      if (repo !== REPO || !tokens.has(token)) return undefined;
+      const found = issues.find((issue) => issue.number === number);
+      return found && { title: found.title, labels: [...found.labels], open: found.open };
+    },
+    async comments(token, repo, number) {
+      if (repo !== REPO || !tokens.has(token)) return undefined;
+      return issues.find((issue) => issue.number === number)?.comments.map((c) => ({ ...c }));
+    },
+    async comment(token, repo, number, body) {
+      const login = owner(token, repo);
+      const id = commentId++;
+      issueOf(number).comments.push({ id, login, body });
+      return { id };
+    },
+    async closeIssue(token, repo, number) {
+      owner(token, repo);
+      issueOf(number).open = false;
+    },
   };
   /** 열린 PR을 머지한다. 그 브랜치의 파일이 있으면 main에 들어간다. */
   const merge = (pull: Pull & { branch?: string }) => {
@@ -352,6 +394,12 @@ export function fakeGitHub() {
       const found = reviews.get(number) ?? new Map();
       found.set(login, state);
       reviews.set(number, found);
+    },
+    /** 서버가 연 이슈. 제목, 라벨, 열림을 고치면 사람이 GitHub에서 고친 것과 같다. */
+    issues,
+    /** `login`이 GitHub에서 이슈 `number`에 댓글을 단다. */
+    comment(number: number, login: string, body: string) {
+      issueOf(number).comments.push({ id: commentId++, login, body });
     },
     /** GitHub이 머지를 막는다(리뷰 필수 등). 까닭을 주지 않으면 막지 않는다. */
     block(reason?: string) {

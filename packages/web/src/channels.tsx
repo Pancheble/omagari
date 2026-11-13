@@ -1,7 +1,7 @@
 import { type Channel, ContractFailure, MAX_CHANNEL_NAME_CHARS } from "@omagari/contract";
 import { ChevronDown, Hash, MessagesSquare, Plus } from "lucide-react";
 import { type FormEvent, type ReactNode, type RefObject, useId, useState } from "react";
-import { type PostItem, postTitle } from "./forum.tsx";
+import { type PostItem, postTitle, settled } from "./forum.tsx";
 
 /** 채널 이름 순서. 받은 곳(목록, 실시간, 만들기)과 상관없이 같은 순서로 둔다. */
 export const byName = (channels: Channel[]) =>
@@ -106,10 +106,7 @@ export function ChannelList({
                 {!forumCollapsed && (
                   <ul className="branches" aria-label={`${channel.name}의 열린 포스트`}>
                     {posts
-                      ?.filter(
-                        (item) =>
-                          item.message.channel === channel.id && !item.message.alert.resolved,
-                      )
+                      ?.filter((item) => item.message.channel === channel.id && !settled(item))
                       .sort((a, b) => Date.parse(b.activity) - Date.parse(a.activity))
                       .map((item) => (
                         <li key={item.alert}>

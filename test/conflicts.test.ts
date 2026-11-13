@@ -323,11 +323,18 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
     return first;
   });
   const post = arrived.post.channel;
-  assert.deepEqual(arrived.post, { channel: post, count: 0, last: null, activity: arrived.at });
+  // 이슈(ADR-0032)는 알림 뒤에 따로 열리므로 여기서는 빼고 본다. 이슈는 issues.test.ts가 본다.
+  const noIssue = <T extends { issue: unknown }>({ issue, ...rest }: T) => rest;
+  assert.deepEqual(noIssue(arrived.post), {
+    channel: post,
+    count: 0,
+    last: null,
+    activity: arrived.at,
+  });
   // 목록 한 번으로 포럼 화면이 그릴 수 있다: 알림, 마지막 글(아직 없다), 글 수, 마지막 활동, 올라온 시각.
   const listed = (await call(alice, api.posts)).posts;
   assert.deepEqual(
-    listed.map(({ message, ...p }) => p),
+    listed.map(({ message, ...p }) => noIssue(p)),
     [{ channel: post, alert: alert.id, count: 0, last: null, activity: arrived.at }],
   );
   const [first] = listed;
@@ -336,7 +343,7 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
   assert.equal(first.message.alert.kind, "direct");
   assert.equal(first.message.alert.resolved, null);
   const opened = await call(world.owner, api.openPost, { alert: alert.id });
-  assert.deepEqual(opened.post, {
+  assert.deepEqual(noIssue(opened.post), {
     channel: post,
     alert: alert.id,
     count: 0,

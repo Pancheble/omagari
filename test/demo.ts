@@ -8,6 +8,7 @@
 // - DEMO_AGENT=fake: 내 에이전트도 정해 둔 답을 낸다. 초안은 5초 동안 "쓰는 중"이다. 사용량을 쓰지 않는다.
 // - DEMO_RUNNER=off: 다 넣은 뒤 내 러너를 끈다. 초안의 "러너 꺼짐"을 본다.
 // - 끝내면(Ctrl+C) 임시 레포와 DB를 지운다. 이름이 *.test.ts가 아니라 npm test와 CI는 돌리지 않는다.
+// - 포스트마다 가짜 GitHub 이슈가 열리고 글이 댓글로 간다. 포스트 "박민수 · 최하준"에는 GitHub에서 단 댓글과 바꾼 제목·라벨이 들어온다.
 // - GitHub 머지를 막아 둔 채로 끝난다("머지 막힘"을 보이려고). 그 뒤로 Omagari가 하는 머지는 모두 막힌다.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -61,7 +62,13 @@ const executors = {
   ...(!fakeAgent && (await codexReady()) ? { codex } : {}),
 };
 // 머지 멈춤을 보이려고 한 멤버의 GitHub 토큰을 지운다. 권한 재확인이 그 멤버를 내보내지 않게 늦춘다.
-const world = await startWorld({ executors, observeMs: 200, recheckMs: 2 ** 31 - 1 });
+// 포스트의 이슈(ADR-0032)는 주기마다 GitHub에서 읽는다. 데모에서는 2초마다다.
+const world = await startWorld({
+  executors,
+  observeMs: 200,
+  recheckMs: 2 ** 31 - 1,
+  followMs: 2_000,
+});
 const fake = world.github;
 const NAMES = { owner: "나 (데모)", minsu: "박민수", seoyeon: "이서연", hajun: "최하준" };
 for (const [login, name] of Object.entries(NAMES)) fake.names.set(login, name);
@@ -279,6 +286,37 @@ assert.equal(asked.code, 0, asked.stderr);
 const asking = await world.cli("ask", "minsu", CANNED[1][0]);
 assert.equal(asking.code, 0, asking.stderr);
 await eventually(async () => assert.ok((await call(world.owner, api.settings)).answered.count > 0));
+
+// 포스트와 GitHub 이슈(ADR-0032): 포스트의 글은 이슈 댓글로 가고, GitHub에서 단 댓글과 바꾼 제목, 라벨이 포스트로 들어온다.
+const issueOf = (post: string) =>
+  eventually(async () => {
+    const number = (await call(world.owner, api.posts)).posts.find((p) => p.channel === post)?.issue
+      ?.number;
+    const found = fake.issues.find((issue) => issue.number === number);
+    assert.ok(found, "아직 포스트의 이슈가 없다");
+    return found;
+  }, 30_000);
+const mailIssue = await issueOf(mail);
+await eventually(() =>
+  assert.ok(
+    mailIssue.comments.some((c) => c.login === "minsu" && c.body.startsWith("메일을 바로")),
+    "포스트의 글이 아직 이슈 댓글로 가지 않았다",
+  ),
+);
+fake.comment(mailIssue.number, "jiwoo", "QA에서도 메일 지연을 봤어요. 큐로 가면 좋겠어요.");
+mailIssue.title = "메일 발송을 큐로 보낼지";
+mailIssue.labels.push("결제");
+(await issueOf(direct)).labels.push("급함");
+await eventually(async () => {
+  const { messages } = await call(world.owner, api.history, { channel: mail });
+  assert.ok(
+    messages.some((m) => m.kind === "text" && m.github && m.login === "jiwoo"),
+    "GitHub 댓글이 아직 포스트에 없다",
+  );
+});
+console.log(
+  `이슈 #${mailIssue.number}의 댓글: ${mailIssue.comments.map((c) => c.login).join(", ")}`,
+);
 
 if (process.env.DEMO_RUNNER === "off") await world.runner.stop();
 

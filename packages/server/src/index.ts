@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { serve, upgradeWebSocket } from "@hono/node-server";
 import {
   ALERT_FILES,
+  ALERT_LABELS,
   type Alert,
   type AlertFile,
   type AlertSymbol,
@@ -183,7 +184,8 @@ const POST_LAST = `(SELECT json_object('login', x.login, 'name', COALESCE(pp.nam
   LEFT JOIN people pp ON pp.login = x.login LEFT JOIN qas qq ON qq.id = x.qa
   WHERE x.channel = c.id AND x.decision IS NULL ORDER BY x.id DESC LIMIT 1)`;
 
-const MESSAGES = `SELECT m.id, m.channel, m.login, m.text, m.note, m.at, p.name,
+const MESSAGES = `SELECT m.id, m.channel, m.login, m.text, m.note, m.at, m.github, p.name,
+  c.issue, c.issue_url, c.issue_title, c.issue_labels, c.issue_open,
   q.id AS qa, q.executor, q.question, q.at AS asked, q.answer, q.visibility,
   m.alert, a.kind, a.works, a.files, a.resolved,
   c.id AS post, CASE WHEN c.id IS NULL THEN 0 ELSE ${POST_COUNT} END AS count, ${POST_LAST} AS last,
@@ -201,7 +203,13 @@ type MessageRow = {
   text: string | null;
   note: string | null;
   at: number;
+  github: number;
   name: string | null;
+  issue: number | null;
+  issue_url: string | null;
+  issue_title: string | null;
+  issue_labels: string | null;
+  issue_open: number | null;
   qa: number | null;
   asked: number;
   alert: number | null;
@@ -271,6 +279,16 @@ const postSummary = (row: MessageRow): Omit<Post, "alert"> => {
       line: last.line.replace(/\s+/g, " ").trim().slice(0, POST_LINE),
     },
     activity: new Date(last ? last.at : row.at).toISOString(),
+    issue:
+      row.issue === null
+        ? null
+        : {
+            number: row.issue,
+            url: row.issue_url as string,
+            title: row.issue_title as string,
+            labels: JSON.parse(row.issue_labels ?? "[]"),
+            open: row.issue_open === 1,
+          },
   };
 };
 
@@ -304,7 +322,13 @@ const messageView = (row: MessageRow): ChannelMessage => {
     name: row.name ?? row.login,
     at: new Date(row.at).toISOString(),
   };
-  if (row.qa === null) return { kind: "text", ...common, text: row.text ?? "" };
+  if (row.qa === null)
+    return {
+      kind: "text",
+      ...common,
+      text: row.text ?? "",
+      ...(row.github === 1 && { github: true }),
+    };
   return {
     kind: "qa",
     ...common,
@@ -470,6 +494,19 @@ export async function startServer(options: {
     db.exec(
       "ALTER TABLE channels ADD COLUMN kind TEXT NOT NULL DEFAULT 'chat' CHECK (kind IN ('chat', 'forum'))",
     );
+  // 포스트의 GitHub 이슈(ADR-0032). `issue`는 번호(아직 열지 못했으면 NULL), 제목·라벨(JSON)·열림은 GitHub에서 마지막으로 읽은 것이다.
+  // `issue_closed`는 알림이 풀려 Omagari가 이슈를 닫은 시각(ms)이다. 사람이 다시 열면 다시 닫지 않는다.
+  // 메시지의 `comment`는 그 글과 맞춘 이슈 댓글의 번호다. 포스트의 글을 댓글로 올렸거나 댓글이 글로 들어왔다. `github`이 1이면 들어온 것이다.
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('channels') WHERE name = 'issue'").get())
+    db.exec(`ALTER TABLE channels ADD COLUMN issue INTEGER;
+      ALTER TABLE channels ADD COLUMN issue_url TEXT;
+      ALTER TABLE channels ADD COLUMN issue_title TEXT;
+      ALTER TABLE channels ADD COLUMN issue_labels TEXT;
+      ALTER TABLE channels ADD COLUMN issue_open INTEGER;
+      ALTER TABLE channels ADD COLUMN issue_closed INTEGER;
+      ALTER TABLE messages ADD COLUMN comment INTEGER;
+      ALTER TABLE messages ADD COLUMN github INTEGER NOT NULL DEFAULT 0;`);
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS messages_by_comment ON messages (comment)");
   // 알림(ADR-0023): 두 작업 한 쌍과 종류(`kind`)마다 하나. 채널에는 messages의 한 줄(`alert`)로 선다. 그 줄의 `text`는 빈 글, `login`은 빈 이름이다
   // (`text`의 CHECK를 바꾸려면 표를 다시 만들어야 한다). `pair`는 두 작업을 정한 순서로 적은 열쇠, `works`는 계약의 WorkRef 둘(JSON),
   // `files`는 묶은 것 전부(직접 충돌이면 계약의 AlertFile 배열로 확인된 것부터 경로 순, 나머지 종류면 AlertSymbol 배열로 이름 순)다. `resolved`는 풀린 시각(ms)이고, 풀리지 않은 알림은 쌍마다 하나다.
@@ -694,7 +731,8 @@ export async function startServer(options: {
       Date.now(),
       ask.qa,
     );
-    shareQa(ask.qa);
+    const { message } = shareQa(ask.qa);
+    if (message) syncSoon(message.channel); // `@호출`의 답을 이슈 댓글로
     shareMembers();
   };
   /** 러너에 보내고 기다리는 결정 초안(ADR-0028). 키는 보낸 `draft`의 id이고 `Draft.id`다. 저장하지 않는다. */
@@ -1129,6 +1167,7 @@ export async function startServer(options: {
       db.exec("COMMIT");
       shareAlert(Number(lastInsertRowid));
       deliver(Number(lastInsertRowid), works, now);
+      syncSoon(post); // 포스트의 이슈를 연다(ADR-0032)
     }
     if (changed) {
       shareMembers(); // 멤버 목록의 직접 충돌 표시
@@ -1690,6 +1729,7 @@ export async function startServer(options: {
     db.exec("COMMIT");
     const { message } = shareQa(qa);
     posted(row.channel);
+    syncSoon(row.channel);
     return { message: message as ChannelMessage };
   });
 
@@ -2207,6 +2247,7 @@ export async function startServer(options: {
     );
     broadcast(encode(serverToWeb, "message", message));
     posted(channel);
+    syncSoon(channel);
     return { message };
   });
 
@@ -2568,6 +2609,239 @@ export async function startServer(options: {
     }
   }, options.recheckMs ?? RECHECK_MS);
 
+  /** 멤버의 GitHub 토큰(마지막에 들어온 세션의 것). 세션이 없으면 없다. */
+  const tokenOf = (login: string) =>
+    (
+      db
+        .prepare("SELECT github_token FROM sessions WHERE login = ? ORDER BY rowid DESC")
+        .get(login) as { github_token: string } | undefined
+    )?.github_token;
+
+  /** 포스트의 이슈 제목: 부딪힌 파일(또는 심볼)과 종류. 사람은 넣지 않는다(DESIGN.md "부딪힘 포럼"). */
+  const issueTitle = (alert: Alert) => {
+    const first =
+      alert.kind === "direct"
+        ? alert.files[0] && basename(alert.files[0].path)
+        : alert.symbols[0]?.name;
+    return `${first ?? alert.works[0].branch} ${ALERT_LABELS[alert.kind]}`;
+  };
+  /** 포스트의 이슈 본문: 알림의 두 작업과 곳, 그리고 포스트 링크. */
+  const issueBody = (alert: Alert, link: string) => {
+    const places =
+      alert.kind === "direct"
+        ? alert.files.map((file) => `\`${file.path}\``)
+        : alert.symbols.map((symbol) => `\`${symbol.name}\``);
+    const [a, b] = alert.works;
+    return [
+      "Omagari가 부딪힘 포럼에 올린 포스트예요. 포스트의 글은 이 이슈의 댓글로, 이 이슈의 댓글은 포스트의 글로 맞춰져요.",
+      "",
+      `- 종류: ${ALERT_LABELS[alert.kind]}`,
+      `- 작업: ${a.name} (\`${a.branch}\`) ↔ ${b.name} (\`${b.branch}\`)`,
+      `- 곳: ${places.join(", ")}${alert.more > 0 ? ` 외 ${alert.more}곳` : ""}`,
+      "",
+      `포스트: ${link}`,
+    ].join("\n");
+  };
+  /**
+   * 포스트의 글 하나를 이슈 댓글로. 사람의 글은 그대로, 공개된 문답은 올린 사람의 글 뒤에 AI가 쓴 답이라는 표시(DESIGN.md "AI가 쓴 글")와
+   * 질문, 답을 붙인다. 아직 답이 오지 않은 문답이면 없다(답이 오면 올린다). 답하지 못한 문답은 올리지 않는다.
+   */
+  const commentBody = (message: ChannelMessage) => {
+    if (message.kind === "text") return message.text;
+    if (message.kind !== "qa" || message.qa.answer.state !== "answered") return undefined;
+    const { answer, executor, question } = message.qa;
+    const model = [answer.model, answer.effort && `effort ${answer.effort}`]
+      .filter(Boolean)
+      .join(" · ");
+    return [
+      ...(message.text ? [message.text, ""] : []),
+      "> [!NOTE]",
+      `> 🤖 **AI가 쓴 답** · ${message.name}의 ${EXECUTOR_NAMES[executor]}${model ? ` (${model})` : ""}`,
+      ...question.split("\n").map((line, i) => `> ${i === 0 ? "물음: " : ""}${line}`),
+      "",
+      answer.text,
+    ].join("\n");
+  };
+
+  /**
+   * 포스트와 GitHub 이슈를 맞춘다(ADR-0032). 포스트마다:
+   * 1. 이슈가 없고 알림이 풀리지 않았으면 연다. 알림의 두 사람 가운데 세션이 있는 사람의 토큰으로, 없으면 아무 멤버의 것으로 연다.
+   * 2. 아직 올리지 않은 글을 쓴 사람의 토큰으로 댓글로 올린다. 그 사람의 세션이 없으면 들어올 때까지 둔다.
+   * 3. 이슈의 제목, 라벨, 열림을 읽고, 모르는 댓글을 포스트의 글로 들인다.
+   * 4. 알림이 풀렸고 이슈가 열려 있으면 한 번 닫는다. 사람이 다시 열면 두고, 알림이 풀렸고 이슈도 닫힌 포스트는 더 따라가지 않는다.
+   * GitHub이 받지 않으면 그 포스트는 다음 주기에 다시 한다.
+   */
+  // ponytail: 주기마다 따라가는 이슈 하나에 GitHub 요청 둘이다. 포스트가 많아져 요청 한도가 걱정되면 GitHub 앱의 웹훅으로 바꾼다.
+  const syncIssues = async (only?: Set<string>) => {
+    const rows = db
+      .prepare(
+        `SELECT c.id, c.issue, c.issue_open, c.issue_closed, m.id AS message, m.alert, m.channel AS forum
+         FROM channels c JOIN messages m ON m.id = c.alert ORDER BY m.id`,
+      )
+      .all() as {
+      id: string;
+      issue: number | null;
+      issue_open: number | null;
+      issue_closed: number | null;
+      message: number;
+      alert: number;
+      forum: string;
+    }[];
+    for (const row of rows) {
+      if (only && !only.has(row.id)) continue;
+      const view = messageView(
+        db.prepare(`${MESSAGES} WHERE m.id = ?`).get(row.message) as MessageRow,
+      );
+      if (view.kind !== "alert") continue;
+      const { alert } = view;
+      const logins = alert.works.map((work) => work.login);
+      // 알림의 두 사람의 토큰부터, 그다음 다른 멤버들의 것. GitHub이 받지 않으면(토큰 무효) 다음 것으로 한다.
+      const tokens = [
+        ...new Set([
+          ...logins.map(tokenOf),
+          ...(
+            db.prepare("SELECT github_token FROM sessions ORDER BY rowid DESC").all() as {
+              github_token: string;
+            }[]
+          ).map((session) => session.github_token),
+        ]),
+      ].filter((token): token is string => token !== undefined);
+      /** 토큰을 차례로 넣어 GitHub이 처음 답한 것. 모두 받지 않으면 없다. 마지막 까닭을 남긴다. */
+      const answered = async <T>(ask: (token: string) => Promise<T | undefined>) => {
+        for (const token of tokens) {
+          const result = await ask(token).catch((error: Error) => {
+            console.error("포스트의 이슈를 GitHub에서 다루지 못했다:", error.message);
+            return undefined;
+          });
+          if (stopped) return undefined;
+          if (result !== undefined) return { token, result };
+        }
+        return undefined;
+      };
+      if (tokens.length === 0) return;
+      const resolved = alert.resolved !== null;
+      let number = row.issue;
+      if (number === null) {
+        if (resolved) continue; // 풀린 뒤에는 열지 않는다
+        const link = `${options.publicUrl ?? url}/#${row.forum}/${row.message}`;
+        const title = issueTitle(alert);
+        const labels = [ALERT_LABELS[alert.kind]];
+        const opened = (
+          await answered((token) =>
+            github.openIssue(token, repo, { title, body: issueBody(alert, link), labels }),
+          )
+        )?.result;
+        if (stopped) return;
+        if (!opened) continue;
+        number = opened.number;
+        db.prepare(
+          "UPDATE channels SET issue = ?, issue_url = ?, issue_title = ?, issue_labels = ?, issue_open = 1 WHERE id = ?",
+        ).run(number, opened.url, title, JSON.stringify(labels), row.id);
+        shareAlert(row.alert);
+      } else if (resolved && row.issue_open === 0) continue;
+
+      // 2. 포스트의 글을 댓글로. 결정 PR 줄과 들어온 댓글은 올리지 않는다.
+      const unsent = db
+        .prepare(
+          `${MESSAGES} WHERE m.channel = ? AND m.comment IS NULL AND m.decision IS NULL ORDER BY m.id`,
+        )
+        .all(row.id) as MessageRow[];
+      for (const message of unsent.map(messageView)) {
+        const body = commentBody(message);
+        const writer = "login" in message ? tokenOf(message.login) : undefined;
+        if (body === undefined || !writer) continue;
+        const made = await github.comment(writer, repo, number, body).catch((e: Error) => e);
+        if (stopped) return;
+        if (made instanceof Error) {
+          console.error("포스트의 글을 이슈 댓글로 올리지 못했다:", made.message);
+          continue;
+        }
+        db.prepare("UPDATE messages SET comment = ? WHERE id = ?").run(made.id, message.id);
+      }
+
+      // 3. 이슈를 읽고 모르는 댓글을 들인다.
+      let changed = false;
+      const read = await answered((token) => github.issue(token, repo, number));
+      if (stopped) return;
+      const issue = read?.result;
+      if (issue) {
+        const labels = JSON.stringify(issue.labels);
+        const open = issue.open ? 1 : 0;
+        const known = db
+          .prepare("SELECT issue_title, issue_labels, issue_open FROM channels WHERE id = ?")
+          .get(row.id) as { issue_title: string; issue_labels: string; issue_open: number };
+        if (
+          known.issue_title !== issue.title ||
+          known.issue_labels !== labels ||
+          known.issue_open !== open
+        ) {
+          db.prepare(
+            "UPDATE channels SET issue_title = ?, issue_labels = ?, issue_open = ? WHERE id = ?",
+          ).run(issue.title, labels, open, row.id);
+          changed = true;
+        }
+      }
+      const comments = read && (await github.comments(read.token, repo, number));
+      if (stopped) return;
+      for (const comment of comments ?? []) {
+        if (db.prepare("SELECT 1 FROM messages WHERE comment = ?").get(comment.id)) continue;
+        const { lastInsertRowid } = db
+          .prepare(
+            "INSERT INTO messages (channel, login, text, at, comment, github) VALUES (?, ?, ?, ?, ?, 1)",
+          )
+          .run(row.id, comment.login, comment.body, Date.now(), comment.id);
+        broadcast(
+          encode(
+            serverToWeb,
+            "message",
+            messageView(
+              db.prepare(`${MESSAGES} WHERE m.id = ?`).get(lastInsertRowid) as MessageRow,
+            ),
+          ),
+        );
+        changed = true;
+      }
+
+      // 4. 알림이 풀렸으면 이슈를 한 번 닫는다.
+      if (read && issue?.open && resolved && row.issue_closed === null) {
+        const closed = await github.closeIssue(read.token, repo, number).catch((e: Error) => e);
+        if (stopped) return;
+        if (closed instanceof Error) console.error("포스트의 이슈를 닫지 못했다:", closed.message);
+        else {
+          db.prepare("UPDATE channels SET issue_open = 0, issue_closed = ? WHERE id = ?").run(
+            Date.now(),
+            row.id,
+          );
+          changed = true;
+        }
+      }
+      if (changed) shareAlert(row.alert);
+    }
+  };
+  /**
+   * 이슈 맞추기를 돌린다. `post`를 주면 그 포스트만, 주지 않으면(주기마다) 모두다. 도는 중이면 끝난 뒤 모아 둔 것을 한 번 더 돈다.
+   * 포스트에 글이 서거나 답이 오거나 알림이 생기면 그 포스트로 부른다.
+   */
+  let syncing = false;
+  let waiting: Set<string> | "all" | undefined;
+  const syncSoon = (post?: string) => {
+    if (post && !db.prepare("SELECT 1 FROM channels WHERE id = ? AND alert IS NOT NULL").get(post))
+      return;
+    waiting = !post || waiting === "all" ? "all" : new Set([...(waiting ?? []), post]);
+    if (syncing) return;
+    syncing = true;
+    void (async () => {
+      while (waiting && !stopped) {
+        const only = waiting;
+        waiting = undefined;
+        await syncIssues(only === "all" ? undefined : only).catch((error) =>
+          console.error("이슈를 맞추지 못했다:", error),
+        );
+      }
+      syncing = false;
+    })();
+  };
+
   // 오프라인 7일이 지난 멤버의 관측과 상태 한 줄을 지우고, 작업마다의 초안 PR 제목과 머지 여부를 GitHub에서 읽는다.
   // 머지되면 그 브랜치에서 머지 전에 쓴 줄을 지운다. 머지 뒤에 같은 브랜치에 새로 쓴 줄은 남는다.
   // ponytail: 주기마다 브랜치 하나에 GitHub 요청 하나다. 작업이 많아져 요청 한도가 걱정되면 GitHub 앱의 웹훅으로 바꾼다.
@@ -2575,6 +2849,7 @@ export async function startServer(options: {
   const follow = setInterval(async () => {
     if (following) return;
     following = true;
+    syncSoon(); // 포스트의 이슈를 맞춘다(ADR-0032). 따로 돈다.
     try {
       const forgotten = "SELECT login FROM offline WHERE since < ?";
       const cutoff = Date.now() - (options.forgetMs ?? FORGET_MS);
