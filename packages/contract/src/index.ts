@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 24;
+export const CONTRACT_VERSION = 25;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -501,6 +501,9 @@ const ClaimTarget = z.strictObject({
  * 묻기의 답(ADR-0024)도 같은 시간을 쓴다.
  */
 export const INBOX_MS = 14 * 24 * 60 * 60_000;
+
+/** 설정 창의 "내 에이전트가 답한 것"이 세는 날 수(`api.settings`). 묻기를 `INBOX_MS`보다 짧게 센다. */
+export const ANSWERED_DAYS = 7;
 
 /**
  * 편지함의 소식 하나(GLOSSARY): 작업(`branch`, 받는 러너의 멤버의 것)의 에이전트에게 직접 넘겨줄 것. 종류는 내 작업과의 부딪힘 알림(네 종류 모두), 내 선점과 겹친 선점, 내가 쓰는 계약의 선언된 변경의 취소다.
@@ -1361,6 +1364,25 @@ export const api = {
     path: "/api/ask-switch",
     body: z.strictObject({ on: z.boolean() }),
     response: z.strictObject({ on: z.boolean() }),
+  },
+  /**
+   * 설정 창이 읽는 것: 내 "남의 질문에 답하기" 스위치(`setAskSwitch`), 내 에이전트가 지난 `ANSWERED_DAYS`일 동안
+   * 남의 질문에 답한 수와 그 가운데 마지막 질문(묻은 멤버와 질문 글, 물은 시각), 알림을 올릴 포럼(`setAlertChannel`)의 채널 id.
+   * 알림을 올릴 포럼을 정한 적이 없으면 "부딪힘" 포럼이다(없으면 만든다).
+   */
+  settings: {
+    method: "GET",
+    path: "/api/settings",
+    response: z.strictObject({
+      askSwitch: z.boolean(),
+      answered: z.strictObject({
+        count: z.number(),
+        last: z
+          .strictObject({ login: z.string(), name: z.string(), text: z.string(), at: z.string() })
+          .nullable(),
+      }),
+      alertChannel: z.string(),
+    }),
   },
   /** 채널 전부(채팅과 포럼), 이름 순서. 포스트는 오지 않는다(`api.posts`). 멤버만 본다. */
   channels: {
