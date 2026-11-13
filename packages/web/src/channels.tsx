@@ -1,6 +1,7 @@
 import { type Channel, ContractFailure, MAX_CHANNEL_NAME_CHARS } from "@omagari/contract";
-import { ChevronDown, Hash, Plus } from "lucide-react";
-import { type FormEvent, type RefObject, useId, useState } from "react";
+import { ChevronDown, Hash, MessagesSquare, Plus } from "lucide-react";
+import { type FormEvent, type ReactNode, type RefObject, useId, useState } from "react";
+import { type PostItem, postTitle } from "./forum.tsx";
 
 /** 채널 이름 순서. 받은 곳(목록, 실시간, 만들기)과 상관없이 같은 순서로 둔다. */
 export const byName = (channels: Channel[]) =>
@@ -30,53 +31,48 @@ export function useCollapsed(key: string) {
 }
 
 /**
- * 채널 패널의 "채팅 채널" 카테고리: 접을 수 있는 머리(이름, 꺾쇠, 채널을 만드는 `+`)와 채널 줄.
- * 채널 줄은 주소의 `#채널 id`를 바꾸는 링크라, 새 탭에서 열 수 있고 뒤로 가기로 앞 채널에 돌아간다.
- * 접어도 지금 고른 채널 줄은 남는다.
+ * 채널 패널의 두 카테고리. "채팅 채널": 접을 수 있는 머리(이름, 꺾쇠, 채널을 만드는 `+`)와 채널 줄.
+ * "포럼 채널": 포럼 줄(부딪힘) 밑에 열린 포스트가 가지로 달린다(DESIGN.md "부딪힘 포럼"). 풀린 포스트는 빠지고, 새 글이 있으면 굵게와 점이 붙는다.
+ * 채널 줄은 주소의 `#채널 id`를 바꾸는 링크라, 새 탭에서 열 수 있고 뒤로 가기로 앞 채널에 돌아간다. 가지는 `#포럼 id/알림 번호`다.
+ * 접어도 지금 고른 줄은 남는다.
  */
 export function ChannelList({
   channels,
   current,
+  post,
+  posts,
+  unread,
   collapsed,
+  forumCollapsed,
   onToggle,
+  onForumToggle,
   onPick,
   onCreate,
 }: {
   channels?: Channel[];
   current?: string;
+  /** 열려 있는 포스트의 알림 번호 */
+  post?: number;
+  posts?: PostItem[];
+  unread: (post: PostItem) => boolean;
   collapsed: boolean;
+  forumCollapsed: boolean;
   onToggle: () => void;
+  onForumToggle: () => void;
   onPick?: () => void;
   onCreate: () => void;
 }) {
-  const title = useId();
-  const list = useId();
+  const chat = channels?.filter((channel) => channel.kind === "chat");
+  const forums = channels?.filter((channel) => channel.kind === "forum");
   return (
-    <nav className="channels" aria-labelledby={title}>
-      <div className="category-head">
-        <h2 className="section-title" id={title}>
-          <button
-            type="button"
-            className="category-name"
-            aria-expanded={!collapsed}
-            aria-controls={list}
-            onClick={onToggle}
-          >
-            채팅 채널
-            <ChevronDown className="category-chevron" size={12} aria-hidden />
-          </button>
-        </h2>
-        <button
-          type="button"
-          className="category-add"
-          aria-label="채팅 채널 만들기"
-          onClick={onCreate}
-        >
-          <Plus size={18} aria-hidden />
-        </button>
-      </div>
-      <ul className="nav-list" id={list}>
-        {channels
+    <nav className="channels">
+      <Category
+        title="채팅 채널"
+        collapsed={collapsed}
+        onToggle={onToggle}
+        add={{ label: "채팅 채널 만들기", onClick: onCreate }}
+      >
+        {chat
           ?.filter((channel) => !collapsed || channel.id === current)
           .map((channel) => (
             <li key={channel.id}>
@@ -91,8 +87,102 @@ export function ChannelList({
               </a>
             </li>
           ))}
-      </ul>
+      </Category>
+      {forums && forums.length > 0 && (
+        <Category title="포럼 채널" collapsed={forumCollapsed} onToggle={onForumToggle}>
+          {forums
+            .filter((channel) => !forumCollapsed || channel.id === current)
+            .map((channel) => (
+              <li key={channel.id}>
+                <a
+                  className="nav-item"
+                  href={`#${channel.id}`}
+                  aria-current={channel.id === current && post === undefined ? "page" : undefined}
+                  onClick={onPick}
+                >
+                  <MessagesSquare size={18} aria-hidden />
+                  <span>{channel.name}</span>
+                </a>
+                {!forumCollapsed && (
+                  <ul className="branches" aria-label={`${channel.name}의 열린 포스트`}>
+                    {posts
+                      ?.filter(
+                        (item) =>
+                          item.message.channel === channel.id && !item.message.alert.resolved,
+                      )
+                      .sort((a, b) => Date.parse(b.activity) - Date.parse(a.activity))
+                      .map((item) => (
+                        <li key={item.alert}>
+                          <a
+                            className="branch-item"
+                            href={`#${channel.id}/${item.alert}`}
+                            aria-current={item.alert === post ? "page" : undefined}
+                            data-unread={unread(item) || undefined}
+                            onClick={onPick}
+                          >
+                            <span>{postTitle(item)}</span>
+                            {unread(item) && (
+                              <span className="unread-dot" role="img" aria-label="새 글" />
+                            )}
+                          </a>
+                        </li>
+                      ))}
+                  </ul>
+                )}
+              </li>
+            ))}
+        </Category>
+      )}
     </nav>
+  );
+}
+
+/** 접을 수 있는 카테고리 머리와 그 아래 줄들. `add`가 있으면 오른쪽 끝에 `+`가 선다. */
+function Category({
+  title,
+  collapsed,
+  onToggle,
+  add,
+  children,
+}: {
+  title: string;
+  collapsed: boolean;
+  onToggle: () => void;
+  add?: { label: string; onClick: () => void };
+  children: ReactNode;
+}) {
+  const heading = useId();
+  const list = useId();
+  return (
+    <section className="category" aria-labelledby={heading}>
+      <div className="category-head">
+        <h2 className="section-title" id={heading}>
+          <button
+            type="button"
+            className="category-name"
+            aria-expanded={!collapsed}
+            aria-controls={list}
+            onClick={onToggle}
+          >
+            {title}
+            <ChevronDown className="category-chevron" size={12} aria-hidden />
+          </button>
+        </h2>
+        {add && (
+          <button
+            type="button"
+            className="category-add"
+            aria-label={add.label}
+            onClick={add.onClick}
+          >
+            <Plus size={18} aria-hidden />
+          </button>
+        )}
+      </div>
+      <ul className="nav-list" id={list}>
+        {children}
+      </ul>
+    </section>
   );
 }
 

@@ -24,6 +24,7 @@ import {
 } from "react";
 import { CallComposer } from "./call.tsx";
 import { QaLine } from "./dm.tsx";
+import { AlertLine } from "./forum.tsx";
 import type { LiveState } from "./live.ts";
 import { Avatar } from "./workspace.tsx";
 
@@ -105,6 +106,8 @@ export function Conversation({
   live,
   members,
   me,
+  label,
+  edited,
   attached,
   onAttach,
   onSend,
@@ -119,6 +122,10 @@ export function Conversation({
   /** 멤버 목록. 내 에이전트(`@호출`)와 문답한 에이전트의 지금 상태를 여기서 읽는다. */
   members?: MemberView[];
   me: string;
+  /** 입력 칸의 안내 글. 없으면 "#채널에 메시지 보내기". 포스트는 제목으로 쓴다. */
+  label?: string;
+  /** 첫 글인 알림이 고쳐진 시각(포스트). */
+  edited?: string;
   /** 입력 칸에 붙인 DM 문답. DM 칸도 함께 보므로 워크스페이스가 갖는다. */
   attached?: Qa;
   onAttach: Dispatch<SetStateAction<Qa | undefined>>;
@@ -216,8 +223,6 @@ export function Conversation({
           <div className="log" role="log" aria-label={`# ${channel.name}의 메시지`}>
             {view.older && <SkeletonRow />}
             {view.messages.map((message, i) => {
-              // 알림의 줄은 아직 그리지 않는다. 시안을 고른 뒤 따로 그린다(PRD #78 웹 앱).
-              if (message.kind === "alert") return null;
               const previous = view.messages[i - 1];
               const newDay = !previous || dayOf(previous.at) !== dayOf(message.at);
               // 문답은 묶지 않고, 문답 다음의 글은 머리를 다시 단다.
@@ -230,17 +235,21 @@ export function Conversation({
               return (
                 <Fragment key={message.id}>
                   {newDay && <div className="day">{dayLabel(message.at)}</div>}
-                  <Message
-                    message={message}
-                    grouped={grouped}
-                    state={
-                      message.kind === "qa"
-                        ? agentsOf(message.login)?.find(
-                            (agent) => agent.executor === message.qa.executor,
-                          )?.state
-                        : undefined
-                    }
-                  />
+                  {message.kind === "alert" ? (
+                    <AlertLine message={message} edited={edited} />
+                  ) : (
+                    <Message
+                      message={message}
+                      grouped={grouped}
+                      state={
+                        message.kind === "qa"
+                          ? agentsOf(message.login)?.find(
+                              (agent) => agent.executor === message.qa.executor,
+                            )?.state
+                          : undefined
+                      }
+                    />
+                  )}
                 </Fragment>
               );
             })}
@@ -249,7 +258,7 @@ export function Conversation({
       )}
       {channel && (
         <CallComposer
-          label={`#${channel.name}에 메시지 보내기`}
+          label={label ?? `#${channel.name}에 메시지 보내기`}
           agents={agentsOf(me) ?? []}
           owner={members?.find((member) => member.login === me)?.name ?? me}
           value={text}

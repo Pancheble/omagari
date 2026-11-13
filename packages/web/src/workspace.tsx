@@ -12,7 +12,17 @@ import {
   type Qa,
   type Visibility,
 } from "@omagari/contract";
-import { Menu, MessageSquare, PanelLeftClose, PanelLeftOpen, Users, X } from "lucide-react";
+import {
+  ChevronLeft,
+  Maximize2,
+  Menu,
+  MessageSquare,
+  Minimize2,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Users,
+  X,
+} from "lucide-react";
 import {
   type ComponentProps,
   type PointerEvent,
@@ -27,6 +37,7 @@ import { type Me, savedPicks, savePicks, server, signedOut } from "./api.ts";
 import { byName, ChannelList, CreateChannel, useCollapsed } from "./channels.tsx";
 import { ChannelTitle, Conversation, type View } from "./conversation.tsx";
 import { chosen, type Dm, DmPanel, type Picks } from "./dm.tsx";
+import { changed, Forum, ForumTitle, type PostItem, postOf, postsOf, postTitle } from "./forum.tsx";
 import { useLive } from "./live.ts";
 import { MemberList, MemberSkeleton } from "./members.tsx";
 import { ProfilePanel } from "./profile.tsx";
@@ -200,8 +211,17 @@ export function Workspace({
     closing.current = right === "agent" ? agentButton.current : membersButton.current;
     setRight(undefined);
   };
-  const toggleRight = (panel: "members" | "agent") =>
-    right === panel ? closeRight() : setRight(panel);
+  /**
+   * 옆 칸의 포스트가 오른쪽 칸을 쓰고 있으면 다른 칸을 열 때 포스트를 닫는다. 단, 내 에이전트는 포스트를 크게 보고 연다(포스트의 DM).
+   * 오른쪽 칸 자리는 하나다.
+   */
+  const toggleRight = (panel: "members" | "agent") => {
+    if (asidePost && openPost) {
+      location.hash = `${current?.id}${panel === "agent" ? `/${openPost.alert}/big` : ""}`;
+      return setRight(panel);
+    }
+    return right === panel ? closeRight() : setRight(panel);
+  };
   // 닫으면 연 버튼으로 돌아간다. 시트(모달)가 사라진 뒤라야 바깥에 포커스를 줄 수 있다.
   useEffect(() => {
     if (right || !closing.current) return;
@@ -219,10 +239,49 @@ export function Workspace({
   const [picks, setPicks] = useState<Picks>(() => savedPicks(me.login));
   /** 채널마다 불러 둔 대화. 연 적 없는 채널은 없고, 처음 열 때 지난 대화를 읽는다. */
   const [views, setViews] = useState<Record<string, View>>({});
-  const hash = useHash();
-  const current = channels?.find((channel) => channel.id === hash) ?? channels?.[0];
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 채널을 옮기면 붙인 문답을 뺀다
-  useEffect(() => setAttached(undefined), [current?.id]);
+  /** 주소는 `#채널 id`, 포럼의 포스트는 `#포럼 id/알림 번호`(옆 칸), 크게 보면 `#포럼 id/알림 번호/big`. */
+  const [hashChannel, hashPost, hashSize] = useHash().split("/");
+  const current =
+    channels?.find((channel) => channel.id === hashChannel) ??
+    channels?.find((channel) => channel.kind === "chat") ??
+    channels?.[0];
+  const forum = current?.kind === "forum";
+  /** 포럼 포스트 전부. 포럼을 처음 읽을 때까지는 없다. */
+  const [posts, setPosts] = useState<PostItem[]>();
+  const openPost = forum ? posts?.find((item) => item.alert === Number(hashPost)) : undefined;
+  const big = openPost !== undefined && hashSize === "big";
+  const asidePost = openPost !== undefined && !big;
+  /** 포스트는 채널처럼 동작한다: 글, 지난 대화, DM, `@호출`이 포스트의 채널로 간다. 이름은 제목이다. */
+  const postChannel: Channel | undefined = openPost && {
+    id: openPost.channel,
+    name: postTitle(openPost),
+    kind: "chat",
+  };
+  /** 대화와 DM이 향하는 채널: 열린 포스트, 아니면 고른 채널. 포럼 자체는 대화가 없다. */
+  const active = postChannel ?? (forum ? undefined : current);
+  /** 포스트마다 마지막으로 읽은 글 수. 이 기기에 남는다. */
+  const [seen, setSeen] = useState<Record<string, number>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("omagari.post-seen") ?? "{}");
+    } catch {
+      return {};
+    }
+  });
+  const unread = (item: PostItem) => item.count > (seen[item.channel] ?? 0);
+  // 열려 있는 포스트는 새 글이 와도 읽은 것으로 둔다.
+  const openCount = openPost?.count;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 열린 포스트의 글 수가 바뀔 때마다 읽은 자리를 옮긴다
+  useEffect(() => {
+    if (!postChannel || openCount === undefined || seen[postChannel.id] === openCount) return;
+    const next = { ...seen, [postChannel.id]: openCount };
+    setSeen(next);
+    try {
+      localStorage.setItem("omagari.post-seen", JSON.stringify(next));
+    } catch {}
+  }, [postChannel?.id, openCount]);
+  const [forumCollapsed, toggleForumCollapsed] = useCollapsed("omagari.forum-collapsed");
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 대화를 옮기면 붙인 문답을 뺀다
+  useEffect(() => setAttached(undefined), [active?.id]);
 
   /** 세션이 끝났으면 로그인으로 돌아간다. 그 밖의 실패는 부른 쪽이 보인다. */
   const check = (error: unknown) => {
@@ -236,13 +295,24 @@ export function Workspace({
     );
 
   /** 불러 둔 채널이면 대화에 넣는다. 안 연 채널의 것은 버리고, 열 때 지난 대화로 읽는다. */
-  const receive = (message: ChannelMessage) =>
+  const receive = (message: ChannelMessage) => {
+    // 알림은 포럼 목록의 포스트다. 고쳐졌으면 고친 시각을 붙이고, 새 글이 서면 요약(`post`)이 바뀌어 온다.
+    if (message.kind === "alert")
+      setPosts((list) => {
+        const known = list?.find((item) => item.alert === message.id);
+        const edited = known && changed(known.message.alert, message.alert);
+        const next = postOf(message, edited ? new Date().toISOString() : known?.edited);
+        return [...(list ?? []).filter((item) => item.alert !== message.id), next].sort(
+          (a, b) => a.alert - b.alert,
+        );
+      });
     setViews((all) => {
       const view = all[message.channel];
       return view
         ? { ...all, [message.channel]: { ...view, messages: merge(view.messages, [message]) } }
         : all;
     });
+  };
 
   /** 불러 둔 채널의 DM이면 넣는다. 안 연 채널의 것은 버리고, 열 때 읽는다. */
   const receiveQa = (qa: Qa) =>
@@ -265,11 +335,11 @@ export function Workspace({
       setDms((all) => ({ ...all, [channel]: "error" }));
     }
   };
-  const dmLoaded = current !== undefined && dms[current.id] !== undefined;
+  const dmLoaded = active !== undefined && dms[active.id] !== undefined;
   // biome-ignore lint/correctness/useExhaustiveDependencies: DM 칸에서 채널을 처음 열 때 한 번만 읽는다
   useEffect(() => {
-    if (right === "agent" && current && !dmLoaded) void loadDm(current.id);
-  }, [right, current?.id, dmLoaded]);
+    if (right === "agent" && active && !dmLoaded) void loadDm(active.id);
+  }, [right, active?.id, dmLoaded]);
 
   /** 내 에이전트에게 묻는다. DM은 비공개, `@호출`은 공개다. `@호출`이면 채널에 선 문답도 바로 넣는다. */
   const ask = async (
@@ -324,6 +394,16 @@ export function Workspace({
         call(server(session), api.channels)
           .then((list) => setChannels(byName(list.channels)))
           .catch(check);
+        call(server(session), api.posts)
+          .then(({ posts: list }) =>
+            setPosts((old) =>
+              postsOf(list).map((item) => ({
+                ...item,
+                edited: old?.find((other) => other.alert === item.alert)?.edited,
+              })),
+            ),
+          )
+          .catch(check);
         // 끊긴 사이에 온 답은 다시 오지 않는다. 불러 둔 DM을 버리고 열려 있는 것은 다시 읽는다.
         setDms({});
       } else if (event.kind === "channel") add(event.payload);
@@ -366,11 +446,11 @@ export function Workspace({
     }
   };
 
-  const opened = current !== undefined && views[current.id] !== undefined;
+  const opened = active !== undefined && views[active.id] !== undefined;
   // biome-ignore lint/correctness/useExhaustiveDependencies: 채널을 처음 열 때 한 번만 읽는다
   useEffect(() => {
-    if (current && !opened) void load(current.id);
-  }, [current?.id, opened]);
+    if (active && !opened) void load(active.id);
+  }, [active?.id, opened]);
 
   const send = async (channel: string, text: string) => {
     try {
@@ -419,16 +499,64 @@ export function Workspace({
       <ChannelList
         channels={channels}
         current={current?.id}
+        post={openPost?.alert}
+        posts={posts}
+        unread={unread}
         collapsed={collapsed}
+        forumCollapsed={forumCollapsed}
         onToggle={toggleCollapsed}
+        onForumToggle={toggleForumCollapsed}
         onPick={onPick}
         onCreate={openCreator}
       />
     </ChannelPanel>
   );
 
+  /** 지금 오른쪽 칸에 선 것. 옆 칸의 포스트가 있으면 그것이고, 포럼 목록에는 DM이 없다. */
+  const shown = asidePost ? "post" : right === "agent" && !active ? undefined : right;
+
+  /** 직접 충돌이 걸린 작업("로그인/브랜치"): 풀리지 않은 직접 충돌 알림의 두 작업. 멤버 목록의 작업 줄에 배지가 붙는다. */
+  const direct = new Set(
+    posts?.flatMap(({ message: { alert } }) =>
+      alert.kind === "direct" && !alert.resolved
+        ? alert.works.map((work) => `${work.login}/${work.branch}`)
+        : [],
+    ),
+  );
+
+  /** 고른 대화(채널, 또는 열린 포스트)를 그린다. 포스트는 지난 대화 앞에 첫 글인 알림이 붙는다. */
+  const conversation = (label: string) => {
+    if (!active) return null;
+    const view = views[active.id];
+    return (
+      <Conversation
+        key={active.id}
+        channel={active}
+        view={openPost && view ? { ...view, messages: [openPost.message, ...view.messages] } : view}
+        live={live}
+        members={members}
+        me={me.login}
+        label={openPost ? label : undefined}
+        edited={openPost?.edited}
+        attached={attached?.channel === active.id ? attached : undefined}
+        onAttach={setAttached}
+        onSend={(text) => send(active.id, text)}
+        onCall={(executor, question) => ask(active.id, executor, question, "public")}
+        onPost={post}
+        onRetry={() => void load(active.id)}
+        onOlder={() => {
+          if (view?.more && !view.older) void load(active.id, view.messages[0]?.id);
+        }}
+      />
+    );
+  };
+
   return (
-    <div className={["app", right && "with-panel", shut && "folded"].filter(Boolean).join(" ")}>
+    <div
+      className={["app", shown && "with-panel", asidePost && "with-post", shut && "folded"]
+        .filter(Boolean)
+        .join(" ")}
+    >
       {/* 접힌 동안 창 왼쪽 가장자리(창 안쪽 여백 8px). 마우스가 머물면 꺼내 본다. */}
       {shut && <div className="peek-edge" onPointerEnter={hoverIn} onPointerLeave={hoverOut} />}
       <aside
@@ -488,21 +616,45 @@ export function Workspace({
               <PanelLeftOpen size={18} aria-hidden />
             </button>
           )}
-          {current && <ChannelTitle channel={current} members={members?.length} />}
+          {big && openPost && current ? (
+            <div className="post-title">
+              <a className="header-button" href={`#${current.id}`} aria-label="포럼으로 돌아가기">
+                <ChevronLeft size={18} aria-hidden />
+              </a>
+              <a className="post-crumb" href={`#${current.id}`}>
+                {current.name} ›
+              </a>
+              <h2>{postTitle(openPost)}</h2>
+            </div>
+          ) : forum && current ? (
+            <ForumTitle name={current.name} />
+          ) : (
+            current && <ChannelTitle channel={current} members={members?.length} />
+          )}
           {/* 오른쪽 칸을 여는 버튼들. 평소에는 아이콘만, 연 버튼만 이름이 붙는다. */}
           <div className="header-actions">
-            {current && (
+            {big && openPost && current && (
+              <a
+                className="header-button"
+                href={`#${current.id}/${openPost.alert}`}
+                aria-label="옆 칸으로"
+                title="옆 칸으로"
+              >
+                <Minimize2 size={18} aria-hidden />
+              </a>
+            )}
+            {active && (
               <button
                 ref={agentButton}
                 type="button"
                 className="header-button"
                 aria-label="내 에이전트"
-                aria-expanded={right === "agent"}
-                aria-controls={right === "agent" ? rightId : undefined}
+                aria-expanded={shown === "agent"}
+                aria-controls={shown === "agent" ? rightId : undefined}
                 onClick={() => toggleRight("agent")}
               >
                 <MessageSquare size={18} aria-hidden />
-                {right === "agent" && <span>내 에이전트</span>}
+                {shown === "agent" && <span>내 에이전트</span>}
               </button>
             )}
             <button
@@ -510,12 +662,12 @@ export function Workspace({
               type="button"
               className="header-button"
               aria-label="멤버 목록"
-              aria-expanded={right === "members"}
-              aria-controls={right === "members" ? rightId : undefined}
+              aria-expanded={shown === "members"}
+              aria-controls={shown === "members" ? rightId : undefined}
               onClick={() => toggleRight("members")}
             >
               <Users size={18} aria-hidden />
-              {right === "members" && <span>멤버 목록</span>}
+              {shown === "members" && <span>멤버 목록</span>}
             </button>
           </div>
         </header>
@@ -527,38 +679,47 @@ export function Workspace({
               채널 만들기
             </button>
           </div>
+        ) : forum && !big ? (
+          <Forum posts={posts} selected={openPost?.alert} unread={unread} />
         ) : (
-          <Conversation
-            key={current?.id}
-            channel={current}
-            view={current && views[current.id]}
-            live={live}
-            members={members}
-            me={me.login}
-            attached={attached?.channel === current?.id ? attached : undefined}
-            onAttach={setAttached}
-            onSend={(text) => send((current as Channel).id, text)}
-            onCall={(executor, question) =>
-              ask((current as Channel).id, executor, question, "public")
-            }
-            onPost={post}
-            onRetry={() => current && void load(current.id)}
-            onOlder={() => {
-              const view = current && views[current.id];
-              if (current && view?.more && !view.older) void load(current.id, view.messages[0]?.id);
-            }}
-          />
+          conversation(`${postChannel?.name}에 메시지 보내기`)
         )}
       </main>
-      {right === "agent" && current && (
+      {asidePost && openPost && postChannel && (
+        <RightPanel
+          id={rightId}
+          title={postChannel.name}
+          sheet={!wide}
+          onClose={() => {
+            location.hash = current?.id ?? "";
+          }}
+          head={
+            <div className="post-head">
+              <h2>{postChannel.name}</h2>
+              <a
+                className="header-button"
+                href={`#${current?.id}/${openPost.alert}/big`}
+                aria-label="크게 보기"
+                title="크게 보기"
+              >
+                <Maximize2 size={18} aria-hidden />
+              </a>
+            </div>
+          }
+        >
+          {conversation("이 포스트에 메시지 보내기")}
+        </RightPanel>
+      )}
+      {shown === "agent" && active && (
         <DmPanel
-          key={current.id}
+          key={active.id}
           id={rightId}
           sheet={!wide}
-          channel={current}
+          channel={active}
+          post={big}
           agents={members?.find((member) => member.login === me.login)?.agents ?? []}
-          dm={dms[current.id]}
-          messages={views[current.id]?.messages}
+          dm={dms[active.id]}
+          messages={views[active.id]?.messages}
           picks={picks}
           attached={attached?.id}
           onPick={(executor, pick) => {
@@ -566,20 +727,24 @@ export function Workspace({
             setPicks(next);
             savePicks(me.login, next);
           }}
-          onAsk={(executor, question) => ask(current.id, executor, question)}
+          onAsk={(executor, question) => ask(active.id, executor, question)}
           onAttach={attach}
-          onReload={() => void loadDm(current.id)}
+          onReload={() => void loadDm(active.id)}
           onClose={closeRight}
         />
       )}
-      {right === "members" && (
+      {shown === "members" && (
         <RightPanel id={rightId} title="멤버 목록" sheet={!wide} onClose={closeRight}>
           {live === "reconnecting" && members && (
             <p className="banner info" role="status">
               서버에 다시 붙는 중…
             </p>
           )}
-          {members ? <MemberList me={me.login} members={members} /> : <MemberSkeleton />}
+          {members ? (
+            <MemberList me={me.login} members={members} direct={direct} />
+          ) : (
+            <MemberSkeleton />
+          )}
         </RightPanel>
       )}
       {/* 덮개를 누르면 닫힌다. 키보드로는 Esc가 닫는다(dialog가 해 준다). */}

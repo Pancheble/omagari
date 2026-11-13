@@ -19,7 +19,16 @@ const offline = (member: Member) => member.presence === "offline";
  * 멤버 목록: "온라인 — N", "오프라인 — N"으로 묶은 사람 행. 자리 비움과 방해 금지는 온라인에 든다.
  * 행은 접힌 것이 기본이고, 펼치면 작업마다 한 덩어리다.
  */
-export function MemberList({ me, members }: { me: string; members: Member[] }) {
+export function MemberList({
+  me,
+  members,
+  direct,
+}: {
+  me: string;
+  members: Member[];
+  /** 직접 충돌이 걸린 작업("로그인/브랜치"). 작업 줄에 배지가 붙는다. */
+  direct?: Set<string>;
+}) {
   useMinuteTick();
   const groups = [
     ["온라인", members.filter((member) => !offline(member))],
@@ -34,7 +43,12 @@ export function MemberList({ me, members }: { me: string; members: Member[] }) {
           </h3>
           <ul>
             {group.map((member) => (
-              <MemberRow key={member.login} member={member} me={member.login === me} />
+              <MemberRow
+                key={member.login}
+                member={member}
+                me={member.login === me}
+                direct={direct}
+              />
             ))}
           </ul>
         </section>
@@ -62,7 +76,7 @@ export const MemberSkeleton = () => (
   </div>
 );
 
-function MemberRow({ member, me }: { member: Member; me: boolean }) {
+function MemberRow({ member, me, direct }: { member: Member; me: boolean; direct?: Set<string> }) {
   const [open, setOpen] = useState(false);
   const works = useId();
   const count = member.works.length;
@@ -118,7 +132,12 @@ function MemberRow({ member, me }: { member: Member; me: boolean }) {
       {open && (
         <ul className="works" id={works}>
           {member.works.map((work) => (
-            <WorkItem key={work.branch} member={member} work={work} />
+            <WorkItem
+              key={work.branch}
+              member={member}
+              work={work}
+              conflict={direct?.has(`${member.login}/${work.branch}`)}
+            />
           ))}
         </ul>
       )}
@@ -127,7 +146,7 @@ function MemberRow({ member, me }: { member: Member; me: boolean }) {
 }
 
 /** 작업 하나: 에이전트 표시, 상태 한 줄(ADR-0010이 고른 것), 브랜치와 쓴 시각, 오프라인이면 "N시간 전 기준". */
-function WorkItem({ member, work }: { member: Member; work: Work }) {
+function WorkItem({ member, work, conflict }: { member: Member; work: Work; conflict?: boolean }) {
   const agent = member.agents.find((candidate) => candidate.executor === work.executor);
   const { line } = work;
   return (
@@ -138,6 +157,7 @@ function WorkItem({ member, work }: { member: Member; work: Work }) {
         <p className={line ? "work-line" : "work-line none"}>{line?.text ?? "상태 한 줄 없음"}</p>
         <p className="work-meta">
           <span className="branch">{work.branch}</span>
+          {conflict && <span className="badge warning">직접 충돌</span>}
           {line?.source === "agent" && (
             <time dateTime={line.at} title={new Date(line.at).toLocaleString("ko-KR")}>
               · {ago(line.at)}
