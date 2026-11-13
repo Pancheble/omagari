@@ -39,7 +39,7 @@ export function chosen(choices: Choices | undefined, pick: ModelPick | undefined
  * 버튼 하나와 그 메뉴(WAI-ARIA menu)의 여닫기. 열리면 고른 줄에 초점을 두고, 바깥을 누르거나 Tab으로 나가면 닫힌다.
  * 위아래 화살표로 줄을 옮기고, Esc는 메뉴만 닫고 버튼으로 돌아간다. DM 칸 머리와 입력 칸의 칩이 쓴다.
  */
-function useMenu() {
+export function useMenu() {
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
@@ -84,6 +84,7 @@ export function DmPanel({
   id,
   sheet,
   channel,
+  post,
   agents,
   dm,
   messages = [],
@@ -97,7 +98,10 @@ export function DmPanel({
 }: {
   id: string;
   sheet: boolean;
+  /** 포스트면 `channel.name`이 포스트의 제목이다. */
   channel: Channel;
+  /** `channel`이 포스트다(채널에 올리기가 포스트에 올리기가 된다). */
+  post?: boolean;
   /** 내 에이전트 전부. 꺼진 것도 온다. */
   agents: Agent[];
   dm?: Dm;
@@ -183,7 +187,13 @@ export function DmPanel({
       sheet={sheet}
       onClose={onClose}
       head={
-        <DmHead channel={channel} connected={connected} selected={selected} onPick={setPicked} />
+        <DmHead
+          channel={channel}
+          post={post}
+          connected={connected}
+          selected={selected}
+          onPick={setPicked}
+        />
       }
     >
       {dm === undefined || dm === "loading" ? (
@@ -206,7 +216,8 @@ export function DmPanel({
               <DmQa
                 key={qa.id}
                 qa={qa}
-                channel={channel.name}
+                channel={post ? "이 포스트" : `# ${channel.name}`}
+                post={post}
                 line={lines.find((line) => line.qa.id === qa.id)}
                 attached={qa.id === attached}
                 onRetry={retry(qa)}
@@ -259,11 +270,13 @@ export function DmPanel({
  */
 function DmHead({
   channel,
+  post,
   connected,
   selected,
   onPick,
 }: {
   channel: Channel;
+  post?: boolean;
   connected: Agent[];
   selected?: Agent;
   onPick: (executor: ExecutorId) => void;
@@ -281,7 +294,7 @@ function DmHead({
         {selected ? EXECUTOR_NAMES[selected.executor] : "내 에이전트"}
         {many && <ChevronDown size={14} className="dm-chevron" aria-hidden />}
       </span>
-      <span className="dm-sub">나만 보여요 · # {channel.name}</span>
+      <span className="dm-sub">나만 보여요 · {post ? channel.name : `# ${channel.name}`}</span>
     </span>
   );
   const face = (
@@ -620,6 +633,7 @@ function QaCard({
 function DmQa({
   qa,
   channel,
+  post,
   line,
   attached,
   onRetry,
@@ -627,7 +641,9 @@ function DmQa({
   onShow,
 }: {
   qa: Qa;
+  /** 올린 곳을 부르는 말("# 결제", "이 포스트"). */
   channel: string;
+  post?: boolean;
   /** 채널에 불러 둔 그 문답의 줄. 없으면 "보기"가 없다. */
   line?: QaMessage;
   /** 채널 입력 칸에 붙어 있다. */
@@ -659,7 +675,7 @@ function DmQa({
         <div className="dm-actions">
           <p className="dm-shared">
             <Check size={16} aria-hidden />
-            {called ? `# ${channel}에서 @호출로 물었어요` : `# ${channel}에 올렸어요`}
+            {called ? `${channel}에서 @호출로 물었어요` : `${channel}에 올렸어요`}
           </p>
           {line && (
             <button type="button" className="dm-show" onClick={onShow}>
@@ -673,12 +689,12 @@ function DmQa({
             {attached ? (
               <p className="dm-shared">
                 <CornerDownLeft size={16} aria-hidden />
-                채널 입력 칸에 넣었어요
+                {post ? "포스트 입력 칸에 넣었어요" : "채널 입력 칸에 넣었어요"}
               </p>
             ) : (
               <button type="button" className="post-action" onClick={onAttach}>
                 <Forward size={16} aria-hidden />
-                채널에 올리기
+                {post ? "포스트에 올리기" : "채널에 올리기"}
               </button>
             )}
           </div>
