@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 16;
+export const CONTRACT_VERSION = 17;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -360,21 +360,70 @@ export const AlertFile = z.union([
 ]);
 export type AlertFile = z.infer<typeof AlertFile>;
 
-/** 알림 하나에 이름을 적는 파일의 수. 넘는 것은 `more`로 센다(Room과 같다). */
+/** 알림 하나에 이름을 적는 파일(심볼 알림이면 심볼)의 수. 넘는 것은 `more`로 센다(Room과 같다). */
 export const ALERT_FILES = 8;
 
 /**
- * 알림: 두 작업 한 쌍과 부딪힘의 종류마다 하나(ADR-0023). 지금 종류는 직접 충돌(`direct`)뿐이다.
- * 러너들이 계산해 올린 것을 서버가 묶는다. 부딪힘이 바뀌면 같은 알림이 고쳐지고, 다 풀리면 `resolved`(풀린 시각)가 한 번 적히고 닫힌다.
- * 닫힌 뒤 다시 부딪히면 새 알림이다. `files`는 부딪히는 것이 확인된 파일부터 경로 순으로 `ALERT_FILES`개까지, 나머지는 `more`다.
+ * 심볼이 한 작업에 있는 곳 하나. `line`은 그 작업의 사본 기준이다(`removed`면 기준 커밋의 판).
+ * `uses`는 그 심볼을 쓰는 곳이고, 나머지는 그 작업의 정의 줄의 변경(`Definition.change`)이다.
  */
-export const Alert = z.strictObject({
-  kind: z.literal("direct"),
+export const SymbolPlace = z.strictObject({
+  path: z.string(),
+  line: z.number().int().positive(),
+  role: z.enum(["added", "changed", "removed", "uses"]),
+});
+export type SymbolPlace = z.infer<typeof SymbolPlace>;
+
+/** 사람이 읽는 심볼의 곳. */
+export const PLACE_ROLES = {
+  added: "새로 만듦",
+  changed: "정의 줄 바꿈",
+  removed: "없앰",
+  uses: "씀",
+} as const satisfies Record<SymbolPlace["role"], string>;
+
+/**
+ * 알림에 묶인 심볼 하나. `places`는 `works`와 같은 순서로 두 작업 각자의 곳이다.
+ * 간접 충돌(추정)은 한 작업이 정의 줄을 바꾸거나 없앴고(`changed`, `removed`) 다른 작업이 그 이름을 쓴다(`uses`).
+ * 서로 상대가 바꾼 것을 쓰면 같은 이름이 방향마다 하나씩 있다. 중복 구현은 두 작업 모두 새로 만들었다(`added`).
+ */
+export const AlertSymbol = z.strictObject({
+  name: z.string(),
+  places: z.tuple([z.array(SymbolPlace), z.array(SymbolPlace)]),
+});
+export type AlertSymbol = z.infer<typeof AlertSymbol>;
+
+/** 사람이 읽는 알림의 종류. 간접 충돌은 이름으로만 이어 잘못 이을 수 있어 "추정"이다(ADR-0023). */
+export const ALERT_KINDS = {
+  direct: "직접 충돌",
+  indirect: "간접 충돌(추정)",
+  duplicate: "중복 구현",
+} as const satisfies Record<Alert["kind"], string>;
+
+const alertCommon = {
   works: z.tuple([WorkRef, WorkRef]),
-  files: z.array(AlertFile).max(ALERT_FILES),
   more: z.number(),
   resolved: z.string().nullable(),
-});
+};
+
+/**
+ * 알림: 두 작업 한 쌍과 부딪힘의 종류마다 하나(ADR-0023). 종류는 직접 충돌(`direct`), 간접 충돌(추정, `indirect`), 중복 구현(`duplicate`)이다.
+ * 러너들이 계산해 올린 것을 서버가 묶는다. 부딪힘이 바뀌면 같은 알림이 고쳐지고, 다 풀리면 `resolved`(풀린 시각)가 한 번 적히고 닫힌다.
+ * 닫힌 뒤 다시 부딪히면 새 알림이다. 직접 충돌의 `files`는 부딪히는 것이 확인된 파일부터 경로 순으로, 나머지 둘의 `symbols`는 이름 순으로
+ * `ALERT_FILES`개까지 적고, 나머지는 `more`다.
+ */
+export const Alert = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("direct"),
+    ...alertCommon,
+    files: z.array(AlertFile).max(ALERT_FILES),
+  }),
+  z.strictObject({
+    kind: z.enum(["indirect", "duplicate"]),
+    ...alertCommon,
+    symbols: z.array(AlertSymbol).max(ALERT_FILES),
+  }),
+]);
 export type Alert = z.infer<typeof Alert>;
 
 /**
@@ -384,7 +433,7 @@ export type Alert = z.infer<typeof Alert>;
 export const INBOX_MS = 14 * 24 * 60 * 60_000;
 
 /**
- * 편지함의 소식 하나(GLOSSARY): 작업(`branch`, 받는 러너의 멤버의 것)의 에이전트에게 직접 넘겨줄 것. 지금 종류는 내 작업과의 부딪힘 알림뿐이다.
+ * 편지함의 소식 하나(GLOSSARY): 작업(`branch`, 받는 러너의 멤버의 것)의 에이전트에게 직접 넘겨줄 것. 지금 종류는 내 작업과의 부딪힘 알림(세 종류 모두)뿐이다.
  * 알림이 생기고, 바뀌고, 풀릴 때마다 두 작업의 편지함에 들어간다. 아직 넘겨주지 않은 같은 알림의 소식은 새 것으로 바뀐다(`id`도 새로 받는다).
  * `id`는 서버 전체에서 늘어나기만 하는 번호이고 넘겨준 확인(`delivered`)이 가리킨다. `at`은 들어온 시각, `alert`는 들어온 때의 알림이다.
  */
@@ -452,18 +501,39 @@ export const ChannelMessage = z.discriminatedUnion("kind", [
 ]);
 export type ChannelMessage = z.infer<typeof ChannelMessage>;
 
-/** 러너가 계산한 직접 충돌의 한 쌍: 이 러너의 작업(`branch`)과 다른 멤버의 작업(`theirs`), 부딪히거나 읽을 수 없는 파일들. */
-export const ConflictPair = z.strictObject({
+const pairCommon = {
   branch: z.string(),
   theirs: z.strictObject({ login: z.string(), branch: z.string() }),
-  /** `mine`은 이 러너의 사본, `theirs`는 상대의 사본 기준 줄이다. */
-  files: z.array(
-    z.union([
-      z.strictObject({ path: z.string(), mine: z.array(LineRange), theirs: z.array(LineRange) }),
-      z.strictObject({ path: z.string(), unknown: Unreadable }),
-    ]),
-  ),
-});
+};
+/**
+ * 러너가 계산한 부딪힘의 한 쌍: 이 러너의 작업(`branch`)과 다른 멤버의 작업(`theirs`).
+ * 직접 충돌은 부딪히거나 읽을 수 없는 파일들, 간접 충돌(추정)과 중복 구현은 심볼들이다.
+ * 간접 충돌은 상대가 정의 줄을 바꾼 심볼을 이 러너의 사본에서 쓰는 방향만 싣는다(반대 방향은 상대 러너가 계산한다).
+ */
+export const ConflictPair = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("direct"),
+    ...pairCommon,
+    /** `mine`은 이 러너의 사본, `theirs`는 상대의 사본 기준 줄이다. */
+    files: z.array(
+      z.union([
+        z.strictObject({ path: z.string(), mine: z.array(LineRange), theirs: z.array(LineRange) }),
+        z.strictObject({ path: z.string(), unknown: Unreadable }),
+      ]),
+    ),
+  }),
+  z.strictObject({
+    kind: z.enum(["indirect", "duplicate"]),
+    ...pairCommon,
+    symbols: z.array(
+      z.strictObject({
+        name: z.string(),
+        mine: z.array(SymbolPlace),
+        theirs: z.array(SymbolPlace),
+      }),
+    ),
+  }),
+]);
 export type ConflictPair = z.infer<typeof ConflictPair>;
 
 /** 러너가 서버에 보내는 것. 이후의 이슈는 자기 메시지를 여기에 더한다. */
@@ -486,8 +556,10 @@ export const runnerToServer = {
    */
   observation: z.strictObject({ works: z.array(Work) }),
   /**
-   * 직접 충돌의 계산(ADR-0023). 이 러너의 작업과 다른 멤버의 작업이 함께 바꾼 파일을, 두 작업의 기준 커밋이 갈라진 지점의 판을 조상으로
+   * 부딪힘의 계산(ADR-0023). 직접 충돌은 이 러너의 작업과 다른 멤버의 작업이 함께 바꾼 파일을, 두 작업의 기준 커밋이 갈라진 지점의 판을 조상으로
    * `git merge-file`로 합쳐 본 결과다. 줄이 부딪히거나 상대 내용을 읽을 수 없는 파일이 있는 쌍만 싣는다. 실리지 않은 쌍은 깨끗하다.
+   * 간접 충돌(추정)은 상대가 정의 줄을 바꾸거나 없앤 심볼을 내 작업의 사본에서 이름으로 찾은 것, 중복 구현은 두 작업에 같은 이름의 새 정의가 생긴 것이다.
+   * 한 쌍과 종류마다 하나다.
    * 서버는 이 러너의 계산을 이것으로 바꾼다. 붙을 때마다 한 번(비어 있어도), 그 뒤로는 달라질 때마다 보낸다. 공유 수준이 intent인 작업은 싣지 않는다.
    */
   conflicts: z.strictObject({ pairs: z.array(ConflictPair) }),
