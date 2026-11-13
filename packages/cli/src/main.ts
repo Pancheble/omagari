@@ -8,6 +8,7 @@ import { parseArgs, promisify } from "node:util";
 import {
   ago,
   api,
+  CHECK_FILE,
   CONTRACT_VERSION,
   ContractFailure,
   call,
@@ -17,17 +18,21 @@ import {
   PLAN_KINDS,
   Plan,
   ShareLevel,
+  VERDICT_LABELS,
 } from "@omagari/contract";
 import { checkoutVersion } from "@omagari/contract/version";
 import {
   alertLine,
+  type CheckRecord,
   callRunner,
+  checkNotice,
   claimNews,
   claimOwner,
   claimPlace,
   inboxNotice,
   observationNotice,
   type RunRecord,
+  readCheck,
   readRepo,
   runnerPaths,
   startRunner,
@@ -36,9 +41,12 @@ import { install } from "./install.ts";
 
 const USAGE = `사용법:
   omagari --version             이 체크아웃의 버전(git 태그)과 계약 버전을 본다
-  omagari runner [--share <수준>]
+  omagari runner [--share <수준>] [--merge-check on|off]
                                 레포 폴더에서 러너를 켠다. 처음이면 GitHub 기기 인증으로 로그인한다
                                 공유 수준은 full(기본), declared(경로만), intent(상태 한 줄만). 고른 것은 이 레포에 남는다
+                                --merge-check는 합쳐 돌려 보기를 켜고(on, 기본) 끈다(off). 고른 것은 이 레포에 남는다
+  omagari runner check          지금 폴더의 내 작업(커밋하지 않은 변경 포함)에 기본 브랜치의 ${CHECK_FILE}에 적힌 검사 명령을
+                                샌드박스 안에서 한 번 돌려 통과, 깨짐, 돌리지 못함을 본다. 이 기기에서 검사 명령이 도는지 확인한다
   omagari runner ask <메시지>   이 레포의 러너 세션에 묻는다. 다음 질문은 같은 세션으로 이어진다
   omagari runner log            러너가 실행한 것을 본다
   omagari status                지금 상황을 본다: 멤버, 작업, 상태 한 줄, 바뀐 파일, 최근 소식(피드)
@@ -83,11 +91,13 @@ try {
   } else if (command === "runner" && (sub === undefined || sub.startsWith("--"))) {
     const { values } = parseArgs({
       args: process.argv.slice(3),
-      options: { share: { type: "string" } },
+      options: { share: { type: "string" }, "merge-check": { type: "string" } },
     });
-    await runner(values.share);
+    await runner(values.share, values["merge-check"]);
   } else if (command === "runner" && sub === "ask" && rest.length > 0) {
     console.log(await ask(rest.join(" ")));
+  } else if (command === "runner" && sub === "check" && rest.length === 0) {
+    process.exitCode = await check();
   } else if (command === "runner" && sub === "log") {
     await log();
   } else if (command === "status" && sub === undefined) {
@@ -167,37 +177,47 @@ async function login() {
 }
 
 /**
- * 이 레포의 공유 수준. 고르면 레포(연결된 워크트리 포함)에 남기고, 안 고르면 남긴 것을, 남긴 것도 없으면 full을 쓴다.
- * 남겨 두지 않으면 수준을 낮춘 주인이 그냥 다시 켰을 때 모르는 채로 내용이 나간다.
+ * 이 레포에 남겨 두는 주인의 선택(공유 수준, 합쳐 돌려 보기). 고르면 레포(연결된 워크트리 포함)의 `file`에 남기고,
+ * 안 고르면 남긴 것을, 남긴 것도 없으면 `values`의 첫째(기본값)를 쓴다. `name`은 틀린 값을 알릴 때 쓰는 이름(조사까지)이다.
+ * 남겨 두지 않으면 공유 수준을 낮추거나 합쳐 돌려 보기를 끈 주인이 그냥 다시 켰을 때 모르는 채로 기본값으로 돌아간다.
  */
-async function shareLevel(folder: string, chosen: string | undefined) {
-  const { share: file } = await runnerPaths(folder);
-  const level =
+async function remembered<T extends string>(
+  file: string,
+  chosen: string | undefined,
+  name: string,
+  values: readonly T[],
+) {
+  const value =
     chosen ??
     (await readFile(file, "utf8").then(
       (saved) => saved.trim(),
       (error) => {
-        if (error.code === "ENOENT") return "full";
-        throw error; // 남긴 것을 못 읽었는데 full로 내보내지 않는다
+        if (error.code === "ENOENT") return values[0];
+        throw error; // 남긴 것을 못 읽었는데 기본값으로 가지 않는다
       },
     ));
-  const parsed = ShareLevel.safeParse(level);
-  if (!parsed.success) {
+  const found = values.find((v) => v === value);
+  if (found === undefined) {
     const from = chosen === undefined ? ` (${file})` : "";
-    throw new Error(`공유 수준은 full, declared, intent 가운데 하나다: ${level}${from}`);
+    throw new Error(`${name} ${values.join(", ")} 가운데 하나다: ${value}${from}`);
   }
   if (chosen !== undefined) {
     await mkdir(dirname(file), { recursive: true });
-    await writeFile(file, `${parsed.data}\n`);
+    await writeFile(file, `${found}\n`);
   }
-  return parsed.data;
+  return found;
 }
 
 /** 이 폴더에서 러너를 켜고, 끄거나 서버가 거절할 때까지 돈다. */
-async function runner(chosen: string | undefined) {
+async function runner(chosen: string | undefined, chosenMergeCheck: string | undefined) {
   const folder = process.cwd();
   await readRepo(folder); // Git 레포가 아니면 로그인하기 전에 멈춘다
-  const share = await shareLevel(folder, chosen);
+  const paths = await runnerPaths(folder);
+  const share = await remembered(paths.share, chosen, "공유 수준은", ShareLevel.options);
+  const mergeCheck = await remembered(paths.mergeCheck, chosenMergeCheck, "합쳐 돌려 보기는", [
+    "on",
+    "off",
+  ]);
   // 로그인하고 붙기 전에, 그러니 아무것도 나가기 전에 무엇이 나가는지 알린다.
   console.log(observationNotice(share));
   const saved = (await readSessions())[server];
@@ -213,6 +233,8 @@ async function runner(chosen: string | undefined) {
   // Codex는 깔려 있고 로그인했을 때만 붙는다. 무엇이 붙었는지 주인이 바로 본다.
   console.log(`에이전트: ${running.executors.map((id) => EXECUTOR_NAMES[id]).join(", ")}`);
   for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, running.stop);
+  // 검사 명령은 기본 브랜치에서 읽으므로 서버가 받아들인 원격을 안 뒤에 알린다. 합쳐 돌려 보기는 붙은 뒤에도 잠잠해지기를 기다려야 돈다.
+  console.log(checkNotice(await readCheck(running.folder, running.remote), mergeCheck === "on"));
   const reason = await running.ended;
   if (reason) throw reason;
   console.log("러너를 껐다");
@@ -228,13 +250,52 @@ async function ask(message: string) {
   return reply.payload.text;
 }
 
+/** 초로 적은 걸린 시간. 위의 명령이 먼저 돌아 모듈 상수가 아니라 함수 선언으로 둔다. */
+function seconds(ms: number) {
+  return `${(ms / 1000).toFixed(1)}초`;
+}
+
+/**
+ * 지금 폴더의 내 작업에 기본 브랜치의 검사 명령을 샌드박스 안에서 한 번 돌린다. 러너가 돌린다.
+ * 통과면 0, 깨짐이나 돌리지 못함이면 1로 끝난다. 통과가 아니면 출력의 끝부분을 보인다.
+ */
+async function check() {
+  const folder = (
+    await promisify(execFile)("git", ["rev-parse", "--show-toplevel"]).catch(() => {
+      throw new Error("Git 레포가 아닌 폴더다. 작업 폴더에서 써라");
+    })
+  ).stdout.trim();
+  const reply = await callRunner(process.cwd(), "check", { folder }).catch((error) => {
+    if (error instanceof ContractFailure) throw new Error(`러너가 답하지 못했다: ${error.message}`);
+    throw error;
+  });
+  if (reply.kind !== "checked") throw new Error(`러너가 묻지 않은 것으로 답했다: ${reply.kind}`);
+  const { verdict, reason, branch, config, ms, output } = reply.payload;
+  if (config) {
+    console.log(`검사 명령: ${config.check} (기본 브랜치 ${branch}의 ${CHECK_FILE})`);
+    if (config.setup) console.log(`준비 명령: ${config.setup}`);
+  }
+  console.log(`판정: ${VERDICT_LABELS[verdict]} (${seconds(ms)})`);
+  if (reason) console.log(`  ${reason}`);
+  if (verdict !== "pass" && output) console.log(`출력의 끝부분:\n${output.replace(/^/gm, "  ")}`);
+  return verdict === "pass" ? 0 : 1;
+}
+
 /** 실행 기록을 한 줄에 하나씩 보인다. 기록은 이 기기에만 있다. */
 async function log() {
   const { log } = await runnerPaths(process.cwd());
   const lines = await readFile(log, "utf8").catch(() => "");
   if (!lines) return console.log("러너가 실행한 것이 아직 없다");
   for (const line of lines.trimEnd().split("\n")) {
-    const run: RunRecord = JSON.parse(line);
+    const run: RunRecord | CheckRecord = JSON.parse(line);
+    if ("kind" in run) {
+      const why = run.reason ? `: ${run.reason}` : "";
+      const setup = run.setup ? `  준비 명령 ${JSON.stringify(run.setup)}` : "";
+      console.log(
+        `${run.at}  검사 명령 ${JSON.stringify(run.check ?? "")}${setup}  폴더 ${run.folder}  판정 ${VERDICT_LABELS[run.verdict]}${why}  ${seconds(run.ms)}`,
+      );
+      continue;
+    }
     const outcome = run.error ? `실패: ${run.error}` : `답함 ${JSON.stringify(run.answer ?? "")}`;
     console.log(
       `${run.at}  세션 ${run.session ?? "(새 세션)"}  도구 ${run.tools.join(",")}  받은 것 ${JSON.stringify(run.message)}  ${outcome}`,

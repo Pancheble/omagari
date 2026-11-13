@@ -5,6 +5,7 @@
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "0.0.81",
     "@omagari/contract": "*",
     "@vscode/tree-sitter-wasm": "0.3.1"
   }

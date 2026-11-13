@@ -38,18 +38,21 @@ import {
   type Source,
   type SymbolPlace,
   serverToRunner,
+  type Verdict,
   VersionMismatch,
   type Work,
   type WorkRef,
   type WorkView,
 } from "@omagari/contract";
 import { checkoutVersion } from "@omagari/contract/version";
+import { CHECK_LIMITS, type CheckLimits, checkWork, osSandbox, type Sandbox } from "./check.ts";
 import { covers, overlap, resolve, see } from "./claims.ts";
 import { conflicts, newMemo, symbolConflicts } from "./conflicts.ts";
 import { gitIn, nearby } from "./nearby.ts";
 import { observe, uses } from "./observe.ts";
 import { named } from "./symbols.ts";
 
+export { checkNotice, readCheck, type Sandbox, type SandboxInput } from "./check.ts";
 export { alertLine, claimNews, claimOwner, claimPlace, inboxNotice, planLine } from "./inbox.ts";
 export { observationNotice } from "./observe.ts";
 
@@ -377,6 +380,20 @@ export type RunRecord = {
   error?: string;
 };
 
+/** 실행 기록 한 줄(검사 명령, `omagari runner check`): 언제, 어느 폴더의 작업에, 어떤 명령을 돌려, 어떤 판정이 났고 얼마나 걸렸나. */
+export type CheckRecord = {
+  at: string;
+  kind: "check";
+  folder: string;
+  /** 읽은 검사 명령과 준비 명령. 설정을 읽지 못했으면 없다. */
+  check?: string;
+  setup?: string;
+  verdict: Verdict;
+  /** 돌리지 못했으면 그 까닭. */
+  reason?: string;
+  ms: number;
+};
+
 /** 러너의 로컬 자리. 레포 하나(연결된 워크트리 포함)에 하나라 CLI는 어느 워크트리에서든 같은 러너를 찾는다. */
 export async function runnerPaths(folder: string) {
   const { stdout } = await execFileAsync(
@@ -396,6 +413,8 @@ export async function runnerPaths(folder: string) {
     share: join(common, "omagari", "share"),
     /** 편집 전 훅이 작업 세션마다 보여 준 것을 적어 두는 폴더. 세션 id마다 파일 하나다. */
     hooks: join(common, "omagari", "hooks"),
+    /** 주인이 고른 합쳐 돌려 보기(on, off). 다시 켤 때 따로 고르지 않으면 이것을 쓴다(ADR-0034). */
+    mergeCheck: join(common, "omagari", "merge-check"),
   };
 }
 
@@ -595,6 +614,10 @@ export async function startRunner(options: {
   turnTimeoutMs?: number;
   /** 관측의 공유 수준. 기본 full. */
   share?: ShareLevel;
+  /** 검사 명령을 가둬 돌릴 샌드박스. 기본은 이 기기의 것이다. */
+  sandbox?: Sandbox;
+  /** 검사 명령과 준비 명령의 상한. 기본은 5분과 출력 4MB, 준비 명령 10분이다. */
+  checkLimits?: Partial<CheckLimits>;
 }) {
   const { folder, repos, remotes } = await readRepo(options.folder);
   const paths = await runnerPaths(folder);
@@ -638,6 +661,8 @@ export async function startRunner(options: {
   let inbox: InboxItem[] | undefined;
   /** 넘겨줬지만 서버가 아직 지우지 않은 소식. 받은 편지함에서 빼고, 다시 붙으면 서버에 다시 알린다. */
   const delivered = new Set<number>();
+  /** 서버가 받아들인 레포의 원격. 기준 커밋과 검사 명령은 그 원격의 기본 브랜치에서 찾는다. 처음 붙기 전에는 없다. */
+  let remote: { name: string; repo: string } | undefined;
   /** 서버에 보내고 답(`re`)을 기다리는 요청(선점과 풀기). 끊기면 시간 상한에서 실패한다. */
   const pending = new Map<string, (message: Message<typeof serverToRunner>) => void>();
 
@@ -986,6 +1011,28 @@ export async function startRunner(options: {
       if (live && ids.length > 0) live.send(encode(runnerToServer, "delivered", { ids }));
       return encode(runnerToCli, "delivered", {}, message.id);
     }
+    if (message.kind === "check") {
+      // 서버를 부르지 않고 이 기기에서만 돈다. 문답의 줄에 서지 않는다.
+      const at = new Date().toISOString();
+      const { folder: tree } = message.payload;
+      const result = await checkWork({
+        folder: tree,
+        remote: remote?.name,
+        sandbox: options.sandbox ?? osSandbox,
+        limits: { ...CHECK_LIMITS, ...options.checkLimits },
+      });
+      const record: CheckRecord = {
+        at,
+        kind: "check",
+        folder: tree,
+        ...result.config,
+        verdict: result.verdict,
+        ...(result.reason !== undefined && { reason: result.reason }),
+        ms: result.ms,
+      };
+      await appendFile(paths.log, `${JSON.stringify(record)}\n`);
+      return encode(runnerToCli, "checked", result, message.id);
+    }
     if (message.kind === "claim" || message.kind === "release" || message.kind === "question") {
       const handled =
         message.kind === "question"
@@ -1155,8 +1202,7 @@ export async function startRunner(options: {
     await localClosed;
     throw error;
   });
-  // 서버가 받아들인 레포의 원격. 기준 커밋은 그 원격의 기본 브랜치에서 찾는다.
-  const remote = remotes.find((r) => r.repo.toLowerCase() === welcome.repo.toLowerCase());
+  remote = remotes.find((r) => r.repo.toLowerCase() === welcome.repo.toLowerCase());
   const observing = remote ? observeLoop(remote.name) : Promise.resolve();
 
   /**
@@ -1259,6 +1305,8 @@ export async function startRunner(options: {
     repo: welcome.repo,
     /** 서버에 알린 실행기. 실행기마다 에이전트가 하나다. */
     executors: executorIds,
+    /** 서버가 받아들인 레포의 원격 이름. 검사 명령은 그 원격의 기본 브랜치에서 읽는다. */
+    remote: remote?.name,
     /** 러너가 멈추면 끝난다. 서버가 거절해서 멈췄으면 그 이유가 온다. */
     ended: ended.promise,
     async stop() {
