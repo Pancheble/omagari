@@ -14,6 +14,8 @@ import {
   DEFINITION_KINDS,
   EXECUTOR_NAMES,
   ExecutorId,
+  PLAN_KINDS,
+  Plan,
   ShareLevel,
 } from "@omagari/contract";
 import { checkoutVersion } from "@omagari/contract/version";
@@ -41,12 +43,15 @@ const USAGE = `사용법:
   omagari runner log            러너가 실행한 것을 본다
   omagari status                지금 상황을 본다: 멤버, 작업, 상태 한 줄, 바뀐 파일, 최근 소식(피드)
   omagari status set <한 줄>    지금 브랜치의 작업에 상태 한 줄을 쓴다
-  omagari claim <경로> [--symbol <이름> | --lines <시작>-<끝>]
+  omagari claim <경로> [--symbol <이름> | --lines <시작>-<끝>] [--plan <종류>[:<심볼>] [--detail <한 줄>]]
                                 지금 브랜치의 작업이 고칠 곳을 선점한다. 경로가 폴더(끝이 /)면 그 아래 전부, 새로 만든 파일은 파일 전체다
                                 남의 선점과 겹쳐도 걸리고, 겹치면 양쪽 작업의 편지함에 들어간다. 아무것도 막지 않는다
+                                --plan은 바꿀 계약을 선언한다: rename(이름 바꾸기), signature(시그니처 변경), delete(삭제), add(추가)
+                                심볼은 --symbol의 것이고, 다르면 종류 뒤에 :<심볼>로 적는다. 그 심볼을 쓰는 다른 작업에 코드를 바꾸기 전에 알린다
+                                같은 심볼에 새 계획을 걸면 옛 계획을 대체한다. 이루지 못한 채 풀면 알림을 받은 작업에 "취소됨"이 간다
   omagari release [<경로> [--symbol <이름> | --lines <시작>-<끝>]]
                                 지금 브랜치의 작업의 선점을 푼다. 경로가 없으면 모두 푼다
-  omagari impact <심볼>          그 심볼을 내 사본에서 쓰는 곳과, 그 정의 줄을 바꾸고 있는 다른 멤버의 작업을 본다
+  omagari impact <심볼>          그 심볼을 내 사본에서 쓰는 곳과, 그 정의 줄을 바꾸고 있거나 바꾸겠다고 선언한 다른 멤버의 작업을 본다
                                 메서드는 클래스.메서드나 메서드 이름으로 묻는다. 이름으로 이어 같은 이름의 다른 심볼도 잡힌다
   omagari ask <멤버> <질문> [--executor claude-code|codex]
                                 지금 브랜치의 작업에서 다른 멤버의 에이전트에게 묻고 바로 돌아온다. 답은 이 작업의 편지함으로 온다
@@ -312,7 +317,12 @@ async function setStatus(text: string) {
 async function target(path: string | undefined) {
   const { values } = parseArgs({
     args: process.argv.slice(path === undefined ? 3 : 4),
-    options: { symbol: { type: "string" }, lines: { type: "string" } },
+    options: {
+      symbol: { type: "string" },
+      lines: { type: "string" },
+      plan: { type: "string" },
+      detail: { type: "string" },
+    },
   });
   const git = (...args: string[]) =>
     promisify(execFile)("git", args).then(({ stdout }) => stdout.trim());
@@ -330,6 +340,7 @@ async function target(path: string | undefined) {
     path === undefined ? undefined : relative(top, resolve(path)) + (path.endsWith("/") ? "/" : "");
   if (relativePath?.startsWith("..")) throw new Error(`레포 밖의 경로다: ${path}`);
   return {
+    plan: plan(values),
     branch,
     ...(relativePath !== undefined && { path: relativePath }),
     ...(values.symbol !== undefined && { symbol: values.symbol }),
@@ -337,13 +348,33 @@ async function target(path: string | undefined) {
   };
 }
 
+/** `--plan <종류>[:<심볼>]`과 `--detail <한 줄>`을 계획으로. 심볼을 적지 않으면 `--symbol`의 것이다. */
+function plan(values: { symbol?: string; plan?: string; detail?: string }) {
+  if (values.plan === undefined) {
+    if (values.detail !== undefined) throw new Error("--detail은 --plan과 함께 준다");
+    return undefined;
+  }
+  const [kind = "", symbol = values.symbol] = values.plan.split(/:(.*)/s);
+  const parsed = Plan.safeParse({
+    kind,
+    symbol,
+    ...(values.detail !== undefined && { detail: values.detail }),
+  });
+  if (!parsed.success)
+    throw new Error(
+      `계획은 --plan <${Object.keys(PLAN_KINDS).join("|")}>[:<심볼>]로 준다. 심볼을 적지 않으면 --symbol의 것이다: ${values.plan}`,
+    );
+  return parsed.data;
+}
+
 /** 지금 브랜치의 작업에 선점을 건다. 러너가 서버에 건다. 겹친 남의 선점이 있으면 함께 보인다. */
 async function claim(path: string) {
-  const { branch, path: at, ...rest } = await target(path);
+  const { branch, path: at, plan, ...rest } = await target(path);
   const reply = await callRunner(process.cwd(), "claim", {
     branch,
     path: at ?? path,
     ...rest,
+    ...(plan && { plan }),
   }).catch((error) => {
     if (error instanceof ContractFailure) throw new Error(`선점을 걸지 못했다: ${error.message}`);
     throw error;
@@ -360,7 +391,8 @@ async function claim(path: string) {
 
 /** 지금 브랜치의 작업의 선점을 푼다. 경로가 없으면 모두 푼다. */
 async function release(path: string | undefined) {
-  const found = await target(path);
+  const { plan, ...found } = await target(path);
+  if (plan) throw new Error("--plan은 omagari claim에만 준다");
   const reply = await callRunner(process.cwd(), "release", found).catch((error) => {
     if (error instanceof ContractFailure) throw new Error(`선점을 풀지 못했다: ${error.message}`);
     throw error;
@@ -379,7 +411,7 @@ async function impact(symbol: string) {
     throw error;
   });
   if (reply.kind !== "impact") throw new Error(`러너가 묻지 않은 것으로 답했다: ${reply.kind}`);
-  const { uses, works, disconnectedAt } = reply.payload;
+  const { uses, works, plans, disconnectedAt } = reply.payload;
   const CHANGE = { added: "새로 만듦", changed: "정의 줄을 바꿈", removed: "없앰" } as const;
   console.log(`심볼 ${symbol}\n쓰는 곳(내 사본, 이름으로 이어 다른 심볼일 수 있다):`);
   if (uses.length === 0) console.log("  없음");
@@ -393,6 +425,9 @@ async function impact(symbol: string) {
       `  ${login} · ${branch} · ${path}:${d.line} ${DEFINITION_KINDS[d.kind]} ${d.name} ${change}${away}`,
     );
   }
+  console.log("바꾸겠다고 선언한(계획을 붙인) 다른 멤버의 선점:");
+  if (plans.length === 0) console.log("  없음");
+  for (const claim of plans) console.log(`  ${claimOwner(claim)} · ${claimPlace(claim)}`);
   if (disconnectedAt)
     console.log(`러너가 ${ago(disconnectedAt)}부터 서버와 끊겨 있어, 그때까지 받은 것이다.`);
 }
