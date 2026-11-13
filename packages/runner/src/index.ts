@@ -1217,19 +1217,25 @@ export async function startRunner(options: {
         // ponytail: 주기마다 함께 바꾼 파일을 다 다시 본다. 같은 내용은 memo로 건너뛴다. 무거워지면 바뀐 작업만 다시 본다.
         const to = live;
         if (to && situation && login) {
+          // 계산하는 동안 서버에서 새 상황이 오면(예: 상대가 되돌렸다) 이 계산은 낡았다. 낡은 것을 보내면 풀린 알림이 다시 선다.
+          const seen = situation;
           const trees = mine.flatMap((work) => {
             const tree = folders.get(work.branch);
             return tree ? [{ work, folder: tree }] : [];
           });
-          const computed = await conflicts(folder, trees, situation.works, login, memo);
+          const computed = await conflicts(folder, trees, seen.works, login, memo);
           memo = computed.memo;
           // 간접 충돌(추정)과 중복 구현도 같은 길로 올린다.
           const all = [
             ...computed.pairs,
-            ...(await symbolConflicts(trees, situation.works, login, situation.claims)),
+            ...(await symbolConflicts(trees, seen.works, login, seen.claims)),
           ];
           const pairs = JSON.stringify(all);
-          if (to === live && (to !== reported.to || pairs !== reported.pairs)) {
+          if (
+            situation === seen &&
+            to === live &&
+            (to !== reported.to || pairs !== reported.pairs)
+          ) {
             to.send(encode(runnerToServer, "conflicts", { pairs: all }));
             reported = { to, pairs };
           }
