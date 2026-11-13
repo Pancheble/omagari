@@ -502,6 +502,9 @@ const ClaimTarget = z.strictObject({
  */
 export const INBOX_MS = 14 * 24 * 60 * 60_000;
 
+/** 설정 창의 "내 에이전트가 답한 것"이 세는 날 수(`api.settings`). 묻기를 `INBOX_MS`보다 짧게 센다. */
+export const ANSWERED_DAYS = 7;
+
 /**
  * 편지함의 소식 하나(GLOSSARY): 작업(`branch`, 받는 러너의 멤버의 것)의 에이전트에게 직접 넘겨줄 것. 종류는 내 작업과의 부딪힘 알림(네 종류 모두), 내 선점과 겹친 선점, 내가 쓰는 계약의 선언된 변경의 취소다.
  * 알림이 생기고, 바뀌고, 풀릴 때마다 두 작업의 편지함에 들어간다. 아직 넘겨주지 않은 같은 알림의 소식은 새 것으로 바뀐다(`id`도 새로 받는다).
@@ -1449,6 +1452,25 @@ export const api = {
     path: "/api/ask-switch",
     body: z.strictObject({ on: z.boolean() }),
     response: z.strictObject({ on: z.boolean() }),
+  },
+  /**
+   * 설정 창이 읽는 것: 내 "남의 질문에 답하기" 스위치(`setAskSwitch`), 내 에이전트가 지난 `ANSWERED_DAYS`일 동안
+   * 남의 질문에 답한 수와 그 가운데 마지막 질문(묻은 멤버와 질문 글, 물은 시각), 알림을 올릴 포럼(`setAlertChannel`)의 채널 id.
+   * 알림을 올릴 포럼을 정한 적이 없으면 "부딪힘" 포럼이다(없으면 만든다).
+   */
+  settings: {
+    method: "GET",
+    path: "/api/settings",
+    response: z.strictObject({
+      askSwitch: z.boolean(),
+      answered: z.strictObject({
+        count: z.number(),
+        last: z
+          .strictObject({ login: z.string(), name: z.string(), text: z.string(), at: z.string() })
+          .nullable(),
+      }),
+      alertChannel: z.string(),
+    }),
   },
   /** 채널 전부(채팅과 포럼), 이름 순서. 포스트는 오지 않는다(`api.posts`). 멤버만 본다. */
   channels: {
