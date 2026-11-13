@@ -2627,6 +2627,263 @@ button.dm-head:active {
   }
 }
 
+/* 설정 창(DESIGN.md "설정 창"): 왼쪽 목록 220px, 오른쪽에 고른 항목. 덮개, Esc, 닫기로 닫힌다. */
+.settings {
+  width: min(820px, 100vw - 32px);
+  height: min(580px, 100dvh - 32px);
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: var(--rounded-lg);
+  background: var(--parchment);
+  box-shadow: var(--floating);
+  color: var(--ink);
+}
+
+.settings[open] {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+}
+
+.settings::backdrop {
+  background: var(--overlay);
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 16px 10px;
+  overflow-y: auto;
+  border-right: 1px solid var(--hairline);
+}
+
+.settings-me {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 6px 12px;
+}
+
+.settings-nav h3 {
+  padding: 12px 10px 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.33;
+}
+
+.settings-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--rounded-sm);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 15px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-item:hover {
+  background: var(--hover);
+}
+
+.settings-item[aria-current] {
+  background: var(--selected);
+  font-weight: 600;
+}
+
+.settings-page {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 4px 28px 28px;
+  overflow-y: auto;
+}
+
+.settings-page > h2 {
+  display: flex;
+  align-items: center;
+  height: 60px;
+  margin-bottom: -24px;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.settings-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  min-width: 32px;
+  height: 32px;
+}
+
+.settings-section h3 {
+  padding: 0 16px 6px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.38;
+}
+
+.settings-section p {
+  padding: 6px 16px 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.settings-group {
+  border: 1px solid var(--selected);
+  border-radius: var(--rounded-md);
+  background: var(--canvas);
+  --mark-ring: var(--canvas);
+}
+
+.settings-loading {
+  height: 105px;
+  background: var(--chip);
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 10px 16px;
+}
+
+.settings-row + .settings-row {
+  border-top: 1px solid var(--divider);
+}
+
+.settings-text {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+.settings-text small {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.38;
+  text-overflow: ellipsis;
+}
+
+.settings-row .agent-mark[data-off] {
+  opacity: 0.5;
+}
+
+.settings-off,
+.settings-value {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+code.settings-value {
+  font-family: var(--mono);
+}
+
+/* 고르기 단추: 겉은 단추 모양이고 속은 네이티브 select다. 키보드와 읽기 프로그램이 그대로 쓴다. */
+.settings-select {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: var(--rounded-sm);
+  background: var(--selected);
+  font-size: 13px;
+}
+
+.settings-select select {
+  padding: 0 18px 0 0;
+  margin-right: -18px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  appearance: none;
+  cursor: pointer;
+}
+
+.settings-select:focus-within {
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.settings-select select:focus {
+  outline: none;
+}
+
+.switch {
+  position: relative;
+  flex: none;
+  width: 40px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--pill);
+  background: var(--offline);
+  cursor: pointer;
+  transition: background-color 150ms ease-out;
+}
+
+.switch::after {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--on-dark);
+  box-shadow: 0 1px 2px #0000002e;
+  content: "";
+  transition: transform 150ms ease-out;
+}
+
+.switch[aria-checked="true"] {
+  background: var(--primary);
+}
+
+.switch[aria-checked="true"]::after {
+  transform: translateX(16px);
+}
+
+@media (max-width: 599px) {
+  .settings[open] {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .settings-nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+    border-right: 0;
+    border-bottom: 1px solid var(--hairline);
+  }
+
+  .settings-me,
+  .settings-nav h3 {
+    display: none;
+  }
+
+  .settings-page {
+    padding: 4px 16px 16px;
+  }
+}
+
 /* ---- 부딪힘 포럼과 포스트 (DESIGN.md "부딪힘 포럼", "포스트") ---- */
 
 .category + .category {

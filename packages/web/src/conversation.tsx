@@ -223,6 +223,8 @@ export function Conversation({
           <div className="log" role="log" aria-label={`# ${channel.name}의 메시지`}>
             {view.older && <SkeletonRow />}
             {view.messages.map((message, i) => {
+              // 결정 PR의 줄은 아직 그리지 않는다(#90).
+              if (message.kind === "decision") return null;
               const previous = view.messages[i - 1];
               const newDay = !previous || dayOf(previous.at) !== dayOf(message.at);
               // 문답은 묶지 않고, 문답 다음의 글은 머리를 다시 단다.
@@ -403,7 +405,7 @@ function Message({
   grouped,
   state,
 }: {
-  message: Exclude<ChannelMessage, { kind: "alert" }>;
+  message: Exclude<ChannelMessage, { kind: "alert" | "decision" }>;
   grouped: boolean;
   state?: MemberView["agents"][number]["state"];
 }) {

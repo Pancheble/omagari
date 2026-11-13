@@ -41,6 +41,7 @@ import { changed, Forum, ForumTitle, type PostItem, postOf, postsOf, postTitle }
 import { useLive } from "./live.ts";
 import { MemberList, MemberSkeleton } from "./members.tsx";
 import { ProfilePanel } from "./profile.tsx";
+import { Settings } from "./settings.tsx";
 
 /** 이 폭부터 채널 패널이 늘 보인다. 그보다 좁으면 대화만 두고 채널 패널은 서랍으로 연다(DESIGN.md 앱의 좁은 화면). */
 const WIDE = "(min-width: 834px)";
@@ -131,6 +132,7 @@ export function Workspace({
   const [channels, setChannels] = useState<Channel[]>();
   const [collapsed, toggleCollapsed] = useCollapsed("omagari.channels-collapsed");
   const [members, setMembers] = useState<MemberView[]>();
+  const [settings, setSettings] = useState(false);
   const wide = useMedia(WIDE);
 
   /** 채널 패널을 접었는지. 834px 이상에서만 쓰고, 좁아졌다 다시 넓어지면 기억한 대로 돌아간다. */
@@ -166,7 +168,8 @@ export function Workspace({
     setPeek(false);
   };
   /** 꺼내 본 패널에서 연 상태 메뉴나 채널 만들기가 열려 있는지. 그동안은 닫지 않는다. */
-  const held = () => !!(creator.current?.open || side.current?.querySelector(".status-menu"));
+  const held = () =>
+    !!(settings || creator.current?.open || side.current?.querySelector(".status-menu"));
   /** 펴는 버튼이나 창 왼쪽 가장자리에 마우스가 머물면 꺼내 본다. 키보드 초점과 손가락으로는 꺼내 보지 않는다. */
   const hoverIn = (event: PointerEvent) => {
     clearTimeout(peekTimer.current);
@@ -493,6 +496,10 @@ export function Workspace({
       action={action}
       mine={members?.find((member) => member.login === me.login)}
       onLogout={onLogout}
+      onSettings={() => {
+        drawer.current?.close();
+        setSettings(true);
+      }}
       onPresence={setPresence}
       onMessage={setMessage}
     >
@@ -758,6 +765,16 @@ export function Workspace({
         <div className="side-panel">{panel(() => drawer.current?.close())}</div>
       </dialog>
       <CreateChannel dialog={creator} onCreate={create} />
+      {settings && (
+        <Settings
+          me={me}
+          mine={members?.find((member) => member.login === me.login)}
+          channels={channels}
+          session={session}
+          check={check}
+          onClose={() => setSettings(false)}
+        />
+      )}
     </div>
   );
 }
@@ -832,6 +849,7 @@ function ChannelPanel({
   action,
   mine,
   onLogout,
+  onSettings,
   onPresence,
   onMessage,
   children,
@@ -841,6 +859,7 @@ function ChannelPanel({
   action?: ReactNode;
   mine?: MemberView;
   onLogout: () => void;
+  onSettings: () => void;
   onPresence: (presence: ChosenPresence, duration?: PresenceDuration) => Promise<void>;
   onMessage: (message: string, emoji: string | null) => Promise<void>;
   children: ReactNode;
@@ -858,6 +877,7 @@ function ChannelPanel({
         me={me}
         mine={mine}
         onLogout={onLogout}
+        onSettings={onSettings}
         onPresence={onPresence}
         onMessage={onMessage}
       />
