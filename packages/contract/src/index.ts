@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 22;
+export const CONTRACT_VERSION = 23;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -552,8 +552,16 @@ export type InboxItem = z.infer<typeof InboxItem>;
  * 알림의 포스트(ADR-0027). 알림 하나에 포스트 하나이고, 알림이 포럼에 올라올 때 함께 생긴다. 포스트의 첫 글이 그 알림이다.
  * 포스트는 채널처럼 동작한다: `channel`을 채널 자리에 넣어 글 쓰기, 지난 대화, DM, `@호출`, 채널에 올리기를 그대로 쓴다.
  * 채널 목록(`api.channels`)에는 없다. `alert`는 알림이 선 채널 메시지의 번호, `count`는 포스트에 선 글(글과 공개된 문답)의 수다.
+ * 포럼 목록이 그리는 요약도 여기 있다: `last`는 마지막 글(알림은 빼고, 글이 없으면 `null`)의 쓴 사람과 한 줄,
+ * `activity`는 마지막 글이 선 시각(글이 없으면 알림이 올라온 시각)이다. 올라온 시각은 알림 메시지의 `at`이다.
  */
-export const Post = z.strictObject({ channel: z.string(), alert: z.number(), count: z.number() });
+export const Post = z.strictObject({
+  channel: z.string(),
+  alert: z.number(),
+  count: z.number(),
+  last: z.strictObject({ login: z.string(), name: z.string(), line: z.string() }).nullable(),
+  activity: z.string(),
+});
 export type Post = z.infer<typeof Post>;
 
 /**
@@ -1267,11 +1275,15 @@ export const api = {
     body: z.strictObject({ alert: z.number().int() }),
     response: z.strictObject({ post: Post, message: ChannelMessage }),
   },
-  /** 포스트 전부, 알림 순서. */
+  /**
+   * 포스트 전부, 알림 순서. 포럼 목록이 한 번에 그리도록 포스트마다 첫 글인 알림 메시지(`message`)가 붙는다:
+   * 알림의 종류, 두 사람과 브랜치, 파일이나 심볼, 풀렸는지(`alert.resolved`)와 올라온 시각(`at`)이 거기 있다. 풀린 포스트도 남는다.
+   * 새 글이 서면 그 알림 줄이 실시간 연결로 다시 오고, 그 `post`가 바뀐 요약이다.
+   */
   posts: {
     method: "GET",
     path: "/api/posts",
-    response: z.strictObject({ posts: z.array(Post) }),
+    response: z.strictObject({ posts: z.array(Post.extend({ message: ChannelMessage })) }),
   },
   /**
    * 내 에이전트가 다른 멤버의 질문(`omagari ask`)에 답할지 정하는 스위치(ADR-0024). 기본은 켜짐이다.
