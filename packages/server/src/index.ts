@@ -9,6 +9,7 @@ import {
   type Alert,
   type AlertFile,
   type AlertSymbol,
+  ANSWERED_DAYS,
   api,
   CHANNEL_CONTEXT,
   type ChannelKind,
@@ -1432,6 +1433,37 @@ export async function startServer(options: {
     if (on) db.prepare("DELETE FROM ask_off WHERE login = ?").run(login);
     else db.prepare("INSERT OR IGNORE INTO ask_off (login) VALUES (?)").run(login);
     return { on };
+  });
+
+  mount(app, api.settings, (_, c) => {
+    const login = c.get("login") as string;
+    // 답한 것만 센다. 남겨 두고 아직 답하지 않았거나 답하지 못한 질문은 세지 않는다.
+    const answered = db
+      .prepare(
+        `SELECT login, text, at FROM questions
+         WHERE target = ? AND at > ? AND json_extract(answer, '$.state') = 'answered' ORDER BY id DESC`,
+      )
+      .all(login, Date.now() - ANSWERED_DAYS * 24 * 60 * 60_000) as {
+      login: string;
+      text: string;
+      at: number;
+    }[];
+    const last = answered[0];
+    return {
+      askSwitch: !db.prepare("SELECT 1 FROM ask_off WHERE login = ?").get(login),
+      answered: {
+        count: answered.length,
+        last: last
+          ? {
+              login: last.login,
+              name: nameOf(last.login),
+              text: last.text,
+              at: new Date(last.at).toISOString(),
+            }
+          : null,
+      },
+      alertChannel: alertChannel(),
+    };
   });
 
   /** 에이전트는 주인만 부른다. */

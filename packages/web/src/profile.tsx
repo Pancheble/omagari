@@ -61,12 +61,14 @@ export function ProfilePanel({
   me,
   mine,
   onLogout,
+  onSettings,
   onPresence,
   onMessage,
 }: {
   me: Me;
   mine?: MemberView;
   onLogout: () => void;
+  onSettings: () => void;
   onPresence: SetPresence;
   onMessage: SetMessage;
 }) {
@@ -126,6 +128,10 @@ export function ProfilePanel({
           onPresence={onPresence}
           onMessage={onMessage}
           onLogout={onLogout}
+          onSettings={() => {
+            close();
+            onSettings();
+          }}
           onDone={close}
         />
       )}
@@ -144,6 +150,7 @@ function StatusMenu({
   onPresence,
   onMessage,
   onLogout,
+  onSettings,
   onDone,
 }: {
   id: string;
@@ -152,6 +159,7 @@ function StatusMenu({
   onPresence: SetPresence;
   onMessage: SetMessage;
   onLogout: () => void;
+  onSettings: () => void;
   onDone: () => void;
 }) {
   const chosen = chosenOf(mine);
@@ -374,11 +382,11 @@ function StatusMenu({
       <button
         type="button"
         className="menu-item"
-        disabled
+        aria-haspopup="dialog"
         onPointerEnter={() => setFlyout(undefined)}
+        onClick={onSettings}
       >
         설정
-        <span className="menu-note">준비 중</span>
       </button>
       <button type="button" className="menu-item danger" onClick={onLogout}>
         로그아웃
