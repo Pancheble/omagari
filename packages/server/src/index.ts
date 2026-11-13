@@ -11,6 +11,7 @@ import {
   type AlertSymbol,
   api,
   CHANNEL_CONTEXT,
+  type ChannelKind,
   type ChannelMessage,
   type Choices,
   type ChosenPresence,
@@ -19,6 +20,7 @@ import {
   type ConflictPair,
   type ContractError,
   ContractFailure,
+  type Draft,
   decode,
   EXECUTOR_NAMES,
   type ExecutorId,
@@ -108,7 +110,7 @@ const qaView = (row: QaRow): Qa => ({
   answer: row.answer === null ? { state: "pending" } : JSON.parse(row.answer),
 });
 
-/** 처음 알림을 올릴 때 알림 채널이 없으면 쓰거나 만드는 채널. */
+/** 처음 알림을 올릴 때 알림을 올릴 포럼이 없으면 쓰거나 만드는 포럼. 사람은 이 이름으로 채팅 채널을 만들지 못한다. */
 const ALERT_CHANNEL = "부딪힘";
 
 /** 포스트(채널 줄)의 글 수. `c`가 포스트의 채널이다. */
@@ -195,7 +197,7 @@ const messageView = (row: MessageRow): ChannelMessage => {
       channel: row.channel,
       at: new Date(row.at).toISOString(),
       alert: alertView(row),
-      post: row.post === null ? null : { channel: row.post, count: row.count },
+      post: { channel: row.post as string, count: row.count },
     };
   }
   const common = {
@@ -316,6 +318,11 @@ export async function startServer(options: {
   if (!db.prepare("SELECT 1 FROM pragma_table_info('channels') WHERE name = 'alert'").get())
     db.exec("ALTER TABLE channels ADD COLUMN alert INTEGER REFERENCES messages (id)");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS channels_by_alert ON channels (alert)");
+  // 채널의 종류(ADR-0027). 포스트의 줄은 'chat'으로 두고 `alert`로 가린다. 2단계 앞의 표에는 `kind`가 없다.
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('channels') WHERE name = 'kind'").get())
+    db.exec(
+      "ALTER TABLE channels ADD COLUMN kind TEXT NOT NULL DEFAULT 'chat' CHECK (kind IN ('chat', 'forum'))",
+    );
   // 알림(ADR-0023): 두 작업 한 쌍과 종류(`kind`)마다 하나. 채널에는 messages의 한 줄(`alert`)로 선다. 그 줄의 `text`는 빈 글, `login`은 빈 이름이다
   // (`text`의 CHECK를 바꾸려면 표를 다시 만들어야 한다). `pair`는 두 작업을 정한 순서로 적은 열쇠, `works`는 계약의 WorkRef 둘(JSON),
   // `files`는 묶은 것 전부(직접 충돌이면 계약의 AlertFile 배열로 확인된 것부터 경로 순, 나머지 종류면 AlertSymbol 배열로 이름 순)다. `resolved`는 풀린 시각(ms)이고, 풀리지 않은 알림은 쌍마다 하나다.
@@ -543,6 +550,21 @@ export async function startServer(options: {
     shareQa(ask.qa);
     shareMembers();
   };
+  /** 러너에 보내고 기다리는 결정 초안(ADR-0028). 키는 보낸 `draft`의 id이고 `Draft.id`다. 저장하지 않는다. */
+  const drafting = new Map<
+    string,
+    { socket: WSContext; login: string; executor: ExecutorId; draft: Draft }
+  >();
+  /** 기다리던 초안을 끝내고 요청한 사람에게 보낸다. 이미 끝났으면 없다. */
+  const settleDraft = (id: string, state: Exclude<Draft["state"], { state: "pending" }>) => {
+    const found = drafting.get(id);
+    if (!found || stopped) return;
+    drafting.delete(id);
+    const draft = { ...found.draft, state };
+    sendTo(found.login, encode(serverToWeb, "draft", draft));
+    shareMembers();
+    return draft;
+  };
 
   /** 멤버들이 보는 작업 전부. 웹과 러너가 같은 것을 본다. */
   const worksView = (): WorkView[] => {
@@ -707,7 +729,7 @@ export async function startServer(options: {
         ([, runner]) => runner.login === login && runner.executors.includes(executor),
       );
       const sockets = live.map(([socket]) => socket);
-      const busy = [...asks.values(), ...questionsSent.values()].some(
+      const busy = [...asks.values(), ...drafting.values(), ...questionsSent.values()].some(
         (ask) => ask.executor === executor && sockets.includes(ask.socket),
       );
       // 고를 거리는 묻는 문답이 갈 러너(마지막에 붙은 것)의 것이다.
@@ -762,20 +784,29 @@ export async function startServer(options: {
   /** 붙어 있는 러너마다 마지막으로 올린 직접 충돌의 계산. 끊기면 지운다. 아직 올리지 않은 러너는 없다. */
   const reports = new Map<WSContext, ConflictPair[]>();
 
-  /** 알림 채널. 정한 것이 없거나 지워졌으면 "부딪힘" 채널을 쓰고, 그것도 없으면 만든다. */
+  /** 알림을 올릴 포럼. 정한 것이 없거나 포럼이 아니면 "부딪힘" 포럼을 쓰고, 그것도 없으면 만든다. */
   const alertChannel = () => {
     const chosen = db.prepare("SELECT value FROM settings WHERE key = 'alert_channel'").get() as
       | { value: string }
       | undefined;
-    if (chosen && db.prepare("SELECT 1 FROM channels WHERE id = ?").get(chosen.value))
+    if (
+      chosen &&
+      db.prepare("SELECT 1 FROM channels WHERE id = ? AND kind = 'forum'").get(chosen.value)
+    )
       return chosen.value;
-    let found = db.prepare("SELECT id FROM channels WHERE name = ?").get(ALERT_CHANNEL) as
-      | { id: string }
-      | undefined;
+    // ponytail: 2단계 앞의 개발용 DB에 채팅 "부딪힘"이 있으면 이름이 겹쳐 만들지 못한다. 릴리즈된 적이 없어 옮기지 않는다(이슈 #101).
+    let found = db
+      .prepare("SELECT id FROM channels WHERE name = ? AND kind = 'forum'")
+      .get(ALERT_CHANNEL) as { id: string } | undefined;
     if (!found) {
       found = { id: randomBytes(8).toString("hex") };
-      db.prepare("INSERT INTO channels (id, name) VALUES (?, ?)").run(found.id, ALERT_CHANNEL);
-      broadcast(encode(serverToWeb, "channel", { id: found.id, name: ALERT_CHANNEL }));
+      db.prepare("INSERT INTO channels (id, name, kind) VALUES (?, ?, 'forum')").run(
+        found.id,
+        ALERT_CHANNEL,
+      );
+      broadcast(
+        encode(serverToWeb, "channel", { id: found.id, name: ALERT_CHANNEL, kind: "forum" }),
+      );
     }
     db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('alert_channel', ?)").run(
       found.id,
@@ -938,9 +969,16 @@ export async function startServer(options: {
       const { lastInsertRowid } = db
         .prepare("INSERT INTO alerts (pair, kind, works, files, updated) VALUES (?, ?, ?, ?, ?)")
         .run(key, kind, JSON.stringify(works), json, now);
-      db.prepare(
-        "INSERT INTO messages (channel, login, text, alert, at) VALUES (?, '', '', ?, ?)",
-      ).run(channel, lastInsertRowid, now);
+      const message = db
+        .prepare("INSERT INTO messages (channel, login, text, alert, at) VALUES (?, '', '', ?, ?)")
+        .run(channel, lastInsertRowid, now).lastInsertRowid;
+      // 알림 하나가 포스트 하나다(ADR-0027). 포스트의 이름은 사람이 지을 수 없는 이름(줄바꿈으로 시작)이다.
+      const post = randomBytes(8).toString("hex");
+      db.prepare("INSERT INTO channels (id, name, alert) VALUES (?, ?, ?)").run(
+        post,
+        `\n${post}`,
+        message,
+      );
       db.exec("COMMIT");
       shareAlert(Number(lastInsertRowid));
       deliver(Number(lastInsertRowid), works, now);
@@ -1320,31 +1358,40 @@ export async function startServer(options: {
     return { on };
   });
 
-  mount(app, api.ask, ({ agent, executor, channel, message, visibility, model, effort }, c) => {
-    if (agent !== c.get("login")) {
+  /** 에이전트는 주인만 부른다. */
+  const mustOwn = (agent: string, login: string) => {
+    if (agent !== login) {
       throw new ContractFailure({
         code: "forbidden",
         message: `${agent}의 에이전트는 ${agent}만 부를 수 있다`,
       });
     }
-    mustExist(channel);
-    visit(agent);
-    // 같은 멤버의 러너가 여럿이면 그 실행기를 돌리는 것 가운데 마지막에 붙은 것이 답한다.
+  };
+
+  /**
+   * `agent`의 `executor`를 돌리는 러너의 연결. 같은 멤버의 러너가 여럿이면 마지막에 붙은 것이 답한다.
+   * 꺼져 있으면 쌓아 두지 않고 `runner_offline`이다.
+   */
+  const runnerOf = (agent: string, executor: ExecutorId) => {
     const found = [...runners].findLast(
       ([, runner]) => runner.login === agent && runner.executors.includes(executor),
     );
     if (!found) {
       throw new ContractFailure({
         code: "runner_offline",
-        message: `${agent}의 ${EXECUTOR_NAMES[executor]} 러너가 꺼져 있다. 문답은 쌓아 두지 않는다`,
+        message: `${agent}의 ${EXECUTOR_NAMES[executor]} 러너가 꺼져 있다. 요청은 쌓아 두지 않는다`,
       });
     }
-    const [socket] = found;
-    // 채널 대화는 이 문답이 채널에 서기 전에 읽는다. `@호출`의 질문이 데이터로 한 번 더 들어가지 않는다.
-    // 포스트면 맨 앞에 그 알림을 둔다. 알림의 번호가 포스트의 글보다 앞이라 러너는 첫 턴에만 넘긴다.
-    // ponytail: 첫 턴 뒤에 알림이 고쳐져도 그 채널 세션에는 다시 넘기지 않는다. 고친 알림이 필요해지면 러너가 알림만 따로 다시 넘긴다.
+    return found[0];
+  };
+
+  /**
+   * 러너에 넘길 채널의 최근 대화, 오래된 것부터 `CHANNEL_CONTEXT`개까지. 포스트면 맨 앞에 그 알림을 둔다.
+   * 알림의 번호가 포스트의 글보다 앞이라 러너는 채널 세션의 첫 턴에만 넘긴다.
+   */
+  const recentOf = (channel: string) => {
     const alert = postAlert(channel);
-    const recent = [
+    return [
       ...(alert ? [alert] : []),
       ...(
         db
@@ -1352,6 +1399,16 @@ export async function startServer(options: {
           .all(channel, CHANNEL_CONTEXT - (alert ? 1 : 0)) as MessageRow[]
       ).reverse(),
     ].map(messageView);
+  };
+
+  mount(app, api.ask, ({ agent, executor, channel, message, visibility, model, effort }, c) => {
+    mustOwn(agent, c.get("login") as string);
+    mustWrite(channel);
+    visit(agent);
+    const socket = runnerOf(agent, executor);
+    // 채널 대화는 이 문답이 채널에 서기 전에 읽는다. `@호출`의 질문이 데이터로 한 번 더 들어가지 않는다.
+    // ponytail: 첫 턴 뒤에 알림이 고쳐져도 그 채널 세션에는 다시 넘기지 않는다. 고친 알림이 필요해지면 러너가 알림만 따로 다시 넘긴다.
+    const recent = recentOf(channel);
     const name = channelName(channel);
     const at = Date.now();
     const { lastInsertRowid } = db
@@ -1382,6 +1439,48 @@ export async function startServer(options: {
     if (visibility === "public") posted(channel);
     shareMembers(); // 답하는 중
     return shared;
+  });
+
+  mount(app, api.draftDecision, ({ agent, executor, post, model, effort }, c) => {
+    mustOwn(agent, c.get("login") as string);
+    if (!postAlert(post))
+      throw new ContractFailure({ code: "not_found", message: `없는 포스트다: ${post}` });
+    visit(agent);
+    const socket = runnerOf(agent, executor);
+    const messages = recentOf(post);
+    const frame = encode(serverToRunner, "draft", {
+      executor,
+      post: { id: post, name: channelName(post) },
+      messages,
+      model,
+      effort,
+    });
+    const draft: Draft = {
+      id: (JSON.parse(frame) as { id: string }).id,
+      post,
+      executor,
+      read: {
+        texts: messages.filter((m) => m.kind === "text").length,
+        qas: messages.filter((m) => m.kind === "qa").length,
+      },
+      state: { state: "pending" },
+    };
+    drafting.set(draft.id, { socket, login: agent, executor, draft });
+    socket.send(frame);
+    shareMembers(); // 답하는 중
+    return { draft };
+  });
+
+  mount(app, api.stopDraft, ({ draft: id }, c) => {
+    const found = drafting.get(id);
+    if (!found || found.login !== c.get("login")) {
+      throw new ContractFailure({
+        code: "not_found",
+        message: `쓰는 중인 내 초안이 아니다: ${id}`,
+      });
+    }
+    found.socket.send(encode(serverToRunner, "stopDraft", { id }));
+    return { draft: settleDraft(id, { state: "stopped" }) as Draft };
   });
 
   mount(app, api.postQa, ({ qa, text }, c) => {
@@ -1425,19 +1524,20 @@ export async function startServer(options: {
 
   mount(app, api.channels, () => ({
     channels: (
-      db.prepare("SELECT id, name FROM channels WHERE alert IS NULL ORDER BY name").all() as {
+      db.prepare("SELECT id, name, kind FROM channels WHERE alert IS NULL ORDER BY name").all() as {
         id: string;
         name: string;
+        kind: ChannelKind;
       }[]
-    ).map(({ id, name }) => ({ id, name })),
+    ).map(({ id, name, kind }) => ({ id, name, kind })),
   }));
 
   mount(app, api.createChannel, ({ name }, c) => {
     visit(c.get("login") as string);
-    if (db.prepare("SELECT 1 FROM channels WHERE name = ?").get(name)) {
+    if (db.prepare("SELECT 1 FROM channels WHERE name = ?").get(name) || name === ALERT_CHANNEL) {
       throw new ContractFailure({ code: "conflict", message: `#${name} 채널이 이미 있다` });
     }
-    const channel = { id: randomBytes(8).toString("hex"), name };
+    const channel = { id: randomBytes(8).toString("hex"), name, kind: "chat" as const };
     db.prepare("INSERT INTO channels (id, name) VALUES (?, ?)").run(channel.id, channel.name);
     broadcast(encode(serverToWeb, "channel", channel));
     return { channel };
@@ -1475,16 +1575,22 @@ export async function startServer(options: {
     return { news } as ReplyOf<typeof api.feed>;
   });
   mount(app, api.setAlertChannel, ({ channel }) => {
-    if (!db.prepare("SELECT 1 FROM channels WHERE id = ? AND alert IS NULL").get(channel)) {
+    const found = db
+      .prepare("SELECT name, kind FROM channels WHERE id = ? AND alert IS NULL")
+      .get(channel) as { name: string; kind: ChannelKind } | undefined;
+    if (!found) {
       throw new ContractFailure({ code: "not_found", message: `없는 채널이다: ${channel}` });
+    }
+    if (found.kind !== "forum") {
+      throw new ContractFailure({
+        code: "invalid_request",
+        message: `알림은 포럼에만 올린다. #${found.name}은 채팅 채널이다`,
+      });
     }
     db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('alert_channel', ?)").run(
       channel,
     );
-    const { name } = db.prepare("SELECT name FROM channels WHERE id = ?").get(channel) as {
-      name: string;
-    };
-    return { channel: { id: channel, name } };
+    return { channel: { id: channel, name: found.name, kind: found.kind } };
   });
 
   /** 포스트 하나. 글 수와 함께 읽는다. */
@@ -1501,18 +1607,7 @@ export async function startServer(options: {
       | MessageRow
       | undefined;
     if (!row) throw new ContractFailure({ code: "not_found", message: `없는 알림이다: ${alert}` });
-    if (row.post !== null) return { post: postView(row.post), message: messageView(row) };
-    const channel = randomBytes(8).toString("hex");
-    db.prepare("INSERT INTO channels (id, name, alert) VALUES (?, ?, ?)").run(
-      channel,
-      `\n${channel}`,
-      alert,
-    );
-    shareAlert(row.alert as number); // 알림 줄에 포스트가 붙었다
-    return {
-      post: postView(channel),
-      message: messageView(db.prepare(`${MESSAGES} WHERE m.id = ?`).get(alert) as MessageRow),
-    };
+    return { post: postView(row.post as string), message: messageView(row) };
   });
 
   mount(app, api.posts, () => ({
@@ -1525,8 +1620,21 @@ export async function startServer(options: {
   }));
 
   const mustExist = (channel: string) => {
-    if (!db.prepare("SELECT 1 FROM channels WHERE id = ?").get(channel)) {
+    const found = db.prepare("SELECT kind FROM channels WHERE id = ?").get(channel) as
+      | { kind: ChannelKind }
+      | undefined;
+    if (!found) {
       throw new ContractFailure({ code: "not_found", message: `없는 채널이다: ${channel}` });
+    }
+    return found.kind;
+  };
+  /** 글, DM, `@호출`은 포럼에 쓰지 못하고 포스트 안에서만 쓴다(ADR-0027). */
+  const mustWrite = (channel: string) => {
+    if (mustExist(channel) === "forum") {
+      throw new ContractFailure({
+        code: "invalid_request",
+        message: "포럼에는 쓸 수 없다. 포스트 안에서 쓴다",
+      });
     }
   };
 
@@ -1540,7 +1648,7 @@ export async function startServer(options: {
   });
 
   mount(app, api.send, ({ channel, text }, c) => {
-    mustExist(channel);
+    mustWrite(channel);
     visit(c.get("login") as string);
     const { lastInsertRowid } = db
       .prepare("INSERT INTO messages (channel, login, text, at) VALUES (?, ?, ?, ?)")
@@ -1604,8 +1712,7 @@ export async function startServer(options: {
         socket.send(encode(serverToWeb, "welcome", { seq }, id));
         if (payload.after !== undefined) {
           // 끊긴 사이에 답이 온 공개 문답도 다시 보낸다. `after`를 받은 뒤에 끊겼으니 그 메시지가 선 뒤에 답이 온 것이면 넉넉히 덮는다.
-          // 끊긴 사이에 고친 알림과, 끊긴 사이에 포스트가 열리거나 글 수가 바뀐 알림도 다시 보낸다.
-          // ponytail: 끊긴 사이에 열기만 하고 글이 없는 포스트는 다시 보내지 않는다. 웹은 다시 붙으면 `api.posts`를 읽는다.
+          // 끊긴 사이에 고친 알림과, 끊긴 사이에 포스트의 글 수가 바뀐 알림도 다시 보낸다.
           const missed = db
             .prepare(
               `${MESSAGES} WHERE m.id > ? OR q.settled >= (SELECT at FROM messages WHERE id = ?)
@@ -1797,7 +1904,7 @@ export async function startServer(options: {
             shareSituation();
           }
         } else {
-          // 문답의 답이나 실패. 그 문답을 보낸 연결에서 온 것만 받는다.
+          // 문답이나 초안의 답, 실패. 그것을 보낸 연결에서 온 것만 받는다.
           const re = message.re ?? "";
           const question = questionsSent.get(re);
           if (question?.socket === socket) {
@@ -1806,10 +1913,20 @@ export async function startServer(options: {
               question.id,
               message.kind === "answer"
                 ? { state: "answered", ...message.payload }
-                : { state: "failed", error: message.payload },
+                : message.kind === "error"
+                  ? { state: "failed", error: message.payload }
+                  : {
+                      state: "failed",
+                      error: { code: "invalid_message", message: "질문에 답 대신 초안이 왔다" },
+                    },
               question.executor,
             );
             shareMembers();
+          } else if (drafting.get(re)?.socket === socket) {
+            if (message.kind === "drafted")
+              settleDraft(re, { state: "drafted", ...message.payload });
+            else if (message.kind === "error")
+              settleDraft(re, { state: "failed", error: message.payload });
           } else if (asks.get(re)?.socket !== socket) {
             if (message.kind === "error")
               console.warn("러너가 서버의 메시지를 거절했다:", message.payload);
@@ -1836,7 +1953,17 @@ export async function startServer(options: {
         // 떨어진 러너에 보낸 질문은 남겨 두고, 그 멤버의 러너가 다시 붙으면 다시 보낸다.
         for (const [id, question] of questionsSent)
           if (question.socket === socket) questionsSent.delete(id);
-        // 떨어진 러너의 답은 오지 않는다. 기다리던 문답을 실패로 둔다.
+        // 떨어진 러너의 답은 오지 않는다. 기다리던 초안과 문답을 실패로 둔다.
+        for (const [id, { socket: to, login }] of drafting) {
+          if (to !== socket) continue;
+          settleDraft(id, {
+            state: "failed",
+            error: {
+              code: "runner_offline",
+              message: `${login}의 러너가 초안을 쓰기 전에 떨어졌다`,
+            },
+          });
+        }
         for (const [id, ask] of asks) {
           if (ask.socket !== socket) continue;
           settle(id, {
