@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 20;
+export const CONTRACT_VERSION = 21;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -262,8 +262,14 @@ export type MemberView = z.infer<typeof MemberView>;
 /** 멤버 목록 전부, 이름 순. `api.members`의 답이고, 실시간 연결의 `members`로도 온다. */
 export const Members = z.strictObject({ members: z.array(MemberView) });
 
-/** 채팅 채널. 1단계의 채널은 채팅 채널뿐이고(포럼 채널은 없다), 워크스페이스의 멤버 모두가 읽고 쓴다. */
-export const Channel = z.strictObject({ id: z.string(), name: z.string() });
+/**
+ * 채널의 종류(ADR-0027). 채팅 채널은 멤버 모두가 읽고 쓴다. 포럼 채널에는 Omagari가 알림 하나를 포스트 하나로 올리고,
+ * 사람은 포럼에 쓰지 못하고 포스트 안에서만 쓴다. 사람이 만드는 채널은 채팅이고, 지금 포럼은 "부딪힘" 하나다.
+ */
+export const ChannelKind = z.enum(["chat", "forum"]);
+export type ChannelKind = z.infer<typeof ChannelKind>;
+/** 채널. 워크스페이스의 멤버 모두가 읽는다. */
+export const Channel = z.strictObject({ id: z.string(), name: z.string(), kind: ChannelKind });
 export type Channel = z.infer<typeof Channel>;
 
 /** 채널 이름의 길이 상한. 앞뒤 공백은 떼고, 줄바꿈과 겹친 공백은 공백 하나로 접는다. */
@@ -513,7 +519,7 @@ export const InboxItem = z.discriminatedUnion("kind", [
 export type InboxItem = z.infer<typeof InboxItem>;
 
 /**
- * 알림에 달린 포스트(문답 Q3). 알림 하나에 포스트 하나이고, 처음 열 때(`api.openPost`) 생긴다.
+ * 알림의 포스트(ADR-0027). 알림 하나에 포스트 하나이고, 알림이 포럼에 올라올 때 함께 생긴다. 포스트의 첫 글이 그 알림이다.
  * 포스트는 채널처럼 동작한다: `channel`을 채널 자리에 넣어 글 쓰기, 지난 대화, DM, `@호출`, 채널에 올리기를 그대로 쓴다.
  * 채널 목록(`api.channels`)에는 없다. `alert`는 알림이 선 채널 메시지의 번호, `count`는 포스트에 선 글(글과 공개된 문답)의 수다.
  */
@@ -554,7 +560,7 @@ export const ChannelMessage = z.discriminatedUnion("kind", [
   }),
   /**
    * Omagari가 올린 알림. 쓴 사람이 없다. 알림이 고쳐지거나 풀리거나 포스트의 글 수가 바뀌면 같은 `id`의 것이 실시간 연결로 다시 온다.
-   * `at`은 처음 올린 시각이다. `post`는 달린 포스트의 채널과 글 수이고, 아직 아무도 열지 않았으면 null이다.
+   * `channel`은 올린 포럼이고, `at`은 처음 올린 시각이다. `post`는 이 알림의 포스트의 채널과 글 수다.
    */
   z.strictObject({
     kind: z.literal("alert"),
@@ -562,7 +568,7 @@ export const ChannelMessage = z.discriminatedUnion("kind", [
     channel: z.string(),
     at: z.string(),
     alert: Alert,
-    post: Post.omit({ alert: true }).nullable(),
+    post: Post.omit({ alert: true }),
   }),
 ]);
 export type ChannelMessage = z.infer<typeof ChannelMessage>;
@@ -722,7 +728,7 @@ export const serverToRunner = {
    */
   ask: z.strictObject({
     executor: ExecutorId,
-    channel: Channel,
+    channel: Channel.omit({ kind: true }),
     message: z.string().min(1),
     recent: z.array(ChannelMessage).max(CHANNEL_CONTEXT),
     ...ModelPick.shape,
@@ -734,7 +740,7 @@ export const serverToRunner = {
    */
   draft: z.strictObject({
     executor: ExecutorId,
-    post: Channel,
+    post: Channel.omit({ kind: true }),
     messages: z.array(ChannelMessage).max(CHANNEL_CONTEXT),
     ...ModelPick.shape,
   }),
@@ -1190,9 +1196,8 @@ export const api = {
     }),
   },
   /**
-   * 알림(`alert`, 알림이 선 채널 메시지의 번호)에 달린 포스트를 연다. 처음 열면 생기고, 다시 열면 같은 포스트다.
-   * 포스트 맨 위에 둘 알림 메시지(`message`)도 함께 준다. 처음 생기면 그 알림이 실시간 연결의 `message`로 모두에게 다시 간다(`post`가 붙어).
-   * 알림이 아닌 메시지면 `not_found`다.
+   * 알림(`alert`, 포럼에 선 알림 메시지의 번호)의 포스트와, 그 첫 글인 알림 메시지(`message`)를 읽는다.
+   * 포스트는 알림이 올라올 때 이미 생겼다. 알림이 아닌 메시지면 `not_found`다.
    */
   openPost: {
     method: "POST",
@@ -1200,21 +1205,22 @@ export const api = {
     body: z.strictObject({ alert: z.number().int() }),
     response: z.strictObject({ post: Post, message: ChannelMessage }),
   },
-  /** 열린 포스트 전부, 알림 순서. 채널 패널이 알림 채널 아래에 줄로 둔다. */
+  /** 포스트 전부, 알림 순서. */
   posts: {
     method: "GET",
     path: "/api/posts",
     response: z.strictObject({ posts: z.array(Post) }),
   },
-  /** 채팅 채널 전부, 이름 순서. 포스트는 오지 않는다(`api.posts`). 멤버만 본다. */
+  /** 채널 전부(채팅과 포럼), 이름 순서. 포스트는 오지 않는다(`api.posts`). 멤버만 본다. */
   channels: {
     method: "GET",
     path: "/api/channels",
     response: z.strictObject({ channels: z.array(Channel) }),
   },
   /**
-   * 알림을 올릴 채널을 바꾼다. 그 뒤에 새로 생기는 알림이 이 채널로 간다. 이미 올라간 알림은 제자리에서 고쳐진다.
-   * 정한 적이 없으면 처음 알림을 올릴 때 "부딪힘" 채널(없으면 만든다)이 알림 채널이 된다. 없는 채널이나 포스트면 `not_found`.
+   * 알림을 올릴 포럼을 바꾼다. 그 뒤에 새로 생기는 알림이 이 포럼에 포스트로 간다. 지난 포스트는 제자리에 있다.
+   * 정한 적이 없으면 처음 알림을 올릴 때 "부딪힘" 포럼(없으면 만든다)이 알림을 올릴 포럼이 된다.
+   * 없는 채널이나 포스트면 `not_found`, 채팅 채널이면 `invalid_request`다.
    */
   setAlertChannel: {
     method: "POST",
@@ -1223,7 +1229,7 @@ export const api = {
     response: z.strictObject({ channel: Channel }),
   },
   /**
-   * 채팅 채널을 만든다. 같은 이름(대소문자를 가리지 않는다)이 있으면 `conflict`다.
+   * 채팅 채널을 만든다. 같은 이름(대소문자를 가리지 않는다)이 있거나 "부딪힘"(포럼의 이름)이면 `conflict`다.
    * 실시간 연결이 붙어 있는 웹 모두에 `channel`이 간다.
    */
   createChannel: {
@@ -1247,7 +1253,10 @@ export const api = {
     body: z.strictObject({ channel: z.string(), before: z.number().optional() }),
     response: z.strictObject({ messages: z.array(ChannelMessage) }),
   },
-  /** 채널에 글을 쓴다. 실시간 연결이 붙어 있는 웹 모두(쓴 사람 것 포함)에 `message`가 간다. */
+  /**
+   * 채널이나 포스트에 글을 쓴다. 실시간 연결이 붙어 있는 웹 모두(쓴 사람 것 포함)에 `message`가 간다.
+   * 포럼에는 쓰지 못한다(`invalid_request`). DM과 `@호출`(`api.ask`)도 같다.
+   */
   send: {
     method: "POST",
     path: "/api/channels/messages",
