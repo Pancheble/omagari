@@ -2,6 +2,7 @@ import {
   type Channel,
   type ChannelMessage,
   ContractFailure,
+  type Decision,
   EXECUTOR_NAMES,
   type ExecutorId,
   MAX_MESSAGE_CHARS,
@@ -23,6 +24,7 @@ import {
   useState,
 } from "react";
 import { CallComposer } from "./call.tsx";
+import { DecisionLine, DecisionStrip } from "./decision.tsx";
 import { QaLine } from "./dm.tsx";
 import { AlertLine } from "./forum.tsx";
 import type { LiveState } from "./live.ts";
@@ -108,6 +110,7 @@ export function Conversation({
   me,
   label,
   edited,
+  strip,
   attached,
   onAttach,
   onSend,
@@ -126,6 +129,13 @@ export function Conversation({
   label?: string;
   /** 첫 글인 알림이 고쳐진 시각(포스트). */
   edited?: string;
+  /** 포스트의 결정 상태 띠. 결정 PR이 열렸으면 대화 위에 늘 붙는다. */
+  strip?: {
+    decision: Decision;
+    onRespond: (response: "agree" | "object" | "withdraw") => Promise<void>;
+    onRevise: () => void;
+    onDiscard: () => Promise<void>;
+  };
   /** 입력 칸에 붙인 DM 문답. DM 칸도 함께 보므로 워크스페이스가 갖는다. */
   attached?: Qa;
   onAttach: Dispatch<SetStateAction<Qa | undefined>>;
@@ -195,6 +205,7 @@ export function Conversation({
           </button>
         </div>
       )}
+      {strip && <DecisionStrip {...strip} me={me} />}
       {!channel || !view || view.status === "loading" ? (
         <Skeleton />
       ) : view.status === "error" ? (
@@ -223,8 +234,6 @@ export function Conversation({
           <div className="log" role="log" aria-label={`# ${channel.name}의 메시지`}>
             {view.older && <SkeletonRow />}
             {view.messages.map((message, i) => {
-              // 결정 PR의 줄은 아직 그리지 않는다(#90).
-              if (message.kind === "decision") return null;
               const previous = view.messages[i - 1];
               const newDay = !previous || dayOf(previous.at) !== dayOf(message.at);
               // 문답은 묶지 않고, 문답 다음의 글은 머리를 다시 단다.
@@ -239,6 +248,8 @@ export function Conversation({
                   {newDay && <div className="day">{dayLabel(message.at)}</div>}
                   {message.kind === "alert" ? (
                     <AlertLine message={message} edited={edited} />
+                  ) : message.kind === "decision" ? (
+                    <DecisionLine message={message} />
                   ) : (
                     <Message
                       message={message}
