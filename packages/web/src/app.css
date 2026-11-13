@@ -20,7 +20,7 @@
   --offline: #8e8e93;
   --tile: #272729;
   --on-dark: #ffffff;
-  --focus-ring: #0071e33d;
+  --text-selection: #0071e33d;
   --overlay: #00000052;
   --error: #d70015;
   --error-bg: #fdeceb;
@@ -77,7 +77,7 @@ body {
 }
 
 ::selection {
-  background: var(--focus-ring);
+  background: var(--text-selection);
 }
 
 h1,
@@ -532,6 +532,11 @@ svg.lucide {
   line-height: 1;
 }
 
+.avatar-22 {
+  width: 22px;
+  height: 22px;
+}
+
 .avatar-36 {
   width: 36px;
   height: 36px;
@@ -712,7 +717,6 @@ svg.lucide {
 
 .status-field:focus-within {
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .status-field[data-invalid] {
@@ -1309,7 +1313,6 @@ svg.lucide {
 
 .composer:focus-within {
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .composer textarea {
@@ -1493,7 +1496,6 @@ svg.lucide {
 .text-input:focus {
   border-color: var(--primary);
   outline: 0;
-  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .text-input[aria-invalid="true"] {
@@ -2440,6 +2442,24 @@ button.dm-head:active {
   height: 100%;
 }
 
+/* 833px 이하의 포스트와 DM: 시트가 아니라 채널처럼 화면 전체를 쓰는 대화다. 덮개, 둘레 여백, 둥근 모서리가 없다. */
+.sheet.full {
+  padding: 0;
+  background: var(--canvas);
+}
+
+.sheet.full .right-panel {
+  border: 0;
+  border-radius: 0;
+  background: var(--canvas);
+}
+
+/* 머리 왼쪽 "‹" 바로 뒤에 제목(또는 DM 칸의 에이전트)이 붙고 남은 폭을 차지한다. */
+.sheet.full .panel-head > :nth-child(2) {
+  flex: 1;
+  min-width: 0;
+}
+
 .sheet::backdrop {
   background: var(--overlay);
 }
@@ -2600,11 +2620,11 @@ button.dm-head:active {
   }
 
   .drawer[open]::backdrop,
-  .sheet[open]::backdrop {
+  .sheet[open]:not(.full)::backdrop {
     animation: fade-in 240ms ease-out;
   }
 
-  .sheet[open] {
+  .sheet[open]:not(.full) {
     animation: sheet-in 240ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 }
@@ -2819,8 +2839,9 @@ code.settings-value {
   cursor: pointer;
 }
 
+/* 테두리가 없는 칸이라 입력 중에는 안쪽 1px Action Blue 선을 테두리로 쓴다(바깥 고리 없음). */
 .settings-select:focus-within {
-  box-shadow: 0 0 0 3px var(--focus-ring);
+  box-shadow: inset 0 0 0 1px var(--primary);
 }
 
 .settings-select select:focus {
@@ -2890,7 +2911,10 @@ code.settings-value {
   margin-top: 16px;
 }
 
-/* 포럼 줄 밑의 가지: 왼쪽 30px 들여, 부딪힘 아이콘 아래에서 내려오는 1px 꺾인 선으로 잇는다. 14px, 새 글이 있으면 600과 점. */
+/*
+ * 포럼 줄 밑의 가지: 왼쪽 30px 들여, 부딪힘 아이콘 아래에서 내려오는 1px 세로선 하나로 잇는다(│ │ └).
+ * 중간 포스트는 세로선만 지나가고, 마지막 포스트에서만 꺾는다. 14px, 새 글이 있으면 600과 점.
+ */
 .branches {
   margin: 0 0 0 19px;
   padding: 0;
@@ -2905,22 +2929,17 @@ code.settings-value {
 .branches li::before {
   position: absolute;
   top: 0;
-  bottom: 50%;
-  left: 0;
-  width: 10px;
-  border-bottom: 1px solid var(--hairline);
-  border-bottom-left-radius: 6px;
-  border-left: 1px solid var(--hairline);
-  content: "";
-}
-
-.branches li:not(:last-child)::after {
-  position: absolute;
-  top: 50%;
   bottom: 0;
   left: 0;
   border-left: 1px solid var(--hairline);
   content: "";
+}
+
+.branches li:last-child::before {
+  bottom: 50%;
+  width: 10px;
+  border-bottom: 1px solid var(--hairline);
+  border-bottom-left-radius: 6px;
 }
 
 .branch-item {
@@ -3007,7 +3026,6 @@ code.settings-value {
 
 .forum-search:focus-within {
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .forum-search input {
@@ -3210,6 +3228,35 @@ code.settings-value {
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.33;
+}
+
+/* 사람 줄(시안 27-B): 22px 아바타를 5px 겹치고 이름을 " · "로 잇는다. 아바타 둘레는 카드 바탕색 2px 고리. */
+.forum-post-people {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.forum-post-people .avatar {
+  font-size: 11px;
+  box-shadow: 0 0 0 2px var(--parchment);
+}
+
+.forum-post-people .avatar + .avatar {
+  margin-left: -5px;
+}
+
+.forum-post-names {
+  overflow: hidden;
+  margin-left: 6px;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.forum-post-tags {
+  display: flex;
+  gap: 6px;
 }
 
 /* 크게 본 포스트의 머리 띠: ‹ 부딪힘 › 제목 */
