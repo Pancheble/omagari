@@ -4,6 +4,8 @@ import {
   type ChannelMessage,
   type ChosenPresence,
   call,
+  type Decision,
+  type Draft,
   type ExecutorId,
   HISTORY_PAGE,
   type MemberView,
@@ -20,6 +22,7 @@ import {
   Minimize2,
   PanelLeftClose,
   PanelLeftOpen,
+  PenLine,
   Users,
   X,
 } from "lucide-react";
@@ -36,6 +39,7 @@ import {
 import { type Me, savedPicks, savePicks, server, signedOut } from "./api.ts";
 import { byName, ChannelList, CreateChannel, useCollapsed } from "./channels.tsx";
 import { ChannelTitle, Conversation, type View } from "./conversation.tsx";
+import { DecisionDialog, type Fields } from "./decision.tsx";
 import { chosen, type Dm, DmPanel, type Picks } from "./dm.tsx";
 import { changed, Forum, ForumTitle, type PostItem, postOf, postsOf, postTitle } from "./forum.tsx";
 import { useLive } from "./live.ts";
@@ -70,6 +74,17 @@ function useMedia(query: string) {
  * 번호로 합친다. 같은 메시지가 지난 대화와 실시간으로 두 번 와도 하나만 남고, 나중에 온 것이 앞의 것을 바꾼다.
  * 다만 답이 온 문답은 늦게 온 "답을 기다리는 중"으로 되돌리지 않는다.
  */
+/** 포스트에서 말한 멤버들(글과 올린 문답을 쓴 사람). 결정자 후보로 보인다. */
+const speakersOf = (messages: ChannelMessage[] = []) => [
+  ...new Map(
+    messages.flatMap((m) =>
+      m.kind === "text" || m.kind === "qa"
+        ? [[m.login, { login: m.login, name: m.name }] as const]
+        : [],
+    ),
+  ).values(),
+];
+
 const merge = (a: ChannelMessage[], b: ChannelMessage[]) => {
   const byId = new Map<number, ChannelMessage>();
   for (const message of [...a, ...b]) {
@@ -133,6 +148,14 @@ export function Workspace({
   const [collapsed, toggleCollapsed] = useCollapsed("omagari.channels-collapsed");
   const [members, setMembers] = useState<MemberView[]>();
   const [settings, setSettings] = useState(false);
+  /** 정리한 결정 전부. 결정 상태 띠가 읽는다. 처음에 읽고, 결정 줄이 올 때와 내가 바꿀 때 갈아 끼운다. */
+  const [decisions, setDecisions] = useState<Decision[]>([]);
+  /** 결정 정리하기 대화 상자: 열려 있으면 값이 있고, 고치는 중이면 그 결정이 든다. */
+  const [deciding, setDeciding] = useState<{ revising?: Decision }>();
+  /** 실시간 연결로 온 가장 최근 결정 초안. 대화 상자가 자기 것인지 가려 받는다. */
+  const [incoming, setIncoming] = useState<Draft>();
+  /** 이 브라우저에서 결정 PR로 올린 마지막 네 칸. 결정의 본문은 계약에 없어서, 고쳐 올릴 때 이것으로 칸을 채운다. */
+  const submitted = useRef<Record<number, Fields>>({});
   const wide = useMedia(WIDE);
 
   /** 채널 패널을 접었는지. 834px 이상에서만 쓰고, 좁아졌다 다시 넓어지면 기억한 대로 돌아간다. */
@@ -297,8 +320,12 @@ export function Workspace({
       (list) => list && byName([...list.filter((other) => other.id !== channel.id), channel]),
     );
 
+  const upsertDecision = (decision: Decision) =>
+    setDecisions((list) => [...list.filter((other) => other.id !== decision.id), decision]);
+
   /** 불러 둔 채널이면 대화에 넣는다. 안 연 채널의 것은 버리고, 열 때 지난 대화로 읽는다. */
   const receive = (message: ChannelMessage) => {
+    if (message.kind === "decision") upsertDecision(message.decision);
     // 알림은 포럼 목록의 포스트다. 고쳐졌으면 고친 시각을 붙이고, 새 글이 서면 요약(`post`)이 바뀌어 온다.
     if (message.kind === "alert")
       setPosts((list) => {
@@ -409,7 +436,11 @@ export function Workspace({
           .catch(check);
         // 끊긴 사이에 온 답은 다시 오지 않는다. 불러 둔 DM을 버리고 열려 있는 것은 다시 읽는다.
         setDms({});
-      } else if (event.kind === "channel") add(event.payload);
+        call(server(session), api.decisions)
+          .then(({ decisions: list }) => setDecisions(list))
+          .catch(check);
+      } else if (event.kind === "draft") setIncoming(event.payload);
+      else if (event.kind === "channel") add(event.payload);
       else if (event.kind === "message") receive(event.payload);
       else if (event.kind === "members") setMembers(event.payload.members);
       else if (event.kind === "qa") receiveQa(event.payload);
@@ -531,6 +562,33 @@ export function Workspace({
     ),
   );
 
+  /** 열린 포스트의 결정: 가장 나중에 정리한 것. */
+  const decision = openPost
+    ? decisions.filter((other) => other.post === openPost.channel).sort((a, b) => b.id - a.id)[0]
+    : undefined;
+  const answer = async (act: () => Promise<{ decision: Decision }>) => {
+    try {
+      upsertDecision((await act()).decision);
+    } catch (error) {
+      throw check(error);
+    }
+  };
+  const strip = decision && {
+    decision,
+    onRespond: (response: "agree" | "object" | "withdraw") =>
+      answer(() => call(server(session), api.respondToDecision, { id: decision.id, response })),
+    onRevise: () => setDeciding({ revising: decision }),
+    onDiscard: () => answer(() => call(server(session), api.discardDecision, { id: decision.id })),
+  };
+
+  /** 결정 정리하기 버튼: 열린 포스트의 머리 띠에 두고 이름이 늘 보인다. */
+  const decide = openPost && (
+    <button type="button" className="header-button named" onClick={() => setDeciding({})}>
+      <PenLine size={18} aria-hidden />
+      <span>결정 정리하기</span>
+    </button>
+  );
+
   /** 고른 대화(채널, 또는 열린 포스트)를 그린다. 포스트는 지난 대화 앞에 첫 글인 알림이 붙는다. */
   const conversation = (label: string) => {
     if (!active) return null;
@@ -545,6 +603,7 @@ export function Workspace({
         me={me.login}
         label={openPost ? label : undefined}
         edited={openPost?.edited}
+        strip={strip}
         attached={attached?.channel === active.id ? attached : undefined}
         onAttach={setAttached}
         onSend={(text) => send(active.id, text)}
@@ -640,6 +699,7 @@ export function Workspace({
           )}
           {/* 오른쪽 칸을 여는 버튼들. 평소에는 아이콘만, 연 버튼만 이름이 붙는다. */}
           <div className="header-actions">
+            {big && decide}
             {big && openPost && current && (
               <a
                 className="header-button"
@@ -703,6 +763,7 @@ export function Workspace({
           head={
             <div className="post-head">
               <h2>{postChannel.name}</h2>
+              {decide}
               <a
                 className="header-button"
                 href={`#${current?.id}/${openPost.alert}/big`}
@@ -765,6 +826,29 @@ export function Workspace({
         <div className="side-panel">{panel(() => drawer.current?.close())}</div>
       </dialog>
       <CreateChannel dialog={creator} onCreate={create} />
+      {deciding && postChannel && (
+        <DecisionDialog
+          // 열 때마다 새로: 초안을 쓰게 하고 칸을 비운다.
+          key={deciding.revising?.id ?? "new"}
+          post={postChannel.id}
+          title={postChannel.name}
+          repo={me.repo}
+          me={me}
+          agents={members?.find((member) => member.login === me.login)?.agents ?? []}
+          picks={picks}
+          speakers={speakersOf(views[postChannel.id]?.messages)}
+          incoming={incoming}
+          revising={deciding.revising}
+          initial={deciding.revising && submitted.current[deciding.revising.id]}
+          session={session}
+          check={check}
+          onDone={(decision, fields) => {
+            submitted.current[decision.id] = fields;
+            upsertDecision(decision);
+          }}
+          onClose={() => setDeciding(undefined)}
+        />
+      )}
       {settings && (
         <Settings
           me={me}
