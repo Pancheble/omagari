@@ -5,6 +5,7 @@ import { lstat, mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
+  Claim,
   ConflictPair,
   Definition,
   LineRange,
@@ -160,7 +161,7 @@ function touching(hunks: Hunk[], others: Hunk[]): LineRange[] {
     .map((hunk) => hunk.after);
 }
 
-type SymbolPair = Extract<ConflictPair, { kind: "indirect" | "duplicate" }>;
+type SymbolPair = Extract<ConflictPair, { kind: "indirect" | "duplicate" | "declared" }>;
 
 /** 작업의 바뀐 파일들에서 `changes`인 정의 줄을 이름마다 모은 곳. */
 function defined(work: Work | WorkView, changes: Definition["change"][]) {
@@ -182,12 +183,14 @@ function defined(work: Work | WorkView, changes: Definition["change"][]) {
  * - 간접 충돌(추정): 상대가 정의 줄을 바꾸거나 없앤 심볼을 내 작업의 사본에서 이름으로 찾는다. 쓰는 곳이 있으면 싣는다.
  *   반대 방향(내가 바꾼 것을 상대가 쓰는 것)은 상대 러너가 자기 사본으로 계산한다.
  * - 중복 구현: 두 작업에 같은 이름의 새 정의가 생겼다. 내 정의 줄은 내용을 올리는 수준(full)에서만 있어, 그때만 계산한다(ADR-0026).
+ * - 선언된 계약 변경: 다른 멤버의 선점에 붙은 계획(`claims`)의 심볼을 내 작업의 사본에서 이름으로 찾는다. 코드가 아직 바뀌지 않았어도 싣는다.
  * intent인 내 작업은 계산하지 않는다(서버로 경로가 나가지 않는다). 심볼이 하나라도 있는 쌍과 종류만 돌려준다.
  */
 export async function symbolConflicts(
   mine: { work: Work; folder: string }[],
   works: WorkView[],
   login: string,
+  claims: Claim[] = [],
 ): Promise<SymbolPair[]> {
   const pairs: SymbolPair[] = [];
   const others = works.filter((theirs) => theirs.login !== login);
@@ -198,8 +201,14 @@ export async function symbolConflicts(
       theirs,
       defs: defined(theirs, ["changed", "removed"]),
     }));
-    // 내 사본은 한 번만 읽는다: 상대들이 바꾼 이름을 모두 모아 찾는다.
-    const used = await uses(folder, [...new Set(changing.flatMap(({ defs }) => [...defs.keys()]))]);
+    const planned = claims.filter((c) => c.login !== login && c.plan);
+    // 내 사본은 한 번만 읽는다: 상대들이 바꾼 이름과 계획한 이름을 모두 모아 찾는다.
+    const used = await uses(folder, [
+      ...new Set([
+        ...changing.flatMap(({ defs }) => [...defs.keys()]),
+        ...planned.map((c) => c.plan?.symbol ?? ""),
+      ]),
+    ]);
     for (const { theirs, defs } of changing) {
       const ends = { branch: work.branch, theirs: { login: theirs.login, branch: theirs.branch } };
       const indirect = [...defs].flatMap(([name, places]) => {
@@ -214,6 +223,28 @@ export async function symbolConflicts(
       });
       if (duplicate.length > 0) pairs.push({ kind: "duplicate", ...ends, symbols: duplicate });
     }
+    // 계획은 선점마다 있다. 같은 상대 작업의 것을 한 쌍으로 묶는다.
+    const declared = new Map<string, SymbolPair>();
+    for (const c of planned) {
+      const plan = c.plan;
+      const at = plan ? (used.get(plan.symbol) ?? []) : [];
+      if (!plan || at.length === 0) continue;
+      const key = JSON.stringify([c.login, c.branch]);
+      const pair = declared.get(key) ?? {
+        kind: "declared" as const,
+        branch: work.branch,
+        theirs: { login: c.login, branch: c.branch },
+        symbols: [],
+      };
+      declared.set(key, pair);
+      pair.symbols.push({
+        name: plan.symbol,
+        mine: at.map((u) => ({ ...u, role: "uses" as const })),
+        theirs: [{ path: c.path, line: c.lines?.from ?? 1, role: "declared" }],
+        plan,
+      });
+    }
+    pairs.push(...declared.values());
   }
   return pairs;
 }
