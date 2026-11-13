@@ -372,7 +372,7 @@ export const ALERT_FILES = 8;
 export const SymbolPlace = z.strictObject({
   path: z.string(),
   line: z.number().int().positive(),
-  role: z.enum(["added", "changed", "removed", "uses"]),
+  role: z.enum(["added", "changed", "removed", "uses", "declared"]),
 });
 export type SymbolPlace = z.infer<typeof SymbolPlace>;
 
@@ -382,16 +382,39 @@ export const PLACE_ROLES = {
   changed: "정의 줄 바꿈",
   removed: "없앰",
   uses: "씀",
+  declared: "바꾸겠다고 선언함",
 } as const satisfies Record<SymbolPlace["role"], string>;
+
+/**
+ * 바꿀 계약(구현 4장, Room의 선점 계획): 선점에 붙여 코드를 바꾸기 전에 알린다. 종류는 이름 바꾸기, 시그니처 변경, 삭제, 추가다.
+ * `symbol`은 바꿀 심볼의 이름(메서드는 `클래스.메서드`), `detail`은 무엇으로 바꾸는지 사람이 쓴 한 줄이다.
+ */
+export const Plan = z.strictObject({
+  kind: z.enum(["rename", "signature", "delete", "add"]),
+  symbol: z.string().min(1),
+  detail: z.string().max(MAX_STATUS_CHARS).optional(),
+});
+export type Plan = z.infer<typeof Plan>;
+
+/** 사람이 읽는 계획의 종류. */
+export const PLAN_KINDS = {
+  rename: "이름 바꾸기",
+  signature: "시그니처 변경",
+  delete: "삭제",
+  add: "추가",
+} as const satisfies Record<Plan["kind"], string>;
 
 /**
  * 알림에 묶인 심볼 하나. `places`는 `works`와 같은 순서로 두 작업 각자의 곳이다.
  * 간접 충돌(추정)은 한 작업이 정의 줄을 바꾸거나 없앴고(`changed`, `removed`) 다른 작업이 그 이름을 쓴다(`uses`).
  * 서로 상대가 바꾼 것을 쓰면 같은 이름이 방향마다 하나씩 있다. 중복 구현은 두 작업 모두 새로 만들었다(`added`).
+ * 선언된 계약 변경은 한 작업이 선점에 계획(`plan`)을 붙였고(`declared`, 선점한 곳) 다른 작업이 그 이름을 쓴다(`uses`). 코드가 아직 바뀌지 않았어도 온다.
  */
 export const AlertSymbol = z.strictObject({
   name: z.string(),
   places: z.tuple([z.array(SymbolPlace), z.array(SymbolPlace)]),
+  /** 선언된 계약 변경에만 있다: 선언한 계획. */
+  plan: Plan.optional(),
 });
 export type AlertSymbol = z.infer<typeof AlertSymbol>;
 
@@ -400,6 +423,7 @@ export const ALERT_KINDS = {
   direct: "직접 충돌",
   indirect: "간접 충돌(추정)",
   duplicate: "중복 구현",
+  declared: "선언된 계약 변경",
 } as const satisfies Record<Alert["kind"], string>;
 
 const alertCommon = {
@@ -409,7 +433,8 @@ const alertCommon = {
 };
 
 /**
- * 알림: 두 작업 한 쌍과 부딪힘의 종류마다 하나(ADR-0023). 종류는 직접 충돌(`direct`), 간접 충돌(추정, `indirect`), 중복 구현(`duplicate`)이다.
+ * 알림: 두 작업 한 쌍과 부딪힘의 종류마다 하나(ADR-0023). 종류는 직접 충돌(`direct`), 간접 충돌(추정, `indirect`), 중복 구현(`duplicate`),
+ * 선언된 계약 변경(`declared`)이다.
  * 러너들이 계산해 올린 것을 서버가 묶는다. 부딪힘이 바뀌면 같은 알림이 고쳐지고, 다 풀리면 `resolved`(풀린 시각)가 한 번 적히고 닫힌다.
  * 닫힌 뒤 다시 부딪히면 새 알림이다. 직접 충돌의 `files`는 부딪히는 것이 확인된 파일부터 경로 순으로, 나머지 둘의 `symbols`는 이름 순으로
  * `ALERT_FILES`개까지 적고, 나머지는 `more`다.
@@ -421,7 +446,7 @@ export const Alert = z.discriminatedUnion("kind", [
     files: z.array(AlertFile).max(ALERT_FILES),
   }),
   z.strictObject({
-    kind: z.enum(["indirect", "duplicate"]),
+    kind: z.enum(["indirect", "duplicate", "declared"]),
     ...alertCommon,
     symbols: z.array(AlertSymbol).max(ALERT_FILES),
   }),
@@ -433,7 +458,7 @@ export type Alert = z.infer<typeof Alert>;
  * 단위는 심볼(정의 이름으로 찾은 줄 범위), 줄 범위, 파일 전체(기준 커밋에 없던 새 파일), 폴더(`path`가 `/`로 끝난다)다.
  * `path`는 레포 최상위에서 본 경로, `lines`는 선점한 사람의 사본에서 건 때의 줄(1부터, 끝 포함)이고 심볼과 줄 범위에만 있다.
  * `id`는 서버 전체에서 늘어나기만 하는 번호다. `stale`은 주인이 오프라인으로 오래(7일) 있어 "오래됨"으로 보이는 것이고, 그 뒤 7일이면 지워진다.
- * 브랜치가 머지되거나 지워지면 저절로 풀린다.
+ * 브랜치가 머지되거나 지워지면 저절로 풀린다. `plan`은 붙인 계획(바꿀 계약)이다. 한 작업에서 같은 심볼의 계획은 하나이고, 새로 걸면 옛 것을 대체한다.
  */
 export const Claim = z.strictObject({
   id: z.number(),
@@ -445,6 +470,7 @@ export const Claim = z.strictObject({
   lines: LineRange.optional(),
   at: z.string(),
   stale: z.boolean(),
+  plan: Plan.optional(),
 });
 export type Claim = z.infer<typeof Claim>;
 
@@ -470,7 +496,7 @@ const ClaimTarget = z.strictObject({
 export const INBOX_MS = 14 * 24 * 60 * 60_000;
 
 /**
- * 편지함의 소식 하나(GLOSSARY): 작업(`branch`, 받는 러너의 멤버의 것)의 에이전트에게 직접 넘겨줄 것. 종류는 내 작업과의 부딪힘 알림(세 종류 모두)과, 내 선점과 겹친 선점이다.
+ * 편지함의 소식 하나(GLOSSARY): 작업(`branch`, 받는 러너의 멤버의 것)의 에이전트에게 직접 넘겨줄 것. 종류는 내 작업과의 부딪힘 알림(네 종류 모두), 내 선점과 겹친 선점, 내가 쓰는 계약의 선언된 변경의 취소다.
  * 알림이 생기고, 바뀌고, 풀릴 때마다 두 작업의 편지함에 들어간다. 아직 넘겨주지 않은 같은 알림의 소식은 새 것으로 바뀐다(`id`도 새로 받는다).
  * `id`는 서버 전체에서 늘어나기만 하는 번호이고 넘겨준 확인(`delivered`)이 가리킨다. `at`은 들어온 시각, `alert`는 들어온 때의 알림이다.
  */
@@ -479,6 +505,11 @@ export const InboxItem = z.discriminatedUnion("kind", [
   z.strictObject({ ...InboxHead, kind: z.literal("alert"), alert: Alert }),
   /** 내 선점(`mine`)과 다른 작업의 선점(`theirs`)이 겹친다. 줄은 각자의 사본에서 건 때의 것이다. 나중에 건 쪽이 알아내 양쪽에 넣는다. */
   z.strictObject({ ...InboxHead, kind: z.literal("overlap"), mine: Claim, theirs: Claim }),
+  /**
+   * 다른 작업이 계획(`claim.plan`)을 이루지 못한 채 선점을 풀었다: 그 선언된 계약 변경은 취소됐다. 그 계획의 알림을 받은 작업에 넣는다.
+   * 정의 줄이 계획대로 바뀐 뒤 풀었거나 브랜치가 머지되어 풀린 것은 취소가 아니다.
+   */
+  z.strictObject({ ...InboxHead, kind: z.literal("cancelled"), claim: Claim }),
 ]);
 export type InboxItem = z.infer<typeof InboxItem>;
 
@@ -582,6 +613,7 @@ const pairCommon = {
  * 러너가 계산한 부딪힘의 한 쌍: 이 러너의 작업(`branch`)과 다른 멤버의 작업(`theirs`).
  * 직접 충돌은 부딪히거나 읽을 수 없는 파일들, 간접 충돌(추정)과 중복 구현은 심볼들이다.
  * 간접 충돌은 상대가 정의 줄을 바꾼 심볼을 이 러너의 사본에서 쓰는 방향만 싣는다(반대 방향은 상대 러너가 계산한다).
+ * 선언된 계약 변경도 같다: 상대의 선점에 붙은 계획의 심볼을 이 러너의 사본에서 쓰는 방향만 싣고, `plan`을 단다.
  */
 export const ConflictPair = z.discriminatedUnion("kind", [
   z.strictObject({
@@ -596,13 +628,14 @@ export const ConflictPair = z.discriminatedUnion("kind", [
     ),
   }),
   z.strictObject({
-    kind: z.enum(["indirect", "duplicate"]),
+    kind: z.enum(["indirect", "duplicate", "declared"]),
     ...pairCommon,
     symbols: z.array(
       z.strictObject({
         name: z.string(),
         mine: z.array(SymbolPlace),
         theirs: z.array(SymbolPlace),
+        plan: Plan.optional(),
       }),
     ),
   }),
@@ -645,6 +678,7 @@ export const runnerToServer = {
    * 선점을 건다(ADR-0008). 서버는 늘 받고 `claimed`(`re`)로 건 선점을 돌려준다. 같은 작업에 같은 곳(경로, 심볼, 줄)의 선점이 있으면 바꾼다.
    * `overlaps`는 러너가 내 사본의 줄로 옮겨 보고 겹친다고 찾은 남의 선점(`Claim.id`)이다. 서버는 양쪽 작업의 편지함에 겹침을 넣는다.
    * `unit`과 `lines`는 러너가 정한다(심볼은 정의를 찾은 줄 범위, 새 파일은 파일 전체).
+   * `plan`을 붙이면 같은 작업의 같은 심볼에 붙은 옛 계획을 대체한다.
    */
   claim: z.strictObject({
     branch: z.string(),
@@ -653,10 +687,12 @@ export const runnerToServer = {
     symbol: z.string().optional(),
     lines: LineRange.optional(),
     overlaps: z.array(z.number()),
+    plan: Plan.optional(),
   }),
   /**
    * 이 멤버의 작업(`branch`)의 선점을 푼다. `path`가 없으면 그 작업의 선점 모두, 있으면 그 경로의 것(심볼이나 줄을 주면 그것만)이다.
    * 서버는 `released`(`re`)로 푼 선점을 돌려준다. 러너는 브랜치가 지워지면 저절로 보낸다.
+   * 푼 선점의 계획이 이루어지지 않았으면(그 작업의 정의 줄이 계획대로 바뀌지 않았으면) 그 계획의 알림을 받은 작업의 편지함에 취소(`cancelled`)를 넣는다.
    */
   release: z.strictObject({
     branch: z.string(),
@@ -853,8 +889,11 @@ export const cliToRunner = {
   inbox: z.strictObject({ branch: z.string().min(1) }),
   /** 편지함의 소식(`id`들)을 에이전트에게 넘겼다. 러너는 다시 내주지 않고 서버에 알린다. 서브에이전트에게 보여 준 것은 보내지 않는다. */
   delivered: z.strictObject({ ids: z.array(z.number()) }),
-  /** 작업(`branch`)의 선점을 건다(`omagari claim`). `path`는 그 작업 폴더의 최상위에서 본 경로다. 러너는 서버에 걸고 답한다. */
-  claim: ClaimTarget,
+  /**
+   * 작업(`branch`)의 선점을 건다(`omagari claim`). `path`는 그 작업 폴더의 최상위에서 본 경로다. 러너는 서버에 걸고 답한다.
+   * `plan`은 붙일 계획(바꿀 계약)이다.
+   */
+  claim: ClaimTarget.extend({ plan: Plan.optional() }),
   /** 작업의 선점을 푼다(`omagari release`). `path`가 없으면 그 작업의 선점 모두다. */
   release: ClaimTarget.partial({ path: true }),
 } satisfies Payloads;
@@ -899,6 +938,8 @@ export const runnerToCli = {
         definition: Definition,
       }),
     ),
+    /** 그 이름에 계획(바꿀 계약)을 붙인 다른 멤버의 선점. 코드가 아직 바뀌지 않았어도 있다. */
+    plans: z.array(Claim),
     /** `situation`의 것과 같다. */
     disconnectedAt: z.string().nullable(),
   }),

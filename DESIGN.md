@@ -776,6 +776,116 @@ components:
     rounded: "{rounded.sm}"
     height: 28px
     padding: 0 8px
+  app-forum-search:
+    backgroundColor: "{colors.canvas}"
+    borderColor: "{colors.hairline}"
+    textColor: "{colors.ink}"
+    fontFamily: "{typography.app-body.fontFamily}"
+    fontSize: "{typography.app-body.fontSize}"
+    rounded: "{rounded.md}"
+    height: 40px
+    padding: 0 12px
+  app-tag-chip:
+    backgroundColor: transparent
+    borderColor: "{colors.hairline}"
+    textColor: "{colors.text-secondary}"
+    fontFamily: "{typography.app-caption.fontFamily}"
+    fontSize: "{typography.app-caption.fontSize}"
+    rounded: "{rounded.pill}"
+    height: 28px
+    padding: 0 10px
+  app-tag-chip-on:
+    backgroundColor: "{colors.selected}"
+    textColor: "{colors.ink}"
+    fontWeight: 600
+    rounded: "{rounded.pill}"
+  app-forum-post:
+    backgroundColor: "{colors.canvas-parchment}"
+    textColor: "{colors.ink}"
+    fontFamily: "{typography.app-body-strong.fontFamily}"
+    fontSize: "{typography.app-body-strong.fontSize}"
+    fontWeight: "{typography.app-body-strong.fontWeight}"
+    rounded: "{rounded.md}"
+    padding: 12px 16px
+  app-forum-card:
+    backgroundColor: "{colors.canvas-parchment}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.lg}"
+  app-post-panel:
+    backgroundColor: "{colors.canvas-parchment}"
+    borderColor: "{colors.selected}"
+    rounded: "{rounded.lg}"
+    padding: 0 8px 8px
+    width: 480px
+  app-alert-card:
+    backgroundColor: "{colors.canvas-parchment}"
+    textColor: "{colors.ink}"
+    fontFamily: "{typography.app-caption.fontFamily}"
+    fontSize: 14px
+    rounded: "{rounded.md}"
+    padding: 10px 14px
+  app-omagari-mark:
+    backgroundColor: "{colors.ink}"
+    textColor: "{colors.canvas}"
+    rounded: "{rounded.md}"
+    size: 36px
+  app-draft-band:
+    backgroundColor: "{colors.selected}"
+    textColor: "{colors.ink}"
+    fontFamily: "{typography.app-caption.fontFamily}"
+    fontSize: "{typography.app-caption.fontSize}"
+    rounded: "{rounded.md}"
+    padding: 10px 12px
+  app-decision-strip:
+    backgroundColor: "{colors.selected}"
+    textColor: "{colors.ink}"
+    fontFamily: "{typography.app-caption.fontFamily}"
+    fontSize: "{typography.app-caption.fontSize}"
+    rounded: "{rounded.md}"
+    height: 44px
+    padding: 6px 8px 6px 14px
+  app-decision-strip-warning:
+    backgroundColor: "{colors.warning-bg}"
+    textColor: "{colors.warning}"
+    rounded: "{rounded.md}"
+  app-decision-strip-error:
+    backgroundColor: "{colors.error-bg}"
+    textColor: "{colors.error}"
+    rounded: "{rounded.md}"
+  app-settings-window:
+    backgroundColor: "{colors.canvas-parchment}"
+    borderColor: "{colors.hairline}"
+    shadow: 0 8px 24px #0000001f
+    overlayColor: "{colors.overlay}"
+    rounded: "{rounded.lg}"
+    width: 820px
+    height: 580px
+  app-settings-item:
+    backgroundColor: transparent
+    textColor: "{colors.ink}"
+    fontFamily: "{typography.app-body.fontFamily}"
+    fontSize: "{typography.app-body.fontSize}"
+    rounded: "{rounded.sm}"
+    height: 36px
+    padding: 0 10px
+  app-settings-group:
+    backgroundColor: "{colors.canvas}"
+    borderColor: "{colors.selected}"
+    rounded: "{rounded.md}"
+  app-settings-row:
+    textColor: "{colors.ink}"
+    fontFamily: "{typography.app-body.fontFamily}"
+    fontSize: "{typography.app-body.fontSize}"
+    height: 52px
+    padding: 10px 16px
+  app-switch:
+    backgroundColor: "{colors.offline}"
+    rounded: "{rounded.pill}"
+    width: 40px
+    height: 24px
+  app-switch-on:
+    backgroundColor: "{colors.primary}"
+    rounded: "{rounded.pill}"
   app-dialog:
     backgroundColor: "{colors.canvas}"
     borderColor: "{colors.hairline}"
@@ -1006,7 +1116,7 @@ Apple's whitespace is the product's pedestal. Every tile begins with at least 64
 
 - **창**: 창 바탕은 `{colors.canvas}`이고, 안쪽 8px 여백과 8px 간격으로 세 칸을 둔다. 왼쪽 채널 패널 240px, 가운데 대화 칸(남는 폭), 오른쪽 칸 300px이다.
 - **떠 있는 패널**: 채널 패널과 오른쪽 칸은 `{component.app-side-panel}`, `{component.app-right-panel}`이다. 파치먼트 바탕, `{rounded.lg}` 18px, 안쪽 1px 선(검정 6%)을 쓴다. 대화 칸은 패널이 아니라 창 바탕 위에 바로 놓는다.
-- **오른쪽 칸은 하나만**: 멤버 목록과 내 에이전트(DM) 가운데 하나만 열린다. 채널 머리 띠의 두 버튼으로 열고, 같은 버튼을 다시 누르면 닫힌다. 닫히면 대화 칸이 넓어진다.
+- **오른쪽 칸은 하나만**: 멤버 목록, 내 에이전트(DM), 옆 칸에 연 포스트(480px, "부딪힘 포럼") 가운데 하나만 열린다. 채널 머리 띠의 두 버튼으로 열고, 같은 버튼을 다시 누르면 닫힌다. 닫히면 대화 칸이 넓어진다.
 - **채널 패널은 접힌다**(834px 이상): 접으면 패널이 자리째 빠지고 대화 칸이 창 왼쪽 8px까지 넓어진다. 접힌 동안에는 창 왼쪽 가장자리에서 잠깐 꺼내 볼 수 있다. 처음에는 펼쳐 둔다. 자세한 것은 "채널 패널 접기"에 있다.
 - **대화 칸**: 위에서부터 머리 띠(52px, 아래에 `{colors.divider}` 선), 메시지 목록(아래로 쌓임), 입력 칸이다. 메시지 글줄은 720px을 넘지 않는다.
 
@@ -1119,7 +1229,7 @@ Apple's whitespace is the product's pedestal. Every tile begins with at least 64
 #### 채널 패널
 
 - **`app-side-panel`** 안쪽 위에 워크스페이스 이름(`{typography.app-heading}`)과 레포 이름(`{typography.app-micro}`, 보조 글씨)이 있다.
-- **카테고리**: 채널은 종류별 카테고리로 묶는다. 1단계에는 "채팅 채널" 하나뿐이고, 포럼 채널이 생기면 "포럼 채널" 카테고리를 그 아래에 더한다. 사람이 직접 만드는 카테고리는 두지 않는다.
+- **카테고리**: 채널은 종류별 카테고리로 묶는다. "채팅 채널"과 그 아래 "포럼 채널" 둘이다(2026-11-13 시안 14-A). 2단계의 포럼 채널은 부딪힘 하나다(아래 "부딪힘 포럼"). 사람이 직접 만드는 카테고리는 두지 않는다.
   - 머리는 높이 28px, `{rounded.sm}`. 왼쪽에 이름(`{component.app-section-title}`, 12px/600 보조 글씨), 그 뒤에 12px 꺾쇠, 오른쪽 끝에 28px `+` 버튼("채팅 채널 만들기")이 있다.
   - 꺾쇠와 `+`는 머리에 마우스를 올렸을 때(바탕 `{colors.hover}`)나 키보드로 머리 안에 갔을 때(`:focus-within`)만 보인다. 손가락으로 쓰는 좁은 화면(833px 이하)에서는 늘 보인다. 보이지 않을 때도 자리는 그대로 둬서 줄이 흔들리지 않는다.
   - 이름을 누르면 접히고 펼쳐진다(`aria-expanded`). 꺾쇠는 펼쳐지면 아래, 접히면 오른쪽을 가리키고 150ms로 돈다. 접어도 지금 고른 채널은 남는다. 접힌 상태는 기기마다 기억한다.
@@ -1163,7 +1273,7 @@ Apple's whitespace is the product's pedestal. Every tile begins with at least 64
      - 글 칸에 직접 친 이모지는 글로 남는다. 막지 않는다.
   3. 구분선, "온라인"
   4. 구분선, "자리 비움", "방해 금지"(설명: 알림을 받지 않아요), "오프라인으로 보이기"(설명: 다른 사람에게 오프라인으로 보여요). 셋은 오른쪽 꺾쇠로 시간 메뉴를 연다: 15분 동안, 1시간 동안, 8시간 동안, 24시간 동안, 3일 동안, 직접 바꿀 때까지. 시간 메뉴는 오른쪽 옆에 같은 떠 있는 층으로 열린다.
-  5. 구분선, "설정", "로그아웃"(`{colors.error}`)
+  5. 구분선, "설정", "로그아웃"(`{colors.error}`). "설정"은 설정 창을 연다(아래 "설정 창").
 - **`app-menu-item`** 높이 32px(설명이 붙으면 40px), `{rounded.sm}`, 14px. 올렸을 때 `{colors.hover}`.
 
 #### 이모지 팔레트
@@ -1298,6 +1408,92 @@ DM의 문답을 채널 입력 칸에 붙여, 내 말과 함께 보낸다(2026-11
 - **보내기**: Enter나 보내기 버튼. 채널에 내 메시지 하나로 올라간다: 머리, 쓴 글, 접힌 문답 줄(위 "문답"). 채널은 그 메시지로 스크롤하고 `{component.app-message-highlight}`(`{colors.selected}` 바탕, `{rounded.md}`)로 칠했다가 2초 동안 걷어 낸다. 움직임 줄이기 설정이면 2초 뒤에 바로 걷는다. DM의 문답은 "# 결제에 올렸어요 · 보기"로 바뀐다.
 - **보내기 실패**: 글과 붙인 문답을 입력 칸에 되돌리고 알림 띠 "채널에 올리지 못했어요"를 띄운다.
 
+#### 부딪힘 포럼
+
+부딪힘은 포럼 채널이다(2026-11-13 시안 14-A, Discord 포럼처럼, ADR-0027). Omagari가 알림 하나를 포스트 하나로 올리고, 사람은 포럼에서 채팅하지 않고 포스트 안에서만 이야기한다.
+
+- **채널 패널**: "포럼 채널" 카테고리 아래에 부딪힘 줄(18px Lucide `messages-square`)이 있다. 그 밑에 열린 포스트가 가지로 달린다: 왼쪽 30px 들여 쓰고, 부딪힘 아이콘 아래에서 내려오는 1px `{colors.hairline}` 꺾인 선으로 잇는다. 14px 글씨, 새 글이 있으면 600과 오른쪽 8px 점. 풀린 포스트는 가지에서 빠진다.
+- **머리 띠**: 20px 포럼 아이콘, "부딪힘"(`{typography.app-title}`), "Omagari가 알림을 포스트로 올려요"(12px 보조). 오른쪽 버튼은 채널과 같다.
+- **찾기 칸**(`{component.app-forum-search}`): 머리 띠 아래 12px에 대화 칸 폭으로 둔다. 높이 40px, 앞에 18px 돋보기, 안내 글 "포스트 찾기 (사람, 파일, 함수)". 포스트는 Omagari가 올리므로 "새 포스트" 버튼은 없다.
+- **도구 줄**: 찾기 칸 아래 10px.
+  - 맨 앞 "정렬과 보기"(`{component.app-tag-chip}`에 14px Lucide `arrow-up-down`과 12px 꺾쇠). 누르면 `{component.app-popover}` 메뉴: "정렬"(최근 활동, 올라온 시각)과 "보기"(목록, 카드). 고른 보기는 기기마다 기억한다.
+  - 1px 세로 구분선 뒤에 태그(`{component.app-tag-chip}`, 켜면 `{component.app-tag-chip-on}`): "열림 N", "풀림 N", 그리고 종류(직접 충돌, 간접 충돌, 중복 구현, 계약 변경). 처음에는 "열림"이 켜져 있다. 좁으면 넘치는 태그는 숨는다.
+- **목록 보기**(기본): 포스트마다 `{component.app-forum-post}` 한 장, 사이 8px. 올렸을 때 `{colors.selected}`.
+  1. 종류 배지(직접 충돌은 `{component.app-badge-warning}`, 추정은 `{component.app-badge-outline}`에 "· 추정")와 제목 15px/600(말줄임)
+  2. 마지막 글 한 줄(13px 보조, 앞에 쓴 사람 이름 600 글자색 "민수:")
+  3. 16px 말풍선 아이콘과 글 수, "· 2분 전"(12px 보조)
+  - 브랜치, 파일, 줄 번호는 줄에 두지 않는다. 포스트의 첫 글(알림)에 있다.
+  - 풀린 포스트는 70% 흐리게 하고 제목 앞에 "풀렸어요" 테두리 배지를 단다.
+- **카드 보기**: 2열 격자, 사이 12px. `{component.app-forum-card}` 위쪽에 부딪힌 줄 미리 보기(12px 고정폭, 줄 높이 1.55, 안쪽 14px 16px, 직접 충돌은 `{colors.warning-bg}` 바탕에 두 사람의 줄을 `{colors.warning}`, 정의 줄 변경은 `{colors.selected}` 바탕에 -/+ 두 줄), 아래에 목록 보기의 세 줄.
+- **제목**은 "지은 ↔ 민수 · refund.ts"처럼 두 사람과 부딪힌 파일(또는 심볼)이다.
+
+#### 포스트
+
+- **옆 칸으로 열기**(기본, 시안 14-A. 가운데에 바로 여는 14-B와 카드가 기본인 14-C는 고르지 않았다): 목록이나 카드를 누르면 오른쪽 칸이 `{component.app-post-panel}`(480px)이 되고 포럼 목록은 가운데에 남는다. 고른 줄은 `{colors.selected}` 바탕과 1px `{colors.hairline}` 안쪽 선. 오른쪽 칸 자리를 쓰므로 머리 띠 버튼은 이름 없이 아이콘만 남는다.
+  - 머리(52px): 제목 17px/600(말줄임), 오른쪽에 32px "크게 보기"(Lucide `maximize-2`)와 닫기(×).
+  - 그 아래 대화, 맨 아래 `{component.app-composer}`(안내 글 "이 포스트에 메시지 보내기").
+- **크게 보기**: 포스트가 가운데 대화 칸이 되고, 오른쪽 칸은 다시 DM이나 멤버 목록이 된다. 머리 띠는 "‹"(포럼으로 돌아가기), "부딪힘 ›"(13px 보조), 제목(`{typography.app-title}`), 오른쪽에 "옆 칸으로"(Lucide `minimize-2`), 내 에이전트, 멤버 목록이다. 입력 칸 안내 글은 "지은 ↔ 민수 · refund.ts에 메시지 보내기".
+- **첫 글은 Omagari의 알림이다.** `{component.app-message}` 모양에 아바타 대신 `{component.app-omagari-mark}`(36px, `{colors.ink}` 바탕 둥근 네모, 흰 18px Lucide `git-merge`), 이름 "Omagari", 본문은 `{component.app-alert-card}`: 종류 배지, 두 사람과 브랜치(12px 고정폭 보조), 다음 줄에 파일과 줄 범위(12px 고정폭 보조). 알림이 고쳐지면 이 글이 바뀌고 시각 옆에 "10:38에 고침"을 붙인다.
+- **결정 상태 띠**(`{component.app-decision-strip}`)는 결정 PR이 열리면 첫 글 아래, 대화 위에 늘 붙는다(아래 "결정 상태 띠").
+- **DM**: 포스트에서 연 DM 칸 머리의 둘째 줄은 "나만 보여요 · 지은 ↔ 민수 · refund.ts"다. 답 아래 "채널에 올리기"는 "포스트에 올리기"가 되고, 올린 뒤에는 "이 포스트에 올렸어요 · 보기"다. 나머지는 "DM 칸"과 같다(모델·effort 칩 포함).
+- **사이드바 표시**: 직접 충돌이 걸린 작업의 작업 줄 뒤에 "직접 충돌" `{component.app-badge-warning}`을 붙이고, 풀리면 뗀다.
+
+#### 결정 정리하기
+
+내 에이전트가 포스트를 읽고 초안을 쓰고, 사람이 읽고 고쳐서 결정 PR을 연다(2026-11-13 주인, ADR-0028). 에이전트끼리 토론해 정하는 것은 4단계다.
+
+- **들어가기**: 포스트 머리 띠의 "결정 정리하기"(`{component.app-header-button}`, 18px Lucide `pen-line`, 이름 13px이 늘 보임). 누르면 `{component.app-dialog}`가 폭 560px, 높이 776px로 열리고 바로 초안을 쓰기 시작한다.
+- **초안 띠**(`{component.app-draft-band}`): 대화 상자 제목 아래. 에이전트 표시 20px, 제목 13px/600, 설명 13px 보조, `role="status"`.
+  - 쓰는 중: "지은의 Claude Code가 초안을 쓰는 중" / "이 포스트의 글 6개와 문답 1개를 읽고 있어요". 오른쪽에 "그만 쓰기"(`{component.app-button-quiet}`, 높이 28px). 네 칸은 `{component.app-skeleton}` 막대(높이 14px, 칸마다 1~3줄)이고 폼에 `aria-busy`. 움직임 줄이기 설정이 아니면 1.4초로 옅어졌다 돌아온다.
+  - 다 씀: "지은의 Claude Code가 쓴 초안이에요" / "포스트의 글 6개와 문답 1개를 읽고 썼어요. 읽어 보고 고친 뒤 여세요." 오른쪽에 답한 모델 배지. 초안을 쓰는 모델과 effort는 DM에 기억된 값이다.
+  - 러너가 꺼짐: `{colors.warning-bg}` 바탕, `{colors.warning}` 글씨로 "초안을 쓸 수 없어요" / "Claude Code 러너가 꺼져 있어요. 직접 쓰거나, 러너를 켜고 다시 쓰게 하세요." 칸은 비어 있고 안내 글이 보인다.
+  - 그만 쓰게 했으면 "초안 쓰기를 멈췄어요" / "직접 쓰거나 다시 쓰게 하세요."
+- **칸**: 2열. 제목(한 줄, 두 열), 맥락과 결정(4줄씩 나란히), 결과(2줄, 두 열). 입력 모양은 `{component.app-text-input}`이고 14px. 안내 글은 "무엇을 정했나요", "왜 정해야 했나요", "무엇으로 정했나요", "그래서 무엇이 바뀌나요".
+- **이의 창**(ADR-0030): 나눔 단추 "바로", "1시간", "하루"(기본), "3일", "직접". "직접"을 고르면 아래에 숫자 칸(폭 72px, 높이 32px, 기본 12)과 단위 고르기(시간, 일), "동안"이 한 줄로 선다. 그 아래 설명(12px 보조):
+  - 바로: "열자마자 머지해요. 이의를 낼 틈이 없으니 되돌리기 쉬운 것만 고르세요."
+  - 그 밖: "하루 동안 아무도 이의를 내지 않으면 머지해요. 결정자가 모두 동의하면 더 일찍 머지해요."처럼 고른 길이를 쓴다.
+- **저절로 붙는 것**: `{colors.selected}` 상자에 결정자(이 포스트에서 말한 멤버의 아바타와 이름)와 출처(이 포스트 링크, 강조색).
+- **아래**: 오른쪽 정렬 한 줄 "지은의 이름으로 Pancheble/omagari에 결정 PR을 열어요."(12px 보조). 그 아래 왼쪽에 "다시 쓰게 하기"(초안이 없으면 "초안 쓰게 하기"), 오른쪽에 "취소"와 "결정 PR 열기". "결정 PR 열기"는 초안을 다 썼거나 사람이 칸을 채웠을 때만 켜진다.
+
+#### 결정 상태 띠
+
+결정 PR의 상태는 포스트 첫 글 아래의 띠 한 줄로 늘 보인다(2026-11-13 시안 15-A). 같은 줄이 포럼 목록에는 보이지 않는다.
+
+- **`app-decision-strip`** 최소 높이 44px, `{rounded.md}`, 13px, `role="status"`. 왼쪽에 16px Lucide `git-pull-request`, 상태 이름(600), 설명(보조 글씨)과 "PR #12" 링크(강조색), 오른쪽 끝에 버튼(높이 28px, 13px). 좁으면 줄을 바꾼다.
+- **상태**: 이름 · 설명 · 띠 색
+  - 제안됨 · "18시간 남음 · 동의 1/2 · 결정자가 모두 동의하면 바로 머지해요" · 기본
+  - 이의 N개 · "민수가 이의를 냈어요 · 모두 거둬질 때까지 머지하지 않아요" · `{component.app-decision-strip-warning}`
+  - 다시 열림 · "이의가 모두 거둬져 창을 다시 열었어요 · 24시간 남음 · 동의 1/2" · 기본
+  - 머지 막힘 · "창은 닫혔지만 GitHub이 막았어요: 지은 말고 다른 멤버의 리뷰 승인이 필요해요 · 풀리면 바로 머지해요"(검사 실패, 충돌도 같은 자리에 까닭을 쓴다) · 경고
+  - 머지 멈춤 · "지은의 GitHub 토큰이 듣지 않아 머지를 멈췄어요 · 지은이 다시 로그인하면 이어 가요" · `{component.app-decision-strip-error}`
+  - 수락됨 · "docs/decisions/0003-calc-refund-signature.md로 머지했어요"(모두 동의해 일찍 머지했으면 "결정자가 모두 동의해 창을 일찍 닫고 …") · 기본
+  - 버림 · "지은이 결정을 버려 결정 PR을 닫았어요" · 바탕 없음, 보조 글씨
+- **버튼**: 보는 사람에 따라 다르다.
+  - 정리한 사람이 아닌 결정자: "동의"(`{component.app-button}`)와 "이의"(`{component.app-button-outline}`). 정리한 사람은 연 것으로 동의한 셈이다. 결정자가 모두 동의하면 창을 일찍 닫고 바로 머지한다(ADR-0029).
+  - 결정자가 아닌 멤버: "이의"만.
+  - 이의를 낸 사람: "내 이의 거두기"(`{component.app-button-outline}`).
+  - 정리한 사람: "고쳐 올리기"(`{component.app-button-quiet}`)와 "버리기"(`{component.app-button-danger}`). 머지되거나 버린 뒤에는 버튼이 없다.
+- **대화의 한 줄**: 결정 PR이 열리고, 동의·이의·거둠이 나고, 머지되거나 닫힐 때마다 포스트에 Omagari의 한 줄이 쌓인다: 16px 아이콘, "Omagari · 지은이 결정 PR #12를 열었어요 · 이의 창 하루 · 오전 10:50"(13px 보조, 안쪽 4px 20px 4px 24px).
+
+#### 설정 창
+
+상태 메뉴의 "설정"으로 여는 창이다(2026-11-13 시안 16-B, macOS 시스템 설정처럼). 항목은 필요할 때 더한다.
+
+- **`app-settings-window`** 820×580px, `{rounded.lg}`, 뒤 덮개 `{colors.overlay}`, `role="dialog"`와 `aria-modal`. Esc, 덮개 누르기, 오른쪽 위 32px 닫기(×)로 닫힌다.
+- **왼쪽 목록**(220px, 파치먼트, 오른쪽 1px 선, 안쪽 16px 10px): 맨 위에 내 아바타 36px, 이름, GitHub 아이디. 그 아래 묶음 제목(12px/600 보조)과 `{component.app-settings-item}` 줄(높이 36px, 18px 아이콘과 15px 이름, 올렸을 때 `{colors.hover}`, 고른 줄은 `{colors.selected}`와 600, `aria-current`).
+  - "나": 내 에이전트
+  - "워크스페이스 · omagari": 부딪힘 알림
+- **오른쪽**: 파치먼트 바탕, 안쪽 4px 28px 28px. 위에 고른 항목 이름(`{typography.app-title}`, 높이 60px 줄). 그 아래 묶음 사이 24px.
+  - 묶음 제목(13px/600 보조, 안쪽 0 16px 6px), `{component.app-settings-group}`(흰 바탕, `{rounded.md}`, 1px 선), 그 아래 설명(12px 보조, 안쪽 6px 16px 0).
+  - `{component.app-settings-row}`(최소 높이 52px, 안쪽 10px 16px, 줄 사이 1px 선): 왼쪽에 이름(15px)과 설명(13px 보조), 오른쪽에 조작(스위치, 고르기 단추, 링크, 배지).
+- **`app-switch`** 40×24px, 흰 20px 손잡이, 꺼짐 `{colors.offline}`, 켜짐 `{component.app-switch-on}`, 150ms. `role="switch"`, `aria-checked`, 이름과 설명을 `aria-labelledby`·`aria-describedby`로 잇는다.
+- **내 에이전트**:
+  - "남이 물을 때": "남의 질문에 답하기" 스위치(기본 켜짐, ADR-0024). 설명은 켜짐 "다른 멤버의 에이전트가 물으면 내 에이전트가 내 폴더를 읽고 답해요.", 꺼짐 "꺼 두었어요. 묻는 쪽은 바로 "받지 않는다"를 들어요." 다음 줄 "내 에이전트가 답한 것"(설명 "지난 7일 동안 3번 · 마지막은 민수의 Codex가 물은 calcRefund()", 오른쪽 "기록 보기 ›" 강조색). 묶음 아래 "답할 때는 내 기기의 러너가 내 폴더를 읽기만 하고, 내 사용량이 쓰여요."
+  - "연결된 에이전트": 에이전트마다 한 줄. 에이전트 표시, 이름, "이 기기 · 러너 켜짐", 오른쪽 "연결됨" 테두리 배지. 러너가 꺼진 것은 표시를 50% 흐리게, "러너가 꺼져 있어요", 오른쪽 "꺼짐"(12px 보조).
+- **부딪힘 알림**:
+  - "부딪힘 알림": "알림을 올릴 포럼" 줄의 오른쪽에 고르기 단추(높이 28px, `{colors.selected}` 바탕, `{rounded.sm}`, 포럼 아이콘, 이름, 꺾쇠). 고를 수 있는 것은 포럼 채널뿐이다. 묶음 아래 "바꾸면 새 알림부터 그 포럼에 올라가고, 지난 포스트는 그대로 있어요. 모든 멤버에게 같아요."
+  - "워크스페이스": 이름과 레포(13px 고정폭), 읽기만 한다.
+
 #### 버튼
 
 - **`app-button`** 높이 32px, `{rounded.pill}`, 14px. 기본은 파란 바탕이다.
@@ -1431,6 +1627,7 @@ The structural breakpoints that matter for agents: 1440px (content lock), 1068px
 - The homepage's embedded video/player frame uses `{colors.surface-black}`; interior player controls are not documented (they're a platform widget, not a web-design token).
 - Some component imagery is dynamic (rotating product hero) and its specific copy varies per surface — component specs name the structure, not the rotating content.
 - Atmospheric photography (environment page mountain vista) is a content asset, not a design token; the documented `{component.environment-quote-card}` describes the structural surface only.
-- 앱: 포럼 채널, 포스트, 결정함, 부딪힘 알림은 1단계 화면이 아니라서 아직 부품이 없다. 2단계 이슈가 이 문서에 더한다.
+- 앱: 결정함과 결정 보기는 아직 부품이 없다(2단계 문답 Q9). "기록 보기"가 여는 답한 기록 화면도 아직 없다.
+- 앱: 사람이 포럼 채널을 따로 만들 수 있게 할지는 정하지 않았다. 지금 포럼 채널은 부딪힘 하나다.
 - 앱: 실행기가 늘어나면 `app-agent-mark`의 약자를 여기에 더한다(지금은 `CC`, `CX`).
 - 앱: 컴포넌트에 쓴 `borderColor`, `iconColor`, `shadow`, `backdropFilter`, `maxWidth` 같은 속성과 글자 값 하나씩 가리키기(`fontSize` 등)는 design.md 규격 검사기에서 "모르는 속성" 경고로 나온다. 오류가 아니라 경고이고, gstack 검사기가 모든 참조를 풀 수 있게 하려고 이렇게 쓴다.

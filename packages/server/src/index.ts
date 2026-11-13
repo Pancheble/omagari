@@ -184,23 +184,26 @@ const alertView = (row: {
   if (kind === "direct")
     return { kind, ...common, files: items.slice(0, ALERT_FILES) as AlertFile[] };
   return {
-    kind: kind as "indirect" | "duplicate",
+    kind: kind as "indirect" | "duplicate" | "declared",
     ...common,
     symbols: items.slice(0, ALERT_FILES) as AlertSymbol[],
   };
 };
 
-/** 간접 충돌의 심볼에서 쓰는 쪽(`works`의 자리). 그 쪽 러너가 계산한 것이다. */
+/** 간접 충돌과 선언된 계약 변경의 심볼에서 쓰는 쪽(`works`의 자리). 그 쪽 러너가 계산한 것이다. */
 const usingSide = (symbol: AlertSymbol) =>
   symbol.places[0].some((place) => place.role === "uses") ? 0 : 1;
 
-/** 알림에 묶인 것 하나의 열쇠: 직접 충돌은 경로, 중복 구현은 이름, 간접 충돌은 이름과 쓰는 쪽(방향마다 따로다). */
-const itemId = (kind: Alert["kind"], item: AlertFile | AlertSymbol) =>
-  "path" in item ? item.path : kind === "indirect" ? `${item.name}\0${usingSide(item)}` : item.name;
+/** 쓰는 쪽 러너만 계산하는 종류(방향이 있다). */
+const oneWay = (kind: Alert["kind"]) => kind === "indirect" || kind === "declared";
 
-/** 알림에 묶인 것 하나를 계산할 수 있는 러너의 멤버들(ADR-0023). 간접 충돌은 쓰는 쪽 사본의 색인이 있어야 한다. */
+/** 알림에 묶인 것 하나의 열쇠: 직접 충돌은 경로, 중복 구현은 이름, 간접 충돌과 선언된 계약 변경은 이름과 쓰는 쪽(방향마다 따로다). */
+const itemId = (kind: Alert["kind"], item: AlertFile | AlertSymbol) =>
+  "path" in item ? item.path : oneWay(kind) ? `${item.name}\0${usingSide(item)}` : item.name;
+
+/** 알림에 묶인 것 하나를 계산할 수 있는 러너의 멤버들(ADR-0023). 간접 충돌과 선언된 계약 변경은 쓰는 쪽 사본의 색인이 있어야 한다. */
 const computedBy = (kind: Alert["kind"], item: AlertFile | AlertSymbol, works: WorkRef[]) =>
-  kind === "indirect" && "places" in item
+  oneWay(kind) && "places" in item
     ? [works[usingSide(item)]?.login]
     : works.map((work) => work.login);
 
@@ -419,8 +422,12 @@ export async function startServer(options: {
     symbol TEXT,
     lines TEXT,
     at INTEGER NOT NULL,
-    stale INTEGER
+    stale INTEGER,
+    plan TEXT
   ) STRICT`);
+  // #85의 표에는 계획(`plan`, 계약의 Plan JSON)이 없다.
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('claims') WHERE name = 'plan'").get())
+    db.exec("ALTER TABLE claims ADD COLUMN plan TEXT");
   // 피드에만 남는 소식: 걸거나 푼 선점(`kind`가 claim이나 released, `claim`은 계약의 Claim JSON). `inboxMs`가 지나면 지운다.
   db.exec(`CREATE TABLE IF NOT EXISTS feed (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -619,6 +626,7 @@ export async function startServer(options: {
     lines: string | null;
     at: number;
     stale: number | null;
+    plan: string | null;
   };
   const claimView = (row: ClaimRow): Claim => ({
     id: row.id,
@@ -630,6 +638,7 @@ export async function startServer(options: {
     ...(row.lines !== null && { lines: JSON.parse(row.lines) }),
     at: new Date(row.at).toISOString(),
     stale: row.stale !== null,
+    ...(row.plan !== null && { plan: JSON.parse(row.plan) }),
   });
   /** 선점 전부. 작업처럼 워크스페이스에서 빠진 사람의 것은 보이지 않는다. */
   const claimsView = (): Claim[] =>
@@ -651,6 +660,45 @@ export async function startServer(options: {
       );
     }
     return rows.map(claimView);
+  };
+
+  /** 계획대로라면 선점한 작업의 정의 줄에 생길 변경. 이름 바꾸기는 옛 이름이 없어진다. */
+  const PLAN_CHANGE = { rename: "removed", signature: "changed", delete: "removed", add: "added" };
+  /**
+   * 푼 선점의 계획 가운데 이루지 못한 것(그 작업의 관측에서 정의 줄이 계획대로 바뀌지 않았다)을 취소로 알린다.
+   * 그 계획의 열린 선언된 계약 변경 알림을 받은 다른 작업의 편지함에 넣는다. 머지되어 풀린 것은 부르지 않는다.
+   */
+  // ponytail: 이루었는지는 서버가 받은 관측의 정의 줄로만 본다. intent 작업은 정의 줄을 올리지 않아 늘 취소로 본다.
+  const cancelPlans = (claims: Claim[]) => {
+    const works = worksView();
+    const open = db
+      .prepare("SELECT works, files FROM alerts WHERE kind = 'declared' AND resolved IS NULL")
+      .all() as { works: string; files: string }[];
+    const put = db.prepare("INSERT INTO inbox (login, branch, news, at) VALUES (?, ?, ?, ?)");
+    const now = Date.now();
+    for (const claim of claims) {
+      const { plan } = claim;
+      if (!plan) continue;
+      const work = works.find((w) => w.login === claim.login && w.branch === claim.branch);
+      const done = work?.files.some((file) =>
+        ("definitions" in file ? (file.definitions ?? []) : []).some(
+          (d) =>
+            (d.name === plan.symbol || d.name.endsWith(`.${plan.symbol}`)) &&
+            d.change === PLAN_CHANGE[plan.kind],
+        ),
+      );
+      if (done) continue;
+      for (const row of open) {
+        const pair = JSON.parse(row.works) as [WorkRef, WorkRef];
+        const side = pair.findIndex((w) => w.login === claim.login && w.branch === claim.branch);
+        if (side === -1) continue;
+        const symbols = JSON.parse(row.files) as AlertSymbol[];
+        if (!symbols.some((s) => s.name === plan.symbol && usingSide(s) !== side)) continue;
+        const to = pair[1 - side] as WorkRef;
+        put.run(to.login, to.branch, JSON.stringify({ kind: "cancelled", claim }), now);
+      }
+    }
+    shareInbox();
   };
 
   /**
@@ -852,9 +900,10 @@ export async function startServer(options: {
                       lines: flip ? [file.theirs, file.mine] : [file.mine, file.theirs],
                     },
               )
-            : pair.symbols.map(({ name, mine, theirs }) => ({
+            : pair.symbols.map(({ name, mine, theirs, plan }) => ({
                 name,
                 places: flip ? [theirs, mine] : [mine, theirs],
+                ...(plan && { plan }),
               }));
         for (const view of views) {
           const id = itemId(entry.kind, view);
@@ -1752,7 +1801,7 @@ export async function startServer(options: {
           for (const id of message.payload.ids) drop.run(id, runner.login);
           shareInbox();
         } else if (message.kind === "claim") {
-          const { branch, path, unit, symbol, lines, overlaps } = message.payload;
+          const { branch, path, unit, symbol, lines, overlaps, plan } = message.payload;
           const login = runner.login;
           const now = Date.now();
           const linesJson = lines ? JSON.stringify(lines) : null;
@@ -1762,11 +1811,25 @@ export async function startServer(options: {
             `DELETE FROM claims WHERE login = ? AND branch = ? AND path = ? AND unit = ?
              AND symbol IS ? AND lines IS ?`,
           ).run(login, branch, path, unit, symbol ?? null, linesJson);
+          // 같은 작업의 같은 심볼에 걸린 옛 계획은 새 계획이 대체한다. 그 계획의 알림은 쓰는 쪽 러너가 다시 계산해 고쳐진다.
+          if (plan)
+            db.prepare(
+              "UPDATE claims SET plan = NULL WHERE login = ? AND branch = ? AND plan ->> '$.symbol' = ?",
+            ).run(login, branch, plan.symbol);
           const { lastInsertRowid } = db
             .prepare(
-              "INSERT INTO claims (login, branch, path, unit, symbol, lines, at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+              "INSERT INTO claims (login, branch, path, unit, symbol, lines, at, plan) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             )
-            .run(login, branch, path, unit, symbol ?? null, linesJson, now);
+            .run(
+              login,
+              branch,
+              path,
+              unit,
+              symbol ?? null,
+              linesJson,
+              now,
+              plan ? JSON.stringify(plan) : null,
+            );
           const claim = claimView(
             db.prepare("SELECT * FROM claims WHERE id = ?").get(lastInsertRowid) as ClaimRow,
           );
@@ -1809,7 +1872,10 @@ export async function startServer(options: {
           }
           const claims = releaseClaims(where.join(" AND "), ...params);
           socket.send(encode(serverToRunner, "released", { claims }, message.id));
-          if (claims.length > 0) shareSituation();
+          if (claims.length > 0) {
+            cancelPlans(claims);
+            shareSituation();
+          }
         } else {
           // 문답의 답이나 실패. 그 문답을 보낸 연결에서 온 것만 받는다.
           const re = message.re ?? "";
