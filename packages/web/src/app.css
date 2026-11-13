@@ -3307,3 +3307,331 @@ code.settings-value {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* 위험한 단추(app-button-danger): 오류색 글씨 */
+.button.danger {
+  color: var(--error);
+}
+
+.button.danger:hover {
+  background: var(--error-bg);
+}
+
+/* 포스트 머리 띠의 "결정 정리하기": 이름이 늘 보이는 머리 띠 단추 */
+.header-button.named {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.38;
+  white-space: nowrap;
+}
+
+.header-button.named svg {
+  color: var(--primary);
+}
+
+/* 결정 상태 띠(app-decision-strip): 대화 위에 늘 붙는다. 좁으면 줄을 바꾼다. */
+.decision-strip {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-height: 44px;
+  margin: 8px 20px 0;
+  padding: 6px 8px 6px 14px;
+  border-radius: var(--rounded-md);
+  background: var(--selected);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.38;
+}
+
+.right-slot .panel-body > .decision-strip {
+  margin-inline: 0;
+}
+
+.decision-strip.warning {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.decision-strip.error {
+  background: var(--error-bg);
+  color: var(--error);
+}
+
+.decision-strip.quiet {
+  background: none;
+  color: var(--text-secondary);
+}
+
+.strip-text {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 0 8px;
+  min-width: 0;
+}
+
+.strip-text strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.decision-strip.warning .strip-text strong,
+.decision-strip.error .strip-text strong {
+  color: inherit;
+}
+
+.strip-text a {
+  color: var(--primary);
+}
+
+.decision-strip.warning .strip-text a,
+.decision-strip.error .strip-text a {
+  color: inherit;
+}
+
+.strip-failure {
+  color: var(--error);
+}
+
+.strip-actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.strip-button {
+  height: 28px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+/* 대화에 쌓이는 결정 PR의 한 줄(13px 보조, 안쪽 4px 20px 4px 24px) */
+.decision-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 20px 4px 24px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.38;
+}
+
+/* 결정 정리하기 대화 상자(폭 560px, 높이 776px까지) */
+.decision-dialog {
+  width: min(560px, 100vw - 32px);
+  max-height: min(776px, 100dvh - 32px);
+  overflow-y: auto;
+}
+
+.draft-band {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 10px 12px;
+  border-radius: var(--rounded-md);
+  background: var(--selected);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.38;
+}
+
+.draft-band.warning {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.draft-band p {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+.draft-band strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.draft-band.warning strong {
+  color: inherit;
+}
+
+.draft-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 12px;
+}
+
+.draft-fields .field.wide {
+  grid-column: 1 / -1;
+}
+
+.draft-fields .field:nth-child(4) {
+  grid-column: 1 / -1;
+}
+
+.draft-area {
+  height: auto;
+  padding: 8px 12px;
+  font-size: 14px;
+  line-height: 1.43;
+  resize: vertical;
+}
+
+.draft-fields .text-input {
+  font-size: 14px;
+}
+
+.draft-bones {
+  display: grid;
+  gap: 8px;
+  padding: 11px 0;
+}
+
+.draft-bones .bone {
+  height: 14px;
+}
+
+.draft-bones .bone:last-child:not(:first-child) {
+  width: 70%;
+}
+
+.window {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 16px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.window legend {
+  padding: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.segments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.segment {
+  position: relative;
+}
+
+.segment input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.segment span {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--pill);
+  font-size: 14px;
+}
+
+.segment input:checked + span {
+  border-color: var(--primary);
+  background: var(--selected);
+  font-weight: 600;
+}
+
+.segment input:focus-visible + span {
+  outline: 2px solid var(--primary-focus);
+  outline-offset: 2px;
+}
+
+.window-custom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.window-custom input {
+  width: 72px;
+  height: 32px;
+}
+
+.window-custom select {
+  height: 32px;
+}
+
+.auto-box {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 10px 12px;
+  border-radius: var(--rounded-md);
+  background: var(--selected);
+  font-size: 13px;
+}
+
+.auto-box p {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.auto-box strong {
+  min-width: 48px;
+  font-weight: 600;
+}
+
+.auto-box a {
+  color: var(--primary);
+}
+
+.decider {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.decider .avatar {
+  width: 24px;
+  height: 24px;
+  font-size: 12px;
+}
+
+.dialog-note {
+  margin-top: 16px;
+  text-align: right;
+}
+
+.decision-actions {
+  margin-top: 8px;
+}
+
+.decision-actions > :first-child {
+  margin-right: auto;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .draft-band + .draft-fields .bone {
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+}
+
+@media (max-width: 560px) {
+  .draft-fields {
+    grid-template-columns: 1fr;
+  }
+}
