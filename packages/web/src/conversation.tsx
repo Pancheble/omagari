@@ -439,6 +439,11 @@ function Message({
             <time dateTime={message.at} title={fullTime(message.at)}>
               {timeOf(message.at)}
             </time>
+            {message.kind === "text" && message.github && (
+              <span className="badge outline" title="이슈에 GitHub에서 단 댓글">
+                GitHub
+              </span>
+            )}
           </p>
         )}
         {message.text && <p className="message-text">{message.text}</p>}

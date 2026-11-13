@@ -1,4 +1,4 @@
-import { type Alert, ago, type ChannelMessage, type Post } from "@omagari/contract";
+import { ALERT_LABELS, type Alert, ago, type ChannelMessage, type Post } from "@omagari/contract";
 import {
   ArrowUpDown,
   ChevronDown,
@@ -33,12 +33,7 @@ export const postsOf = (list: (Post & { message: ChannelMessage })[]) =>
 export const changed = (a: Alert, b: Alert) =>
   JSON.stringify({ ...a, resolved: null }) !== JSON.stringify({ ...b, resolved: null });
 
-export const KINDS = {
-  direct: "직접 충돌",
-  indirect: "간접 충돌",
-  duplicate: "중복 구현",
-  declared: "계약 변경",
-} as const satisfies Record<Alert["kind"], string>;
+export const KINDS = ALERT_LABELS;
 
 const base = (path: string) => path.split("/").at(-1) ?? path;
 
@@ -47,11 +42,35 @@ const subject = (alert: Alert) =>
   alert.kind === "direct" ? alert.files[0] && base(alert.files[0].path) : alert.symbols[0]?.name;
 
 /**
- * "refund.ts". 서버는 제목을 주지 않으니 알림의 파일이나 심볼에서 짓는다.
- * 사람은 제목에 넣지 않고 카드의 사람 줄에 따로 보인다(DESIGN.md 시안 27-B).
+ * 포스트의 제목: 이슈 제목(ADR-0032). 이슈를 아직 열지 못했으면 알림의 파일이나 심볼("refund.ts")에서 짓는다.
+ * 번호("#44")는 따로 그린다(`IssueNumber`). 사람은 제목에 넣지 않고 카드의 사람 줄에 따로 보인다(DESIGN.md 시안 27-B).
  */
-export const postTitle = ({ message: { alert } }: PostItem) =>
-  subject(alert) ?? alert.works[0].branch;
+export const postTitle = ({ issue, message: { alert } }: PostItem) =>
+  issue?.title ?? subject(alert) ?? alert.works[0].branch;
+
+/** 포스트가 풀렸나: 알림이 풀렸거나, 사람이 GitHub에서 이슈를 닫았다(ADR-0032). */
+export const settled = (post: PostItem) =>
+  post.message.alert.resolved !== null || post.issue?.open === false;
+
+/** 포스트의 거르기 태그: 이슈 라벨. 이슈를 아직 열지 못했으면 Omagari가 열 때 달 종류 라벨이다. */
+const labelsOf = (post: PostItem) => post.issue?.labels ?? [KINDS[post.message.alert.kind]];
+
+/** 이슈 번호 "#44". GitHub의 이슈로 가는 링크다. 이슈가 없으면 그리지 않는다. */
+export const IssueNumber = ({ post, link = true }: { post: PostItem; link?: boolean }) =>
+  post.issue &&
+  (link ? (
+    <a
+      className="issue-number"
+      href={post.issue.url}
+      target="_blank"
+      rel="noreferrer"
+      title="GitHub에서 이슈 보기"
+    >
+      #{post.issue.number}
+    </a>
+  ) : (
+    <span className="issue-number">#{post.issue.number}</span>
+  ));
 
 /** 찾기 칸이 훑는 글: 사람, 브랜치, 파일, 심볼. */
 const haystack = (post: PostItem) => {
@@ -61,7 +80,7 @@ const haystack = (post: PostItem) => {
     alert.kind === "direct"
       ? alert.files.map((f) => f.path)
       : alert.symbols.flatMap((s) => [s.name, ...s.places.flat().map((p) => p.path)]);
-  return [postTitle(post), ...names, ...things].join("\n").toLowerCase();
+  return [postTitle(post), ...labelsOf(post), ...names, ...things].join("\n").toLowerCase();
 };
 
 /** 종류 배지: 직접 충돌은 주황, 나머지는 테두리, 간접 충돌은 "· 추정"이 붙는다. */
@@ -120,7 +139,8 @@ export const ForumTitle = ({ name }: { name: string }) => (
 /**
  * 부딪힘 포럼(DESIGN.md "부딪힘 포럼"): 찾기 칸, "정렬과 보기" 메뉴와 태그, 포스트 목록이나 카드. 입력 칸은 없다.
  * 포스트 줄은 `#포럼/알림 번호`로 가는 링크라 옆 칸으로 열리고 뒤로 가기가 닫는다.
- * 찾기는 사람, 브랜치, 파일, 심볼을 훑는다. 태그는 열림·풀림과 종류이고, 켠 것이 없는 묶음은 거르지 않는다.
+ * 찾기는 사람, 브랜치, 파일, 심볼, 라벨을 훑는다. 태그는 열림·풀림과 이슈 라벨(ADR-0032)이고, 켠 것이 없는 묶음은 거르지 않는다.
+ * 라벨을 여럿 켜면 그 가운데 하나라도 단 포스트가 보인다.
  */
 export function Forum({
   posts,
@@ -141,7 +161,7 @@ export function Forum({
     VIEWS.map(([id]) => id),
   );
   const [states, setStates] = useState<Set<string>>(new Set(["open"]));
-  const [kinds, setKinds] = useState<Set<string>>(new Set());
+  const [labels, setLabels] = useState<Set<string>>(new Set());
   const [, tick] = useReducer((n: number) => n + 1, 0);
   useEffect(() => {
     const timer = setInterval(tick, 60_000); // "3분 전"이 흐르게
@@ -156,20 +176,22 @@ export function Forum({
     return (posts ?? [])
       .filter(
         (post) =>
-          (states.size === 0 || states.has(post.message.alert.resolved ? "resolved" : "open")) &&
-          (kinds.size === 0 || kinds.has(post.message.alert.kind)) &&
+          (states.size === 0 || states.has(settled(post) ? "resolved" : "open")) &&
+          (labels.size === 0 || labelsOf(post).some((label) => labels.has(label))) &&
           (!needle || haystack(post).includes(needle)),
       )
       .sort((a, b) => time(b) - time(a));
-  }, [posts, query, sort, states, kinds]);
+  }, [posts, query, sort, states, labels]);
 
   const toggle = (set: Set<string>, put: (next: Set<string>) => void, id: string) => {
     const next = new Set(set);
     if (!next.delete(id)) next.add(id);
     put(next);
   };
-  const open = posts?.filter((post) => !post.message.alert.resolved).length ?? 0;
+  const open = posts?.filter((post) => !settled(post)).length ?? 0;
   const count = { open, resolved: (posts?.length ?? 0) - open };
+  /** 포스트들의 라벨, 처음 나온 순서. 켜 둔 라벨은 단 포스트가 없어져도 남겨 끌 수 있게 한다. */
+  const allLabels = [...new Set([...(posts ?? []).flatMap(labelsOf), ...labels])];
 
   return (
     <div className="forum">
@@ -195,9 +217,13 @@ export function Forum({
               {name} {count[id]}
             </Tag>
           ))}
-          {Object.entries(KINDS).map(([id, name]) => (
-            <Tag key={id} on={kinds.has(id)} onClick={() => toggle(kinds, setKinds, id)}>
-              {name}
+          {allLabels.map((label) => (
+            <Tag
+              key={label}
+              on={labels.has(label)}
+              onClick={() => toggle(labels, setLabels, label)}
+            >
+              {label}
             </Tag>
           ))}
         </fieldset>
@@ -323,7 +349,8 @@ function PostRow({
   unread: boolean;
 }) {
   const { alert } = post.message;
-  const resolved = alert.resolved !== null;
+  const resolved = settled(post);
+  const kind = KINDS[alert.kind];
   return (
     <a
       className="forum-post"
@@ -334,10 +361,18 @@ function PostRow({
       <span className="forum-post-title">
         {resolved && <span className="badge outline">풀렸어요</span>}
         <strong className="forum-post-name">{postTitle(post)}</strong>
+        <IssueNumber post={post} link={false} />
         {unread && <span className="unread-dot" role="img" aria-label="새 글" />}
       </span>
       <span className="forum-post-tags">
         <KindBadge kind={alert.kind} />
+        {labelsOf(post)
+          .filter((label) => label !== kind)
+          .map((label) => (
+            <span key={label} className="badge outline">
+              {label}
+            </span>
+          ))}
       </span>
       <span className="forum-post-last">
         {post.last ? (

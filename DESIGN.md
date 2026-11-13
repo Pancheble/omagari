@@ -707,6 +707,16 @@ components:
     textColor: "{colors.text-secondary}"
     rounded: "{rounded.pill}"
     height: 20px
+  app-badge-ai:
+    backgroundColor: transparent
+    borderColor: "{colors.hairline}"
+    textColor: "{colors.text-secondary}"
+    rounded: "{rounded.pill}"
+    height: 20px
+    padding: 0 6px
+  app-issue-number:
+    textColor: "{colors.text-secondary}"
+    typography: "{typography.app-body}"
   app-badge-warning:
     backgroundColor: "{colors.warning-bg}"
     textColor: "{colors.warning}"
@@ -1357,6 +1367,24 @@ Apple's whitespace is the product's pedestal. Every tile begins with at least 64
 - 같은 사람이 5분 안에 이어 쓴 메시지는 머리 없이 묶는다. 묶인 줄의 시각은 올렸을 때 왼쪽에 보인다.
 - 날짜가 바뀌면 가운데 "오늘"처럼 12px 보조 글씨와 양옆 `{colors.divider}` 선을 둔다.
 - 메시지에 든 HTML과 스크립트는 실행하지 않고 글자로 보인다.
+- 포스트의 이슈에 GitHub에서 단 댓글이 들어온 글은 머리의 시각 뒤에 `{component.app-badge-outline}` "GitHub"을 단다(ADR-0032). 쓴 사람은 GitHub 로그인이라 멤버가 아닐 수 있다. 글은 마크다운으로 그리지 않고 글자로 보인다.
+
+#### AI가 쓴 글
+
+AI를 불러 한 말은 부른 사람의 이름으로 남기고, AI가 썼다는 것을 늘 함께 보인다(2026-11-13 주인, ADR-0032).
+
+- **앱**: 채널과 포스트의 문답 줄(`{component.app-qa-line}`)은 에이전트 이름 뒤에, 펼친 카드(`{component.app-qa-card}`)는 머리의 공개 배지 앞에 `{component.app-badge-ai}`를 단다: `{component.app-badge-outline}`에 12px Lucide `bot`과 "AI", 안쪽 0 6px, 올리면 "AI가 쓴 답". DM에는 달지 않는다(DM은 늘 나와 내 에이전트의 대화다).
+- **GitHub 이슈 댓글**: 포스트에 올린 문답은 올린 사람의 계정으로 댓글이 된다. 올린 사람이 함께 쓴 글, 빈 줄, 그 아래 GitHub 알림 인용으로 표시를 단다.
+  ```
+  참고로 붙여요
+
+  > [!NOTE]
+  > 🤖 **AI가 쓴 답** · 김지은의 Claude Code (Opus · effort high)
+  > 물음: 부분 환불은 어디서 금액을 계산해?
+
+  (답)
+  ```
+  모델과 effort를 모르면 괄호를 뺀다. 사람이 쓴 글에는 아무 표시도 달지 않는다.
 
 #### 문답
 
@@ -1412,26 +1440,27 @@ DM의 문답을 채널 입력 칸에 붙여, 내 말과 함께 보낸다(2026-11
 
 - **채널 패널**: "포럼 채널" 카테고리 아래에 부딪힘 줄(18px Lucide `messages-square`)이 있다. 그 밑에 열린 포스트가 가지로 달린다: 왼쪽 30px 들여 쓰고, 부딪힘 아이콘 아래에서 내려오는 1px `{colors.hairline}` 세로선 하나가 마지막 포스트까지 끊기지 않고 이어진다. 마지막 포스트에서만 └처럼 꺾고, 중간 포스트에는 가로 가지를 달지 않는다(`│ │ └`, 2026-11-13 주인). 14px 글씨, 새 글이 있으면 600과 오른쪽 8px 점. 풀린 포스트는 가지에서 빠진다.
 - **머리 띠**: 20px 포럼 아이콘, "부딪힘"(`{typography.app-title}`), "Omagari가 알림을 포스트로 올려요"(12px 보조). 오른쪽 버튼은 채널과 같다.
-- **찾기 칸**(`{component.app-forum-search}`): 머리 띠 아래 12px에 대화 칸 폭으로 둔다. 높이 40px, 앞에 18px 돋보기, 안내 글 "포스트 찾기 (사람, 파일, 함수)". 포스트는 Omagari가 올리므로 "새 포스트" 버튼은 없다.
+- **찾기 칸**(`{component.app-forum-search}`): 머리 띠 아래 12px에 대화 칸 폭으로 둔다. 높이 40px, 앞에 18px 돋보기, 안내 글 "포스트 찾기 (사람, 파일, 함수)". 라벨도 훑는다. 포스트는 Omagari가 올리므로 "새 포스트" 버튼은 없다.
 - **도구 줄**: 찾기 칸 아래 10px.
   - 맨 앞 "정렬과 보기"(`{component.app-tag-chip}`에 14px Lucide `arrow-up-down`과 12px 꺾쇠). 누르면 `{component.app-popover}` 메뉴: "정렬"(최근 활동, 올라온 시각)과 "보기"(목록, 카드). 고른 보기는 기기마다 기억한다.
-  - 1px 세로 구분선 뒤에 태그(`{component.app-tag-chip}`, 켜면 `{component.app-tag-chip-on}`): "열림 N", "풀림 N", 그리고 종류(직접 충돌, 간접 충돌, 중복 구현, 계약 변경). 처음에는 "열림"이 켜져 있다. 좁으면 넘치는 태그는 숨는다.
+  - 1px 세로 구분선 뒤에 태그(`{component.app-tag-chip}`, 켜면 `{component.app-tag-chip-on}`): "열림 N", "풀림 N", 그리고 포스트들의 이슈 라벨(처음 나온 순서, ADR-0032). Omagari가 이슈를 열 때 종류 라벨(직접 충돌, 간접 충돌, 중복 구현, 계약 변경)을 달고, 사람이 GitHub에서 단 라벨도 여기 선다. 라벨을 여럿 켜면 그 가운데 하나라도 단 포스트가 보인다. 처음에는 "열림"이 켜져 있다. 좁으면 넘치는 태그는 숨는다.
+  - "풀림"은 알림이 풀렸거나 사람이 GitHub에서 이슈를 닫은 포스트다. 알림이 풀리면 Omagari가 이슈를 닫는다.
 - **목록 보기**(기본): 포스트마다 `{component.app-forum-post}` 한 장, 사이 8px. 올렸을 때 `{colors.selected}`.
-  1. 제목 15px/600(말줄임)
-  2. 종류 배지(직접 충돌은 `{component.app-badge-warning}`, 추정은 `{component.app-badge-outline}`에 "· 추정")를 제목 아래 줄에 둔다
+  1. 제목 15px/600(말줄임), 그 뒤에 이슈 번호 "#44"(15px 보조 글씨, `{component.app-issue-number}`)
+  2. 종류 배지(직접 충돌은 `{component.app-badge-warning}`, 추정은 `{component.app-badge-outline}`에 "· 추정")를 제목 아래 줄에 두고, 종류가 아닌 이슈 라벨을 그 뒤에 `{component.app-badge-outline}`으로 잇는다
   3. 마지막 글 한 줄(13px 보조, 앞에 쓴 사람 이름 600 글자색 "민수:")
   4. 사람 줄(시안 27-B, 2026-11-13 주인): 관련된 사람의 22px 아바타를 5px 겹쳐 두고, 그 뒤에 이름을 " · "로 잇는다(12px 글자색, "박민수 · 나"). 그 뒤 " · ", 16px 말풍선 아이콘과 글 수, "· 2분 전"(12px 보조)
   - 브랜치, 파일, 줄 번호는 줄에 두지 않는다. 포스트의 첫 글(알림)에 있다.
   - 풀린 포스트는 70% 흐리게 하고 제목 앞에 "풀렸어요" 테두리 배지를 단다.
 - **카드 보기**: 2열 격자, 사이 12px. `{component.app-forum-card}`에 목록 보기의 세 줄을 둔다. 2단계에서는 위쪽의 부딪힌 줄 미리 보기 칸을 두지 않는다(2026-11-13 주인, 까닭과 명세는 Known Gaps).
-- **제목**에는 사람을 넣지 않는다. 사람은 사람 줄에 따로 보인다(시안 27-B). 지금 제목은 부딪힌 파일(또는 심볼) "refund.ts"이고, 포스트를 GitHub 이슈와 맞추면(#118) 이슈 제목과 번호("refund의 reason 필드 #44")가 된다. 그때 거르기 태그도 이슈 라벨이 된다.
+- **제목**에는 사람을 넣지 않는다. 사람은 사람 줄에 따로 보인다(시안 27-B). 제목은 이슈 제목과 번호("refund의 reason 필드 #44")다(ADR-0032). Omagari가 연 이슈의 제목은 부딪힌 파일(또는 심볼)과 종류("refund.ts 직접 충돌")이고, 사람이 GitHub에서 바꾸면 따라간다. 이슈를 아직 열지 못했으면 부딪힌 파일(또는 심볼)만 쓰고 번호가 없다.
 
 #### 포스트
 
 - **옆 칸으로 열기**(기본, 시안 14-A. 가운데에 바로 여는 14-B와 카드가 기본인 14-C는 고르지 않았다): 목록이나 카드를 누르면 오른쪽 칸이 `{component.app-post-panel}`(480px)이 되고 포럼 목록은 가운데에 남는다. 고른 줄은 `{colors.selected}` 바탕과 1px `{colors.hairline}` 안쪽 선. 오른쪽 칸 자리를 쓰므로 머리 띠 버튼은 이름 없이 아이콘만 남는다.
-  - 머리(52px): 제목 17px/600(말줄임), 오른쪽에 32px "크게 보기"(Lucide `maximize-2`)와 닫기(×).
+  - 머리(52px): 제목 17px/600(말줄임), 그 뒤에 이슈 번호 "#44"(15px 보조 글씨, GitHub의 이슈로 가는 링크, 새 탭, 올리면 강조색 밑줄), 오른쪽에 32px "크게 보기"(Lucide `maximize-2`)와 닫기(×).
   - 그 아래 대화, 맨 아래 `{component.app-composer}`(안내 글 "이 포스트에 메시지 보내기").
-- **크게 보기**: 포스트가 가운데 대화 칸이 되고, 오른쪽 칸은 다시 DM이나 멤버 목록이 된다. 머리 띠는 "‹"(포럼으로 돌아가기), "부딪힘 ›"(13px 보조), 제목(`{typography.app-title}`), 오른쪽에 "옆 칸으로"(Lucide `minimize-2`), 내 에이전트, 멤버 목록이다. 입력 칸 안내 글은 "refund.ts에 메시지 보내기".
+- **크게 보기**: 포스트가 가운데 대화 칸이 되고, 오른쪽 칸은 다시 DM이나 멤버 목록이 된다. 머리 띠는 "‹"(포럼으로 돌아가기), "부딪힘 ›"(13px 보조), 제목(`{typography.app-title}`)과 이슈 번호 링크(17px 보조), 오른쪽에 "옆 칸으로"(Lucide `minimize-2`), 내 에이전트, 멤버 목록이다. 입력 칸 안내 글은 "refund.ts에 메시지 보내기".
 - **첫 글은 Omagari의 알림이다.** `{component.app-message}` 모양에 아바타 대신 `{component.app-omagari-mark}`(36px, `{colors.ink}` 바탕 둥근 네모, 흰 18px Lucide `git-merge`), 이름 "Omagari", 본문은 `{component.app-alert-card}`: 종류 배지, 두 사람과 브랜치(12px 고정폭 보조), 다음 줄에 파일과 줄 범위(12px 고정폭 보조). 알림이 고쳐지면 이 글이 바뀌고 시각 옆에 "10:38에 고침"을 붙인다.
 - **결정 상태 띠**(`{component.app-decision-strip}`)는 결정 PR이 열리면 첫 글 아래, 대화 위에 늘 붙는다(아래 "결정 상태 띠").
 - **DM**: 포스트에서 연 DM 칸 머리의 둘째 줄은 "나만 보여요 · refund.ts"다. 답 아래 "채널에 올리기"는 "포스트에 올리기"가 되고, 올린 뒤에는 "이 포스트에 올렸어요 · 보기"다. 나머지는 "DM 칸"과 같다(모델·effort 칩 포함).
@@ -1501,11 +1530,13 @@ DM의 문답을 채널 입력 칸에 붙여, 내 말과 함께 보낸다(2026-11
 
 #### 배지
 
-- **`app-badge`** 높이 20px, `{rounded.pill}`, 12px. 쓰임은 넷이다.
+- **`app-badge`** 높이 20px, `{rounded.pill}`, 12px. 쓰임은 여섯이다.
   - 공개: `{component.app-badge-outline}`. 채널에서 펼친 문답 카드의 머리에만 단다. DM에는 공개 범위 배지가 없다("DM 칸").
   - 작업 중 변경 포함: `{component.app-badge-warning}`
   - N시간 전 기준: 테두리 배지 앞에 11px 시계 아이콘
   - 답한 모델: `{component.app-badge-outline}`에 "Opus · high"처럼 모델과 effort. "기본"으로 물었으면 실행기가 알려 준 실제 모델 이름을 쓰고, 모르면 배지를 달지 않는다.
+  - AI가 쓴 답: `{component.app-badge-ai}`("AI가 쓴 글")
+  - GitHub에서 들어온 댓글: `{component.app-badge-outline}` "GitHub"("메시지")
 
 #### 알림 띠
 

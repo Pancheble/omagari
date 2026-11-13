@@ -1,7 +1,8 @@
 /**
  * 서버의 바깥 경계: GitHub. 테스트는 여기에 가짜를 꽂는다.
- * 로그인(기기 인증), push 권한, 브랜치마다의 PR(초안 PR 제목과 머지 여부), 그리고 결정 PR(ADR-0025)을 열고, 고쳐 올리고, 리뷰를 읽고, 머지하고, 닫는 것까지다.
- * 결정 PR의 것은 GitHub이 받지 않으면(토큰이 무효, 권한 없음) 던진다. 메시지에 GitHub의 까닭이 있다.
+ * 로그인(기기 인증), push 권한, 브랜치마다의 PR(초안 PR 제목과 머지 여부), 결정 PR(ADR-0025)을 열고, 고쳐 올리고, 리뷰를 읽고, 머지하고, 닫는 것,
+ * 그리고 포스트의 이슈(ADR-0032)를 열고, 읽고, 댓글을 주고받고, 닫는 것까지다.
+ * 결정 PR과 이슈에 쓰는 것은 GitHub이 받지 않으면(토큰이 무효, 권한 없음) 던진다. 메시지에 GitHub의 까닭이 있다.
  */
 export type GitHub = {
   /** 기기 인증을 연다. `deviceCode`는 서버만 들고, 사람에게는 `userCode`를 보인다. */
@@ -66,7 +67,24 @@ export type GitHub = {
     repo: string,
     number: number,
   ): Promise<{ merged: true } | { reason: string }>;
+  /** 이슈를 연다(포스트의 이슈, ADR-0032). 라벨은 push 권한이 있는 토큰일 때만 붙는다. */
+  openIssue(
+    token: string,
+    repo: string,
+    issue: { title: string; body: string; labels: string[] },
+  ): Promise<{ number: number; url: string }>;
+  /** 번호로 이슈 하나의 제목, 라벨 이름, 열림. GitHub이 답하지 못하면 `undefined`다. */
+  issue(token: string, repo: string, number: number): Promise<Issue | undefined>;
+  /** 이슈의 댓글, 오래된 것부터. GitHub이 답하지 못하면 `undefined`다. */
+  comments(token: string, repo: string, number: number): Promise<Comment[] | undefined>;
+  /** 이슈에 댓글을 단다. 토큰 주인의 이름으로 달린다. */
+  comment(token: string, repo: string, number: number, body: string): Promise<{ id: number }>;
+  /** 이슈를 닫는다(끝남). */
+  closeIssue(token: string, repo: string, number: number): Promise<void>;
 };
+
+export type Issue = { title: string; labels: string[]; open: boolean };
+export type Comment = { id: number; login: string; body: string };
 
 export type Pull = {
   title: string;
@@ -274,6 +292,48 @@ export function realGitHub(clientId: string): GitHub {
         if (!(response.status === 405 && /not allowed/i.test(reason))) break;
       }
       return { reason };
+    },
+    // 이슈: https://docs.github.com/en/rest/issues/issues, https://docs.github.com/en/rest/issues/comments
+    async openIssue(token, repo, issue) {
+      const opened = await send(`/repos/${repo}/issues`, token, "POST", issue);
+      return { number: opened.number, url: opened.html_url };
+    },
+    async issue(token, repo, number) {
+      const response = await get(`/repos/${repo}/issues/${number}`, token).catch(() => undefined);
+      if (!response?.ok) return undefined;
+      const issue = await response.json();
+      return {
+        title: issue.title,
+        labels: issue.labels.map((label: { name: string } | string) =>
+          typeof label === "string" ? label : label.name,
+        ),
+        open: issue.state === "open",
+      };
+    },
+    // ponytail: 첫 100개만 읽는다. 한 포스트에 댓글이 그보다 많아지면 `since`나 쪽 넘기기로 읽는다.
+    async comments(token, repo, number) {
+      const response = await get(
+        `/repos/${repo}/issues/${number}/comments?per_page=100`,
+        token,
+      ).catch(() => undefined);
+      if (!response?.ok) return undefined;
+      const comments: { id: number; user: { login: string } | null; body?: string }[] =
+        await response.json();
+      return comments.map((c) => ({
+        id: c.id,
+        login: c.user?.login ?? "ghost",
+        body: c.body ?? "",
+      }));
+    },
+    async comment(token, repo, number, body) {
+      const made = await send(`/repos/${repo}/issues/${number}/comments`, token, "POST", { body });
+      return { id: made.id };
+    },
+    async closeIssue(token, repo, number) {
+      await send(`/repos/${repo}/issues/${number}`, token, "PATCH", {
+        state: "closed",
+        state_reason: "completed",
+      });
     },
   };
 }

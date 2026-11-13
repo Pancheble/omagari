@@ -41,7 +41,16 @@ import { byName, ChannelList, CreateChannel, useCollapsed } from "./channels.tsx
 import { ChannelTitle, Conversation, type View } from "./conversation.tsx";
 import { DecisionDialog, type Fields } from "./decision.tsx";
 import { chosen, type Dm, DmPanel, type Picks } from "./dm.tsx";
-import { changed, Forum, ForumTitle, type PostItem, postOf, postsOf, postTitle } from "./forum.tsx";
+import {
+  changed,
+  Forum,
+  ForumTitle,
+  IssueNumber,
+  type PostItem,
+  postOf,
+  postsOf,
+  postTitle,
+} from "./forum.tsx";
 import { useLive } from "./live.ts";
 import { MemberList, MemberSkeleton } from "./members.tsx";
 import { ProfilePanel } from "./profile.tsx";
@@ -691,6 +700,7 @@ export function Workspace({
                 {current.name} ›
               </a>
               <h2>{postTitle(openPost)}</h2>
+              <IssueNumber post={openPost} />
             </div>
           ) : forum && current ? (
             <ForumTitle name={current.name} />
@@ -764,6 +774,7 @@ export function Workspace({
           head={
             <div className="post-head">
               <h2>{postChannel.name}</h2>
+              <IssueNumber post={openPost} />
               {decide}
               {wide && (
                 <a

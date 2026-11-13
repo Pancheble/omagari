@@ -3259,6 +3259,38 @@ code.settings-value {
   gap: 6px;
 }
 
+/* 포스트의 이슈 번호 "#44"(ADR-0032): 제목 바로 뒤에 보조 글씨로. 머리 띠에서는 GitHub 이슈로 가는 링크다. */
+.issue-number {
+  flex: none;
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+a.issue-number:hover {
+  color: var(--primary);
+  text-decoration: underline;
+}
+
+.post-head .issue-number {
+  margin-right: auto;
+  font-size: 15px;
+}
+
+.post-title .issue-number {
+  font-size: 17px;
+}
+
+.forum-post-title .issue-number {
+  margin-left: -4px;
+  font-size: 15px;
+}
+
+/* AI가 쓴 글의 표시(DESIGN.md "AI가 쓴 글"): 테두리 배지에 12px bot 아이콘과 "AI". */
+.ai-badge {
+  flex: none;
+  padding: 0 6px;
+}
+
 /* 크게 본 포스트의 머리 띠: ‹ 부딪힘 › 제목 */
 .post-title {
   display: flex;
@@ -3297,7 +3329,7 @@ code.settings-value {
 }
 
 .post-head h2 {
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
