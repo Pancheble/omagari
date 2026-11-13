@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 20;
+export const CONTRACT_VERSION = 21;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -573,6 +573,41 @@ export const ChannelMessage = z.discriminatedUnion("kind", [
 ]);
 export type ChannelMessage = z.infer<typeof ChannelMessage>;
 
+/**
+ * 결정 초안의 네 칸(ADR-0028). 결정 기록(Nygard의 ADR)의 꼴을 따른다. 무엇을 담는지는 러너가 실행기에 주는 지시문에 있다.
+ */
+export const DraftFields = z.strictObject({
+  title: z.string(),
+  context: z.string(),
+  decision: z.string(),
+  consequences: z.string(),
+});
+export type DraftFields = z.infer<typeof DraftFields>;
+
+/**
+ * 결정 초안 하나: 포스트(`post`, 포스트의 채널)의 글과 문답을 내 에이전트가 읽고 쓴 것(ADR-0028). 저장하지 않는 제안이라 서버가 꺼지면 잃는다.
+ * `id`는 서버가 정한 것이고 멈출 때(`api.stopDraft`) 쓴다. `read`는 에이전트에 넘긴 포스트의 글(`texts`)과 공개된 문답(`qas`)의 수다.
+ * `state`는 쓰는 중, 다 씀(`drafted`, 답한 모델과 effort가 붙는다, `Reply`와 같다), 멈춤, 쓰지 못함이다.
+ */
+export const Draft = z.strictObject({
+  id: z.string(),
+  post: z.string(),
+  executor: ExecutorId,
+  read: z.strictObject({ texts: z.number(), qas: z.number() }),
+  state: z.discriminatedUnion("state", [
+    z.strictObject({ state: z.literal("pending") }),
+    z.strictObject({
+      state: z.literal("drafted"),
+      ...DraftFields.shape,
+      model: z.string().optional(),
+      effort: z.string().optional(),
+    }),
+    z.strictObject({ state: z.literal("stopped") }),
+    z.strictObject({ state: z.literal("failed"), error: ContractError }),
+  ]),
+});
+export type Draft = z.infer<typeof Draft>;
+
 const pairCommon = {
   branch: z.string(),
   theirs: z.strictObject({ login: z.string(), branch: z.string() }),
@@ -670,6 +705,12 @@ export const runnerToServer = {
   }),
   /** `ask`(`re`)에 러너 세션이 답했다. 답하지 못했으면 `error`를 `re`를 붙여 보낸다. */
   answer: Reply,
+  /** `draft`(`re`)의 초안. 쓰지 못했으면 `error`를 `re`를 붙여 보낸다. 멈춘 초안의 답은 서버가 버린다. */
+  drafted: z.strictObject({
+    ...DraftFields.shape,
+    model: z.string().optional(),
+    effort: z.string().optional(),
+  }),
   error: ContractError,
 } satisfies Payloads;
 
@@ -678,7 +719,7 @@ export const serverToRunner = {
   /** hello를 받아들였다. 러너는 이 멤버의 에이전트로, 이 레포에 짝지어졌다. */
   welcome: z.strictObject({ login: z.string(), repo: z.string() }),
   /**
-   * 문답. 러너가 받는 요청은 이것뿐이다. 물을 에이전트(`executor`), 채널, 질문, 채널 대화만 오고 도구·폴더·세션은 러너가 정한다.
+   * 문답. 러너가 받는 요청은 이것과 결정 초안(`draft`)뿐이다. 물을 에이전트(`executor`), 채널, 질문, 채널 대화만 오고 도구·폴더·세션은 러너가 정한다.
    * 러너는 채널과 실행기마다 채널 세션 하나를 잇고(ADR-0015), 한 번에 한 턴만 돌리고 나머지는 온 순서대로 줄 세운다.
    * 포스트도 채널로 온다(`channel.id`가 포스트의 채널). 그래서 포스트의 채널 세션은 같은 채널의 것과 따로 이어 간다.
    * `recent`는 그 채널의 최근 대화(오래된 것부터 `CHANNEL_CONTEXT`개까지)다. 포스트면 맨 앞이 그 알림이고 뒤가 포스트의 대화다. 러너는 그 채널 세션의 지난 턴 뒤의 것만
@@ -692,6 +733,19 @@ export const serverToRunner = {
     recent: z.array(ChannelMessage).max(CHANNEL_CONTEXT),
     ...ModelPick.shape,
   }),
+  /**
+   * 결정 초안을 써 달라(ADR-0028). `messages`는 포스트의 대화(맨 앞이 그 알림, 오래된 것부터 `CHANNEL_CONTEXT`개까지)다.
+   * 러너는 채널 세션을 잇지 않고 새 러너 세션 하나로, 문답과 같은 줄에 서서 읽기 전용으로 돌린다. 대화는 지시가 아닌 데이터로 감싼다(ADR-0017).
+   * 답은 `drafted`(`re`)다. `model`과 `effort`는 `ask`와 같다.
+   */
+  draft: z.strictObject({
+    executor: ExecutorId,
+    post: Channel.omit({ kind: true }),
+    messages: z.array(ChannelMessage).max(CHANNEL_CONTEXT),
+    ...ModelPick.shape,
+  }),
+  /** `draft`(보낸 것의 `id`)를 멈춘다. 줄에 서 있으면 돌리지 않고, 돌고 있으면 실행기를 끈다. 답하지 않는다. */
+  stopDraft: z.strictObject({ id: z.string() }),
   /**
    * 지금 상황: 워크스페이스의 작업 전부(받는 러너의 멤버 것도 포함, `api.works`와 같은 것)와 선점 전부. 선점은 작업이 관측되지 않아도(브랜치를 바꿔 체크아웃해도) 남는다.
    * welcome 바로 뒤에 보내고, 그 뒤로는 달라질 때마다 다시 보낸다. 러너는 받아 두고 훅에 내준다(ADR-0005).
@@ -1074,6 +1128,33 @@ export const api = {
     response: z.strictObject({ qa: Qa, message: ChannelMessage.optional() }),
   },
   /**
+   * 포스트(`post`, 포스트의 채널)로 내 `executor` 에이전트에게 결정 초안을 쓰게 한다(ADR-0028). 에이전트는 주인만 부른다(`forbidden`).
+   * 답을 기다리지 않고 쓰는 중인 초안(읽을 글과 문답의 수가 붙는다)을 돌려준다. 다 쓰거나, 멈추거나, 쓰지 못하면
+   * 실시간 연결의 `draft`로 요청한 사람에게만 온다. 초안은 저장하지 않는다.
+   * 러너가 꺼져 있으면 쌓아 두지 않고 바로 `runner_offline`이다. 포스트가 아니면 `not_found`. `model`과 `effort`는 `ask`와 같다.
+   */
+  draftDecision: {
+    method: "POST",
+    path: "/api/drafts",
+    body: z.strictObject({
+      agent: z.string(),
+      executor: ExecutorId,
+      post: z.string(),
+      ...ModelPick.shape,
+    }),
+    response: z.strictObject({ draft: Draft }),
+  },
+  /**
+   * 쓰는 중인 내 초안(`draft`, `Draft.id`)을 멈춘다("그만 쓰기"). 멈춘 초안을 돌려주고 실시간 연결의 `draft`로도 보낸다.
+   * 내 것이 아니거나 이미 끝났으면 `not_found`다.
+   */
+  stopDraft: {
+    method: "POST",
+    path: "/api/drafts/stop",
+    body: z.strictObject({ draft: z.string() }),
+    response: z.strictObject({ draft: Draft }),
+  },
+  /**
    * 내 DM의 문답 하나를 채널에 올린다. 질문과 답이 함께 올라가고, 답만 올릴 수는 없다. 공개를 비공개로 되돌리지는 않는다.
    * `text`는 함께 쓰는 한마디다. 채널에는 올린 사람의 메시지 하나(글과 문답)로 선다. 비우거나 공백뿐이면 글 없이 올린다.
    * 답이 온 문답만 올린다(`invalid_request`). 이미 올렸으면 `conflict`. 내 문답이 아니면 있어도 `not_found`다.
@@ -1243,6 +1324,8 @@ export const serverToWeb = {
    * 공개된 문답은 채널의 모두에게 `message`(kind `qa`)로도 간다. 끊긴 사이의 것은 다시 보내지 않으니, 다시 붙으면 `api.dms`를 읽는다.
    */
   qa: Qa,
+  /** 내 결정 초안이 끝났다(다 씀, 멈춤, 쓰지 못함). 요청한 사람의 연결에만 간다. 끊긴 사이의 것은 다시 보내지 않는다. */
+  draft: Draft,
   error: ContractError,
 } satisfies Payloads;
 

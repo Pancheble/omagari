@@ -20,6 +20,7 @@ import {
   type ConflictPair,
   type ContractError,
   ContractFailure,
+  type Draft,
   decode,
   EXECUTOR_NAMES,
   type ExecutorId,
@@ -532,6 +533,21 @@ export async function startServer(options: {
     shareQa(ask.qa);
     shareMembers();
   };
+  /** 러너에 보내고 기다리는 결정 초안(ADR-0028). 키는 보낸 `draft`의 id이고 `Draft.id`다. 저장하지 않는다. */
+  const drafting = new Map<
+    string,
+    { socket: WSContext; login: string; executor: ExecutorId; draft: Draft }
+  >();
+  /** 기다리던 초안을 끝내고 요청한 사람에게 보낸다. 이미 끝났으면 없다. */
+  const settleDraft = (id: string, state: Exclude<Draft["state"], { state: "pending" }>) => {
+    const found = drafting.get(id);
+    if (!found || stopped) return;
+    drafting.delete(id);
+    const draft = { ...found.draft, state };
+    sendTo(found.login, encode(serverToWeb, "draft", draft));
+    shareMembers();
+    return draft;
+  };
 
   /** 멤버들이 보는 작업 전부. 웹과 러너가 같은 것을 본다. */
   const worksView = (): WorkView[] => {
@@ -696,7 +712,7 @@ export async function startServer(options: {
         ([, runner]) => runner.login === login && runner.executors.includes(executor),
       );
       const sockets = live.map(([socket]) => socket);
-      const busy = [...asks.values()].some(
+      const busy = [...asks.values(), ...drafting.values()].some(
         (ask) => ask.executor === executor && sockets.includes(ask.socket),
       );
       // 고를 거리는 묻는 문답이 갈 러너(마지막에 붙은 것)의 것이다.
@@ -1227,31 +1243,40 @@ export async function startServer(options: {
     return { message: message || null, emoji };
   });
 
-  mount(app, api.ask, ({ agent, executor, channel, message, visibility, model, effort }, c) => {
-    if (agent !== c.get("login")) {
+  /** 에이전트는 주인만 부른다. */
+  const mustOwn = (agent: string, login: string) => {
+    if (agent !== login) {
       throw new ContractFailure({
         code: "forbidden",
         message: `${agent}의 에이전트는 ${agent}만 부를 수 있다`,
       });
     }
-    mustWrite(channel);
-    visit(agent);
-    // 같은 멤버의 러너가 여럿이면 그 실행기를 돌리는 것 가운데 마지막에 붙은 것이 답한다.
+  };
+
+  /**
+   * `agent`의 `executor`를 돌리는 러너의 연결. 같은 멤버의 러너가 여럿이면 마지막에 붙은 것이 답한다.
+   * 꺼져 있으면 쌓아 두지 않고 `runner_offline`이다.
+   */
+  const runnerOf = (agent: string, executor: ExecutorId) => {
     const found = [...runners].findLast(
       ([, runner]) => runner.login === agent && runner.executors.includes(executor),
     );
     if (!found) {
       throw new ContractFailure({
         code: "runner_offline",
-        message: `${agent}의 ${EXECUTOR_NAMES[executor]} 러너가 꺼져 있다. 문답은 쌓아 두지 않는다`,
+        message: `${agent}의 ${EXECUTOR_NAMES[executor]} 러너가 꺼져 있다. 요청은 쌓아 두지 않는다`,
       });
     }
-    const [socket] = found;
-    // 채널 대화는 이 문답이 채널에 서기 전에 읽는다. `@호출`의 질문이 데이터로 한 번 더 들어가지 않는다.
-    // 포스트면 맨 앞에 그 알림을 둔다. 알림의 번호가 포스트의 글보다 앞이라 러너는 첫 턴에만 넘긴다.
-    // ponytail: 첫 턴 뒤에 알림이 고쳐져도 그 채널 세션에는 다시 넘기지 않는다. 고친 알림이 필요해지면 러너가 알림만 따로 다시 넘긴다.
+    return found[0];
+  };
+
+  /**
+   * 러너에 넘길 채널의 최근 대화, 오래된 것부터 `CHANNEL_CONTEXT`개까지. 포스트면 맨 앞에 그 알림을 둔다.
+   * 알림의 번호가 포스트의 글보다 앞이라 러너는 채널 세션의 첫 턴에만 넘긴다.
+   */
+  const recentOf = (channel: string) => {
     const alert = postAlert(channel);
-    const recent = [
+    return [
       ...(alert ? [alert] : []),
       ...(
         db
@@ -1259,6 +1284,16 @@ export async function startServer(options: {
           .all(channel, CHANNEL_CONTEXT - (alert ? 1 : 0)) as MessageRow[]
       ).reverse(),
     ].map(messageView);
+  };
+
+  mount(app, api.ask, ({ agent, executor, channel, message, visibility, model, effort }, c) => {
+    mustOwn(agent, c.get("login") as string);
+    mustWrite(channel);
+    visit(agent);
+    const socket = runnerOf(agent, executor);
+    // 채널 대화는 이 문답이 채널에 서기 전에 읽는다. `@호출`의 질문이 데이터로 한 번 더 들어가지 않는다.
+    // ponytail: 첫 턴 뒤에 알림이 고쳐져도 그 채널 세션에는 다시 넘기지 않는다. 고친 알림이 필요해지면 러너가 알림만 따로 다시 넘긴다.
+    const recent = recentOf(channel);
     const name = channelName(channel);
     const at = Date.now();
     const { lastInsertRowid } = db
@@ -1289,6 +1324,48 @@ export async function startServer(options: {
     if (visibility === "public") posted(channel);
     shareMembers(); // 답하는 중
     return shared;
+  });
+
+  mount(app, api.draftDecision, ({ agent, executor, post, model, effort }, c) => {
+    mustOwn(agent, c.get("login") as string);
+    if (!postAlert(post))
+      throw new ContractFailure({ code: "not_found", message: `없는 포스트다: ${post}` });
+    visit(agent);
+    const socket = runnerOf(agent, executor);
+    const messages = recentOf(post);
+    const frame = encode(serverToRunner, "draft", {
+      executor,
+      post: { id: post, name: channelName(post) },
+      messages,
+      model,
+      effort,
+    });
+    const draft: Draft = {
+      id: (JSON.parse(frame) as { id: string }).id,
+      post,
+      executor,
+      read: {
+        texts: messages.filter((m) => m.kind === "text").length,
+        qas: messages.filter((m) => m.kind === "qa").length,
+      },
+      state: { state: "pending" },
+    };
+    drafting.set(draft.id, { socket, login: agent, executor, draft });
+    socket.send(frame);
+    shareMembers(); // 답하는 중
+    return { draft };
+  });
+
+  mount(app, api.stopDraft, ({ draft: id }, c) => {
+    const found = drafting.get(id);
+    if (!found || found.login !== c.get("login")) {
+      throw new ContractFailure({
+        code: "not_found",
+        message: `쓰는 중인 내 초안이 아니다: ${id}`,
+      });
+    }
+    found.socket.send(encode(serverToRunner, "stopDraft", { id }));
+    return { draft: settleDraft(id, { state: "stopped" }) as Draft };
   });
 
   mount(app, api.postQa, ({ qa, text }, c) => {
@@ -1679,9 +1756,14 @@ export async function startServer(options: {
             shareSituation();
           }
         } else {
-          // 문답의 답이나 실패. 그 문답을 보낸 연결에서 온 것만 받는다.
+          // 문답이나 초안의 답, 실패. 그것을 보낸 연결에서 온 것만 받는다.
           const re = message.re ?? "";
-          if (asks.get(re)?.socket !== socket) {
+          if (drafting.get(re)?.socket === socket) {
+            if (message.kind === "drafted")
+              settleDraft(re, { state: "drafted", ...message.payload });
+            else if (message.kind === "error")
+              settleDraft(re, { state: "failed", error: message.payload });
+          } else if (asks.get(re)?.socket !== socket) {
             if (message.kind === "error")
               console.warn("러너가 서버의 메시지를 거절했다:", message.payload);
           } else if (message.kind === "answer") {
@@ -1704,7 +1786,17 @@ export async function startServer(options: {
           );
           shareSituation();
         }
-        // 떨어진 러너의 답은 오지 않는다. 기다리던 문답을 실패로 둔다.
+        // 떨어진 러너의 답은 오지 않는다. 기다리던 초안과 문답을 실패로 둔다.
+        for (const [id, { socket: to, login }] of drafting) {
+          if (to !== socket) continue;
+          settleDraft(id, {
+            state: "failed",
+            error: {
+              code: "runner_offline",
+              message: `${login}의 러너가 초안을 쓰기 전에 떨어졌다`,
+            },
+          });
+        }
         for (const [id, ask] of asks) {
           if (ask.socket !== socket) continue;
           settle(id, {
