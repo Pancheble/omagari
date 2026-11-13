@@ -10,7 +10,7 @@ import {
   type ModelPick,
   type Qa,
 } from "@omagari/contract";
-import { Check, ChevronDown, ChevronRight, CornerDownLeft, Forward } from "lucide-react";
+import { Bot, Check, ChevronDown, ChevronRight, CornerDownLeft, Forward } from "lucide-react";
 import { type KeyboardEvent, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -528,6 +528,14 @@ function subject(name: string) {
   return `${name}${code % 28 ? "이" : "가"}`;
 }
 
+/** AI가 쓴 글의 표시(DESIGN.md "AI가 쓴 글"). 포스트의 이슈 댓글에 붙는 "🤖 AI가 쓴 답"과 같은 뜻이다. */
+export const AiBadge = () => (
+  <span className="badge outline ai-badge" title="AI가 쓴 답">
+    <Bot size={12} aria-hidden />
+    AI
+  </span>
+);
+
 /**
  * 채널에 올라온 문답(DESIGN.md "문답"): 접힌 한 줄(app-qa-line)이 기본이고, 누르면 펼친 카드(app-qa-card)가 된다.
  * 올린 사람의 메시지 본문 안에 둔다. `state`는 그 에이전트의 지금 상태(러너가 붙어 있는지)다.
@@ -561,6 +569,7 @@ export function QaLine({ message, state }: { message: QaMessage; state: Agent["s
         >
           <Mark agent={agent} aria-hidden />
           <strong className="qa-line-owner">{owner}</strong>
+          <AiBadge />
           <span className="qa-line-question">{qa.question}</span>
           <span className="qa-line-toggle" aria-hidden>
             {qa.answer.state === "pending" ? "답하는 중…" : "펼치기"}
@@ -602,6 +611,7 @@ function QaCard({
             </time>
           </span>
         </p>
+        <AiBadge />
         <span className="badge outline">공개</span>
       </div>
       <p className="qa-question">{qa.question}</p>

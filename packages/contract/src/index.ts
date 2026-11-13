@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 26;
+export const CONTRACT_VERSION = 27;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -433,6 +433,14 @@ export const ALERT_KINDS = {
   declared: "선언된 계약 변경",
 } as const satisfies Record<Alert["kind"], string>;
 
+/** 포럼 태그와 배지에 쓰는 짧은 종류 이름. 포스트의 이슈를 열 때 이 이름의 라벨을 단다(ADR-0032). */
+export const ALERT_LABELS = {
+  direct: "직접 충돌",
+  indirect: "간접 충돌",
+  duplicate: "중복 구현",
+  declared: "계약 변경",
+} as const satisfies Record<Alert["kind"], string>;
+
 const alertCommon = {
   works: z.tuple([WorkRef, WorkRef]),
   more: z.number(),
@@ -553,6 +561,20 @@ export const InboxItem = z.discriminatedUnion("kind", [
 export type InboxItem = z.infer<typeof InboxItem>;
 
 /**
+ * 포스트와 맞춘 GitHub 이슈(ADR-0032). 포스트 하나가 이슈 하나다. 제목, 라벨, 열림·닫힘은 GitHub에서 읽은 것이고
+ * 사람이 GitHub에서 바꾸면 다음 주기에 따라온다. 포스트의 글은 이슈 댓글로 가고, 이슈 댓글은 포스트의 글로 들어온다.
+ * 이슈를 아직 열지 못했으면(GitHub이 받지 않음, 토큰 있는 멤버가 없음) 포스트의 `issue`가 null이다.
+ */
+export const PostIssue = z.strictObject({
+  number: z.number(),
+  url: z.string(),
+  title: z.string(),
+  labels: z.array(z.string()),
+  open: z.boolean(),
+});
+export type PostIssue = z.infer<typeof PostIssue>;
+
+/**
  * 알림의 포스트(ADR-0027). 알림 하나에 포스트 하나이고, 알림이 포럼에 올라올 때 함께 생긴다. 포스트의 첫 글이 그 알림이다.
  * 포스트는 채널처럼 동작한다: `channel`을 채널 자리에 넣어 글 쓰기, 지난 대화, DM, `@호출`, 채널에 올리기를 그대로 쓴다.
  * 채널 목록(`api.channels`)에는 없다. `alert`는 알림이 선 채널 메시지의 번호, `count`는 포스트에 선 글(글과 공개된 문답)의 수다.
@@ -565,6 +587,7 @@ export const Post = z.strictObject({
   count: z.number(),
   last: z.strictObject({ login: z.string(), name: z.string(), line: z.string() }).nullable(),
   activity: z.string(),
+  issue: PostIssue.nullable(),
 });
 export type Post = z.infer<typeof Post>;
 
@@ -635,6 +658,8 @@ export const ChannelMessage = z.discriminatedUnion("kind", [
     /** 쓴 그대로의 글. HTML이 들어 있어도 서버는 바꾸지 않고, 웹은 글자로만 보인다. */
     text: z.string(),
     at: z.string(),
+    /** 포스트의 이슈에 GitHub에서 단 댓글이 들어온 것이다(ADR-0032). `login`은 GitHub 로그인이라 멤버가 아닐 수 있다. */
+    github: z.literal(true).optional(),
   }),
   /**
    * 공개된 문답: 채널에 올린 DM이나 `@호출`. 질문과 답이 늘 함께 있다. `login`과 `name`은 그 에이전트의 주인(올린 사람)이고,
