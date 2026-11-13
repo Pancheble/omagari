@@ -10,6 +10,7 @@ import {
 import { useEffect, useId, useMemo, useReducer, useState } from "react";
 import { fullTime, timeOf } from "./conversation.tsx";
 import { useMenu } from "./dm.tsx";
+import { Avatar } from "./workspace.tsx";
 
 export type AlertMessage = Extract<ChannelMessage, { kind: "alert" }>;
 /** 포럼의 포스트 하나: 요약과 첫 글인 알림. `edited`는 알림이 고쳐지는 것을 이 화면이 본 시각이다. */
@@ -45,9 +46,12 @@ const base = (path: string) => path.split("/").at(-1) ?? path;
 const subject = (alert: Alert) =>
   alert.kind === "direct" ? alert.files[0] && base(alert.files[0].path) : alert.symbols[0]?.name;
 
-/** "지은 ↔ 민수 · refund.ts". 서버는 제목을 주지 않으니 알림에서 짓는다. */
+/**
+ * "refund.ts". 서버는 제목을 주지 않으니 알림의 파일이나 심볼에서 짓는다.
+ * 사람은 제목에 넣지 않고 카드의 사람 줄에 따로 보인다(DESIGN.md 시안 27-B).
+ */
 export const postTitle = ({ message: { alert } }: PostItem) =>
-  `${alert.works[0].name} ↔ ${alert.works[1].name} · ${subject(alert) ?? alert.works[0].branch}`;
+  subject(alert) ?? alert.works[0].branch;
 
 /** 찾기 칸이 훑는 글: 사람, 브랜치, 파일, 심볼. */
 const haystack = (post: PostItem) => {
@@ -306,7 +310,7 @@ function ViewMenu<S extends string, V extends string>({
 }
 
 /**
- * 포스트 한 장(목록 보기와 카드 보기의 세 줄): 종류 배지와 제목, 마지막 글 한 줄, 글 수와 시각.
+ * 포스트 한 장(목록 보기와 카드 보기의 네 줄): 제목, 종류 배지, 마지막 글 한 줄, 사람 줄과 글 수와 시각.
  * 새 글이 있으면 제목이 굵고 점이 붙는다. 풀린 포스트는 흐리고 "풀렸어요" 배지가 앞선다.
  */
 function PostRow({
@@ -329,9 +333,11 @@ function PostRow({
     >
       <span className="forum-post-title">
         {resolved && <span className="badge outline">풀렸어요</span>}
-        <KindBadge kind={alert.kind} />
         <strong className="forum-post-name">{postTitle(post)}</strong>
         {unread && <span className="unread-dot" role="img" aria-label="새 글" />}
+      </span>
+      <span className="forum-post-tags">
+        <KindBadge kind={alert.kind} />
       </span>
       <span className="forum-post-last">
         {post.last ? (
@@ -343,6 +349,15 @@ function PostRow({
         )}
       </span>
       <span className="forum-post-meta">
+        <span className="forum-post-people">
+          {alert.works.map((work) => (
+            <Avatar key={work.login} name={work.name} size={22} />
+          ))}
+          <span className="forum-post-names">
+            {alert.works.map((work) => work.name).join(" · ")}
+          </span>
+        </span>
+        <span aria-hidden>·</span>
         <MessageCircle size={16} aria-hidden />
         <span className="sr-only">글 </span>
         {post.count}

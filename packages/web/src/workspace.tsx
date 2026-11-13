@@ -757,6 +757,7 @@ export function Workspace({
           id={rightId}
           title={postChannel.name}
           sheet={!wide}
+          full
           onClose={() => {
             location.hash = current?.id ?? "";
           }}
@@ -764,14 +765,16 @@ export function Workspace({
             <div className="post-head">
               <h2>{postChannel.name}</h2>
               {decide}
-              <a
-                className="header-button"
-                href={`#${current?.id}/${openPost.alert}/big`}
-                aria-label="크게 보기"
-                title="크게 보기"
-              >
-                <Maximize2 size={18} aria-hidden />
-              </a>
+              {wide && (
+                <a
+                  className="header-button"
+                  href={`#${current?.id}/${openPost.alert}/big`}
+                  aria-label="크게 보기"
+                  title="크게 보기"
+                >
+                  <Maximize2 size={18} aria-hidden />
+                </a>
+              )}
             </div>
           }
         >
@@ -866,6 +869,7 @@ export function Workspace({
 /**
  * 오른쪽 칸. 1069px 이상은 세 번째 칸, 834–1068px은 대화 위에 겹친 칸(CSS가 정한다),
  * 833px 이하(`sheet`)는 아래에서 올라오는 전체 높이 시트(모달 `<dialog>`)다. 닫기 버튼과 Esc, 덮개 누르기로 닫힌다.
+ * `full`이면 시트 대신 채널처럼 화면 전체를 쓰는 대화이고(포스트와 DM), 닫기는 머리 왼쪽 "‹"다.
  * 머리 왼쪽은 제목(`title`)이고, `head`를 주면 그것이 대신 선다(DM 칸의 고른 에이전트).
  */
 export function RightPanel({
@@ -873,6 +877,7 @@ export function RightPanel({
   title,
   head,
   sheet,
+  full = false,
   onClose,
   children,
 }: {
@@ -880,6 +885,7 @@ export function RightPanel({
   title: string;
   head?: ReactNode;
   sheet: boolean;
+  full?: boolean;
   onClose: () => void;
   children: ReactNode;
 }) {
@@ -887,18 +893,26 @@ export function RightPanel({
   useEffect(() => {
     if (sheet) dialog.current?.showModal();
   }, [sheet]);
+  const page = sheet && full;
   const body = (
     <div className="right-panel">
       <div className="panel-head">
+        {page && (
+          <button type="button" className="header-button" aria-label="돌아가기" onClick={onClose}>
+            <ChevronLeft size={18} aria-hidden />
+          </button>
+        )}
         {head ?? <h2>{title}</h2>}
-        <button
-          type="button"
-          className="header-button"
-          aria-label={`${title} 닫기`}
-          onClick={onClose}
-        >
-          <X size={18} aria-hidden />
-        </button>
+        {!page && (
+          <button
+            type="button"
+            className="header-button"
+            aria-label={`${title} 닫기`}
+            onClick={onClose}
+          >
+            <X size={18} aria-hidden />
+          </button>
+        )}
       </div>
       <div className="panel-body">{children}</div>
     </div>
@@ -915,7 +929,7 @@ export function RightPanel({
     <dialog
       ref={dialog}
       id={id}
-      className="sheet"
+      className={page ? "sheet full" : "sheet"}
       aria-label={title}
       onCancel={(event) => {
         event.preventDefault();
@@ -987,7 +1001,7 @@ export const Avatar = ({
   presence,
 }: {
   name: string;
-  size: 36 | 40;
+  size: 22 | 36 | 40;
   presence?: Presence;
 }) => {
   const face = (
