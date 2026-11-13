@@ -59,7 +59,7 @@ export const blobAt = (folder: string, commit: string, path: string) =>
  * 바꾼 곳 하나. `before`는 앞 판에서 바뀐 줄(`[from, to)`, 넣기만 했으면 넣은 자리의 빈 범위)이고,
  * `after`는 뒤 판의 줄 번호로 바꾼 곳이다(지운 줄만 있는 곳은 그 앞 줄).
  */
-export type Hunk = { before: { from: number; to: number }; after: LineRange };
+export type Hunk = { before: { from: number; to: number }; after: LineRange; size: number };
 
 /** 두 판을 이 기기의 임시 폴더에서 비교해 바꾼 곳들을 낸다. */
 export async function hunks(
@@ -98,6 +98,7 @@ export async function hunks(
         return {
           before: { from: at, to: at + Number(oldCount) },
           after: { from, to: Math.max(from + Number(count) - 1, from) },
+          size: Number(count),
         };
       },
     );
