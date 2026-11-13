@@ -36,13 +36,16 @@ const DRAFT = {
   consequences: "박민수의 브랜치는 큐 함수를 쓰도록 다시 맞춘다.",
 };
 const canned = (message: string) => CANNED.find(([q]) => message.includes(q))?.[1];
-/** 정해 둔 답이 있으면 그것을, 없으면 `real`(없으면 초안이나 짧은 답)을 부른다. */
+/**
+ * 정해 둔 답이 있으면 그것을, 없으면 `real`을 부른다. `real`이 없으면 초안이나 짧은 답을 낸다.
+ * 초안은 포스트의 대화(미리 넣은 질문도 든다)를 감싸 오므로 정해 둔 답과 맞추지 않는다.
+ */
 const scripted = (real?: Executor): Executor =>
   Object.assign(
     async (input: Parameters<Executor>[0]) => {
-      const answer = canned(input.message);
+      const draft = input.message.includes('"consequences": "…"');
+      const answer = draft ? undefined : canned(input.message);
       if (answer || !real) {
-        const draft = input.message.includes('"consequences": "…"');
         if (draft) await sleep(5_000);
         const text = answer ?? (draft ? JSON.stringify(DRAFT) : "데모라 정해 둔 답이에요.");
         return { answer: text, session: input.resume ?? crypto.randomUUID() };
