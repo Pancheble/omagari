@@ -13,6 +13,7 @@ import {
   type ChannelMessage,
   type Choices,
   type ChosenPresence,
+  type Claim,
   CONTRACT_VERSION,
   type ConflictPair,
   type ContractError,
@@ -35,6 +36,7 @@ import {
   type Presence,
   type PresenceDuration,
   type Qa,
+  type ReplyOf,
   RUNNER_SOCKET,
   runnerToServer,
   type ShareLevel,
@@ -300,15 +302,50 @@ export async function startServer(options: {
   // v0.1.0의 표에는 `alert`가 없다.
   if (!db.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'alert'").get())
     db.exec("ALTER TABLE messages ADD COLUMN alert INTEGER REFERENCES alerts (id)");
-  // 편지함(2단계 질문 A5~A7): 작업(`login` + `branch`)마다 넘겨줄 소식. 지금은 알림(`alert`)뿐이다. `at`은 들어온 시각(ms)이다.
+  // 편지함(2단계 질문 A5~A7): 작업(`login` + `branch`)마다 넘겨줄 소식. 알림(`alert`)이거나, 그 밖의 소식(`news`, 계약의 InboxItem에서
+  // id, branch, at을 뺀 것의 JSON) 가운데 하나다. `at`은 들어온 시각(ms)이다.
   // 작업과 알림마다 넘겨주지 않은 것은 하나다. 넘겨준 확인이 오면 지우고, `inboxMs`가 지나면 만료로 지운다.
-  db.exec(`CREATE TABLE IF NOT EXISTS inbox (
+  const INBOX = `(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     login TEXT NOT NULL,
     branch TEXT NOT NULL,
-    alert INTEGER NOT NULL REFERENCES alerts (id),
+    alert INTEGER REFERENCES alerts (id),
+    news TEXT,
     at INTEGER NOT NULL,
-    UNIQUE (login, branch, alert)
+    UNIQUE (login, branch, alert),
+    CHECK ((alert IS NULL) != (news IS NULL))
+  ) STRICT`;
+  db.exec(`CREATE TABLE IF NOT EXISTS inbox ${INBOX}`);
+  // #82의 표에는 `news`가 없고 `alert`가 NOT NULL이다. 표를 다시 만들어 옮긴다(번호는 그대로 이어 간다).
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('inbox') WHERE name = 'news'").get()) {
+    db.exec("BEGIN");
+    db.exec(`CREATE TABLE inbox_next ${INBOX}`);
+    db.exec(
+      "INSERT INTO inbox_next (id, login, branch, alert, at) SELECT id, login, branch, alert, at FROM inbox",
+    );
+    db.exec("DROP TABLE inbox");
+    db.exec("ALTER TABLE inbox_next RENAME TO inbox");
+    db.exec("COMMIT");
+  }
+  // 선점(ADR-0008). `lines`는 LineRange(JSON)이고 심볼과 줄 범위에만 있다. `at`은 건 시각(ms)이다.
+  // `stale`은 주인이 오프라인으로 `forgetMs`를 넘겨 "오래됨"이 된 시각(ms)이고, 그 뒤 `forgetMs`가 더 지나면 지운다. 러너가 다시 붙으면 지운다.
+  db.exec(`CREATE TABLE IF NOT EXISTS claims (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    login TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    path TEXT NOT NULL,
+    unit TEXT NOT NULL,
+    symbol TEXT,
+    lines TEXT,
+    at INTEGER NOT NULL,
+    stale INTEGER
+  ) STRICT`);
+  // 피드에만 남는 소식: 걸거나 푼 선점(`kind`가 claim이나 released, `claim`은 계약의 Claim JSON). `inboxMs`가 지나면 지운다.
+  db.exec(`CREATE TABLE IF NOT EXISTS feed (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    claim TEXT NOT NULL,
+    at INTEGER NOT NULL
   ) STRICT`);
   // 워크스페이스의 설정 하나씩. 지금은 알림 채널(`alert_channel`)뿐이다.
   db.exec(`CREATE TABLE IF NOT EXISTS settings (
@@ -489,6 +526,50 @@ export async function startServer(options: {
       const offlineSince = since === null ? null : new Date(since).toISOString();
       return { login, branch, base, share, files, line, offlineSince };
     });
+  };
+
+  type ClaimRow = {
+    id: number;
+    login: string;
+    branch: string;
+    path: string;
+    unit: Claim["unit"];
+    symbol: string | null;
+    lines: string | null;
+    at: number;
+    stale: number | null;
+  };
+  const claimView = (row: ClaimRow): Claim => ({
+    id: row.id,
+    login: row.login,
+    branch: row.branch,
+    path: row.path,
+    unit: row.unit,
+    ...(row.symbol !== null && { symbol: row.symbol }),
+    ...(row.lines !== null && { lines: JSON.parse(row.lines) }),
+    at: new Date(row.at).toISOString(),
+    stale: row.stale !== null,
+  });
+  /** 선점 전부. 작업처럼 워크스페이스에서 빠진 사람의 것은 보이지 않는다. */
+  const claimsView = (): Claim[] =>
+    (
+      db
+        .prepare("SELECT * FROM claims WHERE login IN (SELECT login FROM sessions) ORDER BY id")
+        .all() as ClaimRow[]
+    ).map(claimView);
+
+  /** 선점을 푼다. 피드에 남기고 푼 것을 돌려준다. 상황은 부른 쪽이 보낸다. */
+  const releaseClaims = (where: string, ...params: (string | number)[]) => {
+    const rows = db.prepare(`SELECT * FROM claims WHERE ${where}`).all(...params) as ClaimRow[];
+    const now = Date.now();
+    for (const row of rows) {
+      db.prepare("DELETE FROM claims WHERE id = ?").run(row.id);
+      db.prepare("INSERT INTO feed (kind, claim, at) VALUES ('released', ?, ?)").run(
+        JSON.stringify(claimView(row)),
+        now,
+      );
+    }
+    return rows.map(claimView);
   };
 
   /**
@@ -758,24 +839,24 @@ export async function startServer(options: {
     (
       db
         .prepare(
-          `SELECT i.id, i.branch, i.at, a.works, a.files, a.resolved FROM inbox i
-           JOIN alerts a ON a.id = i.alert WHERE i.login = ? AND i.at > ? ORDER BY i.id`,
+          `SELECT i.id, i.branch, i.at, i.news, a.works, a.files, a.resolved FROM inbox i
+           LEFT JOIN alerts a ON a.id = i.alert WHERE i.login = ? AND i.at > ? ORDER BY i.id`,
         )
         .all(login, Date.now() - inboxMs) as {
         id: number;
         branch: string;
         at: number;
-        works: string;
-        files: string;
+        news: string | null;
+        works: string | null;
+        files: string | null;
         resolved: number | null;
       }[]
-    ).map((row) => ({
-      id: row.id,
-      branch: row.branch,
-      at: new Date(row.at).toISOString(),
-      kind: "alert",
-      alert: alertView(row),
-    }));
+    ).map((row) => {
+      const head = { id: row.id, branch: row.branch, at: new Date(row.at).toISOString() };
+      return row.news === null
+        ? { ...head, kind: "alert", alert: alertView(row) }
+        : { ...head, ...JSON.parse(row.news) };
+    });
   /** 러너마다 마지막으로 보낸 편지함. 같은 것을 다시 보내지 않는다. */
   const sentInbox = new Map<WSContext, string>();
   /** 편지함이 달라진 러너에 그 멤버의 편지함을 보낸다. `to`(막 붙은 러너)에는 같아도 보낸다. */
@@ -844,14 +925,15 @@ export async function startServer(options: {
   // ponytail: 달라질 때마다 작업 전부(내용 포함)를 러너마다 보낸다. 멤버와 큰 작업이 많아지면 작업마다의 차이만 보낸다.
   const shareSituation = (to?: WSContext) => {
     const works = worksView();
+    const claims = claimsView();
     shareMembers(undefined, works); // 멤버 목록은 상황에서 나온다
-    const json = JSON.stringify(works);
+    const json = JSON.stringify([works, claims]);
     const targets = (json !== sent ? [...runners.keys()] : to ? [to] : []).filter(
       (socket) => socket.readyState === 1, // OPEN
     );
     sent = json;
     if (targets.length === 0) return;
-    const frame = encode(serverToRunner, "situation", { works });
+    const frame = encode(serverToRunner, "situation", { works, claims });
     for (const socket of targets) socket.send(frame);
   };
 
@@ -1129,21 +1211,33 @@ export async function startServer(options: {
 
   mount(app, api.feed, (_, c) => {
     const login = c.get("login");
+    const since = Date.now() - inboxMs;
     const rows = db
-      .prepare(
-        "SELECT works, files, resolved, updated FROM alerts WHERE updated > ? ORDER BY updated DESC, id DESC",
-      )
-      .all(Date.now() - inboxMs) as {
+      .prepare("SELECT works, files, resolved, updated FROM alerts WHERE updated > ?")
+      .all(since) as {
       works: string;
       files: string;
       resolved: number | null;
       updated: number;
     }[];
-    const news = rows
-      .map((row) => ({ at: new Date(row.updated).toISOString(), alert: alertView(row) }))
-      .filter(({ alert }) => !alert.works.some((work) => work.login === login))
-      .slice(0, FEED_PAGE);
-    return { news };
+    const alerts = rows
+      .map((row) => ({ ms: row.updated, alert: alertView(row) }))
+      .filter(({ alert }) => !alert.works.some((work) => work.login === login));
+    const claims = (
+      db.prepare("SELECT kind, claim, at FROM feed WHERE at > ?").all(since) as {
+        kind: "claim" | "released";
+        claim: string;
+        at: number;
+      }[]
+    )
+      .map((row) => ({ ms: row.at, kind: row.kind, claim: JSON.parse(row.claim) as Claim }))
+      .filter((news) => news.claim.login !== login)
+      .map(({ ms, kind, claim }) => ({ ms, [kind]: claim }));
+    const news = [...alerts, ...claims]
+      .sort((a, b) => b.ms - a.ms)
+      .slice(0, FEED_PAGE)
+      .map(({ ms, ...news }) => ({ at: new Date(ms).toISOString(), ...news }));
+    return { news } as ReplyOf<typeof api.feed>;
   });
   mount(app, api.setAlertChannel, ({ channel }) => {
     if (!db.prepare("SELECT 1 FROM channels WHERE id = ? AND alert IS NULL").get(channel)) {
@@ -1334,6 +1428,7 @@ export async function startServer(options: {
           }
           runners.set(socket, { login, hash: hash(session), executors, choices });
           db.prepare("DELETE FROM offline WHERE login = ?").run(login);
+          db.prepare("UPDATE claims SET stale = NULL WHERE login = ?").run(login);
           // ponytail: 멤버 하나에 러너 하나로 본다. 기기 둘에서 실행기가 다른 러너를 켜면 나중에 붙은 쪽의 것만 남는다.
           db.prepare("DELETE FROM agents WHERE login = ?").run(login);
           const known = db.prepare("INSERT OR IGNORE INTO agents (login, executor) VALUES (?, ?)");
@@ -1357,6 +1452,65 @@ export async function startServer(options: {
           const drop = db.prepare("DELETE FROM inbox WHERE id = ? AND login = ?");
           for (const id of message.payload.ids) drop.run(id, runner.login);
           shareInbox();
+        } else if (message.kind === "claim") {
+          const { branch, path, unit, symbol, lines, overlaps } = message.payload;
+          const login = runner.login;
+          const now = Date.now();
+          const linesJson = lines ? JSON.stringify(lines) : null;
+          db.exec("BEGIN");
+          // 같은 작업의 같은 곳은 하나다. 다시 걸면 새로 건 것으로 바꾼다.
+          db.prepare(
+            `DELETE FROM claims WHERE login = ? AND branch = ? AND path = ? AND unit = ?
+             AND symbol IS ? AND lines IS ?`,
+          ).run(login, branch, path, unit, symbol ?? null, linesJson);
+          const { lastInsertRowid } = db
+            .prepare(
+              "INSERT INTO claims (login, branch, path, unit, symbol, lines, at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            )
+            .run(login, branch, path, unit, symbol ?? null, linesJson, now);
+          const claim = claimView(
+            db.prepare("SELECT * FROM claims WHERE id = ?").get(lastInsertRowid) as ClaimRow,
+          );
+          db.prepare("INSERT INTO feed (kind, claim, at) VALUES ('claim', ?, ?)").run(
+            JSON.stringify(claim),
+            now,
+          );
+          // 겹침은 양쪽 작업의 편지함에 넣는다. 각자 자기 선점이 `mine`이다.
+          const put = db.prepare("INSERT INTO inbox (login, branch, news, at) VALUES (?, ?, ?, ?)");
+          for (const id of overlaps) {
+            const row = db
+              .prepare("SELECT * FROM claims WHERE id = ? AND login != ?")
+              .get(id, login) as ClaimRow | undefined;
+            if (!row) continue;
+            const theirs = claimView(row);
+            put.run(login, branch, JSON.stringify({ kind: "overlap", mine: claim, theirs }), now);
+            put.run(
+              theirs.login,
+              theirs.branch,
+              JSON.stringify({ kind: "overlap", mine: theirs, theirs: claim }),
+              now,
+            );
+          }
+          db.exec("COMMIT");
+          socket.send(encode(serverToRunner, "claimed", { claim }, message.id));
+          shareSituation();
+          shareInbox();
+        } else if (message.kind === "release") {
+          const { branch, path, symbol, lines } = message.payload;
+          const where = ["login = ?", "branch = ?"];
+          const params: string[] = [runner.login, branch];
+          for (const [column, value] of [
+            ["path", path],
+            ["symbol", symbol],
+            ["lines", lines && JSON.stringify(lines)],
+          ] as const) {
+            if (value === undefined) continue;
+            where.push(`${column} = ?`);
+            params.push(value);
+          }
+          const claims = releaseClaims(where.join(" AND "), ...params);
+          socket.send(encode(serverToRunner, "released", { claims }, message.id));
+          if (claims.length > 0) shareSituation();
         } else {
           // 문답의 답이나 실패. 그 문답을 보낸 연결에서 온 것만 받는다.
           const re = message.re ?? "";
@@ -1449,17 +1603,26 @@ export async function startServer(options: {
     try {
       const forgotten = "SELECT login FROM offline WHERE since < ?";
       const cutoff = Date.now() - (options.forgetMs ?? FORGET_MS);
+      const now = Date.now();
       db.exec("BEGIN");
       db.prepare(`DELETE FROM works WHERE login IN (${forgotten})`).run(cutoff);
       db.prepare(`DELETE FROM lines WHERE login IN (${forgotten})`).run(cutoff);
+      // 선점은 지우지 않고 "오래됨"으로 둔다. 오래됨이 된 지 `forgetMs`가 더 지나면 지운다(Room의 오래됨 표시와 7일 만료).
+      db.prepare(`UPDATE claims SET stale = ? WHERE stale IS NULL AND login IN (${forgotten})`).run(
+        now,
+        cutoff,
+      );
       db.prepare("DELETE FROM offline WHERE since < ?").run(cutoff);
-      db.prepare("DELETE FROM inbox WHERE at <= ?").run(Date.now() - inboxMs);
+      db.prepare("DELETE FROM claims WHERE stale < ?").run(now - (options.forgetMs ?? FORGET_MS));
+      db.prepare("DELETE FROM inbox WHERE at <= ?").run(now - inboxMs);
+      db.prepare("DELETE FROM feed WHERE at <= ?").run(now - inboxMs);
       db.exec("COMMIT");
       shareInbox(); // 만료된 소식이 빠진다
 
       const branches = db
         .prepare(
-          `SELECT w.branch, MAX(s.github_token) AS token FROM works w
+          `SELECT w.branch, MAX(s.github_token) AS token
+           FROM (SELECT login, branch FROM works UNION SELECT login, branch FROM claims) w
            JOIN sessions s ON s.login = w.login GROUP BY w.branch`,
         )
         .all() as { branch: string; token: string }[];
@@ -1478,8 +1641,11 @@ export async function startServer(options: {
         const merged = Math.max(
           ...pulls.map((pull) => Date.parse(pull.mergedAt ?? "")).filter(Number.isFinite),
         );
-        if (merged > 0)
+        if (merged > 0) {
           db.prepare("DELETE FROM lines WHERE branch = ? AND at < ?").run(branch, merged);
+          // 머지된 브랜치의 선점은 저절로 풀린다. 머지 뒤에 같은 브랜치에 새로 건 것은 남는다.
+          releaseClaims("branch = ? AND at < ?", branch, merged);
+        }
       }
       drafts = next;
       shareSituation();

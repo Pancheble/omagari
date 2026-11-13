@@ -55,7 +55,8 @@ async function parse<T>(path: string, content: string, use: (root: Node) => T) {
   }
 }
 
-type Found = Omit<Definition, "change"> & { text: string; at: number };
+/** 찾은 정의. `end`는 그 선언이 끝나는 줄(몸 포함)이다. */
+type Found = Omit<Definition, "change"> & { text: string; at: number; end: number };
 
 const FUNCTIONS = new Set([
   "function_declaration",
@@ -91,6 +92,7 @@ function declared(root: Node) {
         name: name.text,
         kind,
         line: line.startPosition.row + 1,
+        end: line.endPosition.row + 1,
         text,
         at: name.startIndex,
       });
@@ -115,6 +117,7 @@ function declared(root: Node) {
             name: `${name.text}.${method.text}`,
             kind: "method",
             line: member.startPosition.row + 1,
+            end: member.endPosition.row + 1,
             text: header(member, member.childForFieldName("body")),
             at: method.startIndex,
           });
@@ -163,6 +166,19 @@ export async function compare(path: string, before: string, after: string | unde
     if (!is.has(`${kind} ${name}`)) result.push({ name, kind, line, change: "removed" });
   }
   return result;
+}
+
+/**
+ * 파일에서 `symbol`의 정의가 차지하는 줄 범위(선언과 몸). 겹쳐 쓴 이름(오버로드)은 모두 덮는다.
+ * 읽을 수 없는 언어거나 그 이름의 정의가 없으면 없음이다.
+ */
+export async function symbolRange(path: string, content: string, symbol: string) {
+  const found = (await parse(path, content, declared))?.filter((d) => named(d.name, symbol));
+  if (!found?.length) return;
+  return {
+    from: Math.min(...found.map((d) => d.line)),
+    to: Math.max(...found.map((d) => d.end)),
+  };
 }
 
 /** 이름이 `symbol`인 정의인가. 메서드는 `클래스.메서드`로도 메서드 이름만으로도 찾는다. */

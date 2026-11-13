@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 16;
+export const CONTRACT_VERSION = 17;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -48,7 +48,8 @@ type Payloads = Record<string, z.ZodType>;
 
 /**
  * 공유 수준: 관측이 서버에 올리는 범위. 주인이 러너마다 고르고, 기본은 full이다(ADR-0007).
- * 1단계에는 선점이 없어 declared는 바뀐 파일의 경로만, intent는 작업(브랜치)과 상태 한 줄만 올린다.
+ * declared는 바뀐 파일의 경로를 모두 올리고 내용은 그 작업이 선점한 경로 안의 것만, intent는 작업(브랜치)과 상태 한 줄만 올린다.
+ * 선점은 공유 수준과 상관없이 올라간다.
  */
 export const ShareLevel = z.enum(["full", "declared", "intent"]);
 export type ShareLevel = z.infer<typeof ShareLevel>;
@@ -93,7 +94,7 @@ export const ObservedFile = z.union([
   z.strictObject({
     path: z.string(),
     deleted: z.literal(true),
-    /** 기준 커밋의 판에 있던 정의 줄(모두 `removed`). 내용을 올리는 수준(full)일 때만 있다. */
+    /** 기준 커밋의 판에 있던 정의 줄(모두 `removed`). 내용을 올리는 경로(full, declared의 선점한 경로)일 때만 있다. */
     definitions: z.array(Definition).optional(),
   }),
   z.strictObject({ path: z.string(), omitted: z.enum(["binary", "too_large", "share"]) }),
@@ -378,23 +379,57 @@ export const Alert = z.strictObject({
 export type Alert = z.infer<typeof Alert>;
 
 /**
+ * 선점 하나(ADR-0008): 작업(멤버 + 브랜치)이 고칠 곳. 아무것도 막지 않고 알리기만 한다.
+ * 단위는 심볼(정의 이름으로 찾은 줄 범위), 줄 범위, 파일 전체(기준 커밋에 없던 새 파일), 폴더(`path`가 `/`로 끝난다)다.
+ * `path`는 레포 최상위에서 본 경로, `lines`는 선점한 사람의 사본에서 건 때의 줄(1부터, 끝 포함)이고 심볼과 줄 범위에만 있다.
+ * `id`는 서버 전체에서 늘어나기만 하는 번호다. `stale`은 주인이 오프라인으로 오래(7일) 있어 "오래됨"으로 보이는 것이고, 그 뒤 7일이면 지워진다.
+ * 브랜치가 머지되거나 지워지면 저절로 풀린다.
+ */
+export const Claim = z.strictObject({
+  id: z.number(),
+  login: z.string(),
+  branch: z.string(),
+  path: z.string(),
+  unit: z.enum(["symbol", "lines", "file", "folder"]),
+  symbol: z.string().optional(),
+  lines: LineRange.optional(),
+  at: z.string(),
+  stale: z.boolean(),
+});
+export type Claim = z.infer<typeof Claim>;
+
+/**
+ * 내 사본에서 본 남의 선점. `lines`는 상대의 판과 내 판의 줄 차이로 옮긴 내 사본의 줄이다.
+ * 상대의 판을 읽을 수 없으면(공유 수준, 빠진 파일, 내 기기에 없는 기준 커밋) 상대의 줄 그대로이고 `approx`("대략")다.
+ */
+export const SeenClaim = z.strictObject({ ...Claim.shape, approx: z.boolean() });
+export type SeenClaim = z.infer<typeof SeenClaim>;
+
+/** 선점을 걸 곳: 경로와, 심볼 이름이나 줄 범위 가운데 하나. 둘 다 없으면 새 파일의 전체나 폴더(`/`로 끝나거나 있는 폴더)다. */
+const ClaimTarget = z.strictObject({
+  branch: z.string().min(1),
+  path: z.string().min(1),
+  symbol: z.string().min(1).optional(),
+  lines: LineRange.optional(),
+});
+
+/**
  * 편지함에 넣어 둔 소식을 넘겨준 것이 확인되지 않아도 남겨 두는 시간. 지나면 만료한다(Room의 14일, 2단계 질문 A7).
  * 묻기의 답(ADR-0024)도 같은 시간을 쓴다.
  */
 export const INBOX_MS = 14 * 24 * 60 * 60_000;
 
 /**
- * 편지함의 소식 하나(GLOSSARY): 작업(`branch`, 받는 러너의 멤버의 것)의 에이전트에게 직접 넘겨줄 것. 지금 종류는 내 작업과의 부딪힘 알림뿐이다.
+ * 편지함의 소식 하나(GLOSSARY): 작업(`branch`, 받는 러너의 멤버의 것)의 에이전트에게 직접 넘겨줄 것. 종류는 내 작업과의 부딪힘 알림과, 내 선점과 겹친 선점이다.
  * 알림이 생기고, 바뀌고, 풀릴 때마다 두 작업의 편지함에 들어간다. 아직 넘겨주지 않은 같은 알림의 소식은 새 것으로 바뀐다(`id`도 새로 받는다).
  * `id`는 서버 전체에서 늘어나기만 하는 번호이고 넘겨준 확인(`delivered`)이 가리킨다. `at`은 들어온 시각, `alert`는 들어온 때의 알림이다.
  */
-export const InboxItem = z.strictObject({
-  id: z.number(),
-  branch: z.string(),
-  at: z.string(),
-  kind: z.literal("alert"),
-  alert: Alert,
-});
+const InboxHead = { id: z.number(), branch: z.string(), at: z.string() };
+export const InboxItem = z.discriminatedUnion("kind", [
+  z.strictObject({ ...InboxHead, kind: z.literal("alert"), alert: Alert }),
+  /** 내 선점(`mine`)과 다른 작업의 선점(`theirs`)이 겹친다. 줄은 각자의 사본에서 건 때의 것이다. 나중에 건 쪽이 알아내 양쪽에 넣는다. */
+  z.strictObject({ ...InboxHead, kind: z.literal("overlap"), mine: Claim, theirs: Claim }),
+]);
 export type InboxItem = z.infer<typeof InboxItem>;
 
 /**
@@ -496,6 +531,29 @@ export const runnerToServer = {
    * 서버와 끊긴 사이에 넘긴 것은 다시 붙자마자 보낸다. 서브에이전트에게 보여 준 것은 넘긴 것으로 치지 않아 싣지 않는다.
    */
   delivered: z.strictObject({ ids: z.array(z.number()) }),
+  /**
+   * 선점을 건다(ADR-0008). 서버는 늘 받고 `claimed`(`re`)로 건 선점을 돌려준다. 같은 작업에 같은 곳(경로, 심볼, 줄)의 선점이 있으면 바꾼다.
+   * `overlaps`는 러너가 내 사본의 줄로 옮겨 보고 겹친다고 찾은 남의 선점(`Claim.id`)이다. 서버는 양쪽 작업의 편지함에 겹침을 넣는다.
+   * `unit`과 `lines`는 러너가 정한다(심볼은 정의를 찾은 줄 범위, 새 파일은 파일 전체).
+   */
+  claim: z.strictObject({
+    branch: z.string(),
+    path: z.string(),
+    unit: Claim.shape.unit,
+    symbol: z.string().optional(),
+    lines: LineRange.optional(),
+    overlaps: z.array(z.number()),
+  }),
+  /**
+   * 이 멤버의 작업(`branch`)의 선점을 푼다. `path`가 없으면 그 작업의 선점 모두, 있으면 그 경로의 것(심볼이나 줄을 주면 그것만)이다.
+   * 서버는 `released`(`re`)로 푼 선점을 돌려준다. 러너는 브랜치가 지워지면 저절로 보낸다.
+   */
+  release: z.strictObject({
+    branch: z.string(),
+    path: z.string().optional(),
+    symbol: z.string().optional(),
+    lines: LineRange.optional(),
+  }),
   /** `ask`(`re`)에 러너 세션이 답했다. 답하지 못했으면 `error`를 `re`를 붙여 보낸다. */
   answer: Reply,
   error: ContractError,
@@ -521,10 +579,14 @@ export const serverToRunner = {
     ...ModelPick.shape,
   }),
   /**
-   * 지금 상황: 워크스페이스의 작업 전부(받는 러너의 멤버 것도 포함). `api.works`와 같은 것이다.
+   * 지금 상황: 워크스페이스의 작업 전부(받는 러너의 멤버 것도 포함, `api.works`와 같은 것)와 선점 전부. 선점은 작업이 관측되지 않아도(브랜치를 바꿔 체크아웃해도) 남는다.
    * welcome 바로 뒤에 보내고, 그 뒤로는 달라질 때마다 다시 보낸다. 러너는 받아 두고 훅에 내준다(ADR-0005).
    */
-  situation: z.strictObject({ works: z.array(WorkView) }),
+  situation: z.strictObject({ works: z.array(WorkView), claims: z.array(Claim) }),
+  /** `claim`(`re`)을 받아 건 선점. */
+  claimed: z.strictObject({ claim: Claim }),
+  /** `release`(`re`)로 푼 선점. 없었으면 비어 있다. */
+  released: z.strictObject({ claims: z.array(Claim) }),
   /**
    * 이 러너의 멤버의 편지함 전부(작업마다, 넘겨준 확인이 없고 만료되지 않은 것). welcome 바로 뒤에 보내고, 달라질 때마다 다시 보낸다.
    * 러너는 받아 두고 훅과 CLI에 내준다.
@@ -663,7 +725,12 @@ export const cliToRunner = {
    * 파일 하나(`path`, 레포 최상위에서 본 경로)의 근처 작업을 묻는다. 편집 전 훅이 고칠 때마다 부른다.
    * `situation`처럼 받아 둔 것으로 바로 답하고, 그 파일을 바꾼 다른 멤버의 작업만 준다.
    */
-  nearby: z.strictObject({ path: z.string().min(1), executor: ExecutorId }),
+  nearby: z.strictObject({
+    path: z.string().min(1),
+    executor: ExecutorId,
+    /** 고치는 작업. 주면 남의 선점을 이 작업의 사본 줄로 옮기고, 이 작업이 그 파일을 선점했는지 본다. */
+    branch: z.string().optional(),
+  }),
   /**
    * 심볼 하나(`omagari impact <심볼>`)를 누가 쓰고 누가 고치는지 묻는다. 메서드는 `클래스.메서드`나 메서드 이름으로 묻는다.
    * 쓰는 곳은 러너의 사본에서 찾고, 고치는 작업은 받아 둔 상황에서 찾는다.
@@ -676,6 +743,10 @@ export const cliToRunner = {
   inbox: z.strictObject({ branch: z.string().min(1) }),
   /** 편지함의 소식(`id`들)을 에이전트에게 넘겼다. 러너는 다시 내주지 않고 서버에 알린다. 서브에이전트에게 보여 준 것은 보내지 않는다. */
   delivered: z.strictObject({ ids: z.array(z.number()) }),
+  /** 작업(`branch`)의 선점을 건다(`omagari claim`). `path`는 그 작업 폴더의 최상위에서 본 경로다. 러너는 서버에 걸고 답한다. */
+  claim: ClaimTarget,
+  /** 작업의 선점을 푼다(`omagari release`). `path`가 없으면 그 작업의 선점 모두다. */
+  release: ClaimTarget.partial({ path: true }),
 } satisfies Payloads;
 
 /** 러너가 CLI와 훅에 보내는 것. */
@@ -691,10 +762,16 @@ export const runnerToCli = {
     disconnectedAt: z.string().nullable(),
     /** 이 러너가 마지막으로 관측한 내 작업들. 공유 수준과 상관없이 바뀐 파일의 경로가 있다(서버로는 수준대로 나간다). */
     mine: z.array(Work),
+    /** 서버에서 마지막으로 받은 선점 전부(줄은 각자의 사본 기준) */
+    claims: z.array(Claim),
   }),
   /** `nearby`의 답. 근처 작업이 없으면 `works`가 비어 있다. 받아 둔 것이 아직 없으면 `error`(`runner_offline`)다. */
   nearby: z.strictObject({
     works: z.array(NearbyWork),
+    /** 그 파일에 걸린 다른 작업의 선점(폴더 선점 포함). 줄은 고치는 작업의 사본으로 옮긴 것이다. */
+    claims: z.array(SeenClaim),
+    /** 고치는 작업(`branch`)이 그 파일에 선점을 걸었다. `branch`를 주지 않았으면 false다. */
+    claimed: z.boolean(),
     /** `situation`의 것과 같다. */
     disconnectedAt: z.string().nullable(),
   }),
@@ -725,6 +802,10 @@ export const runnerToCli = {
   }),
   /** `delivered`를 받았다. */
   delivered: z.strictObject({}),
+  /** `claim`의 답: 건 선점과, 내 사본의 줄로 옮겨 보아 겹친 남의 선점. 겹쳐도 걸린다. 서버와 끊겨 있으면 `error`(`runner_offline`)다. */
+  claimed: z.strictObject({ claim: Claim, overlaps: z.array(SeenClaim) }),
+  /** `release`의 답: 푼 선점. 없었으면 비어 있다. */
+  released: z.strictObject({ claims: z.array(Claim) }),
   error: ContractError,
 } satisfies Payloads;
 
@@ -896,14 +977,22 @@ export const api = {
     response: z.strictObject({ qas: z.array(Qa) }),
   },
   /**
-   * 피드: 최근 소식(`INBOX_MS` 안에 생기거나 바뀐 알림) 가운데 부른 멤버의 작업이 걸리지 않은 것. 걸린 것은 그 작업의 편지함으로 간다.
+   * 피드: 최근 소식(`INBOX_MS` 안에 생기거나 바뀐 알림, 걸거나 푼 선점) 가운데 부른 멤버의 작업이 걸리지 않은 것. 걸린 것은 그 작업의 편지함으로 간다.
    * 새것부터 `FEED_PAGE`개다. `omagari status`의 최근 소식이 이것이다. `at`은 알림이 마지막으로 바뀐 시각이다.
    */
   feed: {
     method: "GET",
     path: "/api/feed",
     response: z.strictObject({
-      news: z.array(z.strictObject({ at: z.string(), alert: Alert })),
+      news: z.array(
+        z.union([
+          z.strictObject({ at: z.string(), alert: Alert }),
+          /** 다른 멤버가 건 선점. `at`은 건 시각이다. */
+          z.strictObject({ at: z.string(), claim: Claim }),
+          /** 다른 멤버가 푼 선점(브랜치가 머지되거나 지워져 저절로 풀린 것 포함). `at`은 푼 시각이다. */
+          z.strictObject({ at: z.string(), released: Claim }),
+        ]),
+      ),
     }),
   },
   /**
