@@ -1,6 +1,6 @@
 /**
  * 서버의 바깥 경계: GitHub. 테스트는 여기에 가짜를 꽂는다.
- * 로그인(기기 인증), push 권한, 브랜치마다의 PR(초안 PR 제목과 머지 여부), 그리고 결정 PR(ADR-0025)을 여는 것과 머지하는 것까지다.
+ * 로그인(기기 인증), push 권한, 브랜치마다의 PR(초안 PR 제목과 머지 여부), 그리고 결정 PR(ADR-0025)을 열고, 고쳐 올리고, 리뷰를 읽고, 머지하고, 닫는 것까지다.
  * 결정 PR의 것은 GitHub이 받지 않으면(토큰이 무효, 권한 없음) 던진다. 메시지에 GitHub의 까닭이 있다.
  */
 export type GitHub = {
@@ -47,6 +47,19 @@ export type GitHub = {
   ): Promise<{ number: number; url: string }>;
   /** 번호로 PR 하나. GitHub이 답하지 못하면 `undefined`다. */
   pull(token: string, repo: string, number: number): Promise<Pull | undefined>;
+  /** 이미 있는 브랜치 `branch`의 끝에 `files`를 쓴 커밋 하나를 더한다. */
+  addCommit(
+    token: string,
+    repo: string,
+    change: { branch: string; message: string; files: { path: string; content: string }[] },
+  ): Promise<void>;
+  /** PR을 머지하지 않고 닫는다. */
+  closePull(token: string, repo: string, number: number): Promise<void>;
+  /**
+   * PR에 변경 요청이 걸린 사람들: 리뷰어마다 마지막 리뷰(승인, 변경 요청, 해제)가 변경 요청인 사람의 로그인.
+   * 의견만 단 리뷰는 셈하지 않는다. GitHub이 답하지 못하면 `undefined`다.
+   */
+  changesRequested(token: string, repo: string, number: number): Promise<string[] | undefined>;
   /** PR을 머지한다. GitHub이 막으면(리뷰 필수, 검사 실패, 충돌, 토큰 무효) 그 까닭을 돌려준다. */
   merge(
     token: string,
@@ -212,6 +225,40 @@ export function realGitHub(clientId: string): GitHub {
         open: pull.state === "open",
         mergedAt: pull.merged_at ?? undefined,
       };
+    },
+    async addCommit(token, repo, { branch, message, files }) {
+      const ref = await send(`/repos/${repo}/git/ref/heads/${encodeURIComponent(branch)}`, token);
+      const parent = await send(`/repos/${repo}/git/commits/${ref.object.sha}`, token);
+      const tree = await send(`/repos/${repo}/git/trees`, token, "POST", {
+        base_tree: parent.tree.sha,
+        tree: files.map(({ path, content }) => ({ path, mode: "100644", type: "blob", content })),
+      });
+      const commit = await send(`/repos/${repo}/git/commits`, token, "POST", {
+        message,
+        tree: tree.sha,
+        parents: [ref.object.sha],
+      });
+      await send(`/repos/${repo}/git/refs/heads/${encodeURIComponent(branch)}`, token, "PATCH", {
+        sha: commit.sha,
+      });
+    },
+    async closePull(token, repo, number) {
+      await send(`/repos/${repo}/pulls/${number}`, token, "PATCH", { state: "closed" });
+    },
+    // 리뷰: https://docs.github.com/en/rest/pulls/reviews#list-reviews-for-a-pull-request (오래된 것부터 온다).
+    // ponytail: 첫 100개만 읽는다. 결정 PR에 리뷰가 그보다 많아지면 쪽을 넘긴다.
+    async changesRequested(token, repo, number) {
+      const response = await get(
+        `/repos/${repo}/pulls/${number}/reviews?per_page=100`,
+        token,
+      ).catch(() => undefined);
+      if (!response?.ok) return undefined;
+      const reviews: { user: { login: string } | null; state: string }[] = await response.json();
+      const last = new Map<string, string>();
+      for (const { user, state } of reviews)
+        if (user && ["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(state))
+          last.set(user.login, state);
+      return [...last].filter(([, state]) => state === "CHANGES_REQUESTED").map(([login]) => login);
     },
     async merge(token, repo, number) {
       // 레포가 허용하지 않는 머지 방법이면 405와 "not allowed"가 온다. 그때만 다음 방법을 해 본다.
