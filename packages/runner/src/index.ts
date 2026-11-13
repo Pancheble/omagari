@@ -10,6 +10,7 @@ import { text } from "node:stream/consumers";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import {
+  ALERT_KINDS,
   type Channel,
   type ChannelMessage,
   type Choices,
@@ -23,14 +24,17 @@ import {
   type ExecutorId,
   encode,
   type InboxItem,
+  type LineRange,
   MAX_FRAME_BYTES,
   type Message,
   type ModelChoice,
+  PLACE_ROLES,
   RUNNER_SOCKET,
   runnerToCli,
   runnerToServer,
   type ShareLevel,
   type Source,
+  type SymbolPlace,
   serverToRunner,
   VersionMismatch,
   type Work,
@@ -38,7 +42,7 @@ import {
 } from "@omagari/contract";
 import { checkoutVersion } from "@omagari/contract/version";
 import { covers, overlap, resolve, see } from "./claims.ts";
-import { conflicts, newMemo } from "./conflicts.ts";
+import { conflicts, newMemo, symbolConflicts } from "./conflicts.ts";
 import { gitIn, nearby } from "./nearby.ts";
 import { observe, uses } from "./observe.ts";
 import { named } from "./symbols.ts";
@@ -426,18 +430,24 @@ const escapeXml = (text: string) =>
  */
 function channelLine(m: ChannelMessage) {
   if (m.kind === "alert") {
-    const { works, files, more, resolved } = m.alert;
-    const who = works.map((w) => `${w.name} (${w.login})의 브랜치 ${w.branch}`).join(", ");
+    const { alert } = m;
+    const who = alert.works.map((w) => `${w.name} (${w.login})의 브랜치 ${w.branch}`).join(", ");
+    const lines = (side: LineRange[]) =>
+      side.map((r) => (r.from === r.to ? r.from : `${r.from}-${r.to}`)).join(",") || "지움";
+    const places = (side: SymbolPlace[]) =>
+      side.map((p) => `${p.path}:${p.line} ${PLACE_ROLES[p.role]}`).join(", ") || "-";
     const what = [
-      ...files.map((f) =>
-        "unknown" in f
-          ? `${f.path}: 부딪힐 수 있음`
-          : `${f.path}: ${f.lines.map((side) => side.map((r) => (r.from === r.to ? r.from : `${r.from}-${r.to}`)).join(",") || "지움").join(" / ")}`,
-      ),
-      ...(more > 0 ? [`그 밖에 ${more}개`] : []),
+      ...(alert.kind === "direct"
+        ? alert.files.map((f) =>
+            "unknown" in f
+              ? `${f.path}: 부딪힐 수 있음`
+              : `${f.path}: ${f.lines.map(lines).join(" / ")}`,
+          )
+        : alert.symbols.map((s) => `${s.name}: ${s.places.map(places).join(" / ")}`)),
+      ...(alert.more > 0 ? [`그 밖에 ${alert.more}개`] : []),
     ];
-    const state = resolved === null ? "" : ` resolved="${resolved}"`;
-    return `<alert kind="직접 충돌" at="${m.at}"${state}>\n${escapeXml(`${who}\n${what.join("\n")}`)}\n</alert>`;
+    const state = alert.resolved === null ? "" : ` resolved="${alert.resolved}"`;
+    return `<alert kind="${ALERT_KINDS[alert.kind]}" at="${m.at}"${state}>\n${escapeXml(`${who}\n${what.join("\n")}`)}\n</alert>`;
   }
   if (m.kind === "text") {
     return `<message from="${escapeXml(`${m.name} (${m.login})`)}" at="${m.at}">\n${escapeXml(m.text)}\n</message>`;
@@ -914,7 +924,8 @@ export async function startRunner(options: {
                   })),
               ),
         );
-        const payload = { uses: await uses(folder, symbol), works: changing, disconnectedAt };
+        const found = (await uses(folder, [symbol])).get(symbol) ?? [];
+        const payload = { uses: found, works: changing, disconnectedAt };
         return encode(runnerToCli, "impact", payload, message.id);
       }
       const { path, branch } = message.payload;
@@ -1074,24 +1085,24 @@ export async function startRunner(options: {
           releasing.add(branch);
           live.send(encode(runnerToServer, "release", { branch }));
         }
-        // 직접 충돌: 서버에서 받은 상황과 지금 내 작업으로 다시 계산하고, 이 연결로 지난번에 보낸 것과 다를 때만 보낸다.
+        // 부딪힘: 서버에서 받은 상황과 지금 내 작업으로 다시 계산하고, 이 연결로 지난번에 보낸 것과 다를 때만 보낸다.
         // ponytail: 주기마다 함께 바꾼 파일을 다 다시 본다. 같은 내용은 memo로 건너뛴다. 무거워지면 바뀐 작업만 다시 본다.
         const to = live;
         if (to && situation && login) {
-          const computed = await conflicts(
-            folder,
-            mine.flatMap((work) => {
-              const tree = folders.get(work.branch);
-              return tree ? [{ work, folder: tree }] : [];
-            }),
-            situation.works,
-            login,
-            memo,
-          );
+          const trees = mine.flatMap((work) => {
+            const tree = folders.get(work.branch);
+            return tree ? [{ work, folder: tree }] : [];
+          });
+          const computed = await conflicts(folder, trees, situation.works, login, memo);
           memo = computed.memo;
-          const pairs = JSON.stringify(computed.pairs);
+          // 간접 충돌(추정)과 중복 구현도 같은 길로 올린다.
+          const all = [
+            ...computed.pairs,
+            ...(await symbolConflicts(trees, situation.works, login)),
+          ];
+          const pairs = JSON.stringify(all);
           if (to === live && (to !== reported.to || pairs !== reported.pairs)) {
-            to.send(encode(runnerToServer, "conflicts", { pairs: computed.pairs }));
+            to.send(encode(runnerToServer, "conflicts", { pairs: all }));
             reported = { to, pairs };
           }
         }

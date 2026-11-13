@@ -8,6 +8,7 @@ import {
   ALERT_FILES,
   type Alert,
   type AlertFile,
+  type AlertSymbol,
   api,
   CHANNEL_CONTEXT,
   type ChannelMessage,
@@ -117,7 +118,7 @@ const POST_COUNT = "(SELECT COUNT(*) FROM messages WHERE channel = c.id)";
  */
 const MESSAGES = `SELECT m.id, m.channel, m.login, m.text, m.note, m.at, p.name,
   q.id AS qa, q.executor, q.question, q.at AS asked, q.answer, q.visibility,
-  m.alert, a.works, a.files, a.resolved,
+  m.alert, a.kind, a.works, a.files, a.resolved,
   c.id AS post, CASE WHEN c.id IS NULL THEN 0 ELSE ${POST_COUNT} END AS count FROM messages m
   LEFT JOIN people p ON p.login = m.login
   LEFT JOIN qas q ON q.id = m.qa
@@ -134,6 +135,7 @@ type MessageRow = {
   qa: number | null;
   asked: number;
   alert: number | null;
+  kind: string | null;
   works: string | null;
   files: string | null;
   resolved: number | null;
@@ -141,21 +143,45 @@ type MessageRow = {
   count: number;
 } & Pick<QaRow, "executor" | "question" | "answer" | "visibility">;
 
-/** 알림 표의 한 줄을 계약의 알림으로. 파일은 `ALERT_FILES`개까지 이름을 적고 나머지는 센다. */
+/**
+ * 알림 표의 한 줄을 계약의 알림으로. `files` 열은 직접 충돌이면 파일들, 나머지 종류면 심볼들이다.
+ * `ALERT_FILES`개까지 이름을 적고 나머지는 센다.
+ */
 const alertView = (row: {
+  kind: string | null;
   works: string | null;
   files: string | null;
   resolved: number | null;
 }): Alert => {
-  const files: AlertFile[] = JSON.parse(row.files ?? "[]");
-  return {
-    kind: "direct",
+  const items: unknown[] = JSON.parse(row.files ?? "[]");
+  const common = {
     works: JSON.parse(row.works ?? "[]"),
-    files: files.slice(0, ALERT_FILES),
-    more: Math.max(files.length - ALERT_FILES, 0),
+    more: Math.max(items.length - ALERT_FILES, 0),
     resolved: row.resolved === null ? null : new Date(row.resolved).toISOString(),
   };
+  const kind = row.kind ?? "direct";
+  if (kind === "direct")
+    return { kind, ...common, files: items.slice(0, ALERT_FILES) as AlertFile[] };
+  return {
+    kind: kind as "indirect" | "duplicate",
+    ...common,
+    symbols: items.slice(0, ALERT_FILES) as AlertSymbol[],
+  };
 };
+
+/** 간접 충돌의 심볼에서 쓰는 쪽(`works`의 자리). 그 쪽 러너가 계산한 것이다. */
+const usingSide = (symbol: AlertSymbol) =>
+  symbol.places[0].some((place) => place.role === "uses") ? 0 : 1;
+
+/** 알림에 묶인 것 하나의 열쇠: 직접 충돌은 경로, 중복 구현은 이름, 간접 충돌은 이름과 쓰는 쪽(방향마다 따로다). */
+const itemId = (kind: Alert["kind"], item: AlertFile | AlertSymbol) =>
+  "path" in item ? item.path : kind === "indirect" ? `${item.name}\0${usingSide(item)}` : item.name;
+
+/** 알림에 묶인 것 하나를 계산할 수 있는 러너의 멤버들(ADR-0023). 간접 충돌은 쓰는 쪽 사본의 색인이 있어야 한다. */
+const computedBy = (kind: Alert["kind"], item: AlertFile | AlertSymbol, works: WorkRef[]) =>
+  kind === "indirect" && "places" in item
+    ? [works[usingSide(item)]?.login]
+    : works.map((work) => work.login);
 
 const messageView = (row: MessageRow): ChannelMessage => {
   if (row.alert !== null) {
@@ -286,19 +312,23 @@ export async function startServer(options: {
   if (!db.prepare("SELECT 1 FROM pragma_table_info('channels') WHERE name = 'alert'").get())
     db.exec("ALTER TABLE channels ADD COLUMN alert INTEGER REFERENCES messages (id)");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS channels_by_alert ON channels (alert)");
-  // 알림(ADR-0023): 두 작업 한 쌍의 직접 충돌. 채널에는 messages의 한 줄(`alert`)로 선다. 그 줄의 `text`는 빈 글, `login`은 빈 이름이다
+  // 알림(ADR-0023): 두 작업 한 쌍과 종류(`kind`)마다 하나. 채널에는 messages의 한 줄(`alert`)로 선다. 그 줄의 `text`는 빈 글, `login`은 빈 이름이다
   // (`text`의 CHECK를 바꾸려면 표를 다시 만들어야 한다). `pair`는 두 작업을 정한 순서로 적은 열쇠, `works`는 계약의 WorkRef 둘(JSON),
-  // `files`는 묶은 파일 전부(계약의 AlertFile 배열, 확인된 것부터 경로 순)다. `resolved`는 풀린 시각(ms)이고, 풀리지 않은 알림은 쌍마다 하나다.
+  // `files`는 묶은 것 전부(직접 충돌이면 계약의 AlertFile 배열로 확인된 것부터 경로 순, 나머지 종류면 AlertSymbol 배열로 이름 순)다. `resolved`는 풀린 시각(ms)이고, 풀리지 않은 알림은 쌍마다 하나다.
   // `updated`는 마지막으로 고친 시각(ms)이다. 실시간 연결이 다시 붙을 때 끊긴 사이에 고친 알림을 다시 보낸다.
   db.exec(`CREATE TABLE IF NOT EXISTS alerts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     pair TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'direct',
     works TEXT NOT NULL,
     files TEXT NOT NULL,
     resolved INTEGER,
     updated INTEGER NOT NULL
   ) STRICT`);
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS alerts_open ON alerts (pair) WHERE resolved IS NULL");
+  // 직접 충돌만 있던 표에는 `kind`가 없다. 직접 충돌의 `pair`는 그대로 두고, 다른 종류는 `pair` 앞에 종류를 붙인다.
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('alerts') WHERE name = 'kind'").get())
+    db.exec("ALTER TABLE alerts ADD COLUMN kind TEXT NOT NULL DEFAULT 'direct'");
   // v0.1.0의 표에는 `alert`가 없다.
   if (!db.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'alert'").get())
     db.exec("ALTER TABLE messages ADD COLUMN alert INTEGER REFERENCES alerts (id)");
@@ -650,7 +680,9 @@ export async function startServer(options: {
   /** 풀리지 않은 알림 가운데 줄이 부딪히는 것이 확인된 것의 작업들. 열쇠는 `[login, branch]`의 JSON이다. */
   const conflictedWorks = () => {
     const found = new Set<string>();
-    const open = db.prepare("SELECT works, files FROM alerts WHERE resolved IS NULL").all() as {
+    const open = db
+      .prepare("SELECT works, files FROM alerts WHERE resolved IS NULL AND kind = 'direct'")
+      .all() as {
       works: string;
       files: string;
     }[];
@@ -719,9 +751,10 @@ export async function startServer(options: {
   };
 
   /**
-   * 러너들의 계산을 두 작업 한 쌍마다 하나로 묶어 알림을 올리고, 고치고, 풀린 것을 닫는다(ADR-0023).
-   * 한 쌍을 양쪽 러너가 올렸으면 파일마다 줄이 확인된 쪽을 쓴다. 쌍의 어느 쪽이든 계산을 올린 러너가 붙어 있는데
-   * 그 쌍이 없으면 풀린 것이다. 양쪽 러너가 다 꺼져 있으면 알 수 없으니 그대로 둔다.
+   * 러너들의 계산을 두 작업 한 쌍과 종류마다 하나로 묶어 알림을 올리고, 고치고, 풀린 것을 닫는다(ADR-0023).
+   * 알림에 묶인 것(직접 충돌의 파일, 나머지의 심볼)마다 그것을 계산할 수 있는 러너가 있다(`computedBy`).
+   * 그 러너가 붙어 있는데 올리지 않았으면 풀린 것이고, 그 러너가 꺼져 있으면 알 수 없으니 지난 것을 그대로 둔다.
+   * 직접 충돌과 중복 구현은 두 쪽 러너 모두, 간접 충돌은 쓰는 쪽 러너만 계산한다. 한 파일을 양쪽 러너가 올렸으면 줄이 확인된 쪽을 쓴다.
    */
   const reconcile = () => {
     const name = (login: string) =>
@@ -730,7 +763,11 @@ export async function startServer(options: {
           | { name: string }
           | undefined
       )?.name ?? login;
-    const found = new Map<string, { works: [WorkRef, WorkRef]; files: Map<string, AlertFile> }>();
+    type Item = AlertFile | AlertSymbol;
+    const found = new Map<
+      string,
+      { kind: Alert["kind"]; works: [WorkRef, WorkRef]; items: Map<string, Item> }
+    >();
     const reporting = new Set<string>();
     for (const [socket, pairs] of reports) {
       const login = runners.get(socket)?.login;
@@ -742,73 +779,105 @@ export async function startServer(options: {
           JSON.stringify([mine.login, mine.branch]) >
           JSON.stringify([pair.theirs.login, pair.theirs.branch]);
         const [a, b] = flip ? [pair.theirs, mine] : [mine, pair.theirs];
-        const key = JSON.stringify([a.login, a.branch, b.login, b.branch]);
+        const ends = JSON.stringify([a.login, a.branch, b.login, b.branch]);
+        // 직접 충돌의 열쇠는 종류가 하나뿐이던 때의 것 그대로다.
+        const key = pair.kind === "direct" ? ends : `${pair.kind} ${ends}`;
         const entry = found.get(key) ?? {
+          kind: pair.kind,
           works: [
             { ...a, name: name(a.login) },
             { ...b, name: name(b.login) },
-          ],
-          files: new Map(),
+          ] as [WorkRef, WorkRef],
+          items: new Map(),
         };
         found.set(key, entry);
-        for (const file of pair.files) {
-          const view: AlertFile =
-            "unknown" in file
-              ? file
-              : {
-                  path: file.path,
-                  lines: flip ? [file.theirs, file.mine] : [file.mine, file.theirs],
-                };
-          const known = entry.files.get(file.path);
-          if (!known || ("unknown" in known && "lines" in view)) entry.files.set(file.path, view);
+        const views: Item[] =
+          pair.kind === "direct"
+            ? pair.files.map((file) =>
+                "unknown" in file
+                  ? file
+                  : {
+                      path: file.path,
+                      lines: flip ? [file.theirs, file.mine] : [file.mine, file.theirs],
+                    },
+              )
+            : pair.symbols.map(({ name, mine, theirs }) => ({
+                name,
+                places: flip ? [theirs, mine] : [mine, theirs],
+              }));
+        for (const view of views) {
+          const id = itemId(entry.kind, view);
+          const known = entry.items.get(id);
+          if (!known || ("unknown" in known && "lines" in view)) entry.items.set(id, view);
         }
       }
     }
     const open = db
-      .prepare("SELECT id, pair, works, files FROM alerts WHERE resolved IS NULL")
-      .all() as { id: number; pair: string; works: string; files: string }[];
+      .prepare("SELECT id, pair, kind, works, files FROM alerts WHERE resolved IS NULL")
+      .all() as { id: number; pair: string; kind: Alert["kind"]; works: string; files: string }[];
     let changed = false;
     const now = Date.now();
-    for (const row of open) {
-      if (found.has(row.pair)) continue;
-      const works = JSON.parse(row.works) as WorkRef[];
-      if (!works.some((work) => reporting.has(work.login))) continue;
-      db.prepare("UPDATE alerts SET resolved = ?, updated = ? WHERE id = ?").run(now, now, row.id);
-      shareAlert(row.id);
-      deliver(row.id, works, now);
-      changed = true;
-    }
-    for (const [key, entry] of found) {
-      // 줄이 확인된 파일부터, 그 안에서는 경로 순이다.
-      const files = [...entry.files.values()].sort(
-        (x, y) => Number("unknown" in x) - Number("unknown" in y) || (x.path < y.path ? -1 : 1),
-      );
-      const json = JSON.stringify(files);
+    for (const key of new Set([...open.map((row) => row.pair), ...found.keys()])) {
       const known = open.find((row) => row.pair === key);
+      const entry = found.get(key);
+      const kind = (entry?.kind ?? known?.kind) as Alert["kind"];
+      const works = entry?.works ?? (JSON.parse(known?.works ?? "[]") as [WorkRef, WorkRef]);
+      const items = new Map(entry?.items);
+      // 계산할 러너가 꺼져 있는 것은 지난 것을 그대로 둔다.
+      for (const view of known ? (JSON.parse(known.files) as Item[]) : []) {
+        const id = itemId(kind, view);
+        if (items.has(id)) continue;
+        if (!computedBy(kind, view, works).some((login) => reporting.has(login)))
+          items.set(id, view);
+      }
+      if (items.size === 0) {
+        if (!known) continue;
+        db.prepare("UPDATE alerts SET resolved = ?, updated = ? WHERE id = ?").run(
+          now,
+          now,
+          known.id,
+        );
+        shareAlert(known.id);
+        deliver(known.id, works, now);
+        changed = true;
+        continue;
+      }
+      // 직접 충돌은 줄이 확인된 파일부터, 그 안에서는 경로 순이다. 심볼은 이름 순이다.
+      const json = JSON.stringify(
+        [...items.entries()]
+          .sort(([x, a], [y, b]) =>
+            "path" in a && "path" in b
+              ? Number("unknown" in a) - Number("unknown" in b) || (a.path < b.path ? -1 : 1)
+              : x < y
+                ? -1
+                : 1,
+          )
+          .map(([, view]) => view),
+      );
       if (known?.files === json) continue;
       changed = true;
       if (known) {
         db.prepare("UPDATE alerts SET files = ?, works = ?, updated = ? WHERE id = ?").run(
           json,
-          JSON.stringify(entry.works),
+          JSON.stringify(works),
           now,
           known.id,
         );
         shareAlert(known.id);
-        deliver(known.id, entry.works, now);
+        deliver(known.id, works, now);
         continue;
       }
       const channel = alertChannel();
       db.exec("BEGIN");
       const { lastInsertRowid } = db
-        .prepare("INSERT INTO alerts (pair, works, files, updated) VALUES (?, ?, ?, ?)")
-        .run(key, JSON.stringify(entry.works), json, now);
+        .prepare("INSERT INTO alerts (pair, kind, works, files, updated) VALUES (?, ?, ?, ?, ?)")
+        .run(key, kind, JSON.stringify(works), json, now);
       db.prepare(
         "INSERT INTO messages (channel, login, text, alert, at) VALUES (?, '', '', ?, ?)",
       ).run(channel, lastInsertRowid, now);
       db.exec("COMMIT");
       shareAlert(Number(lastInsertRowid));
-      deliver(Number(lastInsertRowid), entry.works, now);
+      deliver(Number(lastInsertRowid), works, now);
     }
     if (changed) {
       shareMembers(); // 멤버 목록의 직접 충돌 표시
@@ -839,7 +908,7 @@ export async function startServer(options: {
     (
       db
         .prepare(
-          `SELECT i.id, i.branch, i.at, i.news, a.works, a.files, a.resolved FROM inbox i
+          `SELECT i.id, i.branch, i.at, i.news, a.kind, a.works, a.files, a.resolved FROM inbox i
            LEFT JOIN alerts a ON a.id = i.alert WHERE i.login = ? AND i.at > ? ORDER BY i.id`,
         )
         .all(login, Date.now() - inboxMs) as {
@@ -847,6 +916,7 @@ export async function startServer(options: {
         branch: string;
         at: number;
         news: string | null;
+        kind: string | null;
         works: string | null;
         files: string | null;
         resolved: number | null;
@@ -1213,8 +1283,9 @@ export async function startServer(options: {
     const login = c.get("login");
     const since = Date.now() - inboxMs;
     const rows = db
-      .prepare("SELECT works, files, resolved, updated FROM alerts WHERE updated > ?")
+      .prepare("SELECT kind, works, files, resolved, updated FROM alerts WHERE updated > ?")
       .all(since) as {
+      kind: string;
       works: string;
       files: string;
       resolved: number | null;
