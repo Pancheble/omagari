@@ -175,6 +175,9 @@ test("같은 곳을 고치면 부딪힘 포럼에 알림 하나가 오고, 바�
   );
   const closed = await firstPost();
   assert.ok(closed.kind === "alert" && closed.alert.resolved !== null);
+  // 풀린 포스트도 목록에 남고 풀렸다고 보인다.
+  const listedClosed = (await call(world.owner, api.posts)).posts.find((p) => p.alert === first.id);
+  assert.ok(listedClosed?.message.kind === "alert" && listedClosed.message.alert.resolved !== null);
   // 알림은 포럼에만 올린다. 다른 포럼으로 바꾸면 그 뒤의 알림은 그 포럼에 포스트로 가고, 지난 포스트는 제자리에 있다.
   // 풀린 뒤 다시 부딪히면 새 알림이다.
   const team = await world.channel(world.owner, "팀");
@@ -320,12 +323,26 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
     return first;
   });
   const post = arrived.post.channel;
-  assert.deepEqual(arrived.post, { channel: post, count: 0 });
-  assert.deepEqual((await call(alice, api.posts)).posts, [
-    { channel: post, alert: alert.id, count: 0 },
-  ]);
+  assert.deepEqual(arrived.post, { channel: post, count: 0, last: null, activity: arrived.at });
+  // 목록 한 번으로 포럼 화면이 그릴 수 있다: 알림, 마지막 글(아직 없다), 글 수, 마지막 활동, 올라온 시각.
+  const listed = (await call(alice, api.posts)).posts;
+  assert.deepEqual(
+    listed.map(({ message, ...p }) => p),
+    [{ channel: post, alert: alert.id, count: 0, last: null, activity: arrived.at }],
+  );
+  const [first] = listed;
+  assert.ok(first?.message.kind === "alert");
+  assert.equal(first.message.at, arrived.at);
+  assert.equal(first.message.alert.kind, "direct");
+  assert.equal(first.message.alert.resolved, null);
   const opened = await call(world.owner, api.openPost, { alert: alert.id });
-  assert.deepEqual(opened.post, { channel: post, alert: alert.id, count: 0 });
+  assert.deepEqual(opened.post, {
+    channel: post,
+    alert: alert.id,
+    count: 0,
+    last: null,
+    activity: arrived.at,
+  });
   assert.equal(opened.message.id, alert.id);
   await assert.rejects(call(alice, api.openPost, { alert: alert.id + 1 }), {
     code: "not_found",
@@ -371,7 +388,14 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
   assert.deepEqual((await call(alice, api.history, { channel: post })).messages.map(said), [
     "이 줄은 제가 고칠게요",
   ]);
-  await eventually(() => assert.deepEqual(postOf(), { channel: post, count: 1 }));
+  // 실시간 연결로 온 그 포스트의 요약이 바뀐다: 마지막 글(쓴 사람과 한 줄)과 마지막 활동 시각.
+  await eventually(() => {
+    const p = postOf();
+    assert.equal(p?.count, 1);
+    assert.equal(p?.last?.login, "owner");
+    assert.equal(p?.last?.line, "이 줄은 제가 고칠게요");
+    assert.ok(p && p.activity > arrived.at);
+  });
 
   // 채팅 채널의 채널 세션과 포스트의 채널 세션은 따로 이어 간다.
   await world.settled(world.owner, await world.ask(world.owner, general, "채널에서 묻기"));
@@ -405,9 +429,13 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
     (await call(alice, api.history, { channel: post })).messages.map((m) => m.kind),
     ["text", "qa", "qa"],
   );
-  await eventually(() => assert.deepEqual(postOf(), { channel: post, count: 3 }));
+  await eventually(() => assert.equal(postOf()?.count, 3));
   const [atForum] = (await call(alice, api.history, { channel: forum.id })).messages;
-  assert.deepEqual(atForum?.kind === "alert" && atForum.post, { channel: post, count: 3 });
+  assert.equal(atForum?.kind === "alert" && atForum.post.count, 3);
+  // 목록 API도 같은 요약을 준다. 마지막 글은 `@호출`한 사람의 질문이다.
+  const [now] = (await call(alice, api.posts)).posts;
+  assert.equal(now?.count, 3);
+  assert.equal(now?.last?.line, "모두 보게 묻기");
 });
 
 /** 정의 줄을 견줄 기준 판: 함수 둘과 그것을 쓰는 파일. */
