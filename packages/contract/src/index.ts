@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 23;
+export const CONTRACT_VERSION = 24;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -21,6 +21,7 @@ export const ContractError = z.strictObject({
     "refused", // 받는 쪽이 남의 질문에 답하지 않게 해 두었다(ADR-0024)
     "turn_timeout", // 러너 세션의 한 턴이 시간 상한을 넘어 끊겼다
     "conflict", // 이미 있다(같은 이름의 채널)
+    "github_failed", // GitHub이 요청을 받지 않았다(멤버의 토큰이 무효, 권한 없음, GitHub이 답하지 못함)
   ]),
   message: z.string(),
 });
@@ -564,6 +565,29 @@ export const Post = z.strictObject({
 });
 export type Post = z.infer<typeof Post>;
 
+/** 결정 PR의 이의 창(ADR-0025). "바로"면 PR을 열자마자 Omagari가 머지한다. "하루"는 기본이다. */
+export const DecisionWindow = z.enum(["now", "day"]);
+export type DecisionWindow = z.infer<typeof DecisionWindow>;
+
+/**
+ * 포스트에서 정리한 결정 하나와 그 결정 PR(ADR-0025). 정리한 멤버(`login`)의 이름으로 레포의 기본 브랜치에 PR이 열린다.
+ * `state`는 PR에서 읽는다: 열려 있으면 제안됨(`proposed`), 머지되면 수락됨(`accepted`), 머지 없이 닫히면 `closed`다.
+ * `post`는 포스트의 채널, `path`는 결정 파일(`docs/decisions/NNNN-제목.md`)이다.
+ */
+export const Decision = z.strictObject({
+  id: z.number(),
+  post: z.string(),
+  login: z.string(),
+  name: z.string(),
+  title: z.string(),
+  path: z.string(),
+  pull: z.strictObject({ number: z.number(), url: z.string() }),
+  window: DecisionWindow,
+  state: z.enum(["proposed", "accepted", "closed"]),
+  at: z.string(),
+});
+export type Decision = z.infer<typeof Decision>;
+
 /**
  * 채널에 쌓인 것 하나. `id`는 워크스페이스 전체에서 늘어나기만 하는 번호라 채널 안의 순서이자,
  * 실시간 연결이 다시 붙을 때 이어 받을 자리(`webToServer.hello`의 `after`)다.
@@ -607,6 +631,20 @@ export const ChannelMessage = z.discriminatedUnion("kind", [
     at: z.string(),
     alert: Alert,
     post: Post.omit({ alert: true }),
+  }),
+  /**
+   * Omagari가 올린 결정 PR의 한 줄. 결정의 포스트와 알림 채널에 같은 것이 하나씩 선다. 쓴 사람이 없다.
+   * `event`는 그때 일어난 일이다: PR이 열렸다, 머지됐다, 머지 없이 닫혔다, Omagari가 머지하려 했으나 GitHub이 막았다(`reason`이 그 까닭).
+   * `decision`은 읽은 때의 결정이라, 지난 줄이어도 `state`는 지금의 것이다. 포스트의 글 수에 들지 않는다.
+   */
+  z.strictObject({
+    kind: z.literal("decision"),
+    id: z.number(),
+    channel: z.string(),
+    at: z.string(),
+    event: z.enum(["opened", "merged", "closed", "blocked"]),
+    reason: z.string().optional(),
+    decision: Decision,
   }),
 ]);
 export type ChannelMessage = z.infer<typeof ChannelMessage>;
@@ -1284,6 +1322,35 @@ export const api = {
     method: "GET",
     path: "/api/posts",
     response: z.strictObject({ posts: z.array(Post.extend({ message: ChannelMessage })) }),
+  },
+  /**
+   * 포스트(`post`, 포스트의 채널)에서 결정을 정리해 부른 멤버의 이름으로 결정 PR을 연다(ADR-0025).
+   * 사람이 쓰는 것은 제목, 맥락, 결정, 결과와 창의 길이다. 결정자(그 포스트에서 말한 멤버와 정리한 멤버)와 출처(포스트 링크)는 서버가 붙인다.
+   * 결정 파일은 `docs/decisions/`에 다음 번호로 놓이고, 레포의 AGENTS.md가 그 폴더를 가리키지 않으면 같은 PR에 한 줄을 더한다.
+   * 열리면 포스트와 알림 채널에 `decision` 줄(`opened`)이 선다. "바로"면 곧이어 머지하고, GitHub이 막으면 `blocked` 줄에 까닭을 적는다.
+   * 포스트가 아니면 `not_found`, 부른 멤버의 토큰으로 GitHub이 받지 않으면 `github_failed`다.
+   */
+  proposeDecision: {
+    method: "POST",
+    path: "/api/decisions",
+    body: z.strictObject({
+      post: z.string(),
+      title: z
+        .string()
+        .transform((title) => title.replace(/\s+/g, " ").trim())
+        .pipe(z.string().min(1).max(MAX_CHANNEL_NAME_CHARS)),
+      context: z.string().trim().min(1).max(MAX_MESSAGE_CHARS),
+      decision: z.string().trim().min(1).max(MAX_MESSAGE_CHARS),
+      consequences: z.string().trim().min(1).max(MAX_MESSAGE_CHARS),
+      window: DecisionWindow.default("day"),
+    }),
+    response: z.strictObject({ decision: Decision }),
+  },
+  /** 정리한 결정 전부, 정리한 순서. 상태는 서버가 GitHub에서 주기마다 읽은 것이다. */
+  decisions: {
+    method: "GET",
+    path: "/api/decisions",
+    response: z.strictObject({ decisions: z.array(Decision) }),
   },
   /**
    * 내 에이전트가 다른 멤버의 질문(`omagari ask`)에 답할지 정하는 스위치(ADR-0024). 기본은 켜짐이다.

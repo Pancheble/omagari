@@ -26,6 +26,7 @@ const STATUS = {
   runner_offline: 503,
   turn_timeout: 504,
   conflict: 409,
+  github_failed: 502,
 } as const satisfies Record<ContractError["code"], number>;
 
 const fail = (

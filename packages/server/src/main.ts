@@ -16,6 +16,8 @@ const server = await startServer({
   database: process.env.OMAGARI_DB ?? "omagari.db",
   port: Number(process.env.PORT ?? 3000),
   hostname: process.env.HOST,
+  // 사람이 웹을 여는 주소. 결정 파일의 출처(포스트 링크)에 쓴다. 주지 않으면 서버가 듣는 주소다.
+  publicUrl: process.env.OMAGARI_URL,
 });
 console.log(
   `Omagari 서버 ${server.version} (contract ${CONTRACT_VERSION}): ${server.url} (${OMAGARI_REPO})`,

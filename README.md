@@ -82,4 +82,4 @@ omagari --version
 OMAGARI_REPO=<owner/name> GITHUB_CLIENT_ID=<기기 인증을 켠 GitHub 앱> HOST=0.0.0.0 npm run server
 ```
 
-`OMAGARI_DB`(기본 `omagari.db`)와 `PORT`(기본 3000)로 DB 파일과 포트를 바꾼다.
+`OMAGARI_DB`(기본 `omagari.db`)와 `PORT`(기본 3000)로 DB 파일과 포트를 바꾼다. 멤버가 웹을 여는 주소가 서버가 듣는 주소와 다르면 `OMAGARI_URL`에 준다. 결정 PR의 출처(포스트 링크)가 이 주소로 적힌다.
