@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { setTimeout as sleep } from "node:timers/promises";
 import { api, type ContractFailure, call } from "@omagari/contract";
 import { eventually, said, startWorld, writer } from "./harness.ts";
 
@@ -12,8 +13,8 @@ const BASE = Array.from({ length: 5 }, (_, i) => `line ${i + 1}`);
  * owner와 alice가 같은 줄을 고쳐 직접 충돌 알림을 세우고, 그 알림의 포스트를 연다.
  * 포스트와 알림 채널("부딪힘")과 alice를 돌려준다. 결정 PR은 GitHub 쪽 일이라 알림 종류는 무엇이든 된다.
  */
-async function postOf(t: { after: (fn: () => Promise<void>) => void }) {
-  const world = await startWorld({ observeMs: 50, followMs: 50 });
+async function postOf(t: { after: (fn: () => Promise<void>) => void }, hourMs?: number) {
+  const world = await startWorld({ observeMs: 50, followMs: 50, hourMs });
   t.after(world.stop);
   await writer(world.repo.folder)("src/pay.ts", text(BASE));
   await world.repo.git("add", ".");
@@ -86,8 +87,18 @@ test("포스트에서 결정을 정리하면 정리한 멤버 이름으로 결�
     pull: { number: 1, url: `https://github.com/omagari-test/space/pull/1` },
     window: "day",
     state: "proposed",
+    status: "proposed",
+    closes: decision.closes,
+    deciders: [
+      { login: "alice", name: "Alice Kim", agreed: true },
+      { login: "owner", name: "owner", agreed: false },
+    ],
+    objections: [],
+    early: false,
     at: decision.at,
   });
+  // 창은 정리한 때부터 하루다.
+  assert.equal(Date.parse(decision.closes ?? "") - Date.parse(decision.at), 24 * 3_600_000);
 
   // alice의 토큰으로 main에서 딴 브랜치에 커밋 하나, main으로 PR 하나.
   const [pull] = fake.pulls;
@@ -130,20 +141,17 @@ test("포스트에서 결정을 정리하면 정리한 멤버 이름으로 결�
   assert.match(files.get("AGENTS.md") ?? "", /^결정 기록은 `docs\/decisions\/`에 있다\./);
   assert.deepEqual([...(fake.files.get("main")?.keys() ?? [])], []);
 
-  // 포스트와 알림 채널에 한 줄씩. 실시간으로도 간다. 포스트의 글 수에는 들지 않는다.
+  // 포스트에 한 줄. 부딪힘 포럼에는 올리지 않는다(ADR-0027). 실시간으로도 간다. 포스트의 글 수에는 들지 않는다.
   const opened = `결정 opened: ${DECISION.title}`;
   assert.deepEqual(await lines(world.owner, post), [opened]);
-  assert.deepEqual(await lines(world.owner, room), [opened]);
+  assert.deepEqual(await lines(world.owner, room), []);
   await eventually(() =>
     assert.deepEqual(
       web
         .messages()
         .filter((m) => m.kind === "decision")
         .map((m) => [m.channel, said(m)]),
-      [
-        [post, opened],
-        [room, opened],
-      ],
+      [[post, opened]],
     ),
   );
   const [summary] = (await call(world.owner, api.posts)).posts;
@@ -181,7 +189,7 @@ test("포스트에서 결정을 정리하면 정리한 멤버 이름으로 결�
   ];
   await eventually(async () => {
     assert.deepEqual(await lines(world.owner, post), after);
-    assert.deepEqual(await lines(world.owner, room), after);
+    assert.deepEqual(await lines(world.owner, room), []);
   });
 
   // main에 결정 폴더를 가리키는 AGENTS.md가 생겼으니 다음 결정 PR은 AGENTS.md를 건드리지 않는다.
@@ -238,7 +246,7 @@ test("바로 머지를 GitHub이 막으면 까닭을 포스트에 알리고, 토
   const { world, room, post } = await postOf(t);
   const fake = world.github;
 
-  // 리뷰 필수 같은 규칙으로 막히면 결정은 제안됨으로 남고, 막힌 까닭이 포스트와 알림 채널에 한 줄로 선다.
+  // 리뷰 필수 같은 규칙으로 막히면 결정은 제안됨으로 남고, 막힌 까닭이 포스트에 한 줄로 선다. 주기마다 다시 해 봐도 줄은 하나다.
   const reason = "HTTP 405 At least 1 approving review is required by reviewers with write access.";
   fake.block(reason);
   const { decision } = await call(world.owner, api.proposeDecision, {
@@ -247,17 +255,21 @@ test("바로 머지를 GitHub이 막으면 까닭을 포스트에 알리고, 토
     window: "now",
   });
   assert.equal(decision.state, "proposed");
+  assert.equal(decision.status, "blocked");
+  assert.equal(decision.reason, reason);
   assert.equal(fake.pulls[0]?.open, true);
   const blocked = [`결정 opened: ${DECISION.title}`, `결정 blocked: ${DECISION.title} (${reason})`];
   assert.deepEqual(await lines(world.owner, post), blocked);
-  assert.deepEqual(await lines(world.owner, room), blocked);
+  assert.deepEqual(await lines(world.owner, room), []);
+  await sleep(200);
+  assert.deepEqual(await lines(world.owner, post), blocked);
 
-  // 막힘이 풀린 뒤 사람이 머지하면 Omagari가 읽는다.
+  // 막힘이 풀리면 다음 주기에 Omagari가 머지한다.
   fake.block();
-  fake.merge(fake.pulls[0] as (typeof fake.pulls)[number]);
   await eventually(async () =>
     assert.equal((await call(world.owner, api.decisions)).decisions[0]?.state, "accepted"),
   );
+  assert.ok(fake.pulls[0]?.mergedAt);
 
   // 포스트가 아닌 채널이면 없다.
   await assert.rejects(call(world.owner, api.proposeDecision, { post: room, ...DECISION }), {
@@ -276,4 +288,309 @@ test("바로 머지를 GitHub이 막으면 까닭을 포스트에 알리고, 토
   );
   assert.equal(fake.pulls.length, 1);
   assert.equal((await call(world.owner, api.decisions)).decisions.length, 1);
+});
+
+/** 포스트의 결정 PR 줄을 일어난 일과 한 사람으로. */
+const events = async (as: As, channel: string) =>
+  (await call(as, api.history, { channel })).messages.flatMap((m) =>
+    m.kind === "decision" ? [`${m.decision.title} ${m.event}${m.by ? ` ${m.by.login}` : ""}`] : [],
+  );
+
+/** 포스트에서 말하지 않은 멤버 bob. 결정자가 아니다. */
+async function bobOf(world: Awaited<ReturnType<typeof postOf>>["world"]) {
+  world.github.grant("bob");
+  return world.login("bob");
+}
+
+const decisionNamed = async (as: As, title: string) => {
+  const found = (await call(as, api.decisions)).decisions.find((d) => d.title === title);
+  assert.ok(found, `결정이 없다: ${title}`);
+  return found;
+};
+
+test("고른 길이대로 창이 닫히고 이의가 없으면 Omagari가 머지한다", async (t) => {
+  // 한 시간을 50ms로 줄인다: 1시간 50ms, 직접 3시간 150ms, 하루 1.2초, 3일 3.6초.
+  const HOUR = 50;
+  const { world, alice, post } = await postOf(t, HOUR);
+  await call(alice, api.send, { channel: post, text: "결제 쪽을 먼저 머지할게요" });
+  const windows = [
+    ["1시간", "hour", 1],
+    ["직접 3시간", { amount: 3, unit: "hour" }, 3],
+    ["하루", "day", 24],
+    ["3일", "three_days", 72],
+  ] as const;
+  for (const [title, window, hours] of windows) {
+    const { decision } = await call(world.owner, api.proposeDecision, {
+      post,
+      ...DECISION,
+      title,
+      window,
+    });
+    assert.deepEqual(decision.window, window);
+    assert.equal(Date.parse(decision.closes ?? "") - Date.parse(decision.at), hours * HOUR);
+    assert.match(
+      world.github.pulls.at(-1)?.body ?? "",
+      new RegExp(`이의 창: ${title.replace("직접 ", "")}`),
+    );
+  }
+  for (const [title, , hours] of windows) {
+    const decision = await eventually(async () => {
+      const found = await decisionNamed(world.owner, title);
+      assert.equal(found.status, "accepted");
+      return found;
+    }, 20_000);
+    assert.equal(decision.early, false);
+    assert.equal(decision.closes, null);
+    // 창이 닫히기 전에는 머지하지 않았다.
+    const pull = world.github.pulls.find((p) => p.number === decision.pull.number);
+    assert.ok(Date.parse(pull?.mergedAt ?? "") >= Date.parse(decision.at) + hours * HOUR);
+    assert.ok((await events(world.owner, post)).includes(`${title} merged`));
+  }
+});
+
+test("이의(포스트와 GitHub 변경 요청)가 걸리면 창이 닫혀도 머지하지 않고, 모두 거둬지면 같은 길이로 다시 연다", async (t) => {
+  const HOUR = 50; // 하루 1.2초
+  const { world, alice, post } = await postOf(t, HOUR);
+  const fake = world.github;
+  await call(alice, api.send, { channel: post, text: "결제 쪽을 먼저 머지할게요" });
+  const bob = await bobOf(world);
+  const { decision } = await call(world.owner, api.proposeDecision, { post, ...DECISION });
+
+  // 결정자가 아닌 bob도 이의를 낸다. 걸려 있는 동안 창은 없다.
+  const objected = (await call(bob, api.respondToDecision, { id: decision.id, response: "object" }))
+    .decision;
+  assert.equal(objected.status, "objected");
+  assert.equal(objected.closes, null);
+  assert.deepEqual(
+    objected.objections.map((o) => [o.login, o.via]),
+    [["bob", "post"]],
+  );
+  // 같은 이의를 또 내도 그대로다.
+  await call(bob, api.respondToDecision, { id: decision.id, response: "object" });
+
+  // 남의 이의는 거두지 못한다.
+  await assert.rejects(
+    call(alice, api.respondToDecision, { id: decision.id, response: "withdraw" }),
+    { code: "not_found" } satisfies Partial<ContractFailure>,
+  );
+
+  // GitHub에서 carol이 변경을 요청한다. 주기마다 읽어 이의로 센다.
+  fake.review(decision.pull.number, "carol", "CHANGES_REQUESTED");
+  await eventually(async () =>
+    assert.deepEqual(
+      (await decisionNamed(world.owner, DECISION.title)).objections.map((o) => [o.login, o.via]),
+      [
+        ["bob", "post"],
+        ["carol", "github"],
+      ],
+    ),
+  );
+
+  // 하루(1.2초)가 지나도 머지하지 않는다.
+  await sleep(24 * HOUR + 300);
+  assert.equal((await decisionNamed(world.owner, DECISION.title)).state, "proposed");
+  assert.equal(fake.pulls[0]?.open, true);
+
+  // bob이 거둬도 carol의 것이 남아 아직 걸려 있다.
+  const one = (await call(bob, api.respondToDecision, { id: decision.id, response: "withdraw" }))
+    .decision;
+  assert.equal(one.status, "objected");
+
+  // carol이 변경 요청을 승인으로 바꾸면 모두 거둬져 창이 처음부터 같은 길이(하루)로 다시 열린다.
+  const before = Date.now();
+  fake.review(decision.pull.number, "carol", "APPROVED");
+  const reopened = await eventually(async () => {
+    const found = await decisionNamed(world.owner, DECISION.title);
+    assert.equal(found.status, "reopened");
+    return found;
+  });
+  assert.ok(Date.parse(reopened.closes ?? "") >= before + 24 * HOUR);
+  assert.deepEqual(reopened.objections, []);
+  const merged = await eventually(async () => {
+    const found = await decisionNamed(world.owner, DECISION.title);
+    assert.equal(found.status, "accepted");
+    return found;
+  }, 10_000);
+  assert.equal(merged.early, false);
+  assert.ok(Date.parse(fake.pulls[0]?.mergedAt ?? "") >= Date.parse(reopened.closes ?? ""));
+  assert.deepEqual(await events(world.owner, post), [
+    `${DECISION.title} opened`,
+    `${DECISION.title} objected bob`,
+    `${DECISION.title} objected carol`,
+    `${DECISION.title} withdrawn bob`,
+    `${DECISION.title} withdrawn carol`,
+    `${DECISION.title} merged`,
+  ]);
+});
+
+test("결정자가 모두 동의하면 창이 남아도 바로 머지하지만, 이의가 걸려 있거나 GitHub이 막으면 머지하지 않는다", async (t) => {
+  const { world, alice, post } = await postOf(t); // 창은 정말 하루다
+  const fake = world.github;
+  await call(alice, api.send, { channel: post, text: "결제 쪽을 먼저 머지할게요" });
+  const bob = await bobOf(world);
+  const { decision } = await call(world.owner, api.proposeDecision, { post, ...DECISION });
+  assert.deepEqual(
+    decision.deciders.map((d) => [d.login, d.agreed]),
+    [
+      ["alice", false],
+      ["owner", true],
+    ],
+  );
+
+  // 결정자가 아닌 bob의 동의는 거절된다.
+  await assert.rejects(call(bob, api.respondToDecision, { id: decision.id, response: "agree" }), {
+    code: "forbidden",
+  } satisfies Partial<ContractFailure>);
+
+  // bob의 이의가 걸려 있으면 alice가 동의해 모두 동의해도 머지하지 않는다.
+  await call(bob, api.respondToDecision, { id: decision.id, response: "object" });
+  const agreed = (await call(alice, api.respondToDecision, { id: decision.id, response: "agree" }))
+    .decision;
+  assert.equal(agreed.state, "proposed");
+  assert.equal(agreed.status, "objected");
+  assert.equal(
+    agreed.deciders.every((d) => d.agreed),
+    true,
+  );
+  assert.equal(fake.pulls[0]?.open, true);
+
+  // 거두면 창이 다시 열리고, 모두 동의했으니 바로 머지한다. 일찍 닫았다고 보인다.
+  const merged = (await call(bob, api.respondToDecision, { id: decision.id, response: "withdraw" }))
+    .decision;
+  assert.equal(merged.status, "accepted");
+  assert.equal(merged.early, true);
+  assert.ok(fake.pulls[0]?.mergedAt);
+  assert.deepEqual(await events(world.owner, post), [
+    `${DECISION.title} opened`,
+    `${DECISION.title} objected bob`,
+    `${DECISION.title} agreed alice`,
+    `${DECISION.title} withdrawn bob`,
+    `${DECISION.title} merged`,
+  ]);
+  // 끝난 결정에는 더 응답하지 못한다.
+  await assert.rejects(call(bob, api.respondToDecision, { id: decision.id, response: "object" }), {
+    code: "conflict",
+  } satisfies Partial<ContractFailure>);
+
+  // 모두 동의해도 GitHub이 막으면 "머지 막힘"이다. 풀리면 머지한다.
+  const reason = "HTTP 405 At least 1 approving review is required by reviewers with write access.";
+  fake.block(reason);
+  const second = (
+    await call(world.owner, api.proposeDecision, { post, ...DECISION, title: "둘째 결정" })
+  ).decision;
+  const blocked = (await call(alice, api.respondToDecision, { id: second.id, response: "agree" }))
+    .decision;
+  assert.equal(blocked.status, "blocked");
+  assert.equal(blocked.reason, reason);
+  assert.ok(blocked.closes);
+  fake.block();
+  const done = await eventually(async () => {
+    const found = await decisionNamed(world.owner, "둘째 결정");
+    assert.equal(found.status, "accepted");
+    return found;
+  });
+  assert.equal(done.early, true);
+  assert.deepEqual((await events(world.owner, post)).slice(-4), [
+    "둘째 결정 opened",
+    "둘째 결정 agreed alice",
+    "둘째 결정 blocked",
+    "둘째 결정 merged",
+  ]);
+});
+
+test("정리한 사람만 결정을 고쳐 같은 PR에 커밋을 더하거나 버려 PR을 닫는다", async (t) => {
+  const { world, alice, post } = await postOf(t);
+  const fake = world.github;
+  const bob = await bobOf(world);
+  await call(alice, api.send, { channel: post, text: "결제 쪽을 먼저 머지할게요" });
+  await call(bob, api.send, { channel: post, text: "저도 봤어요" });
+  const { decision } = await call(world.owner, api.proposeDecision, { post, ...DECISION });
+  await call(alice, api.respondToDecision, { id: decision.id, response: "agree" });
+
+  // 정리한 사람이 아니면 고치지도 버리지도 못한다.
+  const revision = { ...DECISION, decision: "환불은 결제 모듈의 refund(amount)를 부른다." };
+  await assert.rejects(call(alice, api.reviseDecision, { id: decision.id, ...revision }), {
+    code: "forbidden",
+  } satisfies Partial<ContractFailure>);
+  await assert.rejects(call(alice, api.discardDecision, { id: decision.id }), {
+    code: "forbidden",
+  } satisfies Partial<ContractFailure>);
+
+  // 고치면 같은 브랜치에 커밋이 더해진다. 다른 결정자의 동의는 지워지고 창은 다시 하루다.
+  const pull = fake.pulls[0];
+  assert.ok(pull);
+  const before = Date.now();
+  const revised = (await call(world.owner, api.reviseDecision, { id: decision.id, ...revision }))
+    .decision;
+  assert.equal(fake.pulls.length, 1);
+  assert.deepEqual(
+    fake.commits.map((c) => [c.branch, c.author]),
+    [
+      [pull.branch, "owner"],
+      [pull.branch, "owner"],
+    ],
+  );
+  assert.deepEqual(fake.commits[1]?.paths, [decision.path]);
+  assert.match(fake.files.get(pull.branch)?.get(decision.path) ?? "", /refund\(amount\)/);
+  assert.deepEqual(
+    revised.deciders.map((d) => [d.login, d.agreed]),
+    [
+      ["alice", false],
+      ["bob", false],
+      ["owner", true],
+    ],
+  );
+  assert.ok(Date.parse(revised.closes ?? "") >= before + 24 * 3_600_000);
+
+  // 버리면 PR이 닫히고 결정은 기본 브랜치에 남지 않는다.
+  const closed = (await call(world.owner, api.discardDecision, { id: decision.id })).decision;
+  assert.equal(closed.status, "closed");
+  assert.equal(closed.closes, null);
+  assert.equal(pull.open, false);
+  assert.equal(pull.mergedAt, undefined);
+  assert.equal(fake.files.get("main")?.has(decision.path), false);
+  assert.deepEqual(await events(world.owner, post), [
+    `${DECISION.title} opened`,
+    `${DECISION.title} agreed alice`,
+    `${DECISION.title} revised owner`,
+    `${DECISION.title} closed owner`,
+  ]);
+  await assert.rejects(call(world.owner, api.discardDecision, { id: decision.id }), {
+    code: "conflict",
+  } satisfies Partial<ContractFailure>);
+});
+
+test("정리한 사람의 토큰이 무효면 머지가 멈추고 알리며, 다시 로그인하면 이어 간다", async (t) => {
+  const HOUR = 20; // 하루 480ms
+  const { world, alice, post } = await postOf(t, HOUR);
+  const fake = world.github;
+  await call(alice, api.send, { channel: post, text: "결제 쪽을 먼저 머지할게요" });
+  const { decision } = await call(world.owner, api.proposeDecision, { post, ...DECISION });
+  // owner의 세션은 그대로 두고 GitHub 토큰만 무효로 한다.
+  for (const [token, login] of fake.tokens) if (login === "owner") fake.tokens.delete(token);
+
+  const stalled = await eventually(async () => {
+    const found = await decisionNamed(alice, DECISION.title);
+    assert.equal(found.status, "stalled");
+    return found;
+  });
+  assert.match(stalled.reason ?? "", /^HTTP 401/);
+  assert.equal(fake.pulls[0]?.open, true);
+  // 주기마다 다시 해 봐도 줄은 하나다.
+  await sleep(300);
+  assert.deepEqual(await events(alice, post), [
+    `${DECISION.title} opened`,
+    `${DECISION.title} stalled`,
+  ]);
+
+  // owner가 다시 로그인하면 새 토큰으로 머지한다.
+  await world.login("owner");
+  const merged = await eventually(async () => {
+    const found = await decisionNamed(alice, DECISION.title);
+    assert.equal(found.status, "accepted");
+    return found;
+  });
+  assert.equal(merged.id, decision.id);
+  assert.equal(merged.early, false);
+  assert.ok(fake.pulls[0]?.mergedAt);
 });

@@ -175,7 +175,7 @@ export async function tempRepo(repo = REPO) {
  * 프로필 이름은 `names`에 적은 사람만 있다.
  * 브랜치의 PR은 `openPull`로 열고, 돌려받은 PR을 고치거나 `merge`해 바꾼다.
  * 레포의 파일은 브랜치마다 `files`에 있다. 기본 브랜치는 main이고, 커밋은 브랜치 이름을 그대로 쓴다.
- * 서버가 연 PR(결정 PR)도 `pulls`에 쌓이고, 연 토큰의 주인이 `author`다. `block`으로 머지를 막는다.
+ * 서버가 연 PR(결정 PR)도 `pulls`에 쌓이고, 연 토큰의 주인이 `author`다. `block`으로 머지를 막고, `review`로 리뷰를 단다.
  * 토큰을 무효로 하려면 `tokens`에서 지운다.
  */
 export function fakeGitHub() {
@@ -190,6 +190,8 @@ export function fakeGitHub() {
   const files = new Map([["main", new Map<string, string>()]]);
   const commits: { branch: string; message: string; author: string; paths: string[] }[] = [];
   let blocked: string | undefined;
+  /** PR 번호마다 리뷰어의 마지막 리뷰 상태. */
+  const reviews = new Map<number, Map<string, "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED">>();
   /** 토큰이 이 레포에 쓸 수 있으면 그 주인. 아니면 GitHub처럼 던진다. */
   const owner = (token: string, repo: string) => {
     const login = tokens.get(token);
@@ -282,6 +284,24 @@ export function fakeGitHub() {
         }
       );
     },
+    async addCommit(token, repo, { branch, message, files: changed }) {
+      const author = owner(token, repo);
+      const head = tree(branch);
+      for (const f of changed) head.set(f.path, f.content);
+      commits.push({ branch, message, author, paths: changed.map((f) => f.path) });
+    },
+    async closePull(token, repo, number) {
+      owner(token, repo);
+      const found = pulls.find((pull) => pull.number === number && pull.open);
+      if (!found) throw new Error("HTTP 422 Pull Request is not open");
+      found.open = false;
+    },
+    async changesRequested(token, repo, number) {
+      if (repo !== REPO || !tokens.has(token)) return undefined;
+      return [...(reviews.get(number) ?? [])]
+        .filter(([, state]) => state === "CHANGES_REQUESTED")
+        .map(([login]) => login);
+    },
     async merge(token, repo, number) {
       if (repo !== REPO || !tokens.has(token)) return { reason: "HTTP 401 Bad credentials" };
       if (blocked) return { reason: blocked };
@@ -327,6 +347,12 @@ export function fakeGitHub() {
     commits,
     /** 서버가 연 PR까지 모든 PR. */
     pulls,
+    /** `login`이 PR `number`에 리뷰를 단다. 변경 요청, 승인, 또는 변경 요청의 해제다. */
+    review(number: number, login: string, state: "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED") {
+      const found = reviews.get(number) ?? new Map();
+      found.set(login, state);
+      reviews.set(number, found);
+    },
     /** GitHub이 머지를 막는다(리뷰 필수 등). 까닭을 주지 않으면 막지 않는다. */
     block(reason?: string) {
       blocked = reason;
@@ -439,6 +465,8 @@ export async function startWorld(
     inboxMs?: number;
     /** 고른 접속 상태가 온라인으로 돌아오기까지의 시간. 줄여서 만료를 본다. */
     presenceDurations?: Partial<Record<PresenceDuration, number>>;
+    /** 결정 PR의 이의 창에서 한 시간의 길이. 줄여서 창이 닫히는 것을 본다. */
+    hourMs?: number;
     /** 서버가 처음 뜨기 전에 DB에 넣을 SQL. 예전 판이 만든 DB로 띄울 때 쓴다. */
     seed?: string;
   } = {},
@@ -463,6 +491,7 @@ export async function startWorld(
     forgetMs: options.forgetMs,
     inboxMs: options.inboxMs,
     presenceDurations: options.presenceDurations,
+    hourMs: options.hourMs,
   };
   let server = await startServer(serverOptions).catch(async (error) => {
     await cleanup();

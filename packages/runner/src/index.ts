@@ -460,7 +460,8 @@ function channelLine(m: ChannelMessage) {
   if (m.kind === "decision") {
     const { decision } = m;
     const reason = m.reason === undefined ? "" : `\n${m.reason}`;
-    return `<decision event="${m.event}" state="${decision.state}" pull="${escapeXml(decision.pull.url)}" at="${m.at}">\n${escapeXml(`${decision.title} (${decision.path}, 정리한 사람 ${decision.name} (${decision.login}))${reason}`)}\n</decision>`;
+    const by = m.by ? ` by="${escapeXml(`${m.by.name} (${m.by.login})`)}"` : "";
+    return `<decision event="${m.event}"${by} state="${decision.status}" pull="${escapeXml(decision.pull.url)}" at="${m.at}">\n${escapeXml(`${decision.title} (${decision.path}, 정리한 사람 ${decision.name} (${decision.login}))${reason}`)}\n</decision>`;
   }
   if (m.kind === "text") {
     return `<message from="${escapeXml(`${m.name} (${m.login})`)}" at="${m.at}">\n${escapeXml(m.text)}\n</message>`;

@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 25;
+export const CONTRACT_VERSION = 26;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -568,14 +568,29 @@ export const Post = z.strictObject({
 });
 export type Post = z.infer<typeof Post>;
 
-/** 결정 PR의 이의 창(ADR-0025). "바로"면 PR을 열자마자 Omagari가 머지한다. "하루"는 기본이다. */
-export const DecisionWindow = z.enum(["now", "day"]);
+/**
+ * 결정 PR의 이의 창 길이(ADR-0025, ADR-0030). "바로"면 PR을 열자마자 Omagari가 머지한다. "하루"가 기본이다.
+ * "직접"은 숫자와 단위(시간, 일)다. 가장 긴 값은 정하지 않았고, `amount`의 상한은 시각이 넘치지 않게 둔 것이다.
+ */
+export const DecisionWindow = z.union([
+  z.enum(["now", "hour", "day", "three_days"]),
+  z.strictObject({ amount: z.number().int().min(1).max(9999), unit: z.enum(["hour", "day"]) }),
+]);
 export type DecisionWindow = z.infer<typeof DecisionWindow>;
 
 /**
  * 포스트에서 정리한 결정 하나와 그 결정 PR(ADR-0025). 정리한 멤버(`login`)의 이름으로 레포의 기본 브랜치에 PR이 열린다.
  * `state`는 PR에서 읽는다: 열려 있으면 제안됨(`proposed`), 머지되면 수락됨(`accepted`), 머지 없이 닫히면 `closed`다.
  * `post`는 포스트의 채널, `path`는 결정 파일(`docs/decisions/NNNN-제목.md`)이다.
+ *
+ * 결정 상태 띠(DESIGN.md)가 그리는 것:
+ * - `status`: 제안됨, 이의가 걸림(`objected`, 수는 `objections`), 이의가 모두 거둬져 다시 열림(`reopened`),
+ *   창은 닫혔거나 모두 동의했는데 GitHub이 막음(`blocked`), 정리한 사람의 토큰이 듣지 않아 멈춤(`stalled`), 수락됨, 버림(`closed`).
+ *   `reason`은 막히거나 멈춘 까닭(GitHub이 준 것)이다.
+ * - `closes`: 창이 닫히는 시각. 이의가 걸려 있거나 머지되거나 닫혔으면 null이다. 남은 시간은 이것과 지금의 차이다.
+ * - `deciders`: 결정자(ADR-0029)와 동의했는지. 정리한 사람은 늘 동의한 것이다. 동의 수는 `agreed`인 결정자의 수다.
+ * - `objections`: 걸린 이의. 포스트에서 낸 것(`post`)과 GitHub의 변경 요청 리뷰(`github`)다. 거두면 빠진다.
+ * - `early`: 결정자가 모두 동의해 창이 닫히기 전에 머지했다.
  */
 export const Decision = z.strictObject({
   id: z.number(),
@@ -587,6 +602,19 @@ export const Decision = z.strictObject({
   pull: z.strictObject({ number: z.number(), url: z.string() }),
   window: DecisionWindow,
   state: z.enum(["proposed", "accepted", "closed"]),
+  status: z.enum(["proposed", "objected", "reopened", "blocked", "stalled", "accepted", "closed"]),
+  reason: z.string().optional(),
+  closes: z.string().nullable(),
+  deciders: z.array(z.strictObject({ login: z.string(), name: z.string(), agreed: z.boolean() })),
+  objections: z.array(
+    z.strictObject({
+      login: z.string(),
+      name: z.string(),
+      via: z.enum(["post", "github"]),
+      at: z.string(),
+    }),
+  ),
+  early: z.boolean(),
   at: z.string(),
 });
 export type Decision = z.infer<typeof Decision>;
@@ -636,8 +664,10 @@ export const ChannelMessage = z.discriminatedUnion("kind", [
     post: Post.omit({ alert: true }),
   }),
   /**
-   * Omagari가 올린 결정 PR의 한 줄. 결정의 포스트와 알림 채널에 같은 것이 하나씩 선다. 쓴 사람이 없다.
-   * `event`는 그때 일어난 일이다: PR이 열렸다, 머지됐다, 머지 없이 닫혔다, Omagari가 머지하려 했으나 GitHub이 막았다(`reason`이 그 까닭).
+   * Omagari가 올린 결정 PR의 한 줄. 결정의 포스트에만 선다(부딪힘 포럼에는 올리지 않는다, ADR-0027).
+   * `event`는 그때 일어난 일이다: PR이 열렸다, 결정자가 동의했다, 이의가 났다, 이의를 거뒀다, 정리한 사람이 고쳐 올렸다,
+   * 머지됐다, 머지 없이 닫혔다, Omagari가 머지하려 했으나 GitHub이 막았다(`blocked`), 정리한 사람의 토큰이 듣지 않아 멈췄다(`stalled`).
+   * `reason`은 막히거나 멈춘 까닭이다. `by`는 그 일을 한 사람이다(동의, 이의, 거두기, 고쳐 올리기). GitHub의 리뷰면 멤버가 아닐 수 있다.
    * `decision`은 읽은 때의 결정이라, 지난 줄이어도 `state`는 지금의 것이다. 포스트의 글 수에 들지 않는다.
    */
   z.strictObject({
@@ -645,8 +675,19 @@ export const ChannelMessage = z.discriminatedUnion("kind", [
     id: z.number(),
     channel: z.string(),
     at: z.string(),
-    event: z.enum(["opened", "merged", "closed", "blocked"]),
+    event: z.enum([
+      "opened",
+      "agreed",
+      "objected",
+      "withdrawn",
+      "revised",
+      "merged",
+      "closed",
+      "blocked",
+      "stalled",
+    ]),
     reason: z.string().optional(),
+    by: z.strictObject({ login: z.string(), name: z.string() }).optional(),
     decision: Decision,
   }),
 ]);
@@ -1330,7 +1371,8 @@ export const api = {
    * 포스트(`post`, 포스트의 채널)에서 결정을 정리해 부른 멤버의 이름으로 결정 PR을 연다(ADR-0025).
    * 사람이 쓰는 것은 제목, 맥락, 결정, 결과와 창의 길이다. 결정자(그 포스트에서 말한 멤버와 정리한 멤버)와 출처(포스트 링크)는 서버가 붙인다.
    * 결정 파일은 `docs/decisions/`에 다음 번호로 놓이고, 레포의 AGENTS.md가 그 폴더를 가리키지 않으면 같은 PR에 한 줄을 더한다.
-   * 열리면 포스트와 알림 채널에 `decision` 줄(`opened`)이 선다. "바로"면 곧이어 머지하고, GitHub이 막으면 `blocked` 줄에 까닭을 적는다.
+   * 열리면 포스트에 `decision` 줄(`opened`)이 선다. 창이 닫힐 때 걸린 이의가 없으면 Omagari가 정리한 사람의 토큰으로 머지한다("바로"면 곧이어).
+   * GitHub이 막으면 `blocked` 줄에 까닭을 적고 주기마다 다시 해 본다. 토큰이 듣지 않으면 `stalled` 줄을 적고 다시 로그인할 때까지 멈춘다.
    * 포스트가 아니면 `not_found`, 부른 멤버의 토큰으로 GitHub이 받지 않으면 `github_failed`다.
    */
   proposeDecision: {
@@ -1347,6 +1389,52 @@ export const api = {
       consequences: z.string().trim().min(1).max(MAX_MESSAGE_CHARS),
       window: DecisionWindow.default("day"),
     }),
+    response: z.strictObject({ decision: Decision }),
+  },
+  /**
+   * 결정 PR에 동의하거나(`agree`), 이의를 내거나(`object`), 내 이의를 거둔다(`withdraw`)(ADR-0025, ADR-0029).
+   * 동의는 결정자만 한다(아니면 `forbidden`). 정리한 사람은 이미 동의한 것이라 다시 해도 그대로다. 결정자가 모두 동의하고 걸린 이의가 없으면 바로 머지한다.
+   * 이의는 아무 멤버나 낸다. 걸린 이의가 하나라도 있으면 머지하지 않는다. 거두기는 이의를 낸 사람만 한다(내 이의가 없으면 `not_found`).
+   * 이의가 모두 거둬지면 창이 처음부터 같은 길이로 다시 열린다. 이미 머지되거나 닫힌 결정이면 `conflict`다.
+   * 동의, 이의, 거두기마다 포스트에 `decision` 줄이 선다. 같은 것을 두 번 하면 그대로이고 줄도 서지 않는다.
+   */
+  respondToDecision: {
+    method: "POST",
+    path: "/api/decisions/respond",
+    body: z.strictObject({
+      id: z.number().int(),
+      response: z.enum(["agree", "object", "withdraw"]),
+    }),
+    response: z.strictObject({ decision: Decision }),
+  },
+  /**
+   * 정리한 사람이 결정을 고쳐 같은 결정 PR에 새 커밋으로 올린다(ADR-0025). 결정 파일의 경로는 그대로다.
+   * 고치면 다른 결정자의 동의는 지워지고 창이 처음부터 같은 길이로 다시 열린다(ADR-0031). 걸린 이의는 그대로다.
+   * 정리한 사람이 아니면 `forbidden`, 이미 머지되거나 닫혔으면 `conflict`, GitHub이 받지 않으면 `github_failed`다.
+   */
+  reviseDecision: {
+    method: "POST",
+    path: "/api/decisions/revise",
+    body: z.strictObject({
+      id: z.number().int(),
+      title: z
+        .string()
+        .transform((title) => title.replace(/\s+/g, " ").trim())
+        .pipe(z.string().min(1).max(MAX_CHANNEL_NAME_CHARS)),
+      context: z.string().trim().min(1).max(MAX_MESSAGE_CHARS),
+      decision: z.string().trim().min(1).max(MAX_MESSAGE_CHARS),
+      consequences: z.string().trim().min(1).max(MAX_MESSAGE_CHARS),
+    }),
+    response: z.strictObject({ decision: Decision }),
+  },
+  /**
+   * 정리한 사람이 결정을 버린다: 결정 PR을 머지하지 않고 닫는다. 결정 파일은 기본 브랜치에 들어가지 않는다.
+   * 정리한 사람이 아니면 `forbidden`, 이미 머지되거나 닫혔으면 `conflict`, GitHub이 받지 않으면 `github_failed`다.
+   */
+  discardDecision: {
+    method: "POST",
+    path: "/api/decisions/discard",
+    body: z.strictObject({ id: z.number().int() }),
     response: z.strictObject({ decision: Decision }),
   },
   /** 정리한 결정 전부, 정리한 순서. 상태는 서버가 GitHub에서 주기마다 읽은 것이다. */
