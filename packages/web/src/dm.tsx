@@ -185,6 +185,7 @@ export function DmPanel({
       id={id}
       title="내 에이전트"
       sheet={sheet}
+      full
       onClose={onClose}
       head={
         <DmHead
