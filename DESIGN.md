@@ -860,6 +860,25 @@ components:
     backgroundColor: "{colors.error-bg}"
     textColor: "{colors.error}"
     rounded: "{rounded.md}"
+  app-verdict-strip:
+    backgroundColor: "{colors.selected}"
+    textColor: "{colors.ink}"
+    fontFamily: "{typography.app-caption.fontFamily}"
+    fontSize: "{typography.app-caption.fontSize}"
+    rounded: "{rounded.md}"
+    height: 44px
+    padding: 6px 8px 6px 14px
+  app-verdict-strip-warning:
+    backgroundColor: "{colors.warning-bg}"
+    textColor: "{colors.warning}"
+    rounded: "{rounded.md}"
+  app-verdict-output:
+    backgroundColor: "{colors.canvas}"
+    textColor: "{colors.ink}"
+    borderColor: "{colors.hairline}"
+    fontSize: 12px
+    rounded: "{rounded.sm}"
+    padding: 10px 12px
   app-settings-window:
     backgroundColor: "{colors.canvas-parchment}"
     borderColor: "{colors.hairline}"
@@ -1446,12 +1465,26 @@ DM의 문답을 채널 입력 칸에 붙여, 내 말과 함께 보낸다(2026-11
   - 1px 세로 구분선 뒤에 태그(`{component.app-tag-chip}`, 켜면 `{component.app-tag-chip-on}`): "열림 N", "풀림 N", 그리고 포스트들의 이슈 라벨(처음 나온 순서, ADR-0032). Omagari가 이슈를 열 때 종류 라벨(직접 충돌, 간접 충돌, 중복 구현, 계약 변경)을 달고, 사람이 GitHub에서 단 라벨도 여기 선다. 라벨을 여럿 켜면 그 가운데 하나라도 단 포스트가 보인다. 처음에는 "열림"이 켜져 있다. 좁으면 넘치는 태그는 숨는다.
   - "풀림"은 알림이 풀렸거나 사람이 GitHub에서 이슈를 닫은 포스트다. 알림이 풀리면 Omagari가 이슈를 닫는다.
 - **목록 보기**(기본): 포스트마다 `{component.app-forum-post}` 한 장, 사이 8px. 올렸을 때 `{colors.selected}`.
-  1. 제목 15px/600(말줄임), 그 뒤에 이슈 번호 "#44"(15px 보조 글씨, `{component.app-issue-number}`)
-  2. 종류 배지(직접 충돌은 `{component.app-badge-warning}`, 추정은 `{component.app-badge-outline}`에 "· 추정")를 제목 아래 줄에 두고, 종류가 아닌 이슈 라벨을 그 뒤에 `{component.app-badge-outline}`으로 잇는다
+  1. 판정 아이콘(16px, 아래 "목록의 판정"), 제목 15px/600(말줄임), 그 뒤에 이슈 번호 "#44"(15px 보조 글씨, `{component.app-issue-number}`)
+  2. 종류 배지(직접 충돌은 `{component.app-badge-warning}`, 그 밖은 `{component.app-badge-outline}`)를 제목 아래 줄에 두고, 간접 충돌이면 그 뒤에 판정 배지를 단다. 종류가 아닌 이슈 라벨을 그 뒤에 `{component.app-badge-outline}`으로 잇는다
   3. 마지막 글 한 줄(13px 보조, 앞에 쓴 사람 이름 600 글자색 "민수:")
   4. 사람 줄(시안 27-B, 2026-11-13 주인): 관련된 사람의 22px 아바타를 5px 겹쳐 두고, 그 뒤에 이름을 " · "로 잇는다(12px 글자색, "박민수 · 나"). 그 뒤 " · ", 16px 말풍선 아이콘과 글 수, "· 2분 전"(12px 보조)
   - 브랜치, 파일, 줄 번호는 줄에 두지 않는다. 포스트의 첫 글(알림)에 있다.
   - 풀린 포스트는 70% 흐리게 하고 제목 앞에 "풀렸어요" 테두리 배지를 단다.
+- **목록의 판정**(2026-11-13 시안 29-B와 29-C를 합침): 합쳐 돌려 보기의 판정(ADR-0035)을 제목 앞 아이콘과 판정 배지 둘로 보인다. 아이콘은 16px Lucide, 보조 글씨색이고 깨짐만 `{colors.warning}`이다. `role="img"`와 판정 이름의 `aria-label`을 단다. 판정 배지는 글자만 쓴다.
+
+  | 판정 | 아이콘 | 판정 배지 |
+  | --- | --- | --- |
+  | 추정(아직 돌리지 않음) | `circle-dashed` | "추정" `{component.app-badge-outline}` |
+  | 돌려 보는 중 | `loader-circle`(1초에 한 바퀴, 움직임 줄이기면 멈춤) | "돌려 보는 중" 테두리 배지 |
+  | 깨짐 | `circle-x` 경고색 | "깨짐" `{component.app-badge-warning}` |
+  | 가릴 수 없음 | `circle-question-mark` | "가릴 수 없음" 테두리 배지 |
+  | 통과(풀림) | `circle-check` | "통과" 테두리 배지 |
+  | 직접 충돌 | `circle-x` 경고색 | 없음. 종류 배지가 경고색이다 |
+
+  - 돌리지 못함은 목록에 따로 보이지 않고 "추정"으로 남는다. 까닭은 포스트의 판정 띠에 있다.
+  - 중복 구현과 계약 변경은 합쳐 돌려 보지 않으므로(ADR-0036) 아이콘과 판정 배지가 없다.
+  - 태그에 "확인됨"이 선다. 깨짐이 확인되면 Omagari가 이슈에 붙이는 라벨이다.
 - **카드 보기**: 2열 격자, 사이 12px. `{component.app-forum-card}`에 목록 보기의 세 줄을 둔다. 2단계에서는 위쪽의 부딪힌 줄 미리 보기 칸을 두지 않는다(2026-11-13 주인, 까닭과 명세는 Known Gaps).
 - **제목**에는 사람을 넣지 않는다. 사람은 사람 줄에 따로 보인다(시안 27-B). 제목은 이슈 제목과 번호("refund의 reason 필드 #44")다(ADR-0032). Omagari가 연 이슈의 제목은 부딪힌 파일(또는 심볼)과 종류("refund.ts 직접 충돌")이고, 사람이 GitHub에서 바꾸면 따라간다. 이슈를 아직 열지 못했으면 부딪힌 파일(또는 심볼)만 쓰고 번호가 없다.
 
@@ -1462,9 +1495,29 @@ DM의 문답을 채널 입력 칸에 붙여, 내 말과 함께 보낸다(2026-11
   - 그 아래 대화, 맨 아래 `{component.app-composer}`(안내 글 "이 포스트에 메시지 보내기").
 - **크게 보기**: 포스트가 가운데 대화 칸이 되고, 오른쪽 칸은 다시 DM이나 멤버 목록이 된다. 머리 띠는 "‹"(포럼으로 돌아가기), "부딪힘 ›"(13px 보조), 제목(`{typography.app-title}`)과 이슈 번호 링크(17px 보조), 오른쪽에 "옆 칸으로"(Lucide `minimize-2`), 내 에이전트, 멤버 목록이다. 입력 칸 안내 글은 "refund.ts에 메시지 보내기".
 - **첫 글은 Omagari의 알림이다.** `{component.app-message}` 모양에 아바타 대신 `{component.app-omagari-mark}`(36px, `{colors.ink}` 바탕 둥근 네모, 흰 18px Lucide `git-merge`), 이름 "Omagari", 본문은 `{component.app-alert-card}`: 종류 배지, 두 사람과 브랜치(12px 고정폭 보조), 다음 줄에 파일과 줄 범위(12px 고정폭 보조). 알림이 고쳐지면 이 글이 바뀌고 시각 옆에 "10:38에 고침"을 붙인다.
-- **결정 상태 띠**(`{component.app-decision-strip}`)는 결정 PR이 열리면 첫 글 아래, 대화 위에 늘 붙는다(아래 "결정 상태 띠").
+- **첫 글의 배지**: 간접 충돌이 합쳐 돌려 보기로 확인되면 알림 카드의 배지가 "간접 충돌 · 추정"(`{component.app-badge-outline}`)에서 "간접 충돌 · 확인됨"(`{component.app-badge-warning}`)으로 바뀐다. 통과해서 닫히면 "간접 충돌 · 추정" 뒤에 "풀렸어요"가 붙는다.
+- **판정 띠**(`{component.app-verdict-strip}`)는 합쳐 돌려 보기가 돌면 대화 위에 늘 붙는다(아래 "판정 띠").
+- **결정 상태 띠**(`{component.app-decision-strip}`)는 결정 PR이 열리면 첫 글 아래, 대화 위에 늘 붙는다(아래 "결정 상태 띠"). 판정 띠가 있으면 그 아래다.
 - **DM**: 포스트에서 연 DM 칸 머리의 둘째 줄은 "나만 보여요 · refund.ts"다. 답 아래 "채널에 올리기"는 "포스트에 올리기"가 되고, 올린 뒤에는 "이 포스트에 올렸어요 · 보기"다. 나머지는 "DM 칸"과 같다(모델·effort 칩 포함).
-- **사이드바 표시**: 직접 충돌이 걸린 작업의 작업 줄 뒤에 "직접 충돌" `{component.app-badge-warning}`을 붙이고, 풀리면 뗀다.
+- **사이드바 표시**: 직접 충돌이 걸린 작업의 작업 줄 뒤에 "직접 충돌" `{component.app-badge-warning}`을 붙이고, 풀리면 뗀다. 합쳐 돌려 보기의 판정이 깨짐인 작업에는 같은 자리에 "합치면 깨짐" `{component.app-badge-warning}`을 붙인다.
+
+#### 판정 띠
+
+합쳐 돌려 보기의 판정(ADR-0035)은 포스트의 대화 위에 띠 한 줄로 늘 보인다(2026-11-13 시안 28-B). 알림 카드 안에 두는 28-A와 대화에 한 줄씩 쌓는 28-C는 고르지 않았다. 띠의 모양은 결정 상태 띠와 같다.
+
+- **`app-verdict-strip`** 최소 높이 44px, `{rounded.md}`, 13px, `role="status"`. 왼쪽에 16px 판정 아이콘, 판정 이름(600), 설명(보조 글씨). 좁으면 줄을 바꾼다. 간접 충돌 포스트에만 있고, 러너가 판정을 올린 적이 없으면 띠가 없다.
+- **판정**: 아이콘 · 이름 · 설명 · 띠 색
+  - `loader-circle` · 돌려 보는 중 · "지은의 기기에서 npm test · 20초째" · 기본
+  - `circle-x` · 깨짐 · "합치면 깨져요 · 따로 돌리면 둘 다 통과해요" · `{component.app-verdict-strip-warning}`
+  - `circle-check` · 통과 · "합쳐도 통과해서 포스트를 닫았어요 · npm test · 방금" · 기본
+  - `circle-question-mark` · 가릴 수 없음 · "민수의 작업만 돌려도 깨져요" · 기본
+  - `circle-minus` · 돌리지 못함 · 까닭을 쓴다: "레포에 검사 명령이 없어요 · 정하는 법", "지은의 기기에 샌드박스 도구가 없어요 · 까는 법", "5분이 넘어 끊었어요 · 통과로 치지 않아요", "직접 충돌을 먼저 풀어야 돌려 볼 수 있어요" · 기본. "정하는 법"과 "까는 법"은 강조색 링크다.
+  - 지난 결과: 돌린 뒤에 내용이 바뀌었으면 이름 뒤에 " · 지난 결과"를 붙이고 설명은 "내용이 바뀌어서, 잠잠해지면 다시 돌려요", 띠 색은 기본이다.
+- **출력**: 깨짐이면 오른쪽 끝에 "출력 보기"(`{component.app-button-quiet}`, 높이 28px, `aria-expanded`)가 있다. **출력은 접힌 채가 기본이다**(2026-11-13 주인). 누르면 띠 아래 6px에 한 줄(12px 고정폭 보조 글씨, "npm test · 48초 · 지은의 기기 · 2분 전")과 출력 칸이 펼쳐지고 버튼은 "출력 접기"가 된다.
+  - **`app-verdict-output`** 흰 바탕, 1px `{colors.hairline}`, `{rounded.sm}`, 안쪽 10px 12px, 12px 고정폭, 줄 높이 1.55. 줄을 바꾸지 않고 가로로 스크롤한다. 출력의 끝부분만 보인다.
+  - 출력을 올리지 않은 판정(공유 수준이 full이 아닌 러너)에는 "출력 보기"가 없다.
+- **색**: 경고색은 깨짐에만 쓴다. 통과에 초록을 쓰지 않는다(강조색은 하나).
+- **띠가 둘일 때**: 결정 PR이 열려 있으면 판정 띠가 위, 결정 상태 띠가 아래이고 사이는 6px이다.
 
 #### 결정 정리하기
 
@@ -1520,6 +1573,10 @@ DM의 문답을 채널 입력 칸에 붙여, 내 말과 함께 보낸다(2026-11
   - "연결된 에이전트": 에이전트마다 한 줄. 에이전트 표시, 이름, "이 기기 · 러너 켜짐", 오른쪽 "연결됨" 테두리 배지. 러너가 꺼진 것은 표시를 50% 흐리게, "러너가 꺼져 있어요", 오른쪽 "꺼짐"(12px 보조).
 - **부딪힘 알림**:
   - "부딪힘 알림": "알림을 올릴 포럼" 줄의 오른쪽에 고르기 단추(높이 28px, `{colors.selected}` 바탕, `{rounded.sm}`, 포럼 아이콘, 이름, 꺾쇠). 고를 수 있는 것은 포럼 채널뿐이다. 묶음 아래 "바꾸면 새 알림부터 그 포럼에 올라가고, 지난 포스트는 그대로 있어요. 모든 멤버에게 같아요."
+  - "합쳐 돌려 보기"(2026-11-13 시안 30-C. 새 항목을 만드는 30-A와 내 에이전트 아래에 두는 30-B는 고르지 않았다): "알림을 올릴 포럼" 묶음 아래에 둔다. 스위치가 없다. 켜고 끄는 것은 웹이 아니라 러너에서 한다(ADR-0034).
+    - "검사 명령" 줄: 설명 "합친 것에 돌리는 명령이에요.", 오른쪽에 명령(13px 고정폭 보조 글씨, 읽기만). 레포에 설정 파일이 없으면 설명 "레포에 설정 파일이 없어요. 머지하면 돌리기 시작해요.", 오른쪽에 "정하는 법 ›"(강조색).
+    - "내 러너에서 돌리기" 줄: 켜짐이면 설명 "켜져 있어요. 샌드박스 안에서만 돌아요."와 "켜짐" 테두리 배지. 꺼 두었으면 "꺼 두었어요. 다른 멤버의 러너가 돌린 판정은 그대로 보여요."와 "꺼짐"(12px 보조). 샌드박스 도구가 없으면 "이 기기에 샌드박스 도구가 없어 돌리지 않아요."와 "까는 법 ›"(강조색). 러너가 꺼져 있으면 "러너가 꺼져 있어요."와 "꺼짐".
+    - 묶음 아래 설명: "레포 기본 브랜치의 설정 파일에서 읽어요. 바꾸려면 그 파일을 고쳐 머지하세요. 모든 멤버에게 같아요. 켜고 끄는 것은 웹이 아니라 러너에서 해요. 서버가 내 기기에서 돌릴 것을 정하지 못하게 하려는 거예요."
   - "워크스페이스": 이름과 레포(13px 고정폭), 읽기만 한다.
 
 #### 버튼
@@ -1530,13 +1587,14 @@ DM의 문답을 채널 입력 칸에 붙여, 내 말과 함께 보낸다(2026-11
 
 #### 배지
 
-- **`app-badge`** 높이 20px, `{rounded.pill}`, 12px. 쓰임은 여섯이다.
+- **`app-badge`** 높이 20px, `{rounded.pill}`, 12px. 쓰임은 일곱이다.
   - 공개: `{component.app-badge-outline}`. 채널에서 펼친 문답 카드의 머리에만 단다. DM에는 공개 범위 배지가 없다("DM 칸").
   - 작업 중 변경 포함: `{component.app-badge-warning}`
   - N시간 전 기준: 테두리 배지 앞에 11px 시계 아이콘
   - 답한 모델: `{component.app-badge-outline}`에 "Opus · high"처럼 모델과 effort. "기본"으로 물었으면 실행기가 알려 준 실제 모델 이름을 쓰고, 모르면 배지를 달지 않는다.
   - AI가 쓴 답: `{component.app-badge-ai}`("AI가 쓴 글")
   - GitHub에서 들어온 댓글: `{component.app-badge-outline}` "GitHub"("메시지")
+  - 판정: 포럼 목록의 판정 배지("부딪힘 포럼"의 "목록의 판정")와 작업 줄의 "합치면 깨짐". 깨짐만 `{component.app-badge-warning}`, 나머지는 `{component.app-badge-outline}`
 
 #### 알림 띠
 
@@ -1659,6 +1717,7 @@ The structural breakpoints that matter for agents: 1440px (content lock), 1068px
 - Atmospheric photography (environment page mountain vista) is a content asset, not a design token; the documented `{component.environment-quote-card}` describes the structural surface only.
 - 앱: 결정함과 결정 보기는 아직 부품이 없다(2단계 문답 Q9). "기록 보기"가 여는 답한 기록 화면도 아직 없다.
 - 앱: 사람이 포럼 채널을 따로 만들 수 있게 할지는 정하지 않았다. 지금 포럼 채널은 부딪힘 하나다.
+- 앱: 합쳐 돌려 보기의 설정 파일 이름과 러너에서 끄는 명령의 이름은 정하지 않았다(ADR-0034). 시안은 `.omagari.json`과 `omagari runner --merge-check off`로 그렸다. 좁은 화면의 판정 띠는 따로 그리지 않았고, 결정 상태 띠처럼 줄을 바꾼다.
 - 앱: 포럼 카드 보기의 부딪힌 줄 미리 보기는 나중에 한다(2026-11-13 주인이 2단계에서 뺌). 알림에는 줄 번호만 있고, 줄 내용을 실으려면 러너가 공유 수준(ADR-0007)대로 내용을 싣는 계약 변경이 필요하다. 카드 보기는 기본 보기도 아니다. 넣을 때의 명세: 카드 위쪽, 12px 고정폭, 줄 높이 1.55, 안쪽 14px 16px. 직접 충돌은 `{colors.warning-bg}` 바탕에 두 사람의 줄을 `{colors.warning}`, 정의 줄 변경은 `{colors.selected}` 바탕에 -/+ 두 줄.
 - 앱: 실행기가 늘어나면 `app-agent-mark`의 약자를 여기에 더한다(지금은 `CC`, `CX`).
 - 앱: 컴포넌트에 쓴 `borderColor`, `iconColor`, `shadow`, `backdropFilter`, `maxWidth` 같은 속성과 글자 값 하나씩 가리키기(`fontSize` 등)는 design.md 규격 검사기에서 "모르는 속성" 경고로 나온다. 오류가 아니라 경고이고, gstack 검사기가 모든 참조를 풀 수 있게 하려고 이렇게 쓴다.
