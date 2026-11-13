@@ -29,7 +29,6 @@ colors:
   hover: "#0000000a"
   selected: "#0000000f"
   selected-solid: "#e6e6e8"
-  focus-ring: "#0071e33d"
   overlay: "#00000052"
   online: "#248a3d"
   away: "#c27c0e"
@@ -655,7 +654,6 @@ components:
     padding: 0 12px
   app-text-input-focus:
     borderColor: "{colors.primary}"
-    ringColor: "{colors.focus-ring}"
     rounded: "{rounded.md}"
   app-text-input-error:
     borderColor: "{colors.error}"
@@ -1008,7 +1006,7 @@ Store and shop surfaces retain the same chassis but switch modes. The product co
 - **접속 상태**: 온라인 `{colors.online}` #248a3d, 자리 비움 `{colors.away}` #c27c0e, 방해 금지 `{colors.dnd}` #d70015, 오프라인 `{colors.offline}` #8e8e93. 색만이 아니라 점의 모양으로도 가른다(부품 "접속 점").
 - **오류와 경고**: 오류 `{colors.error}` #d70015 / 바탕 `{colors.error-bg}`, 경고 `{colors.warning}` #b25000 / 바탕 `{colors.warning-bg}`. 둘 다 바탕 위 글씨가 4.5:1을 넘는다.
 - **칩과 뼈대**: `{colors.chip}` #e8e8ed는 아바타 바탕, 막힌 버튼, 불러오는 중의 회색 막대에 쓴다.
-- **덮개와 고리**: 대화 상자 뒤 덮개 `{colors.overlay}`(검정 32%), 입력 칸 포커스 고리 `{colors.focus-ring}`(Focus Blue 24%).
+- **덮개와 고리**: 대화 상자 뒤 덮개 `{colors.overlay}`(검정 32%). 입력 칸에는 포커스 고리를 두지 않는다(아래 "입력").
 - **강조색은 그대로 하나다.** 접속 상태와 오류·경고의 색은 상태를 알리는 색이고, 누를 수 있다는 신호는 여전히 `{colors.primary}`만 낸다.
 
 ### 어두운 모드
@@ -1375,7 +1373,7 @@ Apple's whitespace is the product's pedestal. Every tile begins with at least 64
 #### 입력
 
 - **`app-text-input`** 높이 36px, `{rounded.md}`, 1px `{colors.hairline}`, 15px. 위에 라벨(13px/600), 아래에 도움말(12px 보조).
-  - 입력 중: 테두리 `{colors.primary}`와 바깥 3px `{colors.focus-ring}`
+  - 입력 중: 테두리만 `{colors.primary}`로 바뀐다. 바깥에 번지는 연한 파란 고리는 두지 않는다(2026-11-13 주인). 메시지 입력 칸, 찾기 칸, 고르기 칸도 같다.
   - 오류: 테두리 `{colors.error}`, 도움말 글씨도 `{colors.error}`, `aria-invalid`
 - **`app-composer`** 메시지 입력 칸. 흰 바탕, 1px 선, `{rounded.lg}`, 안쪽 6px 6px 6px 16px. 줄이 늘어나면 200px까지 커지고 그 뒤로는 칸 안에서 스크롤한다. 오른쪽에 32px 둥근 보내기 버튼(`{component.app-send-button}`). Enter는 보내기, Shift+Enter는 줄바꿈.
   - 러너가 꺼져 있으면 `{component.app-composer-disabled}`: 파치먼트 바탕에 "Claude Code 러너가 꺼져 있어 지금은 물을 수 없어요", 보내기 버튼은 막힌다.
@@ -1404,7 +1402,7 @@ DM의 문답을 채널 입력 칸에 붙여, 내 말과 함께 보낸다(2026-11
   - 안내 글은 "한마디 덧붙이기 (선택)"이다. 글 없이 문답만 보내도 된다. 문답이 붙어 있으면 보내기 버튼이 켜진다.
   - 붙어 있는 동안 DM의 그 문답은 버튼 자리에 16px Lucide `corner-down-left`와 "채널 입력 칸에 넣었어요"(12px 보조)를 보인다. 빼면 버튼이 돌아온다.
   - 붙인 문답은 입력 칸의 글처럼 그 채널에만 있다. 다른 채널로 가면 빠진다.
-- **좁은 화면**: 오른쪽 칸이 대화 위에 떠 있는 폭(1068px 이하)에서는 누르면 오른쪽 칸(833px 이하는 시트)을 닫고 채널 입력 칸으로 간다.
+- **좁은 화면**: 오른쪽 칸이 대화 위에 떠 있는 폭(1068px 이하)에서는 누르면 오른쪽 칸(833px 이하는 DM 화면)을 닫고 채널 입력 칸으로 간다.
 - **보내기**: Enter나 보내기 버튼. 채널에 내 메시지 하나로 올라간다: 머리, 쓴 글, 접힌 문답 줄(위 "문답"). 채널은 그 메시지로 스크롤하고 `{component.app-message-highlight}`(`{colors.selected}` 바탕, `{rounded.md}`)로 칠했다가 2초 동안 걷어 낸다. 움직임 줄이기 설정이면 2초 뒤에 바로 걷는다. DM의 문답은 "# 결제에 올렸어요 · 보기"로 바뀐다.
 - **보내기 실패**: 글과 붙인 문답을 입력 칸에 되돌리고 알림 띠 "채널에 올리지 못했어요"를 띄운다.
 
@@ -1412,7 +1410,7 @@ DM의 문답을 채널 입력 칸에 붙여, 내 말과 함께 보낸다(2026-11
 
 부딪힘은 포럼 채널이다(2026-11-13 시안 14-A, Discord 포럼처럼, ADR-0027). Omagari가 알림 하나를 포스트 하나로 올리고, 사람은 포럼에서 채팅하지 않고 포스트 안에서만 이야기한다.
 
-- **채널 패널**: "포럼 채널" 카테고리 아래에 부딪힘 줄(18px Lucide `messages-square`)이 있다. 그 밑에 열린 포스트가 가지로 달린다: 왼쪽 30px 들여 쓰고, 부딪힘 아이콘 아래에서 내려오는 1px `{colors.hairline}` 꺾인 선으로 잇는다. 14px 글씨, 새 글이 있으면 600과 오른쪽 8px 점. 풀린 포스트는 가지에서 빠진다.
+- **채널 패널**: "포럼 채널" 카테고리 아래에 부딪힘 줄(18px Lucide `messages-square`)이 있다. 그 밑에 열린 포스트가 가지로 달린다: 왼쪽 30px 들여 쓰고, 부딪힘 아이콘 아래에서 내려오는 1px `{colors.hairline}` 세로선 하나가 마지막 포스트까지 끊기지 않고 이어진다. 마지막 포스트에서만 └처럼 꺾고, 중간 포스트에는 가로 가지를 달지 않는다(`│ │ └`, 2026-11-13 주인). 14px 글씨, 새 글이 있으면 600과 오른쪽 8px 점. 풀린 포스트는 가지에서 빠진다.
 - **머리 띠**: 20px 포럼 아이콘, "부딪힘"(`{typography.app-title}`), "Omagari가 알림을 포스트로 올려요"(12px 보조). 오른쪽 버튼은 채널과 같다.
 - **찾기 칸**(`{component.app-forum-search}`): 머리 띠 아래 12px에 대화 칸 폭으로 둔다. 높이 40px, 앞에 18px 돋보기, 안내 글 "포스트 찾기 (사람, 파일, 함수)". 포스트는 Omagari가 올리므로 "새 포스트" 버튼은 없다.
 - **도구 줄**: 찾기 칸 아래 10px.
@@ -1603,7 +1601,7 @@ The structural breakpoints that matter for agents: 1440px (content lock), 1068px
 | --- | --- |
 | 1069px 이상 | 세 칸(채널 패널, 대화, 오른쪽 칸). 채널 패널을 접으면 대화와 오른쪽 칸 두 칸 |
 | 834–1068px | 채널 패널과 대화 두 칸. 오른쪽 칸은 대화 위에 겹쳐 열린다(폭 320px, 떠 있는 층). 채널 패널을 접으면 대화만 |
-| 833px 이하 | 대화만. 머리 띠 왼쪽 메뉴 버튼이 채널 패널(프로필 포함)을 왼쪽 서랍으로 열고, 오른쪽 두 버튼이 내 에이전트와 멤버 목록을 아래에서 올라오는 전체 높이 시트로 연다. 버튼과 줄은 44px |
+| 833px 이하 | 대화만. 머리 띠 왼쪽 메뉴 버튼이 채널 패널(프로필 포함)을 왼쪽 서랍으로 연다. 포스트와 내 에이전트(DM)는 채널처럼 화면 전체를 쓰는 대화로 연다: 덮개, 둘레 여백, 둥근 모서리 없이 머리 띠와 입력 칸이 채널과 같은 자리에 있고, 머리 띠 왼쪽 "‹"로 전 화면에 돌아간다. 포스트의 "크게 보기"는 숨긴다(2026-11-13 주인). 멤버 목록은 아래에서 올라오는 전체 높이 시트다. 버튼과 줄은 44px |
 
 ### Image Behavior
 - All product imagery uses responsive `srcset` with breakpoint-matched crops.
