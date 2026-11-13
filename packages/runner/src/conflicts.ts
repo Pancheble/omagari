@@ -4,8 +4,18 @@ import { createHash } from "node:crypto";
 import { lstat, mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { LineRange, ConflictPair as Pair, Work, WorkView } from "@omagari/contract";
+import type {
+  ConflictPair,
+  Definition,
+  LineRange,
+  SymbolPlace,
+  Work,
+  WorkView,
+} from "@omagari/contract";
 import { blobAt, gitIn, type Hunk, hasCommit, hunks } from "./nearby.ts";
+import { uses } from "./observe.ts";
+
+type Pair = Extract<ConflictPair, { kind: "direct" }>;
 
 type Found = Pair["files"][number] | undefined;
 
@@ -66,6 +76,7 @@ export async function conflicts(
         }
         if (files.length > 0) {
           pairs.push({
+            kind: "direct",
             branch: work.branch,
             theirs: { login: theirs.login, branch: theirs.branch },
             files,
@@ -147,4 +158,62 @@ function touching(hunks: Hunk[], others: Hunk[]): LineRange[] {
   return hunks
     .filter(({ before: a }) => others.some(({ before: b }) => a.from <= b.to && b.from <= a.to))
     .map((hunk) => hunk.after);
+}
+
+type SymbolPair = Extract<ConflictPair, { kind: "indirect" | "duplicate" }>;
+
+/** 작업의 바뀐 파일들에서 `changes`인 정의 줄을 이름마다 모은 곳. */
+function defined(work: Work | WorkView, changes: Definition["change"][]) {
+  const found = new Map<string, SymbolPlace[]>();
+  for (const file of work.files) {
+    for (const d of "definitions" in file ? (file.definitions ?? []) : []) {
+      if (!d.change || !changes.includes(d.change)) continue;
+      found.set(d.name, [
+        ...(found.get(d.name) ?? []),
+        { path: file.path, line: d.line, role: d.change },
+      ]);
+    }
+  }
+  return found;
+}
+
+/**
+ * 정의 줄 위의 추정 부딪힘(ADR-0023, ADR-0026). `mine`(이 러너의 작업과 그 폴더)과 `works` 가운데 `login`이 아닌 멤버의 작업마다 본다.
+ * - 간접 충돌(추정): 상대가 정의 줄을 바꾸거나 없앤 심볼을 내 작업의 사본에서 이름으로 찾는다. 쓰는 곳이 있으면 싣는다.
+ *   반대 방향(내가 바꾼 것을 상대가 쓰는 것)은 상대 러너가 자기 사본으로 계산한다.
+ * - 중복 구현: 두 작업에 같은 이름의 새 정의가 생겼다. 내 정의 줄은 내용을 올리는 수준(full)에서만 있어, 그때만 계산한다(ADR-0026).
+ * intent인 내 작업은 계산하지 않는다(서버로 경로가 나가지 않는다). 심볼이 하나라도 있는 쌍과 종류만 돌려준다.
+ */
+export async function symbolConflicts(
+  mine: { work: Work; folder: string }[],
+  works: WorkView[],
+  login: string,
+): Promise<SymbolPair[]> {
+  const pairs: SymbolPair[] = [];
+  const others = works.filter((theirs) => theirs.login !== login);
+  for (const { work, folder } of mine) {
+    if (work.share === "intent") continue;
+    const added = defined(work, ["added"]);
+    const changing = others.map((theirs) => ({
+      theirs,
+      defs: defined(theirs, ["changed", "removed"]),
+    }));
+    // 내 사본은 한 번만 읽는다: 상대들이 바꾼 이름을 모두 모아 찾는다.
+    const used = await uses(folder, [...new Set(changing.flatMap(({ defs }) => [...defs.keys()]))]);
+    for (const { theirs, defs } of changing) {
+      const ends = { branch: work.branch, theirs: { login: theirs.login, branch: theirs.branch } };
+      const indirect = [...defs].flatMap(([name, places]) => {
+        const at = used.get(name) ?? [];
+        if (at.length === 0) return [];
+        return [{ name, mine: at.map((u) => ({ ...u, role: "uses" as const })), theirs: places }];
+      });
+      if (indirect.length > 0) pairs.push({ kind: "indirect", ...ends, symbols: indirect });
+      const duplicate = [...defined(theirs, ["added"])].flatMap(([name, places]) => {
+        const ours = added.get(name);
+        return ours ? [{ name, mine: ours, theirs: places }] : [];
+      });
+      if (duplicate.length > 0) pairs.push({ kind: "duplicate", ...ends, symbols: duplicate });
+    }
+  }
+  return pairs;
 }

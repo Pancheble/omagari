@@ -47,21 +47,38 @@ async function payment(world: World) {
   );
 }
 
-/** 채널 `name`(기본은 알림 채널 "부딪힘")의 지난 대화에 선 알림들. 채널이 없으면 비어 있다. */
-async function alerts(as: As, name = "부딪힘") {
+type Of<K extends Alert["kind"]> = (K extends "direct"
+  ? Extract<Alert, { kind: "direct" }>
+  : Exclude<Alert, { kind: "direct" }>) & { id: number };
+
+/** 채널 `name`(기본은 알림 채널 "부딪힘")의 지난 대화에 선 `kind`(기본은 직접 충돌) 알림들. 채널이 없으면 비어 있다. */
+async function alerts<K extends Alert["kind"] = "direct">(
+  as: As,
+  name = "부딪힘",
+  kind = "direct" as K,
+): Promise<Of<K>[]> {
   const channel = (await call(as, api.channels)).channels.find((c) => c.name === name);
   if (!channel) return [];
   const { messages } = await call(as, api.history, { channel: channel.id });
-  return messages.flatMap((m) => (m.kind === "alert" ? [{ id: m.id, ...m.alert }] : []));
+  return messages.flatMap((m) =>
+    m.kind === "alert" && m.alert.kind === kind
+      ? [{ id: m.id, ...m.alert } as unknown as Of<K>]
+      : [],
+  );
 }
 
-/** 알림이 정확히 하나가 될 때까지 기다리고, `check`가 맞을 때까지 기다린 그 알림. */
-const theAlert = (as: As, check: (alert: Alert) => void, name?: string) =>
+/** `kind` 알림이 정확히 하나가 될 때까지 기다리고, `check`가 맞을 때까지 기다린 그 알림. */
+const theAlert = <K extends Alert["kind"] = "direct">(
+  as: As,
+  check: (alert: Of<K>) => void,
+  name?: string,
+  kind = "direct" as K,
+) =>
   eventually(async () => {
-    const found = await alerts(as, name);
+    const found = await alerts(as, name, kind);
     assert.equal(found.length, 1, JSON.stringify(found));
-    check(found[0] as Alert);
-    return found[0] as Alert & { id: number };
+    check(found[0] as Of<K>);
+    return found[0] as Of<K>;
   });
 
 /** 멤버 목록에서 작업마다 직접 충돌 표시. */
@@ -124,6 +141,7 @@ test("같은 곳을 고치면 부딪힘 채널에 알림 하나가 오고, 바�
           (m) =>
             m.id === first.id &&
             m.kind === "alert" &&
+            m.alert.kind === "direct" &&
             JSON.stringify(m.alert.files) === JSON.stringify(changed.files),
         ),
     ),
@@ -343,4 +361,202 @@ test("알림에 달린 포스트: 열면 생기고 다시 열면 같고, 글과 
     (m) => m.kind === "alert",
   );
   assert.deepEqual(atRoom?.kind === "alert" && atRoom.post, { channel: post, count: 3 });
+});
+
+/** 정의 줄을 견줄 기준 판: 함수 둘과 그것을 쓰는 파일. */
+const PAY = `export function pay(amount: number) {
+  return amount;
+}
+export function refund(amount: number) {
+  return -amount;
+}
+`;
+const CHECKOUT = `import { pay, refund } from "./pay";
+export const total = pay(1) + refund(2);
+`;
+
+/** 기준 커밋에 src/pay.ts와 src/checkout.ts를 둔다. */
+async function symbolBase(world: World) {
+  await writer(world.repo.folder)("src/pay.ts", PAY);
+  await writer(world.repo.folder)("src/checkout.ts", CHECKOUT);
+  await world.repo.git("add", ".");
+  await world.repo.git("commit", "--message=base");
+  await world.repo.git("update-ref", "refs/remotes/origin/main", "HEAD");
+}
+
+/** 넣은 글(CLI의 응답)에서 편지함의 소식 줄만. */
+const inboxLines = (output: string) =>
+  output.split("<omagari-inbox>\n")[1]?.split("\n</omagari-inbox>")[0]?.split("\n") ?? [];
+
+/** `cwd`에서 `omagari status`를 거듭 돌려 편지함에 `line`이 넘겨질 때까지 기다린다. 넘긴 것은 다시 오지 않으니 본 것을 모은다. */
+async function receives(world: World, cwd: string, line: string) {
+  const seen: string[] = [];
+  await eventually(async () => {
+    seen.push(...inboxLines((await world.cliIn(cwd, "status")).stdout));
+    assert.ok(seen.includes(line), JSON.stringify(seen));
+  });
+}
+
+test("함수의 정의 줄을 바꾸면 그 함수를 쓰는 다른 작업에 추정 간접 충돌이 오고, 본문만 바꾼 함수는 빠지며, 되돌리거나 쓰는 곳이 사라지면 풀렸다", async (t) => {
+  const world = await startWorld({ observeMs: 50 });
+  t.after(world.stop);
+  await symbolBase(world);
+  const alice = await clone(world, "alice", "refund");
+  t.after(alice.desk.remove);
+  await payment(world);
+
+  // owner가 한 번에 pay의 본문과 refund의 정의 줄을 바꾼다. alice는 둘 다 쓴다. 알림에는 refund만 있다.
+  const changed = PAY.replace("return amount;", "return amount + 0;").replace(
+    "refund(amount: number)",
+    "refund(amount: number, reason: string)",
+  );
+  await writer(world.repo.folder)("src/pay.ts", changed);
+  const REFUND = {
+    name: "refund",
+    places: [
+      [
+        { path: "src/checkout.ts", line: 1, role: "uses" },
+        { path: "src/checkout.ts", line: 2, role: "uses" },
+      ],
+      [{ path: "src/pay.ts", line: 4, role: "changed" }],
+    ],
+  };
+  const first = await theAlert(world.owner, () => {}, undefined, "indirect");
+  assert.deepEqual(first, {
+    id: first.id,
+    kind: "indirect",
+    works: [ALICE, OWNER],
+    symbols: [REFUND],
+    more: 0,
+    resolved: null,
+  });
+  // 직접 충돌은 없다(함께 바꾼 파일이 없다). 쓰는 쪽 작업의 편지함에 "추정"과 함께 들어간다.
+  assert.deepEqual(await alerts(world.owner), []);
+  await receives(
+    world,
+    alice.desk.folder,
+    `- 간접 충돌(추정): 내 작업과 owner의 브랜치 "payment". 한쪽이 정의 줄을 바꾸거나 없앤 심볼을 다른 쪽이 쓴다. 이름으로만 이어 다른 심볼일 수 있다. "refund"(나: 씀 "src/checkout.ts":1, "src/checkout.ts":2 / 상대: 정의 줄 바꿈 "src/pay.ts":4)`,
+  );
+
+  // 바꾼 정의 줄을 되돌리면 풀렸다.
+  await writer(world.repo.folder)(
+    "src/pay.ts",
+    PAY.replace("return amount;", "return amount + 0;"),
+  );
+  const resolved = await theAlert(
+    world.owner,
+    (alert) => assert.notEqual(alert.resolved, null),
+    undefined,
+    "indirect",
+  );
+  assert.equal(resolved.id, first.id);
+  await receives(
+    world,
+    alice.desk.folder,
+    `- 풀렸다: 내 작업과 owner의 브랜치 "payment"의 간접 충돌(추정)`,
+  );
+
+  // 다시 바꾸면 새 알림이다. 쓰는 쪽 러너가 꺼져 있으면 바꾼 쪽 러너만으로는 풀었다고 보지 않는다.
+  await writer(world.repo.folder)("src/pay.ts", changed);
+  const again = await eventually(async () => {
+    const open = (await alerts(world.owner, undefined, "indirect")).filter((a) => !a.resolved);
+    assert.equal(open.length, 1);
+    return open[0] as Of<"indirect">;
+  });
+  assert.deepEqual(again.symbols, [REFUND]);
+  await alice.desk.stop();
+  await eventually(async () =>
+    assert.ok((await world.works(world.owner)).some((w) => w.login === "alice" && w.offlineSince)),
+  );
+  assert.deepEqual(
+    (await alerts(world.owner, undefined, "indirect")).find((a) => a.id === again.id)?.resolved,
+    null,
+  );
+
+  // 쓰는 곳이 사라지면 풀렸다.
+  await alice.desk.start();
+  await writer(alice.desk.folder)("src/checkout.ts", "export const total = 1;\n");
+  await eventually(async () =>
+    assert.notEqual(
+      (await alerts(world.owner, undefined, "indirect")).find((a) => a.id === again.id)?.resolved,
+      null,
+    ),
+  );
+});
+
+test("두 작업에 같은 이름의 새 정의가 생기면 중복 구현이 양쪽 편지함에 들어가고, 한 쌍에 직접 충돌과 간접 충돌이 함께 있으면 종류마다 알림이 따로다", async (t) => {
+  const world = await startWorld({ observeMs: 50 });
+  t.after(world.stop);
+  await symbolBase(world);
+  const alice = await clone(world, "alice", "refund");
+  t.after(alice.desk.remove);
+  await payment(world);
+
+  // 같은 이름의 새 함수를 다른 파일에 따로 만든다.
+  await writer(alice.desk.folder)(
+    "src/split.ts",
+    "export function split(n: number) {\n  return [n];\n}\n",
+  );
+  await writer(world.repo.folder)(
+    "src/money.ts",
+    "export const split = (total: number) => [total];\n",
+  );
+  const duplicate = await theAlert(world.owner, () => {}, undefined, "duplicate");
+  assert.deepEqual(duplicate, {
+    id: duplicate.id,
+    kind: "duplicate",
+    works: [ALICE, OWNER],
+    symbols: [
+      {
+        name: "split",
+        places: [
+          [{ path: "src/split.ts", line: 1, role: "added" }],
+          [{ path: "src/money.ts", line: 1, role: "added" }],
+        ],
+      },
+    ],
+    more: 0,
+    resolved: null,
+  });
+  await receives(
+    world,
+    world.repo.folder,
+    `- 중복 구현: 내 작업과 alice의 브랜치 "refund"에 같은 이름의 새 정의가 따로 생겼다. "split"(나: 새로 만듦 "src/money.ts":1 / 상대: 새로 만듦 "src/split.ts":1)`,
+  );
+  await receives(
+    world,
+    alice.desk.folder,
+    `- 중복 구현: 내 작업과 owner의 브랜치 "payment"에 같은 이름의 새 정의가 따로 생겼다. "split"(나: 새로 만듦 "src/split.ts":1 / 상대: 새로 만듦 "src/money.ts":1)`,
+  );
+
+  // 같은 줄(pay의 본문)을 둘이 고치고, owner는 refund의 정의 줄도 바꾼다. 한 쌍에 세 종류가 따로 선다.
+  await writer(alice.desk.folder)(
+    "src/pay.ts",
+    PAY.replace("return amount;", "return amount * 1;"),
+  );
+  await writer(world.repo.folder)(
+    "src/pay.ts",
+    PAY.replace("return amount;", "return amount + 0;").replace(
+      "refund(amount: number)",
+      "refund(amount: number, reason: string)",
+    ),
+  );
+  await theAlert(world.owner, (alert) => assert.equal(alert.files[0]?.path, "src/pay.ts"));
+  await theAlert(
+    world.owner,
+    (alert) =>
+      assert.deepEqual(
+        alert.symbols.map((s) => s.name),
+        ["refund"],
+      ),
+    undefined,
+    "indirect",
+  );
+  const kinds = (await call(world.owner, api.feed)).news;
+  assert.deepEqual(kinds, []); // 두 작업 모두 owner의 것이 걸려 있어 피드에는 없다
+  const all = await alerts(world.owner, undefined, "duplicate");
+  assert.deepEqual(
+    all.map((a) => a.id),
+    [duplicate.id],
+  );
 });

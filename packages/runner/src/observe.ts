@@ -180,24 +180,38 @@ export async function observe(folder: string, remote: string, share: ShareLevel)
   }
 }
 
+/** 쓰는 곳을 찾은 결과. 파일의 경로, 크기, 고친 시각과 이름이 같으면 다시 읽지 않는다. 가장 오래 넣은 것부터 버린다. */
+const used = new Map<string, number[]>();
+const USED_LIMIT = 20_000;
+
 /**
- * 러너의 사본(등록한 폴더)에서 `symbol`을 쓰는 곳. 추적하는 파일과 추적하지 않는 새 파일 가운데 읽을 수 있는 언어의 것만 본다.
- * 관측처럼 gitignore된 파일과 .env 계열, 파일 하나의 상한을 넘는 것은 읽지 않는다.
+ * 사본(`folder`)에서 `symbols`의 이름마다 쓰는 곳. 추적하는 파일과 추적하지 않는 새 파일 가운데 읽을 수 있는 언어의 것만 본다.
+ * 관측처럼 gitignore된 파일과 .env 계열, 파일 하나의 상한을 넘는 것은 읽지 않는다. `omagari impact`와 간접 충돌이 쓴다.
  */
-// ponytail: 물을 때마다 사본을 처음부터 읽는다(이름이 들어 있는 파일만 파싱한다). 자주 물으면 색인을 남겨 두고 바뀐 파일만 다시 읽는다.
-export async function uses(folder: string, symbol: string) {
+// ponytail: 물을 때마다 사본의 파일 목록을 다시 받고, 크기와 고친 시각이 그대로인 파일은 지난 결과를 쓴다. 큰 레포에서 무거워지면 파일 감시로 바뀐 파일만 다시 본다.
+export async function uses(folder: string, symbols: string[]) {
+  const found = new Map(symbols.map((symbol) => [symbol, [] as { path: string; line: number }[]]));
+  if (symbols.length === 0) return found;
   const listed = await git(folder, "ls-files", "--cached", "--others", "--exclude-standard", "-z");
   const paths = [...new Set(listed.split("\0"))]
     .filter((p) => p && parsable(p) && !secret(p))
     .sort();
-  const found: { path: string; line: number }[] = [];
   for (const path of paths) {
     const full = join(folder, path);
     const stat = await lstat(full).catch(() => undefined);
     if (!stat?.isFile() || stat.size > FILE_LIMIT) continue; // 지운 파일, 링크, 큰 파일
-    const content = asText(await readFile(full));
-    if (content === undefined) continue;
-    for (const line of (await usesIn(path, content, symbol)) ?? []) found.push({ path, line });
+    let content: string | undefined | null = null; // 아직 읽지 않았다
+    for (const symbol of symbols) {
+      const key = `${full}\0${stat.size}\0${stat.mtimeMs}\0${symbol}`;
+      let lines = used.get(key);
+      if (!lines) {
+        if (content === null) content = asText(await readFile(full));
+        lines = (content !== undefined && (await usesIn(path, content, symbol))) || [];
+        used.set(key, lines);
+        if (used.size > USED_LIMIT) used.delete(used.keys().next().value as string);
+      }
+      for (const line of lines) found.get(symbol)?.push({ path, line });
+    }
   }
   return found;
 }
