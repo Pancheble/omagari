@@ -29,6 +29,7 @@ import {
   type Message,
   type ModelChoice,
   PLACE_ROLES,
+  PLAN_KINDS,
   RUNNER_SOCKET,
   runnerToCli,
   runnerToServer,
@@ -47,7 +48,7 @@ import { gitIn, nearby } from "./nearby.ts";
 import { observe, uses } from "./observe.ts";
 import { named } from "./symbols.ts";
 
-export { alertLine, claimNews, claimOwner, claimPlace, inboxNotice } from "./inbox.ts";
+export { alertLine, claimNews, claimOwner, claimPlace, inboxNotice, planLine } from "./inbox.ts";
 export { observationNotice } from "./observe.ts";
 
 const execFileAsync = promisify(execFile);
@@ -443,7 +444,10 @@ function channelLine(m: ChannelMessage) {
               ? `${f.path}: 부딪힐 수 있음`
               : `${f.path}: ${f.lines.map(lines).join(" / ")}`,
           )
-        : alert.symbols.map((s) => `${s.name}: ${s.places.map(places).join(" / ")}`)),
+        : alert.symbols.map(
+            (s) =>
+              `${s.name}: ${s.places.map(places).join(" / ")}${s.plan ? ` (계획: ${PLAN_KINDS[s.plan.kind]}${s.plan.detail ? `, ${s.plan.detail}` : ""})` : ""}`,
+          )),
       ...(alert.more > 0 ? [`그 밖에 ${alert.more}개`] : []),
     ];
     const state = alert.resolved === null ? "" : ` resolved="${alert.resolved}"`;
@@ -929,7 +933,10 @@ export async function startRunner(options: {
               ),
         );
         const found = (await uses(folder, [symbol])).get(symbol) ?? [];
-        const payload = { uses: found, works: changing, disconnectedAt };
+        const plans = claims.filter(
+          (c) => c.login !== login && c.plan && named(c.plan.symbol, symbol),
+        );
+        const payload = { uses: found, works: changing, plans, disconnectedAt };
         return encode(runnerToCli, "impact", payload, message.id);
       }
       const { path, branch } = message.payload;
@@ -972,7 +979,7 @@ export async function startRunner(options: {
       const claims = reply.kind === "released" ? reply.payload.claims : [];
       return encode(runnerToCli, "released", { claims }, message.id);
     }
-    const { branch, ...target } = message.payload;
+    const { branch, plan, ...target } = message.payload;
     const tree = folders.get(branch);
     const base = mine.find((work) => work.branch === branch)?.base;
     if (!tree || !base)
@@ -989,6 +996,7 @@ export async function startRunner(options: {
       branch,
       ...place,
       overlaps: overlaps.map((c) => c.id),
+      ...(plan && { plan }),
     });
     if (reply.kind !== "claimed") throw new Error(`서버가 다른 것으로 답했다: ${reply.kind}`);
     return encode(runnerToCli, "claimed", { claim: reply.payload.claim, overlaps }, message.id);
@@ -1102,7 +1110,7 @@ export async function startRunner(options: {
           // 간접 충돌(추정)과 중복 구현도 같은 길로 올린다.
           const all = [
             ...computed.pairs,
-            ...(await symbolConflicts(trees, situation.works, login)),
+            ...(await symbolConflicts(trees, situation.works, login, situation.claims)),
           ];
           const pairs = JSON.stringify(all);
           if (to === live && (to !== reported.to || pairs !== reported.pairs)) {
