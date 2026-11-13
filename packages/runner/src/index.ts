@@ -471,7 +471,11 @@ function channelLine(m: ChannelMessage) {
  * 태그로 경계를 두고(Microsoft의 spotlighting 중 delimiting) 안의 글은 이스케이프해 그 경계를 흉내 내지 못하게 하고,
  * 따르지 말라고 앞에 적는다. 주인의 질문은 경계 밖, 맨 뒤에 둔다. 넘길 대화가 없으면 질문만 넘긴다.
  */
-export function channelPrompt(channel: Channel, messages: ChannelMessage[], question: string) {
+export function channelPrompt(
+  channel: Omit<Channel, "kind">,
+  messages: ChannelMessage[],
+  question: string,
+) {
   if (messages.length === 0) return question;
   const lines = messages.map(channelLine);
   return [
@@ -743,7 +747,7 @@ export async function startRunner(options: {
   /** 한 턴에 받은 것: 질문과, 채널 세션이면 그 채널과 최근 대화, 고른 모델과 effort. */
   type Ask = {
     question: string;
-    channel?: Channel;
+    channel?: Omit<Channel, "kind">;
     recent?: ChannelMessage[];
     model?: string;
     effort?: string;
