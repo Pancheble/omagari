@@ -72,7 +72,7 @@ test("러너가 실행한 것(언제, 어느 세션으로, 무엇을 받아)이 
   assert.deepEqual(more, []);
   assert.match(
     first,
-    /^\d{4}-\d\d-\d\dT\S+ {2}세션 session-1 {2}도구 Read,Grep,Glob {2}받은 것 "첫 질문" {2}답함$/,
+    /^\d{4}-\d\d-\d\dT\S+ {2}세션 session-1 {2}도구 Read,Grep,Glob {2}받은 것 "첫 질문" {2}답함 "답"$/,
   );
   assert.match(second, /세션 session-1 .*받은 것 "죽어" {2}실패: 실행기가 죽었다$/);
 });
