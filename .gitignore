@@ -34,3 +34,4 @@ omagari.db
 
 # 실제 실행기 손 점검 결과(docs/executor-check.md). 결과는 구현 문서에 옮겨 적는다.
 executor-check-result.md
+github-check-result.md
