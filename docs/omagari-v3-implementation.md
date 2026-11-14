@@ -263,6 +263,24 @@ CSCW 연구에서 작업 공간 인식이라고 부르는 것이다. 진행 중�
 - 러너가 무엇을 실행했는지 주인이 기기에서 기록으로 본다
 - 푸시하지 않은 작업을 합쳐 돌려 보면 서버에서 받은 코드를 주인 기기에서 실행하게 된다. 푸시된 브랜치는 GitHub에서 받지만 이 코드는 서버를 거치므로, 서버가 뚫리면 테스트 실행이 곧 임의 코드 실행이 된다. 그래서 합쳐 돌려 보기는 샌드박스 안에서만 돌린다(ADR-0033)
 
+**실제 샌드박스 손 점검 결과** (`test/real-sandbox.ts`, 돌리는 법은 `docs/sandbox-check.md`). 2026-11-14, #138 세션이 주인 기기(macOS, darwin arm64, Node 24.19.0, `@anthropic-ai/sandbox-runtime` 0.0.81)에서 러너의 `checkWork`와 실제 `osSandbox`로 돌렸다. Linux는 못 돌렸다(이 기기는 macOS뿐이다)
+
+- [x] 도구: ripgrep 없이 `checkDependenciesAsync`가 통과했다. 0.0.81은 macOS에서 ripgrep을 요구하지 않는다(PR #141의 말과 같다)
+- [x] 바깥 네트워크가 막힌다(https, http 둘 다. 샌드박스 밖에서는 닿는 것을 먼저 확인했다)
+- [x] 임시 워크트리 밖에 쓰지 못한다(홈 폴더, 레포 폴더, 점검용 폴더). 임시 워크트리 안과 `HOME`에는 쓴다
+- [x] 홈 폴더를 읽지 못한다(`~/.ssh` 포함)
+- [x] 자기 기기의 포트를 열고 붙는다(127.0.0.1). 샌드박스 밖에서 떠 있는 127.0.0.1 서버에도 붙는다
+- [x] 토큰이 든 환경 변수(`GITHUB_TOKEN` 등)가 넘어오지 않는다
+- [x] Node가 홈 폴더 아래에 있어도(`~/.omagari-check-node/bin/node`에 Node를 복사해 그것으로 돌림. nvm 자체는 깔지 않았다) 검사 명령이 돌고 위 항목이 그대로다
+- [x] 의존성을 읽는다. `node_modules/.cache`나 이은 패키지 폴더 **안에 쓰기는 막힌다**(`Operation not permitted`). `node_modules` 밑에 새 폴더를 만드는 것은 된다. 캐시를 `node_modules/.cache`에 쓰는 도구는 거기서 실패한다
+- [x] #142가 남긴 것 1: 임시 워크트리 안의 `git add`, `write-tree`, `commit`, `status`가 된다(인덱스 쓰기에 지장 없음)
+- [x] #142가 남긴 것 2: 홈 아래의 임시 워크트리와 레포의 `objects`를 읽는다(`git log`, `cat-file`). 레포의 Git 폴더의 `config`(원격 URL)는 읽지 못한다
+- [ ] #142가 남긴 것 3: 이 레포의 `npm test`는 샌드박스 안에서 148개 중 **147개가 실패**한다(통과 1). 모두 유닉스 소켓 `listen EPERM`이다 → #145
+- [ ] `TMPDIR`을 sandbox-runtime이 `/tmp/claude`로 덮는다 → #146
+- [ ] 러너의 현재 폴더가 레포가 아니면 임시 워크트리의 `.git/config`에 쓸 수 있고, 러너가 샌드박스 밖에서 부르는 `git`이 `core.fsmonitor`로 명령을 돌렸다(무해한 `touch`로 재현). 레포 폴더에서 띄우면 `.git/config`, `.git/hooks` 쓰기가 막힌다 → #144
+  - 고친 뒤(2026-11-14, #144 세션, 같은 기기·판, `--quick`): 러너의 현재 폴더가 레포일 때와 아닐 때 모두 "안 돌았다". 러너는 샌드박스가 쓸 수 없는 자기 Git 폴더로 임시 워크트리에 git을 부른다(ADR-0033). 샌드박스 안의 git은 돌림마다 새로 만드는 복사본을 쓰므로 `.git/config`, `.git/hooks`, `.git/HEAD`가 이제 레포 폴더에서 띄워도 쓸 수 있게 열리고, `add`·`commit`은 그대로 된다
+- 못 본 것: Linux, 진짜 nvm, Jest의 감시 도구(`--no-watchman`)
+
 ## 12. 검증과 지표
 
 - **머무는가**: 주간 활성 인원, 에이전트 DM 사용, 알림에서 대화가 시작된 비율
