@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, rm } from "node:fs/promises";
+import { access, mkdir, readFile, realpath, rm, symlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -79,8 +79,8 @@ test("omagari runner check가 내 작업을 커밋하지 않은 변경까지 임
     assert.match(key, /^(PATH|LANG|LANGUAGE|TERM|TZ|USER|LOGNAME|SHELL|HOME|TMPDIR|LC_\w+)$/);
     assert.doesNotMatch(value, /secret/);
   }
-  // 임시 워크트리는 돌린 뒤 지운다. 내 폴더는 그대로다.
-  await assert.rejects(access(call.folder));
+  // 임시 워크트리는 레포의 Git 폴더 아래에 있어, 내 폴더의 워크트리 목록에 나타나지 않는다.
+  assert.ok(call.folder.startsWith(await realpath(join(repo.folder, ".git"))));
   assert.equal((await repo.git("worktree", "list")).split("\n").length, 1);
   assert.equal(
     await repo.git("status", "--porcelain"),
@@ -259,4 +259,71 @@ test("러너를 켤 때 검사 명령과 샌드박스 안에서 돈다는 것을
   const wrong = await world.cliIn(desk.folder, "runner", "--merge-check", "maybe");
   assert.equal(wrong.code, 1);
   assert.match(wrong.stderr, /합쳐 돌려 보기는 on, off 가운데 하나다: maybe/);
+});
+
+test("임시 워크트리는 레포의 Git 폴더 아래에서 다시 쓰이고, 내 폴더의 의존성이 이어지되 워크스페이스 패키지는 임시 워크트리 안을 가리킨다", async (t) => {
+  const fake = fakeSandbox();
+  const world = await startWorld({ sandbox: fake.sandbox });
+  t.after(world.stop);
+  const { repo } = world;
+  const write = writer(repo.folder);
+
+  // 워크스페이스 패키지 둘과, 설치된 의존성: 최상위와 한 단계 아래의 node_modules, 워크스페이스 링크, 범위 폴더.
+  await merge(repo, {
+    ".gitignore": "node_modules/\ndist/\n",
+    ".omagari.json": config({ check: "sh check.sh" }),
+    "check.sh": [
+      'test "$(cat node_modules/dep/index.txt)" = "설치된 것"',
+      'test "$(cat packages/app/node_modules/inner/index.txt)" = "안쪽 것"',
+      "echo 임시에서만 > packages/lib/code.txt",
+      'test "$(cat node_modules/@ws/lib/code.txt)" = "임시에서만"',
+      'test "$(git status --porcelain)" = " M packages/lib/code.txt"',
+      "mkdir -p dist && echo built > dist/out.txt",
+      "echo 새 파일 > leftover.txt",
+      "",
+    ].join("\n"),
+    "packages/lib/code.txt": "합친 코드\n",
+    "packages/app/package.json": "{}\n",
+  });
+  await write("packages/lib/code.txt", "내 작업의 코드\n");
+  await write("node_modules/dep/index.txt", "설치된 것");
+  await write("packages/app/node_modules/inner/index.txt", "안쪽 것");
+  await mkdir(join(repo.folder, "node_modules/@ws"), { recursive: true });
+  // 워크스페이스 링크는 npm처럼 상대 링크다. 이 링크는 내 폴더의 packages/lib를 가리킨다(여기서는 내 작업의 코드가 든 같은 파일을 읽는다).
+  await symlink("../../packages/lib", join(repo.folder, "node_modules/@ws/lib"));
+  const before = await repo.git("status", "--porcelain");
+
+  const first = await world.cli("runner", "check");
+  assert.match(first.stdout, /판정: 통과/, first.stdout);
+  const second = await world.cli("runner", "check");
+  assert.match(second.stdout, /판정: 통과/, second.stdout);
+
+  // 두 번 다 같은 폴더이고, 레포의 Git 폴더 아래다. 내 폴더의 git status와 워크트리 목록에는 나타나지 않는다.
+  const [one, two] = fake.calls;
+  assert.ok(one && two);
+  assert.equal(one.folder, two.folder);
+  const gitDir = await realpath(join(repo.folder, ".git"));
+  assert.equal(one.folder, join(gitDir, "omagari", "check-worktree"));
+  assert.equal(await repo.git("status", "--porcelain"), before);
+  assert.equal((await repo.git("worktree", "list")).split("\n").length, 1);
+
+  // 샌드박스가 읽을 수 있는 것: 개체 폴더와 이은 의존성 폴더뿐이다. 레포의 Git 폴더(원격 URL의 토큰이 든 config)는 열지 않는다.
+  const read = one.policy.filesystem.allowRead ?? [];
+  assert.ok(read.includes(join(gitDir, "objects")));
+  assert.ok(read.includes(await realpath(join(repo.folder, "node_modules"))));
+  assert.ok(!read.includes(gitDir));
+
+  // 돌린 뒤: 추적하는 파일은 되돌려지고, 새 파일과 이은 링크는 없어지고, 무시되는 빌드 산출물은 남는다.
+  assert.equal(
+    await readFile(join(one.folder, "packages/lib/code.txt"), "utf8"),
+    "내 작업의 코드\n",
+  );
+  await assert.rejects(access(join(one.folder, "leftover.txt")));
+  await assert.rejects(access(join(one.folder, "node_modules")));
+  assert.equal(await readFile(join(one.folder, "dist/out.txt"), "utf8"), "built\n");
+  // 내 폴더는 그대로다(명령이 쓴 것은 임시 워크트리에만 간다).
+  assert.equal(
+    await readFile(join(repo.folder, "packages/lib/code.txt"), "utf8"),
+    "내 작업의 코드\n",
+  );
 });

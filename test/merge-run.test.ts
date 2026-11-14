@@ -68,7 +68,7 @@ async function member(
   world: World,
   login: string,
   branch: string,
-  extra: { sandbox?: Sandbox; quietMs?: number; mergeCheck?: boolean } = {},
+  extra: { sandbox?: Sandbox; quietMs?: number; mergeCheck?: "on" | "off" } = {},
 ) {
   world.github.grant(login);
   const as = await world.login(login);
@@ -96,7 +96,10 @@ async function indirect(as: As) {
 const alertWith = (as: As, login: string, check: (alert: Indirect) => void = () => {}) =>
   eventually(async () => {
     const found = (await indirect(as)).filter(
-      (a) => a.resolved === null && a.works.some((w) => w.login === login),
+      (a) =>
+        a.resolved === null &&
+        a.works.some((w) => w.login === login) &&
+        a.works.some((w) => w.login === "owner"),
     );
     assert.equal(found.length, 1, JSON.stringify(found));
     const [alert] = found as [Indirect];
@@ -123,7 +126,13 @@ test("간접 충돌(추정)이 걸린 쌍이 잠잠해지면 쓰는 쪽 러너�
   timeout: 90_000,
 }, async (t) => {
   const fake = fakeSandbox();
-  const world = await startWorld({ observeMs: 50, sandbox: fake.sandbox, quietMs: QUIET_MS });
+  // 문이 열리지 않은 채 실패해도 오래 걸리지 않게 검사 명령의 상한을 줄인다.
+  const world = await startWorld({
+    observeMs: 50,
+    sandbox: fake.sandbox,
+    quietMs: QUIET_MS,
+    checkLimits: { checkMs: 20_000 },
+  });
   t.after(world.stop);
   const gate = (await place(t))("gate");
   // 검사 명령: 합친 폴더의 src를 적고, 문이 열릴 때까지 기다렸다가, pay에 currency가 생겼는데 pay(1)로 부르면 깨진다.
@@ -143,11 +152,10 @@ if grep -q currency src/pay.ts && grep -q "pay(1)" src/use.ts; then echo "pay(1)
   await git("add", ".");
   await git("commit", "--message=푸시하지 않은 커밋");
   await writer(folder)("src/draft.ts", "export const b = 1;\n");
-  // bob은 pay의, carol은 refund의 정의 줄을 커밋하지 않고 바꾼다. 정의를 바꾼 쪽의 러너는 돌리지 않는다.
-  const bobSandbox = fakeSandbox();
-  const bob = await member(world, "bob", "currency", { sandbox: bobSandbox.sandbox, quietMs: 0 });
+  // bob은 pay의, carol은 refund의 정의 줄을 커밋하지 않고 바꾼다. 둘의 러너는 잠잠한 시간이 길어(기본 2분) 이 테스트에서 돌리지 않는다.
+  const bob = await member(world, "bob", "currency");
   t.after(bob.desk.remove);
-  const carol = await member(world, "carol", "reason", { quietMs: 0 });
+  const carol = await member(world, "carol", "reason");
   t.after(carol.desk.remove);
   await writer(bob.desk.folder)(
     "src/pay.ts",
@@ -172,11 +180,13 @@ if grep -q currency src/pay.ts && grep -q "pay(1)" src/use.ts; then echo "pay(1)
 
   // 잠잠해지면 한 쌍을 돌린다. 도는 동안은 "돌려 보는 중"이고, 러너는 한 번에 하나만 돌린다.
   const first = await eventually(async () => {
-    const runs = (await indirect(world.owner)).flatMap((a) => (a.run ? [a] : []));
+    const runs = (await indirect(world.owner)).flatMap((a) =>
+      a.run && a.works.some((w) => w.login === "owner") ? [a] : [],
+    );
     assert.equal(runs.length, 1);
     return runs[0] as Indirect;
   });
-  assert.equal(first.run?.verdict, "running");
+  assert.equal(first.run?.verdict, "running", JSON.stringify(first.run));
   assert.equal(first.run?.check, "sh check.sh");
   assert.equal(first.run?.login, "owner");
   assert.equal(first.run?.stale, false);
@@ -205,10 +215,9 @@ if grep -q currency src/pay.ts && grep -q "pay(1)" src/use.ts; then echo "pay(1)
   await receives(world, folder, OWNER_SEES);
   await receives(world, bob.desk.folder, BOB_SEES);
 
-  // 같은 내용이면 다시 돌리지 않는다. 정의를 바꾼 쪽(bob)의 러너는 돌리지 않았다.
+  // 같은 내용이면 다시 돌리지 않는다.
   await sleep(QUIET_MS * 2);
   assert.equal(fake.calls.length, 2);
-  assert.equal(bobSandbox.calls.length, 0);
 
   // bob의 러너가 꺼져도 서버에 남은 관측으로 돈다. owner가 고치면 지난 판정은 지난 결과가 되고, 잠잠해지면 다시 돌려 통과다.
   await bob.desk.stop();
@@ -317,7 +326,7 @@ test("직접 충돌만 걸린 쌍과 정의를 바꾼 쪽은 돌리지 않고, �
   const bob = await member(world, "bob", "more", {
     sandbox: bobSandbox.sandbox,
     quietMs: 0,
-    mergeCheck: false,
+    mergeCheck: "off",
   });
   t.after(bob.desk.remove);
   await writer(bob.desk.folder)("src/use.ts", `${USE}pay(2);\n`);

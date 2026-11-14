@@ -548,7 +548,7 @@ export async function startWorld(
     /** owner 러너가 합쳐 돌려 보기 전에 기다리는 잠잠한 시간. 줄여서 본다. */
     quietMs?: number;
     /** owner 러너의 합쳐 돌려 보기. 기본은 켜짐이다. */
-    mergeCheck?: boolean;
+    mergeCheck?: "on" | "off";
   } = {},
 ) {
   const repo = await tempRepo();
@@ -746,7 +746,7 @@ export async function startWorld(
       as: { session: string },
       share?: ShareLevel,
       executors: Partial<Record<ExecutorId, Executor>> = { "claude-code": noExecutor },
-      extra: { sandbox?: Sandbox; quietMs?: number; mergeCheck?: boolean } = {},
+      extra: { sandbox?: Sandbox; quietMs?: number; mergeCheck?: "on" | "off" } = {},
     ) {
       const repo = await tempRepo();
       const options = {

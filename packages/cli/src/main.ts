@@ -222,7 +222,7 @@ async function runner(chosen: string | undefined, chosenMergeCheck: string | und
   console.log(observationNotice(share));
   const saved = (await readSessions())[server];
   const start = async (session: string) =>
-    startRunner({ serverUrl: server, folder, session, share, mergeCheck: mergeCheck === "on" });
+    startRunner({ serverUrl: server, folder, session, share, mergeCheck });
   const running = await start(saved ?? (await login())).catch(async (error) => {
     // 남겨 둔 세션이 끝났으면 한 번 다시 로그인한다.
     if (!saved || !(error instanceof ContractFailure) || error.code !== "unauthorized") throw error;

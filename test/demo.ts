@@ -15,7 +15,7 @@ import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { api, call } from "@omagari/contract";
 import { claudeCode, codex, codexReady, type Executor } from "@omagari/runner";
-import { eventually, fakeExecutor, startWorld, writer } from "./harness.ts";
+import { eventually, fakeExecutor, fakeSandbox, startWorld, writer } from "./harness.ts";
 
 type As = { url: string; session: string; login: string };
 
@@ -68,6 +68,8 @@ const world = await startWorld({
   observeMs: 200,
   recheckMs: 2 ** 31 - 1,
   followMs: 2_000,
+  // 설정 창의 "합쳐 돌려 보기"가 켜짐으로 보이게 내 러너에 가짜 샌드박스를 꽂는다. 가짜는 명령을 가두지 않는다.
+  sandbox: fakeSandbox().sandbox,
 });
 const fake = world.github;
 const NAMES = { owner: "나 (데모)", minsu: "박민수", seoyeon: "이서연", hajun: "최하준" };
@@ -94,6 +96,7 @@ await own(
 );
 for (const file of ["config", "webhook", "ledger", "retry", "mail", "i18n"])
   await own(`src/${file}.ts`, text(LINES));
+await own(".omagari.json", '{ "check": "npm test", "setup": "npm ci" }\n');
 await world.repo.git("add", ".");
 await world.repo.git("commit", "--message=base");
 await world.repo.git("update-ref", "refs/remotes/origin/main", "HEAD");

@@ -28,6 +28,7 @@ import {
   type InboxItem,
   type LineRange,
   MAX_FRAME_BYTES,
+  type MergeCheckState,
   type MergeRun,
   type Message,
   type ModelChoice,
@@ -50,6 +51,7 @@ import { checkoutVersion } from "@omagari/contract/version";
 import {
   CHECK_LIMITS,
   type CheckLimits,
+  checkReading,
   checkWork,
   osSandbox,
   readCheck,
@@ -634,8 +636,8 @@ export async function startRunner(options: {
   sandbox?: Sandbox;
   /** 검사 명령과 준비 명령의 상한. 기본은 5분과 출력 4MB, 준비 명령 10분이다. */
   checkLimits?: Partial<CheckLimits>;
-  /** 합쳐 돌려 보기를 켰는지(ADR-0034). 기본은 켜짐이다. */
-  mergeCheck?: boolean;
+  /** 합쳐 돌려 보기를 켤지(`omagari runner --merge-check`). 기본은 켜짐이다(ADR-0034). */
+  mergeCheck?: "on" | "off";
   /** 합쳐 돌려 보기 전에 두 작업이 잠잠해야 하는 시간. 기본 2분. */
   quietMs?: number;
 }) {
@@ -661,6 +663,10 @@ export async function startRunner(options: {
       )
     ).filter(([, listed]) => listed),
   );
+  const sandbox = options.sandbox ?? osSandbox;
+  // 켜 두었어도 샌드박스 도구가 없으면 돌리지 않는다(ADR-0033). 붙을 때 서버에 알린다.
+  const mergeCheck: MergeCheckState =
+    options.mergeCheck === "off" ? "off" : (await sandbox.unavailable()) ? "no_sandbox" : "on";
   const url = new URL(RUNNER_SOCKET, options.serverUrl);
   url.protocol = url.protocol.replace("http", "ws");
   const timeoutMs = options.welcomeTimeoutMs ?? 10_000;
@@ -737,6 +743,7 @@ export async function startRunner(options: {
           repos,
           executors: executorIds,
           choices,
+          mergeCheck,
         }),
       ),
     );
@@ -1183,7 +1190,7 @@ export async function startRunner(options: {
   /** 검사 명령을 돌릴 곳: 서버가 받아들인 원격의 기본 브랜치, 샌드박스, 상한. */
   const checkWith = () => ({
     remote: remote?.name,
-    sandbox: options.sandbox ?? osSandbox,
+    sandbox,
     limits: { ...CHECK_LIMITS, ...options.checkLimits },
   });
 
@@ -1356,6 +1363,7 @@ export async function startRunner(options: {
     let reported: { to?: WebSocket; pairs?: string } = {};
     /** 이 연결로 쌍마다 마지막으로 보낸 판정. 부딪힘을 다시 보내면 비운다(알림이 새로 섰을 수 있다). */
     let sentRuns = new Map<string, string>();
+    let checkSent: { to?: WebSocket; reading?: string } = {};
     let memo = newMemo();
     let problem: string | undefined;
     /** 지워진 것을 보고 풀기를 보낸 브랜치. 상황에서 그 선점이 빠지면 잊는다. */
@@ -1379,6 +1387,13 @@ export async function startRunner(options: {
           }
           live.send(frame);
           sent = { to: live, works: json };
+        }
+        // 기본 브랜치의 설정 파일. 받아 온(fetch) 뒤 바뀌었으면 다시 알린다.
+        const reading = checkReading(await readCheck(folder, remote));
+        const readingJson = JSON.stringify(reading);
+        if (live && (live !== checkSent.to || readingJson !== checkSent.reading)) {
+          live.send(encode(runnerToServer, "checkCommand", reading));
+          checkSent = { to: live, reading: readingJson };
         }
         // 브랜치가 지워지면 그 작업의 선점을 푼다. 체크아웃만 바꾼 브랜치(아직 있는 것)의 선점은 남는다.
         const claimedBranches = new Set(
@@ -1427,7 +1442,7 @@ export async function startRunner(options: {
             reported = { to, pairs };
             sentRuns = new Map();
           }
-          if (options.mergeCheck !== false && situation === seen && to === live) {
+          if (options.mergeCheck !== "off" && situation === seen && to === live) {
             const runs = await mergeRuns(all, trees, seen.works);
             for (const { pair, run } of to === live ? runs : []) {
               const { branch, theirs } = pair;

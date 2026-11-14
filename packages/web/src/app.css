@@ -3714,3 +3714,21 @@ a.issue-number:hover {
     grid-template-columns: 1fr;
   }
 }
+
+.settings-link {
+  flex: none;
+  color: var(--primary);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.settings-link:hover {
+  text-decoration: underline;
+}
+
+/* 긴 검사 명령은 오른쪽 절반 안에서 줄을 바꾼다. */
+.settings-command {
+  max-width: 50%;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
