@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 27;
+export const CONTRACT_VERSION = 28;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -1056,6 +1056,28 @@ export const NearbyWork = z.strictObject({
 });
 export type NearbyWork = z.infer<typeof NearbyWork>;
 
+/** 검사 명령을 두는 설정 파일. 레포 최상위에 커밋하고, 러너는 기본 브랜치(원격 추적)에 머지된 판만 읽는다(ADR-0034). */
+export const CHECK_FILE = ".omagari.json";
+
+/**
+ * 설정 파일의 꼴: 검사 명령(`check`)과, 선택으로 그 앞에 한 번 돌릴 준비 명령(`setup`). 둘 다 셸 명령 한 줄이다.
+ * 모르는 키는 받지 않는다. 키를 잘못 쓴 준비 명령이 말없이 빠지지 않게 하려는 것이다.
+ */
+export const CheckConfig = z.strictObject({
+  check: z.string().trim().min(1),
+  setup: z.string().trim().min(1).optional(),
+});
+export type CheckConfig = z.infer<typeof CheckConfig>;
+
+/** 검사 명령을 돌린 판정. 통과(0으로 끝남), 깨짐(0이 아닌 코드), 돌리지 못함(설정 없음, 샌드박스 없음, 준비 명령 실패, 상한에서 끊김). */
+export const Verdict = z.enum(["pass", "broken", "not_run"]);
+export type Verdict = z.infer<typeof Verdict>;
+export const VERDICT_LABELS = {
+  pass: "통과",
+  broken: "깨짐",
+  not_run: "돌리지 못함",
+} as const satisfies Record<Verdict, string>;
+
 /** CLI와 훅이 러너에 보내는 것. 러너는 문답과 지금 상황 묻기만 받는다. */
 export const cliToRunner = {
   /** 터미널에서 묻는다(`omagari runner ask`). 채널 세션과 따로 터미널 세션 하나를 잇는다. */
@@ -1093,6 +1115,11 @@ export const cliToRunner = {
   release: ClaimTarget.partial({ path: true }),
   /** 작업(`branch`)의 에이전트가 다른 멤버의 에이전트에게 묻는다(`omagari ask`). 러너는 서버에 보내고 서버의 답을 그대로 돌려준다. */
   question: runnerToServer.question,
+  /**
+   * 폴더(`folder`, 그 작업 폴더의 최상위)의 내 작업을 커밋하지 않은 변경까지 임시 워크트리에 옮겨, 기본 브랜치의 검사 명령을
+   * 샌드박스 안에서 한 번 돌린다(`omagari runner check`). 상대 작업은 합치지 않는다. 러너는 서버를 부르지 않는다.
+   */
+  check: z.strictObject({ folder: z.string().min(1) }),
 } satisfies Payloads;
 
 /** 러너가 CLI와 훅에 보내는 것. */
@@ -1156,6 +1183,20 @@ export const runnerToCli = {
   released: z.strictObject({ claims: z.array(Claim) }),
   /** `question`의 답(서버의 `questioned`와 같다). 서버와 끊겨 있으면 `error`(`runner_offline`)다. */
   questioned: serverToRunner.questioned,
+  /** `check`의 답. 돌리지 못한 것도 판정(`not_run`)과 까닭으로 온다. */
+  checked: z.strictObject({
+    verdict: Verdict,
+    /** 돌리지 못했으면 그 까닭과 고치는 법. */
+    reason: z.string().optional(),
+    /** 설정을 읽은 기본 브랜치(원격 추적, 예: `origin/main`). 모르면 없다. */
+    branch: z.string().optional(),
+    /** 읽은 설정. 읽지 못했으면 없다. */
+    config: CheckConfig.optional(),
+    /** 걸린 시간(밀리초). */
+    ms: z.number(),
+    /** 마지막으로 돈 명령(준비 명령이 실패했으면 그것) 출력의 끝부분. 아무것도 돌지 않았으면 비어 있다. */
+    output: z.string(),
+  }),
   error: ContractError,
 } satisfies Payloads;
 

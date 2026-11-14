@@ -1,6 +1,6 @@
 // 테스트 경계의 틀. 실제 서버와 실제 러너를 임시 Git 레포 위에 띄운다.
 // 조작과 확인은 서버 API(`call`)와 CLI·훅 실행 파일의 입출력으로만 한다.
-// 가짜는 바깥 두 곳에만 꽂는다: GitHub(서버), 에이전트 실행기(러너).
+// 가짜는 바깥 세 곳에만 꽂는다: GitHub(서버), 에이전트 실행기(러너), 검사 명령을 가두는 샌드박스(러너).
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
@@ -28,7 +28,7 @@ import {
   serverToWeb,
   webToServer,
 } from "@omagari/contract";
-import { type Executor, startRunner } from "@omagari/runner";
+import { type Executor, type Sandbox, type SandboxInput, startRunner } from "@omagari/runner";
 import { type GitHub, type Pull, startServer } from "@omagari/server";
 
 const executable = (path: string) => fileURLToPath(new URL(path, import.meta.url));
@@ -410,6 +410,30 @@ export function fakeGitHub() {
 
 type ExecutorInput = Parameters<Executor>[0];
 
+/**
+ * 가짜 샌드박스. 받은 명령, 폴더, 환경 변수, 막는 설정을 `calls`에 적고, 가두지 않고 명령을 그대로 돌린다(`sh -c`).
+ * `unavailable`에 까닭을 넣으면 샌드박스를 쓸 수 없는 기기다. 실제 샌드박스는 CI에서 돌지 않을 수 있어 손 점검으로 본다(ADR-0033).
+ */
+export function fakeSandbox() {
+  const fake: { calls: SandboxInput[]; unavailable?: string; sandbox: Sandbox } = {
+    calls: [],
+    sandbox: {
+      unavailable: async () => fake.unavailable,
+      wrap: async (input) => {
+        fake.calls.push(input);
+        return ["/bin/sh", "-c", input.command];
+      },
+    },
+  };
+  return fake;
+}
+
+/** 쓸 수 없는 샌드박스. 가짜를 넘기지 않은 러너에 실제 샌드박스 대신 꽂는다. 테스트가 이 기기의 샌드박스 도구에 따라 바뀌지 않게 한다. */
+const noSandbox: Sandbox = {
+  unavailable: async () => "가짜 샌드박스를 넘기지 않았다",
+  wrap: () => Promise.reject(new Error("가짜 샌드박스를 넘기지 않았다")),
+};
+
 /** 늘 실패하는 실행기. 가짜를 넘기지 않은 러너에 실제 실행기 대신 꽂는다. 이 기기에 깔린 Claude Code나 Codex에 따라 결과가 바뀌지 않게 한다. */
 const noExecutor: Executor = () => Promise.reject(new Error("가짜 실행기를 넘기지 않았다"));
 
@@ -517,6 +541,10 @@ export async function startWorld(
     hourMs?: number;
     /** 서버가 처음 뜨기 전에 DB에 넣을 SQL. 예전 판이 만든 DB로 띄울 때 쓴다. */
     seed?: string;
+    /** owner 러너의 샌드박스. 주지 않으면 쓸 수 없는 것이 꽂힌다. */
+    sandbox?: Sandbox;
+    /** owner 러너의 검사 명령 상한. 줄여서 끊기는 것을 본다. */
+    checkLimits?: { checkMs?: number; setupMs?: number; outputBytes?: number };
   } = {},
 ) {
   const repo = await tempRepo();
@@ -574,6 +602,8 @@ export async function startWorld(
     turnTimeoutMs: options.turnTimeoutMs,
     observeMs: options.observeMs,
     share: options.share,
+    sandbox: options.sandbox ?? noSandbox,
+    checkLimits: options.checkLimits,
   }).catch(async (error) => {
     await server.stop();
     await cleanup();
@@ -719,6 +749,7 @@ export async function startWorld(
         executors,
         observeMs: 50,
         share,
+        sandbox: noSandbox,
       };
       let runner = await startRunner(options);
       return {

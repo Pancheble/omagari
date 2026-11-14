@@ -49,6 +49,22 @@ cd <워크스페이스 레포 폴더>
 omagari runner
 ```
 
+## 검사 명령
+
+합쳐 돌려 보기는 두 작업을 합쳐 레포의 검사 명령을 이 기기의 샌드박스 안에서 돌린다. 바깥 네트워크, 임시 폴더 밖에 쓰기, 홈 폴더 읽기가 막힌다. 검사 명령은 팀이 레포 최상위에 `.omagari.json`을 커밋해 기본 브랜치에 머지하면 정해진다. `setup`(검사 명령 앞에 한 번 돌릴 준비 명령)은 없어도 된다.
+
+```json
+{ "check": "npm test", "setup": "npm ci" }
+```
+
+러너는 기본 브랜치(원격 추적)에 머지된 판만 읽는다. 이 기기에서 샌드박스와 검사 명령이 도는지는 지금 폴더의 내 작업에 한 번 돌려 본다.
+
+```bash
+omagari runner check
+```
+
+샌드박스 도구는 macOS에는 따로 깔 것이 없고, Linux는 bubblewrap, socat, ripgrep이 있어야 한다. 이 기기에서 끄려면 `omagari runner --merge-check off`로 켜고, 고른 것은 그 레포에 남는다.
+
 ## 업데이트
 
 ```bash
