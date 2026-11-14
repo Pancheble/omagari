@@ -37,6 +37,7 @@ import {
   LIVE_SOCKET,
   MAX_FRAME_BYTES,
   type MemberView,
+  type MergeCheckState,
   type ObservedFile,
   type Post,
   PRESENCE_DURATIONS,
@@ -576,7 +577,7 @@ export async function startServer(options: {
     claim TEXT NOT NULL,
     at INTEGER NOT NULL
   ) STRICT`);
-  // 워크스페이스의 설정 하나씩. 지금은 알림 채널(`alert_channel`)뿐이다.
+  // 워크스페이스의 설정 하나씩: 알림 채널(`alert_channel`)과, 러너가 마지막으로 알려 온 설정 파일(`check`, 계약의 CheckReading JSON).
   db.exec(`CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -685,6 +686,7 @@ export async function startServer(options: {
       hash: string;
       executors: ExecutorId[];
       choices: Partial<Record<ExecutorId, Choices>>;
+      mergeCheck: MergeCheckState;
     }
   >();
   /** hello를 마친 웹의 실시간 연결과 그 세션의 해시, 멤버. 세션이 끝나면 닫는다. */
@@ -1575,6 +1577,19 @@ export async function startServer(options: {
           : null,
       },
       alertChannel: alertChannel(),
+      mergeCheck: {
+        // ponytail: 멤버 하나에 러너 하나로 본다(hello와 같다). 마지막에 붙은 러너의 것이다.
+        runner:
+          [...runners.values()].findLast((r) => r.login === login)?.mergeCheck ??
+          ("offline" as const),
+        check: JSON.parse(
+          (
+            db.prepare("SELECT value FROM settings WHERE key = 'check'").get() as
+              | { value: string }
+              | undefined
+          )?.value ?? "null",
+        ),
+      },
     };
   });
 
@@ -2339,7 +2354,7 @@ export async function startServer(options: {
         }
         const { message } = decoded;
         if (message.kind === "hello") {
-          const { session, repos, executors, choices } = message.payload;
+          const { session, repos, executors, choices, mergeCheck } = message.payload;
           const login = sessionLogin(session);
           if (!login) {
             return refuse(
@@ -2358,7 +2373,7 @@ export async function startServer(options: {
               message.id,
             );
           }
-          runners.set(socket, { login, hash: hash(session), executors, choices });
+          runners.set(socket, { login, hash: hash(session), executors, choices, mergeCheck });
           db.prepare("DELETE FROM offline WHERE login = ?").run(login);
           db.prepare("UPDATE claims SET stale = NULL WHERE login = ?").run(login);
           // ponytail: 멤버 하나에 러너 하나로 본다. 기기 둘에서 실행기가 다른 러너를 켜면 나중에 붙은 쪽의 것만 남는다.
@@ -2375,6 +2390,10 @@ export async function startServer(options: {
         if (!runner) {
           // hello를 마치지 않은 연결의 메시지는 받지 않는다.
           refuse(socket, { code: "unauthorized", message: "hello를 먼저 보내라" }, message.id);
+        } else if (message.kind === "checkCommand") {
+          db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('check', ?)").run(
+            JSON.stringify(message.payload),
+          );
         } else if (message.kind === "observation") {
           replaceWorks(runner.login, message.payload.works);
           shareSituation();
