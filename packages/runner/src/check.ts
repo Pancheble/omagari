@@ -16,7 +16,7 @@ import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { promisify, stripVTControlCharacters } from "node:util";
 import type { SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
-import { CHECK_FILE, CheckConfig, type Verdict } from "@omagari/contract";
+import { CHECK_FILE, CheckConfig, type CheckReading, type Verdict } from "@omagari/contract";
 
 const execFileAsync = promisify(execFile);
 
@@ -87,11 +87,22 @@ export const osSandbox: Sandbox = {
 /** 정하는 법. 설정이 없거나 읽지 못했을 때 붙인다. */
 const HOW = `정하는 법: 레포 최상위에 ${CHECK_FILE}을 {"check": "<검사 명령>", "setup": "<준비 명령, 없어도 된다>"} 꼴로 커밋해 기본 브랜치에 머지한다`;
 
-/** 기본 브랜치에서 읽은 설정. 읽었으면 `config`, 못 읽었으면 까닭과 정하는 법(`problem`)이다. `branch`는 읽은 원격 추적 브랜치다. */
+/**
+ * 기본 브랜치에서 읽은 설정. 읽었으면 `config`, 못 읽었으면 까닭과 정하는 법(`problem`)과 그 갈래(`why`, 서버로 나가는 것)다.
+ * `branch`는 읽은 원격 추적 브랜치다.
+ */
 export type CheckRead = { branch?: string } & (
-  | { config: CheckConfig; problem?: undefined }
-  | { config?: undefined; problem: string }
+  | { config: CheckConfig; problem?: undefined; why?: undefined }
+  | {
+      config?: undefined;
+      problem: string;
+      why: Extract<CheckReading, { problem: unknown }>["problem"];
+    }
 );
+
+/** 서버에 알리는 꼴(`checkCommand`). 명령만 싣고 까닭은 갈래만 싣는다. */
+export const checkReading = (read: CheckRead): CheckReading =>
+  read.config ? { config: read.config } : { problem: read.why };
 
 const gitOut = async (folder: string, args: string[], env?: Record<string, string>) =>
   (
@@ -106,16 +117,25 @@ const gitOut = async (folder: string, args: string[], env?: Record<string, strin
  * 원격 추적이라 받아 온(fetch) 만큼만 안다.
  */
 export async function readCheck(folder: string, remote: string | undefined): Promise<CheckRead> {
-  if (!remote) return { problem: "레포의 GitHub 원격을 몰라 기본 브랜치를 읽지 못했다" };
+  if (!remote)
+    return {
+      why: "unknown_branch",
+      problem: "레포의 GitHub 원격을 몰라 기본 브랜치를 읽지 못했다",
+    };
   const ref = `refs/remotes/${remote}/HEAD`;
   const branch = await gitOut(folder, ["rev-parse", "--abbrev-ref", ref]).catch(() => undefined);
   if (!branch)
     return {
+      why: "unknown_branch",
       problem: `${remote}의 기본 브랜치를 모른다. git remote set-head ${remote} --auto 로 정하라`,
     };
   const text = await gitOut(folder, ["show", `${ref}:${CHECK_FILE}`]).catch(() => undefined);
   if (text === undefined)
-    return { branch, problem: `기본 브랜치(${branch})에 ${CHECK_FILE}이 없다. ${HOW}` };
+    return {
+      branch,
+      why: "missing",
+      problem: `기본 브랜치(${branch})에 ${CHECK_FILE}이 없다. ${HOW}`,
+    };
   let parsed: ReturnType<typeof CheckConfig.safeParse> | undefined;
   try {
     parsed = CheckConfig.safeParse(JSON.parse(text));
@@ -123,6 +143,7 @@ export async function readCheck(folder: string, remote: string | undefined): Pro
   if (!parsed?.success)
     return {
       branch,
+      why: "invalid",
       problem: `기본 브랜치(${branch})의 ${CHECK_FILE}을 읽지 못했다(JSON이 아니거나 꼴이 다르다). ${HOW}`,
     };
   return { branch, config: parsed.data };

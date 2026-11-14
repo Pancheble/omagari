@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 28;
+export const CONTRACT_VERSION = 29;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -790,19 +790,55 @@ export const ConflictPair = z.discriminatedUnion("kind", [
 ]);
 export type ConflictPair = z.infer<typeof ConflictPair>;
 
+/** 검사 명령을 두는 설정 파일. 레포 최상위에 커밋하고, 러너는 기본 브랜치(원격 추적)에 머지된 판만 읽는다(ADR-0034). */
+export const CHECK_FILE = ".omagari.json";
+
+/**
+ * 설정 파일의 꼴: 검사 명령(`check`)과, 선택으로 그 앞에 한 번 돌릴 준비 명령(`setup`). 둘 다 셸 명령 한 줄이다.
+ * 모르는 키는 받지 않는다. 키를 잘못 쓴 준비 명령이 말없이 빠지지 않게 하려는 것이다.
+ */
+export const CheckConfig = z.strictObject({
+  check: z.string().trim().min(1),
+  setup: z.string().trim().min(1).optional(),
+});
+export type CheckConfig = z.infer<typeof CheckConfig>;
+
+/**
+ * 이 러너의 합쳐 돌려 보기: 켜짐, 꺼 둠(`omagari runner --merge-check off`), 켰지만 이 기기에 샌드박스 도구가 없어 돌리지 않음(ADR-0033, ADR-0034).
+ */
+export const MergeCheckState = z.enum(["on", "off", "no_sandbox"]);
+export type MergeCheckState = z.infer<typeof MergeCheckState>;
+
+/**
+ * 러너가 기본 브랜치에서 읽은 설정 파일. 읽었으면 `config`, 못 읽었으면 까닭이다:
+ * 기본 브랜치를 모른다(`unknown_branch`), 파일이 없다(`missing`), JSON이 아니거나 꼴이 다르다(`invalid`).
+ */
+export const CheckReading = z.union([
+  z.strictObject({ config: CheckConfig }),
+  z.strictObject({ problem: z.enum(["unknown_branch", "missing", "invalid"]) }),
+]);
+export type CheckReading = z.infer<typeof CheckReading>;
+
 /** 러너가 서버에 보내는 것. 이후의 이슈는 자기 메시지를 여기에 더한다. */
 export const runnerToServer = {
   /**
    * 붙자마자 보낸다. `repos`는 러너 폴더의 GitHub 원격이 가리키는 레포(`owner/name`)들이다.
    * `executors`는 이 기기에서 러너가 돌릴 수 있는 실행기다. 실행기마다 에이전트가 하나씩 생긴다(ADR-0015).
    * `choices`는 실행기마다 고를 거리다. 실행기에 묻지 못한 것은 빠진다(ADR-0020).
+   * `mergeCheck`는 이 러너의 합쳐 돌려 보기다. 켜고 끄는 것은 러너에서만 하므로(ADR-0034) 붙을 때 한 번 알린다.
    */
   hello: z.strictObject({
     session: z.string(),
     repos: z.array(z.string()),
     executors: z.array(ExecutorId),
     choices: z.partialRecord(ExecutorId, Choices),
+    mergeCheck: MergeCheckState,
   }),
+  /**
+   * 기본 브랜치에서 읽은 설정 파일(검사 명령). 붙을 때마다 한 번, 그 뒤로는 읽은 것이 달라질 때마다 보낸다.
+   * 레포에 하나라 서버는 어느 멤버의 러너가 보냈든 마지막 것을 둔다.
+   */
+  checkCommand: CheckReading,
   /**
    * 관측. 러너가 지금 보는 작업 전부다: 등록한 폴더와 그 연결된 워크트리마다 체크아웃된 브랜치 하나씩(ADR-0006).
    * 서버는 그 멤버의 작업을 이것으로 바꾼다. 그래서 공유 수준을 낮추면 전에 올린 내용이 서버에서 내려간다.
@@ -1055,19 +1091,6 @@ export const NearbyWork = z.strictObject({
   ]),
 });
 export type NearbyWork = z.infer<typeof NearbyWork>;
-
-/** 검사 명령을 두는 설정 파일. 레포 최상위에 커밋하고, 러너는 기본 브랜치(원격 추적)에 머지된 판만 읽는다(ADR-0034). */
-export const CHECK_FILE = ".omagari.json";
-
-/**
- * 설정 파일의 꼴: 검사 명령(`check`)과, 선택으로 그 앞에 한 번 돌릴 준비 명령(`setup`). 둘 다 셸 명령 한 줄이다.
- * 모르는 키는 받지 않는다. 키를 잘못 쓴 준비 명령이 말없이 빠지지 않게 하려는 것이다.
- */
-export const CheckConfig = z.strictObject({
-  check: z.string().trim().min(1),
-  setup: z.string().trim().min(1).optional(),
-});
-export type CheckConfig = z.infer<typeof CheckConfig>;
 
 /** 검사 명령을 돌린 판정. 통과(0으로 끝남), 깨짐(0이 아닌 코드), 돌리지 못함(설정 없음, 샌드박스 없음, 준비 명령 실패, 상한에서 끊김). */
 export const Verdict = z.enum(["pass", "broken", "not_run"]);
@@ -1536,6 +1559,15 @@ export const api = {
           .nullable(),
       }),
       alertChannel: z.string(),
+      /**
+       * 합쳐 돌려 보기(DESIGN.md 설정 창, 시안 30-C). 웹은 읽기만 한다. 켜고 끄는 것은 러너에서 한다(ADR-0034).
+       * `runner`는 내 러너의 것이고, 러너가 붙어 있지 않으면 `offline`이다. 러너가 여럿이면 마지막에 붙은 것이다.
+       * `check`는 러너가 마지막으로 알려 온 레포의 설정 파일이고, 아직 어느 러너도 알려 오지 않았으면 null이다.
+       */
+      mergeCheck: z.strictObject({
+        runner: z.union([MergeCheckState, z.literal("offline")]),
+        check: CheckReading.nullable(),
+      }),
     }),
   },
   /** 채널 전부(채팅과 포럼), 이름 순서. 포스트는 오지 않는다(`api.posts`). 멤버만 본다. */

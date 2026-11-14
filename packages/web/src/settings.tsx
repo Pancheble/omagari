@@ -15,6 +15,9 @@ import { Avatar } from "./workspace.tsx";
 type Reply = Awaited<ReturnType<typeof call<typeof api.settings>>>;
 type Page = "agent" | "alerts";
 
+/** 검사 명령을 정하는 법, 샌드박스 도구를 까는 법(README "검사 명령"). */
+const CHECK_HELP = "https://github.com/Pancheble/omagari#검사-명령";
+
 /**
  * 설정 창(DESIGN.md "설정 창"). 왼쪽 목록에서 항목을 고르고 오른쪽에 그 내용을 보인다.
  * 열릴 때마다 서버의 설정을 새로 읽는다. 에이전트와 포럼 목록은 실시간으로 받는 멤버 목록과 채널을 쓴다.
@@ -56,6 +59,15 @@ export function Settings({
     dialog.current?.showModal();
     load();
   }, []);
+  // 내 러너가 꺼지거나 켜지면(실시간 멤버 목록) 다시 읽는다. 합쳐 돌려 보기를 러너에서 끄고 다시 켠 것도 이렇게 보인다.
+  const online = mine?.agents.some((agent) => agent.state !== "offline");
+  const seen = useRef(online);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 러너가 켜지고 꺼질 때만 읽는다
+  useEffect(() => {
+    if (seen.current === online) return;
+    seen.current = online;
+    load();
+  }, [online]);
 
   /** 먼저 화면을 바꾸고, 서버가 받지 않으면 되돌린다. */
   const save = async (next: Partial<Reply>, send: () => Promise<unknown>) => {
@@ -116,6 +128,7 @@ export function Settings({
     body = (
       <AlertsPage
         settings={settings}
+        online={online}
         forums={channels?.filter((channel) => channel.kind === "forum") ?? []}
         workspace={workspace}
         repo={me.repo}
@@ -242,12 +255,15 @@ function AgentPage({
 
 function AlertsPage({
   settings,
+  online,
   forums,
   workspace,
   repo,
   save,
 }: {
   settings: Reply;
+  /** 실시간 멤버 목록으로 본 내 러너. 모르면 없다. */
+  online?: boolean;
   forums: Channel[];
   workspace: string;
   repo: string;
@@ -278,6 +294,10 @@ function AlertsPage({
           </span>
         </Row>
       </Group>
+      <MergeCheckGroup
+        {...settings.mergeCheck}
+        runner={online === false ? "offline" : settings.mergeCheck.runner}
+      />
       <Group title="워크스페이스">
         <Row name="이름">
           <span className="settings-value">{workspace}</span>
@@ -287,6 +307,59 @@ function AlertsPage({
         </Row>
       </Group>
     </>
+  );
+}
+
+const help = (text: string) => (
+  <a className="settings-link" href={CHECK_HELP} target="_blank" rel="noreferrer">
+    {text} ›
+  </a>
+);
+
+/** 합쳐 돌려 보기(시안 30-C). 읽기만 한다. 켜고 끄는 것은 러너에서 한다(ADR-0034). */
+function MergeCheckGroup({ runner, check }: Reply["mergeCheck"]) {
+  const off = <span className="settings-off">꺼짐</span>;
+  const rows: Record<typeof runner, [string, ReactNode]> = {
+    on: [
+      "켜져 있어요. 샌드박스 안에서만 돌아요.",
+      <span key="on" className="badge outline">
+        켜짐
+      </span>,
+    ],
+    off: ["꺼 두었어요. 다른 멤버의 러너가 돌린 판정은 그대로 보여요.", off],
+    no_sandbox: ["이 기기에 샌드박스 도구가 없어 돌리지 않아요.", help("까는 법")],
+    offline: ["러너가 꺼져 있어요.", off],
+  };
+  const [description, control] = rows[runner];
+  const problem = check && "problem" in check ? check.problem : undefined;
+  return (
+    <Group
+      title="합쳐 돌려 보기"
+      note="레포 기본 브랜치의 설정 파일에서 읽어요. 바꾸려면 그 파일을 고쳐 머지하세요. 모든 멤버에게 같아요. 켜고 끄는 것은 웹이 아니라 러너에서 해요. 서버가 내 기기에서 돌릴 것을 정하지 못하게 하려는 거예요."
+    >
+      <Row
+        name="검사 명령"
+        description={
+          !check
+            ? "러너가 붙으면 레포의 설정 파일을 읽어 와요."
+            : "config" in check
+              ? "합친 것에 돌리는 명령이에요."
+              : {
+                  missing: "레포에 설정 파일이 없어요. 머지하면 돌리기 시작해요.",
+                  invalid: "레포의 설정 파일을 읽지 못했어요. JSON이 아니거나 꼴이 달라요.",
+                  unknown_branch: "러너가 레포의 기본 브랜치를 몰라 설정 파일을 읽지 못했어요.",
+                }[check.problem]
+        }
+      >
+        {check && "config" in check && (
+          <code className="settings-value settings-command">{check.config.check}</code>
+        )}
+        {problem && help("정하는 법")}
+      </Row>
+      <Row name="내 러너에서 돌리기" description={description}>
+        {control}
+      </Row>
+    </Group>
   );
 }
 
