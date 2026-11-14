@@ -144,6 +144,9 @@ const CLAIM_TIMEOUT_MS = 5000;
 /** 합쳐 돌려 보기를 돌리기 전에 두 작업의 내용이 바뀌지 않고 있어야 하는 시간(ADR-0036). 써 보고 고친다. */
 const QUIET_MS = 2 * 60_000;
 
+/** 합쳐 돌려 보기의 지문을 다시 만드는 가장 짧은 간격. 관측 주기가 짧아도 이보다 자주 Git을 부르지 않는다. */
+const MERGE_POLL_MS = 1000;
+
 /** 관측을 다시 읽는 주기. Room의 기준 커밋 확인 주기(3초)에서 시작한다. */
 const OBSERVE_MS = 3000;
 
@@ -1202,6 +1205,9 @@ export async function startRunner(options: {
   const quiet = new Map<string, { fingerprint: string; since: number }>();
   const verdicts = new Map<string, MergeRun>();
   const last = new Map<string, MergeRun>();
+  /** 지문을 만들고 판정을 보내는 중인 것(한 번에 하나)과, 다음에 해도 되는 시각. */
+  let merging: Promise<void> | undefined;
+  let nextMerge = 0;
   let running:
     | { key: string; fingerprint: string; report: MergeRun; done: Promise<void> }
     | undefined;
@@ -1442,16 +1448,33 @@ export async function startRunner(options: {
             reported = { to, pairs };
             sentRuns = new Map();
           }
-          if (options.mergeCheck !== "off" && situation === seen && to === live) {
-            const runs = await mergeRuns(all, trees, seen.works);
-            for (const { pair, run } of to === live ? runs : []) {
-              const { branch, theirs } = pair;
-              const key = JSON.stringify([branch, theirs.login, theirs.branch]);
-              const json = JSON.stringify(run);
-              if (sentRuns.get(key) === json) continue;
-              to.send(encode(runnerToServer, "merged", { branch, theirs, run }));
-              sentRuns.set(key, json);
-            }
+          // 합쳐 돌려 보기는 이 주기를 기다리게 하지 않는다. 지문을 만드는 Git 호출로 주기가 길어지면 부딪힘의 보고가 늦어진다.
+          // 한 번에 하나만, `MERGE_POLL_MS`에 한 번까지만 따로 돌리고, 그동안 연결이나 상황이 바뀌었거나 부딪힘을 다시 보냈으면 보내지 않는다.
+          if (
+            options.mergeCheck !== "off" &&
+            situation === seen &&
+            to === live &&
+            !merging &&
+            Date.now() >= nextMerge
+          ) {
+            nextMerge = Date.now() + MERGE_POLL_MS;
+            const pending = sentRuns;
+            merging = mergeRuns(all, trees, seen.works)
+              .then((runs) => {
+                if (to !== live || situation !== seen || sentRuns !== pending) return;
+                for (const { pair, run } of runs) {
+                  const { branch, theirs } = pair;
+                  const key = JSON.stringify([branch, theirs.login, theirs.branch]);
+                  const json = JSON.stringify(run);
+                  if (sentRuns.get(key) === json) continue;
+                  to.send(encode(runnerToServer, "merged", { branch, theirs, run }));
+                  sentRuns.set(key, json);
+                }
+              })
+              .catch((error) => console.warn(`합쳐 돌려 보기: ${error.message ?? error}`))
+              .finally(() => {
+                merging = undefined;
+              });
           }
         }
       } catch (error) {
@@ -1480,6 +1503,7 @@ export async function startRunner(options: {
     async stop() {
       end();
       await Promise.all([localClosed, observing]);
+      await merging;
       await running?.done;
     },
   };
