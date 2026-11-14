@@ -187,6 +187,7 @@ test("답하지 않는 러너 연결은 끊겨 그 에이전트가 오프라인�
       repos: [REPO],
       executors: ["claude-code"],
       choices: {},
+      mergeCheck: "on",
     }),
   );
   const [welcome] = await once(silent, "message");

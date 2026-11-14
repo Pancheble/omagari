@@ -27,6 +27,7 @@ import {
   type InboxItem,
   type LineRange,
   MAX_FRAME_BYTES,
+  type MergeCheckState,
   type Message,
   type ModelChoice,
   PLACE_ROLES,
@@ -45,7 +46,15 @@ import {
   type WorkView,
 } from "@omagari/contract";
 import { checkoutVersion } from "@omagari/contract/version";
-import { CHECK_LIMITS, type CheckLimits, checkWork, osSandbox, type Sandbox } from "./check.ts";
+import {
+  CHECK_LIMITS,
+  type CheckLimits,
+  checkReading,
+  checkWork,
+  osSandbox,
+  readCheck,
+  type Sandbox,
+} from "./check.ts";
 import { covers, overlap, resolve, see } from "./claims.ts";
 import { conflicts, newMemo, symbolConflicts } from "./conflicts.ts";
 import { gitIn, nearby } from "./nearby.ts";
@@ -618,6 +627,8 @@ export async function startRunner(options: {
   sandbox?: Sandbox;
   /** 검사 명령과 준비 명령의 상한. 기본은 5분과 출력 4MB, 준비 명령 10분이다. */
   checkLimits?: Partial<CheckLimits>;
+  /** 합쳐 돌려 보기를 켤지(`omagari runner --merge-check`). 기본은 켜짐이다(ADR-0034). */
+  mergeCheck?: "on" | "off";
 }) {
   const { folder, repos, remotes } = await readRepo(options.folder);
   const paths = await runnerPaths(folder);
@@ -641,6 +652,10 @@ export async function startRunner(options: {
       )
     ).filter(([, listed]) => listed),
   );
+  const sandbox = options.sandbox ?? osSandbox;
+  // 켜 두었어도 샌드박스 도구가 없으면 돌리지 않는다(ADR-0033). 붙을 때 서버에 알린다.
+  const mergeCheck: MergeCheckState =
+    options.mergeCheck === "off" ? "off" : (await sandbox.unavailable()) ? "no_sandbox" : "on";
   const url = new URL(RUNNER_SOCKET, options.serverUrl);
   url.protocol = url.protocol.replace("http", "ws");
   const timeoutMs = options.welcomeTimeoutMs ?? 10_000;
@@ -717,6 +732,7 @@ export async function startRunner(options: {
           repos,
           executors: executorIds,
           choices,
+          mergeCheck,
         }),
       ),
     );
@@ -1018,7 +1034,7 @@ export async function startRunner(options: {
       const result = await checkWork({
         folder: tree,
         remote: remote?.name,
-        sandbox: options.sandbox ?? osSandbox,
+        sandbox,
         limits: { ...CHECK_LIMITS, ...options.checkLimits },
       });
       const record: CheckRecord = {
@@ -1215,6 +1231,7 @@ export async function startRunner(options: {
     // ponytail: 달라지면 작업 전체(내용 합계 8MiB까지)를 다시 보낸다. 큰 작업을 자주 고치면 파일마다의 차이만 보낸다.
     let sent: { to?: WebSocket; works?: string } = {};
     let reported: { to?: WebSocket; pairs?: string } = {};
+    let checkSent: { to?: WebSocket; reading?: string } = {};
     let memo = newMemo();
     let problem: string | undefined;
     /** 지워진 것을 보고 풀기를 보낸 브랜치. 상황에서 그 선점이 빠지면 잊는다. */
@@ -1238,6 +1255,13 @@ export async function startRunner(options: {
           }
           live.send(frame);
           sent = { to: live, works: json };
+        }
+        // 기본 브랜치의 설정 파일. 받아 온(fetch) 뒤 바뀌었으면 다시 알린다.
+        const reading = checkReading(await readCheck(folder, remote));
+        const readingJson = JSON.stringify(reading);
+        if (live && (live !== checkSent.to || readingJson !== checkSent.reading)) {
+          live.send(encode(runnerToServer, "checkCommand", reading));
+          checkSent = { to: live, reading: readingJson };
         }
         // 브랜치가 지워지면 그 작업의 선점을 푼다. 체크아웃만 바꾼 브랜치(아직 있는 것)의 선점은 남는다.
         const claimedBranches = new Set(
