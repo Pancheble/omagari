@@ -17,7 +17,7 @@ import {
 } from "@omagari/contract";
 import { startRunner } from "@omagari/runner";
 import { type WebSocket as ServerSocket, WebSocketServer } from "ws";
-import { eventually, fakeExecutor, REPO, startWorld, tempRepo } from "./harness.ts";
+import { eventually, fakeExecutor, REPO, startWorld, stubbed, tempRepo } from "./harness.ts";
 
 const frame = (fields: object) => JSON.stringify({ v: CONTRACT_VERSION, payload: {}, ...fields });
 const tooBigFrame = "x".repeat(MAX_FRAME_BYTES + 1);
@@ -82,6 +82,7 @@ async function fakeServer(
       serverUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
       folder: repo.folder,
       session: "세션",
+      ...stubbed(),
     },
     /** hello 다음에 러너가 보낸 메시지들(관측은 빼고). 온 순서대로다. */
     received,

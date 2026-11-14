@@ -434,6 +434,15 @@ const noSandbox: Sandbox = {
   wrap: () => Promise.reject(new Error("가짜 샌드박스를 넘기지 않았다")),
 };
 
+/**
+ * 직접 `startRunner`를 부르는 테스트가 꽂는 것: 실제 Claude Code·Codex를 띄워 고를 거리를 묻지 않고 실제 샌드박스를 살피지 않는다.
+ * 그것들은 느리고 부하 아래에서 몇 초씩 걸려 시간 초과의 원인이 된다.
+ */
+export const stubbed = () => ({
+  executors: { "claude-code": noExecutor },
+  sandbox: noSandbox,
+});
+
 /** 늘 실패하는 실행기. 가짜를 넘기지 않은 러너에 실제 실행기 대신 꽂는다. 이 기기에 깔린 Claude Code나 Codex에 따라 결과가 바뀌지 않게 한다. */
 const noExecutor: Executor = () => Promise.reject(new Error("가짜 실행기를 넘기지 않았다"));
 

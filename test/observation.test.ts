@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { api, call } from "@omagari/contract";
 import { startRunner } from "@omagari/runner";
-import { eventually, startWorld, tempRepo, writer } from "./harness.ts";
+import { eventually, startWorld, stubbed, tempRepo, writer } from "./harness.ts";
 
 test("커밋한 것, 커밋하지 않은 것, 추적하지 않는 새 파일이 푸시 여부와 상관없이 그 작업의 변경으로 올라가고, 다른 멤버가 API로 본다", async (t) => {
   const world = await startWorld();
@@ -258,6 +258,7 @@ test("러너는 작업 폴더의 어떤 파일도 바꾸지 않는다", async (t
     folder,
     session: alice.session,
     observeMs: 20,
+    ...stubbed(),
   });
   t.after(runner.stop);
   await eventually(async () => {

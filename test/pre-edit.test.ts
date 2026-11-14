@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { runnerPaths, startRunner } from "@omagari/runner";
-import { eventually, startWorld, writer } from "./harness.ts";
+import { eventually, startWorld, stubbed, writer } from "./harness.ts";
 
 type World = Awaited<ReturnType<typeof startWorld>>;
 type Desk = Awaited<ReturnType<World["desk"]>>;
@@ -277,6 +277,7 @@ test("러너에 닿지 않으면 세션에 한 번만 근처 작업을 확인하
     folder: world.repo.folder,
     session: world.owner.session,
     observeMs: 50,
+    ...stubbed(),
   });
   t.after(() => runner.stop());
   await eventually(async () => assert.equal(await fresh(world, "a.ts"), ""));
