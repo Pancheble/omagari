@@ -16,6 +16,7 @@ import {
   type Choices,
   type Claim,
   CONTRACT_VERSION,
+  type ConflictPair,
   type ContractError,
   ContractFailure,
   cliToRunner,
@@ -27,6 +28,7 @@ import {
   type InboxItem,
   type LineRange,
   MAX_FRAME_BYTES,
+  type MergeRun,
   type Message,
   type ModelChoice,
   PLACE_ROLES,
@@ -45,7 +47,15 @@ import {
   type WorkView,
 } from "@omagari/contract";
 import { checkoutVersion } from "@omagari/contract/version";
-import { CHECK_LIMITS, type CheckLimits, checkWork, osSandbox, type Sandbox } from "./check.ts";
+import {
+  CHECK_LIMITS,
+  type CheckLimits,
+  checkWork,
+  osSandbox,
+  readCheck,
+  type Sandbox,
+  workTree,
+} from "./check.ts";
 import { covers, overlap, resolve, see } from "./claims.ts";
 import { conflicts, newMemo, symbolConflicts } from "./conflicts.ts";
 import { gitIn, nearby } from "./nearby.ts";
@@ -128,6 +138,9 @@ async function converse<T>(
 
 /** 선점과 풀기를 서버에 보내고 답을 기다리는 시간. */
 const CLAIM_TIMEOUT_MS = 5000;
+
+/** 합쳐 돌려 보기를 돌리기 전에 두 작업의 내용이 바뀌지 않고 있어야 하는 시간(ADR-0036). 써 보고 고친다. */
+const QUIET_MS = 2 * 60_000;
 
 /** 관측을 다시 읽는 주기. Room의 기준 커밋 확인 주기(3초)에서 시작한다. */
 const OBSERVE_MS = 3000;
@@ -388,6 +401,9 @@ export type CheckRecord = {
   /** 읽은 검사 명령과 준비 명령. 설정을 읽지 못했으면 없다. */
   check?: string;
   setup?: string;
+  /** 합쳐 돌려 보기면 합친 두 작업: 이 러너의 작업(`branch`)과 상대 작업(`theirs`). `omagari runner check`면 없다. */
+  branch?: string;
+  theirs?: { login: string; branch: string };
   verdict: Verdict;
   /** 돌리지 못했으면 그 까닭. */
   reason?: string;
@@ -618,6 +634,10 @@ export async function startRunner(options: {
   sandbox?: Sandbox;
   /** 검사 명령과 준비 명령의 상한. 기본은 5분과 출력 4MB, 준비 명령 10분이다. */
   checkLimits?: Partial<CheckLimits>;
+  /** 합쳐 돌려 보기를 켰는지(ADR-0034). 기본은 켜짐이다. */
+  mergeCheck?: boolean;
+  /** 합쳐 돌려 보기 전에 두 작업이 잠잠해야 하는 시간. 기본 2분. */
+  quietMs?: number;
 }) {
   const { folder, repos, remotes } = await readRepo(options.folder);
   const paths = await runnerPaths(folder);
@@ -1015,12 +1035,7 @@ export async function startRunner(options: {
       // 서버를 부르지 않고 이 기기에서만 돈다. 문답의 줄에 서지 않는다.
       const at = new Date().toISOString();
       const { folder: tree } = message.payload;
-      const result = await checkWork({
-        folder: tree,
-        remote: remote?.name,
-        sandbox: options.sandbox ?? osSandbox,
-        limits: { ...CHECK_LIMITS, ...options.checkLimits },
-      });
+      const result = await checkWork({ folder: tree, ...checkWith() });
       const record: CheckRecord = {
         at,
         kind: "check",
@@ -1165,6 +1180,130 @@ export async function startRunner(options: {
     return encode(runnerToCli, "claimed", { claim: reply.payload.claim, overlaps }, message.id);
   }
 
+  /** 검사 명령을 돌릴 곳: 서버가 받아들인 원격의 기본 브랜치, 샌드박스, 상한. */
+  const checkWith = () => ({
+    remote: remote?.name,
+    sandbox: options.sandbox ?? osSandbox,
+    limits: { ...CHECK_LIMITS, ...options.checkLimits },
+  });
+
+  /**
+   * 합쳐 돌려 보기(ADR-0036). 쌍마다 지문과 그 지문이 처음 보인 시각(`quiet`), 지문마다 난 판정(`verdicts`), 쌍마다 마지막으로 난 판정(`last`),
+   * 지금 도는 것(`running`, 한 번에 하나)을 둔다. 쌍의 열쇠는 `[내 브랜치, 상대 멤버, 상대 브랜치]`의 JSON이다.
+   */
+  // ponytail: 메모리에만 둔다. 러너를 다시 켜면 같은 내용도 한 번 다시 돌린다. 서버에 붙은 판정으로 건너뛰는 것은 #129에서 한다.
+  const quiet = new Map<string, { fingerprint: string; since: number }>();
+  const verdicts = new Map<string, MergeRun>();
+  const last = new Map<string, MergeRun>();
+  let running:
+    | { key: string; fingerprint: string; report: MergeRun; done: Promise<void> }
+    | undefined;
+
+  /**
+   * 간접 충돌(추정) 쌍마다 지금 올릴 판정을 정하고, 두 작업이 잠잠해졌는데 이 지문의 판정이 없으면 돌리기 시작한다(기다리지 않는다).
+   * 직접 충돌, 중복 구현, 선언된 계약 변경만 걸린 쌍은 돌리지 않는다. 올릴 판정이 없으면 빠진다.
+   */
+  async function mergeRuns(
+    pairs: ConflictPair[],
+    trees: { work: Work; folder: string }[],
+    works: WorkView[],
+  ) {
+    const reports: { pair: ConflictPair; run: MergeRun }[] = [];
+    const indirect = pairs.filter((pair) => pair.kind === "indirect");
+    if (indirect.length === 0) return reports;
+    const { config } = await readCheck(folder, remote?.name);
+    for (const pair of indirect) {
+      const key = JSON.stringify([pair.branch, pair.theirs.login, pair.theirs.branch]);
+      const mine = trees.find(({ work }) => work.branch === pair.branch);
+      const theirs = works.find(
+        (w) => w.login === pair.theirs.login && w.branch === pair.theirs.branch,
+      );
+      if (!mine || !theirs) continue;
+      // ponytail: 주기마다 내 폴더를 임시 인덱스에 담아 트리를 쓴다(git add --all). 큰 레포에서 무거우면 관측이 읽은 내용으로 지문을 만든다.
+      const tree = await workTree(mine.folder, join(dirname(paths.log), "merge-index"));
+      const fingerprint = createHash("sha256")
+        .update(JSON.stringify([tree, mine.work.base, theirs.base, theirs.files, config ?? null]))
+        .digest("hex");
+      const now = Date.now();
+      const seen = quiet.get(key);
+      if (seen?.fingerprint !== fingerprint) quiet.set(key, { fingerprint, since: now });
+      const since = quiet.get(key)?.since ?? now;
+      let run: MergeRun | undefined;
+      if (running?.key === key) {
+        run = { ...running.report, stale: running.fingerprint !== fingerprint };
+      } else if (verdicts.has(fingerprint)) {
+        run = verdicts.get(fingerprint);
+      } else if (!running && now - since >= (options.quietMs ?? QUIET_MS)) {
+        run = start(key, pair, fingerprint, tree, mine, theirs, config?.check);
+      } else {
+        const previous = last.get(key);
+        run = previous && { ...previous, stale: true };
+      }
+      if (run) reports.push({ pair, run });
+    }
+    return reports;
+  }
+
+  /** 합쳐 돌려 보기 하나를 돌리기 시작하고 "돌려 보는 중"을 돌려준다. 끝나면 판정을 남기고 실행 기록에 적는다. */
+  function start(
+    key: string,
+    pair: ConflictPair,
+    fingerprint: string,
+    tree: string,
+    mine: { work: Work; folder: string },
+    theirs: WorkView,
+    check: string | undefined,
+  ): MergeRun {
+    const omitted = theirs.files.flatMap((file) => ("omitted" in file ? [file.path] : []));
+    const report: MergeRun = {
+      verdict: "running",
+      ...(check !== undefined && { check }),
+      omitted,
+      fingerprint,
+      stale: false,
+    };
+    const at = new Date().toISOString();
+    const done = checkWork({
+      folder: mine.folder,
+      ...checkWith(),
+      tree,
+      merge: { base: mine.work.base, theirs },
+    })
+      .then(async (result) => {
+        const run: MergeRun = {
+          verdict: result.verdict,
+          ...(result.reason !== undefined && { reason: result.reason }),
+          ...(result.config && { check: result.config.check }),
+          ms: result.ms,
+          omitted,
+          fingerprint,
+          // 출력은 공유 수준이 full인 러너만 올린다(ADR-0007).
+          ...((options.share ?? "full") === "full" && result.output && { output: result.output }),
+          stale: false,
+        };
+        verdicts.set(fingerprint, run);
+        last.set(key, run);
+        const record: CheckRecord = {
+          at,
+          kind: "check",
+          folder: mine.folder,
+          ...result.config,
+          branch: pair.branch,
+          theirs: pair.theirs,
+          verdict: result.verdict,
+          ...(result.reason !== undefined && { reason: result.reason }),
+          ms: result.ms,
+        };
+        await appendFile(paths.log, `${JSON.stringify(record)}\n`);
+      })
+      .catch((error) => console.warn(`합쳐 돌려 보기: ${error.message ?? error}`))
+      .finally(() => {
+        running = undefined;
+      });
+    running = { key, fingerprint, report, done };
+    return report;
+  }
+
   // 같은 레포(워크트리 포함)에 러너는 하나다. 소켓에 누가 답하면 이미 켜진 러너가 있다.
   const taken = await new Promise<boolean>((resolve) => {
     const probe = connectLocal(paths.socket);
@@ -1215,6 +1354,8 @@ export async function startRunner(options: {
     // ponytail: 달라지면 작업 전체(내용 합계 8MiB까지)를 다시 보낸다. 큰 작업을 자주 고치면 파일마다의 차이만 보낸다.
     let sent: { to?: WebSocket; works?: string } = {};
     let reported: { to?: WebSocket; pairs?: string } = {};
+    /** 이 연결로 쌍마다 마지막으로 보낸 판정. 부딪힘을 다시 보내면 비운다(알림이 새로 섰을 수 있다). */
+    let sentRuns = new Map<string, string>();
     let memo = newMemo();
     let problem: string | undefined;
     /** 지워진 것을 보고 풀기를 보낸 브랜치. 상황에서 그 선점이 빠지면 잊는다. */
@@ -1284,6 +1425,18 @@ export async function startRunner(options: {
           ) {
             to.send(encode(runnerToServer, "conflicts", { pairs: all }));
             reported = { to, pairs };
+            sentRuns = new Map();
+          }
+          if (options.mergeCheck !== false && situation === seen && to === live) {
+            const runs = await mergeRuns(all, trees, seen.works);
+            for (const { pair, run } of to === live ? runs : []) {
+              const { branch, theirs } = pair;
+              const key = JSON.stringify([branch, theirs.login, theirs.branch]);
+              const json = JSON.stringify(run);
+              if (sentRuns.get(key) === json) continue;
+              to.send(encode(runnerToServer, "merged", { branch, theirs, run }));
+              sentRuns.set(key, json);
+            }
           }
         }
       } catch (error) {
@@ -1312,6 +1465,7 @@ export async function startRunner(options: {
     async stop() {
       end();
       await Promise.all([localClosed, observing]);
+      await running?.done;
     },
   };
 }

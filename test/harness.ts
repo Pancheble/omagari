@@ -545,6 +545,10 @@ export async function startWorld(
     sandbox?: Sandbox;
     /** owner 러너의 검사 명령 상한. 줄여서 끊기는 것을 본다. */
     checkLimits?: { checkMs?: number; setupMs?: number; outputBytes?: number };
+    /** owner 러너가 합쳐 돌려 보기 전에 기다리는 잠잠한 시간. 줄여서 본다. */
+    quietMs?: number;
+    /** owner 러너의 합쳐 돌려 보기. 기본은 켜짐이다. */
+    mergeCheck?: boolean;
   } = {},
 ) {
   const repo = await tempRepo();
@@ -604,6 +608,8 @@ export async function startWorld(
     share: options.share,
     sandbox: options.sandbox ?? noSandbox,
     checkLimits: options.checkLimits,
+    quietMs: options.quietMs,
+    mergeCheck: options.mergeCheck,
   }).catch(async (error) => {
     await server.stop();
     await cleanup();
@@ -734,12 +740,13 @@ export async function startWorld(
     },
     /**
      * 멤버 `as`의 레포 폴더 하나와 그 폴더에서 켠 러너. 멤버마다 기기가 따로다. 관측은 짧게 돈다.
-     * `executors`를 주지 않으면 늘 실패하는 Claude Code 실행기가 꽂힌다.
+     * `executors`를 주지 않으면 늘 실패하는 Claude Code 실행기가 꽂힌다. `extra`는 러너에 더 넘길 것(샌드박스, 잠잠한 시간)이다.
      */
     async desk(
       as: { session: string },
       share?: ShareLevel,
       executors: Partial<Record<ExecutorId, Executor>> = { "claude-code": noExecutor },
+      extra: { sandbox?: Sandbox; quietMs?: number; mergeCheck?: boolean } = {},
     ) {
       const repo = await tempRepo();
       const options = {
@@ -750,6 +757,7 @@ export async function startWorld(
         observeMs: 50,
         share,
         sandbox: noSandbox,
+        ...extra,
       };
       let runner = await startRunner(options);
       return {

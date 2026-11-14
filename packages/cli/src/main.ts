@@ -222,7 +222,7 @@ async function runner(chosen: string | undefined, chosenMergeCheck: string | und
   console.log(observationNotice(share));
   const saved = (await readSessions())[server];
   const start = async (session: string) =>
-    startRunner({ serverUrl: server, folder, session, share });
+    startRunner({ serverUrl: server, folder, session, share, mergeCheck: mergeCheck === "on" });
   const running = await start(saved ?? (await login())).catch(async (error) => {
     // 남겨 둔 세션이 끝났으면 한 번 다시 로그인한다.
     if (!saved || !(error instanceof ContractFailure) || error.code !== "unauthorized") throw error;
@@ -291,8 +291,11 @@ async function log() {
     if ("kind" in run) {
       const why = run.reason ? `: ${run.reason}` : "";
       const setup = run.setup ? `  준비 명령 ${JSON.stringify(run.setup)}` : "";
+      const pair = run.theirs
+        ? `  합쳐 돌려 보기 ${run.branch} + ${run.theirs.login}의 ${run.theirs.branch}`
+        : "";
       console.log(
-        `${run.at}  검사 명령 ${JSON.stringify(run.check ?? "")}${setup}  폴더 ${run.folder}  판정 ${VERDICT_LABELS[run.verdict]}${why}  ${seconds(run.ms)}`,
+        `${run.at}  검사 명령 ${JSON.stringify(run.check ?? "")}${setup}${pair}  폴더 ${run.folder}  판정 ${VERDICT_LABELS[run.verdict]}${why}  ${seconds(run.ms)}`,
       );
       continue;
     }
