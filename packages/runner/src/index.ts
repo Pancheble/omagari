@@ -51,6 +51,7 @@ import { checkoutVersion } from "@omagari/contract/version";
 import {
   CHECK_LIMITS,
   type CheckLimits,
+  type CheckRead,
   checkReading,
   checkWork,
   osSandbox,
@@ -1220,11 +1221,14 @@ export async function startRunner(options: {
     pairs: ConflictPair[],
     trees: { work: Work; folder: string }[],
     works: WorkView[],
+    read: CheckRead,
   ) {
     const reports: { pair: ConflictPair; run: MergeRun }[] = [];
     const indirect = pairs.filter((pair) => pair.kind === "indirect");
     if (indirect.length === 0) return reports;
-    const { config } = await readCheck(folder, remote?.name);
+    const { config } = read;
+    // 검사 명령이 없거나 샌드박스를 쓸 수 없으면 무엇을 합쳐도 "돌리지 못함"이다. 그때는 Git을 부르지 않고 관측으로만 잠잠한지 본다.
+    const blocked = config ? await (options.sandbox ?? osSandbox).unavailable() : read.problem;
     for (const pair of indirect) {
       const key = JSON.stringify([pair.branch, pair.theirs.login, pair.theirs.branch]);
       const mine = trees.find(({ work }) => work.branch === pair.branch);
@@ -1232,10 +1236,21 @@ export async function startRunner(options: {
         (w) => w.login === pair.theirs.login && w.branch === pair.theirs.branch,
       );
       if (!mine || !theirs) continue;
-      // ponytail: 주기마다 내 폴더를 임시 인덱스에 담아 트리를 쓴다(git add --all). 큰 레포에서 무거우면 관측이 읽은 내용으로 지문을 만든다.
-      const tree = await workTree(mine.folder, join(dirname(paths.log), "merge-index"));
+      // ponytail: 돌릴 수 있으면 `MERGE_POLL_MS`마다 내 폴더를 임시 인덱스에 담아 트리를 쓴다(git add --all). 큰 레포에서 무거우면 관측이 읽은 내용으로 지문을 만든다.
+      const tree = blocked
+        ? undefined
+        : await workTree(mine.folder, join(dirname(paths.log), "merge-index"));
       const fingerprint = createHash("sha256")
-        .update(JSON.stringify([tree, mine.work.base, theirs.base, theirs.files, config ?? null]))
+        .update(
+          JSON.stringify([
+            tree ?? mine.work,
+            mine.work.base,
+            theirs.base,
+            theirs.files,
+            config ?? null,
+            blocked ?? null,
+          ]),
+        )
         .digest("hex");
       const now = Date.now();
       const seen = quiet.get(key);
@@ -1262,7 +1277,7 @@ export async function startRunner(options: {
     key: string,
     pair: ConflictPair,
     fingerprint: string,
-    tree: string,
+    tree: string | undefined,
     mine: { work: Work; folder: string },
     theirs: WorkView,
     check: string | undefined,
@@ -1395,7 +1410,8 @@ export async function startRunner(options: {
           sent = { to: live, works: json };
         }
         // 기본 브랜치의 설정 파일. 받아 온(fetch) 뒤 바뀌었으면 다시 알린다.
-        const reading = checkReading(await readCheck(folder, remote));
+        const read = await readCheck(folder, remote);
+        const reading = checkReading(read);
         const readingJson = JSON.stringify(reading);
         if (live && (live !== checkSent.to || readingJson !== checkSent.reading)) {
           live.send(encode(runnerToServer, "checkCommand", reading));
@@ -1459,7 +1475,7 @@ export async function startRunner(options: {
           ) {
             nextMerge = Date.now() + MERGE_POLL_MS;
             const pending = sentRuns;
-            merging = mergeRuns(all, trees, seen.works)
+            merging = mergeRuns(all, trees, seen.works, read)
               .then((runs) => {
                 if (to !== live || situation !== seen || sentRuns !== pending) return;
                 for (const { pair, run } of runs) {
