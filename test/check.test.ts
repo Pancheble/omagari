@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { access, mkdir, readFile, realpath, rm, symlink } from "node:fs/promises";
-import { homedir } from "node:os";
+import { access, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fakeSandbox, startWorld, tempRepo, writer } from "./harness.ts";
@@ -69,7 +69,7 @@ test("omagari runner check가 내 작업을 커밋하지 않은 변경까지 임
     deniedDomains: [],
     allowLocalBinding: true,
   });
-  assert.deepEqual(call.policy.filesystem.allowWrite, [call.folder, temp]);
+  assert.deepEqual(call.policy.filesystem.allowWrite?.slice(0, 2), [call.folder, temp]);
   assert.deepEqual(call.policy.filesystem.denyRead, [homedir()]);
   assert.deepEqual(call.policy.filesystem.allowRead?.slice(0, 2), [call.folder, temp]);
   // 환경 변수는 정해 둔 것만 넘어간다. 토큰과 키가 든 변수는 넘어가지 않는다.
@@ -326,4 +326,44 @@ test("임시 워크트리는 레포의 Git 폴더 아래에서 다시 쓰이고,
     await readFile(join(repo.folder, "packages/lib/code.txt"), "utf8"),
     "내 작업의 코드\n",
   );
+});
+
+test("검사 명령이 임시 워크트리의 Git 설정과 훅을 바꿔 둬도 러너가 샌드박스 밖에서 부르는 git은 그것을 돌리지 않는다(#144)", async (t) => {
+  const fake = fakeSandbox();
+  const world = await startWorld({ sandbox: fake.sandbox });
+  t.after(world.stop);
+  const { repo } = world;
+  // 샌드박스 밖에서 무언가 돌면 이 폴더에 표지가 생긴다. 가짜 샌드박스는 가두지 않으므로, 검사 명령은 실제 샌드박스가 여는 곳(임시 워크트리와 그 안의 git)에만 쓴다.
+  const marks = await mkdtemp(join(tmpdir(), "omagari-escape-"));
+  t.after(() => rm(marks, { recursive: true, force: true }));
+  const touch = (name: string) => `touch '${join(marks, name)}'`;
+  await merge(repo, {
+    ".omagari.json": config({ check: "sh check.sh" }),
+    "check.sh": [
+      `git config core.fsmonitor "${touch("fsmonitor")}; false"`,
+      `git config filter.x.smudge "${touch("filter")}; cat"`,
+      `git config filter.x.clean "${touch("filter")}; cat"`,
+      "printf '* filter=x\\n' > .gitattributes",
+      'hooks="$PWD/hooks"',
+      'git config core.hooksPath "$hooks"',
+      'for dir in "$hooks" "$(git rev-parse --git-path hooks)"; do',
+      '  mkdir -p "$dir"',
+      "  for hook in reference-transaction post-checkout post-index-change; do",
+      `    printf '#!/bin/sh\\n${touch("hook")}\\n' > "$dir/$hook" && chmod +x "$dir/$hook"`,
+      "  done",
+      "done",
+      "",
+    ].join("\n"),
+  });
+
+  // 두 번 돌린다. 첫 번째 뒤의 되돌리기와 두 번째의 마련이 모두 샌드박스 밖의 git이다.
+  for (let round = 0; round < 2; round++) {
+    const ran = await world.cli("runner", "check");
+    assert.match(ran.stdout, /판정: 통과/, ran.stdout);
+  }
+  assert.deepEqual(await readdir(marks), []);
+  // 샌드박스 안의 git이 쓰는 Git 폴더는 쓸 수 있게 열린다.
+  const [call] = fake.calls;
+  assert.ok(call);
+  assert.equal(call.policy.filesystem.allowWrite?.length, 3);
 });
