@@ -16,7 +16,7 @@
 | 환경 변수 | 이 셸에 가짜 `GITHUB_TOKEN` 등 셋을 두고 돌리면 명령 안에 없다. 이름에 TOKEN, SECRET, API_KEY가 든 변수도 없다 |
 | Node | `node`가 돈다. Node가 홈 폴더 아래에 있으면(nvm) 그 경우를 본다 |
 | 의존성 폴더 | 이은 의존성을 읽는다. `node_modules/.cache`와 이은 패키지 폴더 안에 쓰기, 그 밑에 새 폴더 만들기는 **관찰**한다 |
-| git (#142) | 임시 워크트리 안의 `git add`, `write-tree`, `commit`, `status`가 된다. `objects`(홈 아래)를 읽고 레포의 `config`는 읽지 못한다. `.git/config`, `.git/hooks`, `.git/HEAD` 쓰기는 관찰한다 |
+| git (#142) | 임시 워크트리 안의 `git add`, `write-tree`, `commit`, `status`가 된다. `objects`(홈 아래)를 읽고 레포의 `config`는 읽지 못한다. 샌드박스 안의 git이 쓰는 Git 폴더(돌림마다 새로 만드는 복사본, #144)의 `config`, `hooks`, `HEAD` 쓰기는 관찰한다. 열려 있는 것이 맞다 |
 | 벗어남(관찰) | 러너가 샌드박스 밖에서 임시 워크트리에 부르는 `git`이 검사 명령이 써 둔 `.git/config`(`core.fsmonitor`)를 따라 밖에서 명령을 돌리는지. 러너의 현재 폴더가 레포일 때와 아닐 때 둘 다 본다. 표지 파일은 점검용 폴더 안에 만든다 |
 | 유닉스 소켓, TMPDIR | `TMPDIR`이 러너가 준 임시 폴더인지, 유닉스 소켓을 열 수 있는지 관찰한다 |
 | 이 레포의 `npm test` | `npm test`가 통과한다. 통과하지 못하면 실패한 테스트 이름과 수를 적는다. 이 레포에는 `.omagari.json`이 없을 수 있어 기본 브랜치에 있는 것처럼 가짜 원격 추적 ref(`refs/remotes/omagari-sandbox-check/*`)를 잠깐 만들고 끝나면 지운다. 실패하면 sandbox-runtime이 덮는 `TMPDIR`을 되돌려 한 번 더 돌려 본다(실험) |
@@ -45,7 +45,7 @@ node test/real-sandbox.ts > sandbox-check-result.md
 ## 읽는 법
 
 - `[x]`는 통과, `[ ] (실패)`는 실패, `(관찰)`은 통과·실패 없이 본 것이다. 실패가 하나라도 있으면 종료 코드가 1이다.
-- 관찰 줄은 "막힌다"가 좋은 것도, "쓸 수 있다"가 좋은 것도 있다. `.git/config`·`.git/hooks`는 막혀야 하고, `node_modules` 밑 새 폴더는 열려야 한다. 어긋나면 이슈로 만든다.
+- 관찰 줄은 "막힌다"가 좋은 것도, "쓸 수 있다"가 좋은 것도 있다. `node_modules` 밑 새 폴더는 열려야 한다. 어긋나면 이슈로 만든다.
 - "벗어남" 줄이 실패이면 샌드박스 밖에서 명령이 돈 것이다. 가장 급하다.
 - 실패한 항목은 `docs/omagari-v3-implementation.md` 11장의 결과 블록과 같은 꼴로 날짜, 기기, 도구의 판과 함께 적고, 고쳐야 하는 것은 이슈로 만든다.
 
