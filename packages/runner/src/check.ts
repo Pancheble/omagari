@@ -3,6 +3,7 @@ import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import {
   copyFile,
+  cp,
   mkdir,
   mkdtemp,
   readdir,
@@ -172,11 +173,11 @@ const under = (home: string, path: string) => {
 };
 
 /**
- * 막는 설정(ADR-0033): 바깥 네트워크를 막고 자기 기기의 포트는 쓴다. 쓰기는 임시 워크트리와 임시 폴더만이다.
+ * 막는 설정(ADR-0033): 바깥 네트워크를 막고 자기 기기의 포트는 쓴다. 쓰기는 임시 워크트리, 임시 폴더, 샌드박스 안의 git이 쓰는 Git 폴더만이다.
  * 읽기는 홈 폴더를 막고 임시 워크트리, 임시 폴더, 도구 자리, 이어 둔 의존성 폴더, 레포의 개체 폴더만 다시 연다. 레포의 Git 폴더는 열지 않는다(원격 URL에 토큰이 있을 수 있다). 도구 자리는 러너를 돌리는 Node가 깔린 곳과 PATH의 폴더 가운데
  * 홈 폴더 아래의 것이다(nvm처럼 Node를 홈 폴더에 깐 기기).
  */
-function policy(worktree: string, temp: string, extraRead: string[]): SandboxRuntimeConfig {
+function policy(writable: string[], extraRead: string[]): SandboxRuntimeConfig {
   const home = homedir();
   const tools = [
     dirname(dirname(process.execPath)),
@@ -186,8 +187,8 @@ function policy(worktree: string, temp: string, extraRead: string[]): SandboxRun
     network: { allowedDomains: [], deniedDomains: [], allowLocalBinding: true },
     filesystem: {
       denyRead: [home],
-      allowRead: [worktree, temp, ...new Set([...tools, ...extraRead])],
-      allowWrite: [worktree, temp],
+      allowRead: [...writable, ...new Set([...tools, ...extraRead])],
+      allowWrite: writable,
       denyWrite: [],
     },
   };
@@ -309,13 +310,23 @@ async function linkDeps(folder: string, worktree: string) {
   return { links, reads };
 }
 
+/** 사용자와 시스템의 Git 설정을 읽지 않는다. 합친 코드의 `.gitattributes`가 그 설정의 필터(예: git-lfs)를 샌드박스 밖에서 부르지 못하게 한다. */
+const NO_USER_CONFIG = { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
+
+/**
+ * 러너가 샌드박스 밖에서 임시 워크트리에 부르는 git(#144). 샌드박스가 쓸 수 없는 러너의 Git 폴더(`gitDir`)를 쓰고,
+ * 임시 워크트리의 `.git`은 찾지도 읽지도 않는다. 검사 명령이 거기 써 둔 설정(`core.fsmonitor`, `core.hooksPath`, 필터)과 훅은 돌지 않는다.
+ */
+const workGit = (gitDir: string, worktree: string, args: string[]) =>
+  gitOut(worktree, [`--git-dir=${gitDir}`, `--work-tree=${worktree}`, ...args], NO_USER_CONFIG);
+
 /**
  * 임시 워크트리를 `tree`(내 작업)로 맞춘다. 추적하는 파일은 되돌리고 추적하지 않는 새 파일은 지우되, 무시되는 파일(빌드 산출물)은 남긴다.
  */
-async function reset(worktree: string, tree: string) {
-  await gitOut(worktree, ["read-tree", "--reset", tree]);
-  await gitOut(worktree, ["checkout-index", "--all", "--force"]);
-  await gitOut(worktree, ["clean", "--force", "-d", "--quiet"]);
+async function reset(gitDir: string, worktree: string, tree: string) {
+  await workGit(gitDir, worktree, ["read-tree", "--reset", tree]);
+  await workGit(gitDir, worktree, ["checkout-index", "--all", "--force"]);
+  await workGit(gitDir, worktree, ["clean", "--force", "-d", "--quiet"]);
 }
 
 /** 한 번에 하나만 돌린다. 임시 워크트리 하나를 다시 쓰므로 겹치면 서로 덮는다. */
@@ -325,10 +336,15 @@ let turn: Promise<unknown> = Promise.resolve();
  * 임시 워크트리를 마련한다: 레포의 Git 폴더 아래(`<Git 폴더>/omagari/check-worktree`)에 두고 다시 쓴다. 내 폴더의 `git status`와 관측에 잡히지 않는다.
  * `git worktree add`는 쓰지 않는다. 그러면 샌드박스 안의 `git`이 레포의 Git 폴더 전체(원격 URL의 토큰이 든 config 포함)를 읽어야 한다.
  * 대신 자기만의 Git 폴더를 두고 개체 폴더만 빌려 읽는다(alternates). 그래서 샌드박스에는 개체 폴더만 열면 된다.
- * 내 작업은 내 폴더의 파일 전부(커밋하지 않은 변경과 추적하지 않는 새 파일 포함, gitignore된 것은 빼고)를 임시 인덱스(`index`)에 담은 트리다.
+ * Git 폴더는 둘이다(#144). 러너가 쓰는 것(`<run>/runner-git`)은 샌드박스가 쓸 수 없고, 샌드박스 안의 `git`이 쓰는 것(`<run>/git`)은 그 복사본이다.
+ * 임시 워크트리의 `.git`은 뒤의 것을 가리키는 파일이다. 둘 다 이번 돌림의 임시 폴더에 새로 만들어, 지난 돌림에서 남은 것을 믿지 않는다.
+ * 내 작업은 내 폴더의 파일 전부(커밋하지 않은 변경과 추적하지 않는 새 파일 포함, gitignore된 것은 빼고)를 임시 인덱스에 담은 트리다.
  * 내 폴더의 인덱스는 건드리지 않는다.
  */
-async function prepareWork(folder: string, index: string) {
+async function prepareWork(folder: string, run: string) {
+  const index = join(run, "index");
+  const gitDir = join(run, "runner-git");
+  const sandboxGit = join(run, "git");
   const common = await realpath(
     await gitOut(folder, ["rev-parse", "--path-format=absolute", "--git-common-dir"]),
   );
@@ -345,24 +361,28 @@ async function prepareWork(folder: string, index: string) {
   await gitOut(folder, ["add", "--all"], withIndex);
   const tree = await gitOut(folder, ["write-tree"], withIndex);
   const head = await gitOut(folder, ["rev-parse", "HEAD"]);
+  // 훅은 없는 채로 둔다(`--template=`).
+  await gitOut(run, ["init", "--quiet", "--bare", "--template=", gitDir], NO_USER_CONFIG);
+  await mkdir(join(gitDir, "objects", "info"), { recursive: true });
+  await writeFile(join(gitDir, "objects", "info", "alternates"), `${join(common, "objects")}\n`);
   const place = async () => {
     await mkdir(worktree, { recursive: true });
-    // 훅은 없는 채로 둔다. 있으면 옮겨 온 파일이 샌드박스 밖에서 돈다.
-    await gitOut(worktree, ["init", "--quiet", "--template="]);
-    await mkdir(join(worktree, ".git", "objects", "info"), { recursive: true });
-    await writeFile(
-      join(worktree, ".git", "objects", "info", "alternates"),
-      `${join(common, "objects")}\n`,
-    );
-    await gitOut(worktree, ["update-ref", "--no-deref", "HEAD", head]);
-    await reset(worktree, tree);
+    // 지난 돌림의 검사 명령이 바꿔 둔 `.git`은 지운다. 링크여도 따라가지 않는다.
+    await rm(join(worktree, ".git"), { recursive: true, force: true });
+    await workGit(gitDir, worktree, ["update-ref", "--no-deref", "HEAD", head]);
+    await reset(gitDir, worktree, tree);
+    await cp(gitDir, sandboxGit, { recursive: true });
+    await gitOut(run, [`--git-dir=${sandboxGit}`, "config", "core.bare", "false"], NO_USER_CONFIG);
+    // `wx`: 그새 무언가 생겼으면 따라가 쓰지 않고 실패한다.
+    await writeFile(join(worktree, ".git"), `gitdir: ${sandboxGit}\n`, { flag: "wx" });
   };
   // 지난 돌림이 죽으며 망가졌으면 지우고 처음부터 만든다.
   await place().catch(async () => {
     await rm(worktree, { recursive: true, force: true });
+    await rm(sandboxGit, { recursive: true, force: true });
     await place();
   });
-  return { worktree, tree, common };
+  return { worktree, tree, common, gitDir, sandboxGit };
 }
 
 /** `checkWork`의 결과. 계약의 `checked`와 같다. */
@@ -419,8 +439,8 @@ async function checkOne(options: {
   let links: string[] = [];
   try {
     await mkdir(temp);
-    work = await prepareWork(folder, join(run, "index"));
-    const { worktree, common } = work;
+    work = await prepareWork(folder, run);
+    const { worktree, common, sandboxGit } = work;
     const deps = await linkDeps(folder, worktree);
     links = deps.links;
     const readable = [join(common, "objects"), ...deps.reads];
@@ -428,7 +448,7 @@ async function checkOne(options: {
       command,
       folder: worktree,
       env: passedEnv(temp),
-      policy: policy(worktree, temp, readable),
+      policy: policy([worktree, temp, sandboxGit], readable),
     });
     if (setup) {
       const ran = await sandboxed(sandbox, input(setup), { ms: limits.setupMs });
@@ -460,7 +480,7 @@ async function checkOne(options: {
   } finally {
     // 돌린 뒤 추적하는 파일을 되돌리고 이은 링크를 뗀다. 무시되는 파일은 남긴다.
     for (const link of links) await rm(link, { recursive: true, force: true });
-    if (work) await reset(work.worktree, work.tree).catch(() => {});
+    if (work) await reset(work.gitDir, work.worktree, work.tree).catch(() => {});
     await rm(run, { recursive: true, force: true });
   }
 }

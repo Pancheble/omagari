@@ -26,6 +26,19 @@ status: accepted
 - 돌린 것은 실행 기록에 남긴다(구현 11장).
 - 출력은 에이전트에게 지시가 아닌 데이터로만 넘긴다(ADR-0017).
 
+## 샌드박스 밖의 git이 샌드박스가 쓴 것을 따르지 않는다(#144)
+
+러너는 샌드박스 밖에서 임시 워크트리에 git을 부른다(돌리기 전에 마련하고 돌린 뒤 되돌린다). 검사 명령은 임시 워크트리와 그 안의 `.git`에 쓸 수 있다. Git은 설정(`core.fsmonitor`, `core.hooksPath`, `filter.*`, `include.path` 등)과 훅으로 바깥 명령을 부르므로, 러너의 git이 그 `.git`을 읽으면 검사 명령이 써 둔 명령이 샌드박스 밖에서 돈다. sandbox-runtime도 `.git/config`, `.git/hooks` 쓰기를 늘 막지만 `wrap`을 부르는 프로세스의 현재 폴더 기준이라, 러너를 레포 밖에서 띄우면 막히지 않았다(2026-11-14 손 점검).
+
+그래서 Git 폴더를 둘로 나눈다.
+
+- **러너의 Git 폴더**: 돌림마다 이번 돌림의 임시 폴더에 새로 만든다(`--bare`, 훅 없음, 개체는 alternates로 빌린다). 샌드박스는 이곳에 쓸 수 없다. 러너가 임시 워크트리에 부르는 git은 모두 `--git-dir`(이 폴더)과 `--work-tree`를 주고 불러, 임시 워크트리의 `.git`은 찾지도 읽지도 않는다. 사용자와 시스템 설정도 읽지 않는다(`GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_GLOBAL=/dev/null`). 합친 코드의 `.gitattributes`가 사용자 설정의 필터(예: git-lfs)를 샌드박스 밖에서 부르지 않게 하려는 것이다.
+- **샌드박스의 Git 폴더**: 러너의 Git 폴더를 맞춘 뒤 복사한 것이다. 샌드박스가 쓸 수 있게 열고, 임시 워크트리의 `.git`은 이것을 가리키는 파일(`gitdir:`)이다. 샌드박스 안의 `git add`, `commit`은 그대로 된다. 돌림이 끝나면 지운다.
+
+임시 워크트리의 `.git`은 마련할 때 지우고(링크여도 따라가지 않는다) 새로 쓴다. 샌드박스가 쓸 수 있는 곳 가운데 러너의 git이 읽는 것은 임시 워크트리의 파일뿐이고, `.gitattributes`가 가리킬 필터는 러너의 Git 폴더에 없다. 개체 폴더의 alternates도 러너의 Git 폴더에 있어 샌드박스가 바꾸지 못한다.
+
+러너 프로세스의 현재 폴더를 `process.chdir`로 레포에 맞추는 길은 버렸다. 러너 전체에 영향을 주고, sandbox-runtime의 막기가 늘 막는 이름(`.git/config`, `.git/hooks`)만 덮어 `core.hooksPath`처럼 다른 자리를 가리키는 설정이나 `.git/HEAD`는 남는다.
+
 ## Considered Options
 
 - **GitHub Actions에서 돌리기**: 푸시하지 않은 작업은 합칠 수 없다. 서버에는 레포가 없어(ADR-0023) 합친 브랜치를 만들어 올릴 수도 없다.
@@ -42,11 +55,12 @@ status: accepted
 - 읽기를 열어 둔 파일은 출력에 실려 서버로 나갈 수 있다. 샌드박스는 피해를 줄이지만 서버를 믿을 수 있게 만들지는 않는다.
 - `sandbox-exec`는 macOS 매뉴얼에 폐기 예정으로 적혀 있다. 지금은 돌고, Apple이 내놓은 대체 명령은 찾지 못했다.
 - `@anthropic-ai/sandbox-runtime`은 미리 보기 판이라 설정의 꼴이 바뀔 수 있다.
-- 손 점검(2026-11-14, macOS, #138, 구현 문서 11장): 홈 아래에 둔 Node에서 읽기 막기와 돌리기는 됐다. 못 한 것은 Linux, 진짜 nvm, Jest 같은 감시 도구를 쓰는 테스트(`--no-watchman`)다. 점검에서 나온 것: 이 레포의 `npm test`는 유닉스 소켓이 막혀 돌지 못하고(#145), `TMPDIR`이 덮이고(#146), 러너의 현재 폴더가 레포가 아니면 임시 워크트리의 `.git/config`로 벗어날 수 있다(#144).
+- 손 점검(2026-11-14, macOS, #138, 구현 문서 11장): 홈 아래에 둔 Node에서 읽기 막기와 돌리기는 됐다. 못 한 것은 Linux, 진짜 nvm, Jest 같은 감시 도구를 쓰는 테스트(`--no-watchman`)다. 점검에서 나온 것: 이 레포의 `npm test`는 유닉스 소켓이 막혀 돌지 못하고(#145), `TMPDIR`이 덮이고(#146), 러너의 현재 폴더가 레포가 아니면 임시 워크트리의 `.git/config`로 벗어날 수 있었다(#144, 위 "샌드박스 밖의 git"으로 고쳤고 같은 점검에서 안 돌았다).
 
 ## Sources
 
 - [sandbox-runtime README](https://github.com/anthropics/sandbox-runtime)
 - [Room](https://github.com/rohanz/room) 커밋 `917b8d4`: `README.md`, `packages/room-mcp/src/tools/files.ts`의 `room_preview_merge`
 - [GitHub Security Lab: Preventing pwn requests](https://securitylab.github.com/resources/github-actions-preventing-pwn-requests/): 믿지 못하는 코드를 돌리는 쪽에는 비밀을 주지 않는다
+- [Git: git-config](https://git-scm.com/docs/git-config)(`core.fsmonitor`, `core.hooksPath`, `filter.<driver>`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_NOSYSTEM`), [githooks](https://git-scm.com/docs/githooks)(`reference-transaction`은 `update-ref`에서도 돈다)
 - [SSH 서명과 GitHub의 서명 키](https://www.agwa.name/blog/post/ssh_signatures), [GitHub REST: SSH signing keys](https://docs.github.com/en/rest/users/ssh-signing-keys)

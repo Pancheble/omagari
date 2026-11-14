@@ -281,21 +281,21 @@ try {
   );
   await probe(
     "임시 워크트리의 .git/config에 쓴다(관찰)",
-    "echo '[core]' >> .git/config",
+    "echo '[core]' >> \"$(git rev-parse --git-dir)/config\"",
     "observe",
     "쓸 수 있다",
     "막힌다",
   );
   await probe(
     "임시 워크트리의 .git/hooks에 쓴다(관찰)",
-    "mkdir -p .git/hooks && echo x > .git/hooks/pre-commit",
+    'mkdir -p "$(git rev-parse --git-path hooks)" && echo x > "$(git rev-parse --git-path hooks)/pre-commit"',
     "observe",
     "쓸 수 있다",
     "막힌다",
   );
   await probe(
     "임시 워크트리의 .git/HEAD에 쓴다(관찰)",
-    "echo x >> .git/HEAD",
+    'echo x >> "$(git rev-parse --git-dir)/HEAD"',
     "observe",
     "쓸 수 있다",
     "막힌다",
