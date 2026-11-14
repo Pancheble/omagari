@@ -169,9 +169,17 @@ test("omagari impact가 내 사본에서 그 심볼을 쓰는 곳과, 그 정의
     assert.deepEqual({ code, stderr }, { code: 0, stderr: "" });
     return stdout;
   };
-  await eventually(async () =>
+  // owner의 main은 pay를 써서 alice와의 간접 충돌(추정)이 owner의 편지함에 들어온다. 그 소식은 관측보다 한 번 늦게 와서,
+  // 그 뒤 첫 omagari 명령의 응답 끝에 한 번만 붙는다. 붙을 때까지 기다려야 아래 출력이 흔들리지 않는다.
+  let delivered = false;
+  await eventually(async () => {
+    const out = await impact("pay");
+    delivered ||= out.includes(
+      '<omagari-inbox>\n- 간접 충돌(추정): 내 작업과 alice의 브랜치 "main"',
+    );
+    assert.ok(delivered, "편지함 소식이 아직 넘겨지지 않았다");
     assert.equal(
-      await impact("pay"),
+      out.split("\nOmagari: ")[0],
       `심볼 pay
 쓰는 곳(내 사본, 이름으로 이어 다른 심볼일 수 있다):
   src/use.ts:1
@@ -182,8 +190,8 @@ test("omagari impact가 내 사본에서 그 심볼을 쓰는 곳과, 그 정의
 바꾸겠다고 선언한(계획을 붙인) 다른 멤버의 선점:
   없음
 `,
-    ),
-  );
+    );
+  });
   // 메서드는 클래스.메서드나 메서드 이름으로 묻는다. 아무도 바꾸지 않으면 없음이다.
   const method = `  src/use.ts:4
 정의 줄을 바꾸고 있는 다른 멤버의 작업:

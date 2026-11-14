@@ -94,18 +94,19 @@ test("선점에 계획을 붙이면 코드를 바꾸기 전에 쓰는 작업에 
   t.after(desk.remove);
   await payment(world);
 
-  // 코드는 그대로 두고 refund의 시그니처 변경을 선언한다.
+  // 코드는 그대로 두고 refund의 시그니처 변경을 선언한다. 알림이 빨리 서면 이 명령의 응답 끝에 owner의 편지함 소식이 붙어 넘겨진다.
+  const claimed = await omagari(world, [
+    "claim",
+    "src/pay.ts",
+    "--symbol",
+    "refund",
+    "--plan",
+    "signature",
+    "--detail",
+    "refund(amount, reason)",
+  ]);
   assert.match(
-    await omagari(world, [
-      "claim",
-      "src/pay.ts",
-      "--symbol",
-      "refund",
-      "--plan",
-      "signature",
-      "--detail",
-      "refund(amount, reason)",
-    ]),
+    claimed,
     /^payment의 선점을 걸었다: "src\/pay.ts"의 "refund" 줄 4-6 · 계획: 시그니처 변경 "refund" "refund\(amount, reason\)"\n/,
   );
   const signature = { kind: "signature", symbol: "refund", detail: "refund(amount, reason)" };
@@ -138,6 +139,7 @@ test("선점에 계획을 붙이면 코드를 바꾸기 전에 쓰는 작업에 
     world,
     world.repo.folder,
     `- 선언된 계약 변경: 내 작업과 alice의 브랜치 "refund". 한쪽이 심볼을 바꾸겠다고 선점에 선언했고(코드는 아직 안 바뀌었을 수 있다), 다른 쪽이 그 이름을 쓴다. "refund"(나: 바꾸겠다고 선언함 "src/pay.ts":4 / 상대: 씀 "src/checkout.ts":1, "src/checkout.ts":2 / 계획: 시그니처 변경 "refund" "refund(amount, reason)")`,
+    inboxLines(claimed),
   );
 
   // 쓰는 쪽의 omagari impact가 걸린 계획을 보인다.

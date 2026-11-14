@@ -9,6 +9,7 @@ import {
   ALERT_LABELS,
   type Alert,
   type AlertFile,
+  type AlertRun,
   type AlertSymbol,
   ANSWERED_DAYS,
   api,
@@ -38,6 +39,7 @@ import {
   MAX_FRAME_BYTES,
   type MemberView,
   type MergeCheckState,
+  type Message,
   type ObservedFile,
   type Post,
   PRESENCE_DURATIONS,
@@ -188,7 +190,7 @@ const POST_LAST = `(SELECT json_object('login', x.login, 'name', COALESCE(pp.nam
 const MESSAGES = `SELECT m.id, m.channel, m.login, m.text, m.note, m.at, m.github, p.name,
   c.issue, c.issue_url, c.issue_title, c.issue_labels, c.issue_open,
   q.id AS qa, q.executor, q.question, q.at AS asked, q.answer, q.visibility,
-  m.alert, a.kind, a.works, a.files, a.resolved,
+  m.alert, a.kind, a.works, a.files, a.resolved, a.run, a.confirmed,
   c.id AS post, CASE WHEN c.id IS NULL THEN 0 ELSE ${POST_COUNT} END AS count, ${POST_LAST} AS last,
   CASE WHEN d.id IS NULL THEN NULL ELSE ${DECISION} END AS decision FROM messages m
   LEFT JOIN people p ON p.login = m.login
@@ -218,6 +220,8 @@ type MessageRow = {
   works: string | null;
   files: string | null;
   resolved: number | null;
+  run: string | null;
+  confirmed: number | null;
   post: string | null;
   count: number;
   decision: string | null;
@@ -233,6 +237,8 @@ const alertView = (row: {
   works: string | null;
   files: string | null;
   resolved: number | null;
+  run: string | null;
+  confirmed: number | null;
 }): Alert => {
   const items: unknown[] = JSON.parse(row.files ?? "[]");
   const common = {
@@ -247,6 +253,7 @@ const alertView = (row: {
     kind: kind as "indirect" | "duplicate" | "declared",
     ...common,
     symbols: items.slice(0, ALERT_FILES) as AlertSymbol[],
+    ...(row.run !== null && { run: JSON.parse(row.run), confirmed: row.confirmed === 1 }),
   };
 };
 
@@ -525,6 +532,10 @@ export async function startServer(options: {
   // 직접 충돌만 있던 표에는 `kind`가 없다. 직접 충돌의 `pair`는 그대로 두고, 다른 종류는 `pair` 앞에 종류를 붙인다.
   if (!db.prepare("SELECT 1 FROM pragma_table_info('alerts') WHERE name = 'kind'").get())
     db.exec("ALTER TABLE alerts ADD COLUMN kind TEXT NOT NULL DEFAULT 'direct'");
+  // 합쳐 돌려 보기(ADR-0036): `run`은 간접 충돌 알림에 붙은 마지막 판정(계약의 AlertRun, JSON), `confirmed`는 깨져 확인됐는지(0, 1)다.
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('alerts') WHERE name = 'run'").get())
+    db.exec(`ALTER TABLE alerts ADD COLUMN run TEXT;
+      ALTER TABLE alerts ADD COLUMN confirmed INTEGER NOT NULL DEFAULT 0;`);
   // v0.1.0의 표에는 `alert`가 없다.
   if (!db.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'alert'").get())
     db.exec("ALTER TABLE messages ADD COLUMN alert INTEGER REFERENCES alerts (id)");
@@ -1177,6 +1188,41 @@ export async function startServer(options: {
     }
   };
 
+  /**
+   * 러너가 올린 합쳐 돌려 보기의 판정을 그 쌍의 열린 간접 충돌 알림에 붙인다(ADR-0036). 열린 알림이 없으면 버린다.
+   * 새 판정(돌려 보는 중도 지난 결과도 아닌 것)이 나면 두 작업의 편지함에 다시 넣는다. 이 이슈에서는 깨지면 곧 확인됨이고,
+   * 확인됨은 다음 판정이 날 때까지 남는다(돌려 보는 중이나 지난 결과로는 바뀌지 않는다).
+   */
+  const attachRun = (
+    login: string,
+    { branch, theirs, run }: Extract<Message<typeof runnerToServer>, { kind: "merged" }>["payload"],
+  ) => {
+    const mine = { login, branch };
+    const flip = JSON.stringify([login, branch]) > JSON.stringify([theirs.login, theirs.branch]);
+    const [a, b] = flip ? [theirs, mine] : [mine, theirs];
+    const key = `indirect ${JSON.stringify([a.login, a.branch, b.login, b.branch])}`;
+    const row = db
+      .prepare("SELECT id, works, run, confirmed FROM alerts WHERE pair = ? AND resolved IS NULL")
+      .get(key) as { id: number; works: string; run: string | null; confirmed: number } | undefined;
+    if (!row) return;
+    const next = { ...run, login };
+    const { at: _, ...known } = row.run ? (JSON.parse(row.run) as AlertRun) : {};
+    if (JSON.stringify(known) === JSON.stringify(next)) return; // 같은 것을 다시 올렸다
+    const finished = run.verdict !== "running" && !run.stale;
+    const confirmed = finished ? Number(run.verdict === "broken") : row.confirmed;
+    const now = Date.now();
+    db.prepare("UPDATE alerts SET run = ?, confirmed = ?, updated = ? WHERE id = ?").run(
+      JSON.stringify({ ...next, at: new Date(now).toISOString() }),
+      confirmed,
+      now,
+      row.id,
+    );
+    shareAlert(row.id);
+    if (!finished) return;
+    deliver(row.id, JSON.parse(row.works), now);
+    shareInbox();
+  };
+
   /** 알림이 생기거나 바뀌거나 풀렸다. 두 작업의 편지함에 넣는다. 아직 넘겨주지 않은 같은 알림의 소식은 새 것으로 바꾼다. */
   const deliver = (alert: number, works: WorkRef[], now: number) => {
     for (const { login, branch } of works) {
@@ -1200,7 +1246,7 @@ export async function startServer(options: {
     (
       db
         .prepare(
-          `SELECT i.id, i.branch, i.at, i.news, a.kind, a.works, a.files, a.resolved FROM inbox i
+          `SELECT i.id, i.branch, i.at, i.news, a.kind, a.works, a.files, a.resolved, a.run, a.confirmed FROM inbox i
            LEFT JOIN alerts a ON a.id = i.alert WHERE i.login = ? AND i.at > ? ORDER BY i.id`,
         )
         .all(login, Date.now() - inboxMs) as {
@@ -1212,6 +1258,8 @@ export async function startServer(options: {
         works: string | null;
         files: string | null;
         resolved: number | null;
+        run: string | null;
+        confirmed: number | null;
       }[]
     ).map((row) => {
       const head = { id: row.id, branch: row.branch, at: new Date(row.at).toISOString() };
@@ -1783,12 +1831,16 @@ export async function startServer(options: {
     const login = c.get("login");
     const since = Date.now() - inboxMs;
     const rows = db
-      .prepare("SELECT kind, works, files, resolved, updated FROM alerts WHERE updated > ?")
+      .prepare(
+        "SELECT kind, works, files, resolved, run, confirmed, updated FROM alerts WHERE updated > ?",
+      )
       .all(since) as {
       kind: string;
       works: string;
       files: string;
       resolved: number | null;
+      run: string | null;
+      confirmed: number;
       updated: number;
     }[];
     const alerts = rows
@@ -2400,6 +2452,8 @@ export async function startServer(options: {
         } else if (message.kind === "conflicts") {
           reports.set(socket, message.payload.pairs);
           reconcile();
+        } else if (message.kind === "merged") {
+          attachRun(runner.login, message.payload);
         } else if (message.kind === "delivered") {
           const drop = db.prepare("DELETE FROM inbox WHERE id = ? AND login = ?");
           for (const id of message.payload.ids) drop.run(id, runner.login);

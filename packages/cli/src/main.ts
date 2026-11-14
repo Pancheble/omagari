@@ -291,8 +291,11 @@ async function log() {
     if ("kind" in run) {
       const why = run.reason ? `: ${run.reason}` : "";
       const setup = run.setup ? `  준비 명령 ${JSON.stringify(run.setup)}` : "";
+      const pair = run.theirs
+        ? `  합쳐 돌려 보기 ${run.branch} + ${run.theirs.login}의 ${run.theirs.branch}`
+        : "";
       console.log(
-        `${run.at}  검사 명령 ${JSON.stringify(run.check ?? "")}${setup}  폴더 ${run.folder}  판정 ${VERDICT_LABELS[run.verdict]}${why}  ${seconds(run.ms)}`,
+        `${run.at}  검사 명령 ${JSON.stringify(run.check ?? "")}${setup}${pair}  폴더 ${run.folder}  판정 ${VERDICT_LABELS[run.verdict]}${why}  ${seconds(run.ms)}`,
       );
       continue;
     }
