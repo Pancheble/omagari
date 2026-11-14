@@ -3,7 +3,14 @@ import { test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { api, call } from "@omagari/contract";
 import { startRunner } from "@omagari/runner";
-import { eventually, fakeExecutor, gatedExecutor, startWorld, tempRepo } from "./harness.ts";
+import {
+  eventually,
+  fakeExecutor,
+  gatedExecutor,
+  startWorld,
+  stubbed,
+  tempRepo,
+} from "./harness.ts";
 
 test("DM으로 물으면 답을 기다리는 문답이 바로 오고, 서버를 거쳐 주인의 러너 세션이 답한다. 다음 문답은 같은 세션으로 이어진다", async (t) => {
   const fake = fakeExecutor((input) => `답: ${input.message}`);
@@ -88,6 +95,7 @@ test("러너가 꺼진 에이전트에게 보낸 문답은 바로 러너가 꺼�
     folder: desk.folder,
     session: alice.session,
     executors: { "claude-code": fake.executor },
+    sandbox: stubbed().sandbox,
   });
   t.after(runner.stop);
   const asked = await world.ask(alice, channel, "이제는?");
