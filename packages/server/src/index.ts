@@ -49,6 +49,7 @@ import {
   type Question,
   type ReplyOf,
   RUNNER_SOCKET,
+  RunVerdict,
   runnerToServer,
   type ShareLevel,
   type StatusLine,
@@ -629,6 +630,12 @@ export async function startServer(options: {
     day TEXT NOT NULL,
     login TEXT NOT NULL,
     PRIMARY KEY (day, login)
+  ) STRICT`);
+  // 합쳐 돌려 보기의 판정 수(ADR-0018, ADR-0036). 지문마다 한 번만 센다. 이름은 남기지 않고 지문, 판정, 시각만 둔다.
+  db.exec(`CREATE TABLE IF NOT EXISTS merge_runs (
+    fingerprint TEXT PRIMARY KEY,
+    verdict TEXT NOT NULL,
+    at INTEGER NOT NULL
   ) STRICT`);
   // 서버가 막 떴으니 러너에 보낸 문답의 답은 오지 않는다. 기다리는 채로 남지 않게 실패로 둔다.
   db.prepare("UPDATE qas SET answer = ?, settled = ? WHERE answer IS NULL").run(
@@ -1233,6 +1240,11 @@ export async function startServer(options: {
     const flip = JSON.stringify([login, branch]) > JSON.stringify([theirs.login, theirs.branch]);
     const [a, b] = flip ? [theirs, mine] : [mine, theirs];
     const key = `indirect ${JSON.stringify([a.login, a.branch, b.login, b.branch])}`;
+    // 판정 수(지표). 열린 알림이 없어도 돌린 것이라 센다. 돌려 보는 중과 같은 지문의 다시 올림은 세지 않는다.
+    if (run.verdict !== "running")
+      db.prepare(
+        "INSERT OR IGNORE INTO merge_runs (fingerprint, verdict, at) VALUES (?, ?, ?)",
+      ).run(run.fingerprint, run.verdict, Date.now());
     const finished = run.verdict !== "running" && !run.stale;
     const closes = finished && run.verdict === "pass" && run.omitted.length === 0;
     type Row = { id: number; works: string; run: string | null; confirmed: number };
@@ -2414,12 +2426,27 @@ export async function startServer(options: {
       at: number;
     }[];
     const qas = Map.groupBy(asked, ({ at }) => dayOf(at));
+    const ran = Map.groupBy(
+      db
+        .prepare("SELECT verdict, at FROM merge_runs WHERE at > ?")
+        .all(now - (days + 1) * DAY_MS) as {
+        verdict: RunVerdict;
+        at: number;
+      }[],
+      ({ at }) => dayOf(at),
+    );
     return {
       timeZone: TIME_ZONE,
       days: range.map((day) => ({
         day,
         members: members.get(day) ?? 0,
         qas: qas.get(day)?.length ?? 0,
+        runs: Object.fromEntries(
+          RunVerdict.options.map((v) => [
+            v,
+            (ran.get(day) ?? []).filter((r) => r.verdict === v).length,
+          ]),
+        ) as Record<RunVerdict, number>,
       })),
     };
   });
