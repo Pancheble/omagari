@@ -64,7 +64,14 @@ import { gitIn, nearby } from "./nearby.ts";
 import { observe, uses } from "./observe.ts";
 import { named } from "./symbols.ts";
 
-export { checkNotice, readCheck, type Sandbox, type SandboxInput } from "./check.ts";
+export {
+  checkNotice,
+  dependencyProblem,
+  NO_SECCOMP,
+  readCheck,
+  type Sandbox,
+  type SandboxInput,
+} from "./check.ts";
 export { alertLine, claimNews, claimOwner, claimPlace, inboxNotice, planLine } from "./inbox.ts";
 export { observationNotice } from "./observe.ts";
 
@@ -1327,6 +1334,8 @@ export async function startRunner(options: {
           broke = sides.flatMap((s) => (s.result.verdict === "broken" ? [s.side] : []));
           const failed = sides.find((s) => s.result.verdict === "not_run");
           if (broke.length > 0) verdict = "unclear";
+          else if (!failed)
+            reason = undefined; // 깨짐에는 소켓 까닭을 붙이지 않는다
           else if (failed) {
             verdict = "not_run";
             reason = `${failed.name} 돌린 것을 돌리지 못해 가리지 못했다: ${failed.result.reason}`;
