@@ -356,14 +356,27 @@ export async function workTree(folder: string, index: string) {
   return gitOut(folder, ["write-tree"], withIndex);
 }
 
-/** 합쳐 돌려 보기의 상대 작업: 서버에 올라온 관측과, 내 작업의 기준 커밋. */
-export type MergeWith = { base: string; theirs: { base: string; files: ObservedFile[] } };
+/**
+ * 합쳐 돌려 보기의 상대 작업: 서버에 올라온 관측과, 내 작업의 기준 커밋.
+ * `alone`을 주면 합치지 않고 한쪽만 돌린다(ADR-0035): `mine`은 내 트리, `theirs`는 상대의 판(상대의 기준 커밋에 관측을 얹은 트리)이다.
+ */
+export type MergeWith = {
+  base: string;
+  theirs: { base: string; files: ObservedFile[] };
+  alone?: "mine" | "theirs";
+};
 
 /**
  * 내 트리(`mine`)에 상대의 바뀐 파일을 Git으로 합친다(ADR-0036). 상대의 판은 상대의 기준 커밋에 관측의 내용을 얹은 트리이고,
  * 조상은 두 기준 커밋이 갈라진 지점이다. 내용이 빠진 파일은 얹지 않는다(그 파일 없이 돈다). 줄이 부딪히면 합친 트리 대신 까닭이다.
  */
-async function mergeTree(folder: string, run: string, mine: string, { base, theirs }: MergeWith) {
+async function mergeTree(
+  folder: string,
+  run: string,
+  mine: string,
+  { base, theirs, alone }: MergeWith,
+) {
+  if (alone === "mine") return { tree: mine };
   const known = await gitOut(folder, ["cat-file", "-e", `${theirs.base}^{commit}`]).then(
     () => true,
     () => false,
@@ -394,6 +407,7 @@ async function mergeTree(folder: string, run: string, mine: string, { base, thei
   update.child.stdin?.end(lines.map((line) => `${line}\n`).join(""));
   await update;
   const their = await gitOut(folder, ["write-tree"], withIndex);
+  if (alone === "theirs") return { tree: their };
   // 부딪히면 1로 끝나고, 첫 줄은 합친(부딪힌 표시가 든) 트리, 그 뒤는 부딪힌 경로다.
   const merged = await execFileAsync("git", [
     "-C",
