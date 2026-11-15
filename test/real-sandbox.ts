@@ -219,13 +219,52 @@ try {
   );
   outer.close();
 
+  // 유닉스 소켓(#145, ADR-0037): 임시 워크트리와 임시 폴더 안에서만 열고 붙는다. 밖의 소켓에는 붙지 못한다.
+  const listenConnect = (path: string) =>
+    `node -e "const n=require('net');const p=${path};n.createServer(c=>c.end('hi')).listen(p,()=>{n.connect(p).on('data',()=>process.exit(0)).on('error',e=>{console.log(e.code);process.exit(1)})}).on('error',e=>{console.log(e.code);process.exit(2)})"`;
   await probe(
-    "유닉스 소켓을 임시 워크트리 안에 열고 붙는다(짧은 상대 경로, 관찰)",
-    `node -e "const n=require('net');const s=n.createServer(c=>c.end('hi')).listen('u.sock',()=>{n.connect('u.sock').on('data',()=>process.exit(0)).on('error',()=>process.exit(1))}).on('error',()=>process.exit(2))"`,
-    "observe",
+    "유닉스 소켓을 임시 워크트리 안에 열고 붙는다(짧은 상대 경로)",
+    listenConnect("'u.sock'"),
+    "check",
     "된다",
-    "막힌다",
   );
+  await probe(
+    "유닉스 소켓을 러너가 준 임시 폴더(HOME) 안에 열고 붙는다(절대 경로, 104바이트 안)",
+    listenConnect("process.env.HOME+'/omagari-0123456789abcdef.sock'"),
+    "check",
+    "된다",
+  );
+  // 샌드박스 밖에서 연 소켓. 홈 폴더 밖(읽기는 열린 /tmp)에 두어, 읽기 막기가 아니라 소켓 막기로 막히는지 본다.
+  const outerSock = join(await realpath("/tmp"), `omagari-outer-${process.pid}.sock`);
+  const outerUnix = createServer((c) => c.end("hi")).listen(outerSock);
+  await new Promise((r) => outerUnix.once("listening", r));
+  const connectFails = (path: string) =>
+    `node -e "require('net').connect(${path}).on('data',()=>process.exit(1)).on('error',e=>{console.log(e.code);process.exit(0)})"`;
+  try {
+    await probe(
+      "샌드박스 밖에서 연 유닉스 소켓(/tmp)에는 붙지 못한다",
+      connectFails(`'${outerSock}'`),
+      "check",
+      "막힌다",
+    );
+    await probe(
+      "임시 워크트리 안에 밖의 소켓을 가리키는 링크를 걸어도 붙지 못한다",
+      `ln -s '${outerSock}' l.sock && ${connectFails("'l.sock'")}`,
+      "check",
+      "막힌다",
+    );
+  } finally {
+    outerUnix.close();
+  }
+  const docker = "/var/run/docker.sock";
+  if (
+    await access(docker).then(
+      () => true,
+      () => false,
+    )
+  )
+    await probe("Docker 소켓에 붙지 못한다", connectFails(`'${docker}'`), "check", "막힌다");
+  else add("Docker 소켓에 붙지 못한다", "observe", `이 기기에 ${docker}가 없어 보지 못했다`);
   await probe(
     "유닉스 소켓을 TMPDIR(sandbox-runtime이 덮은 /tmp/claude)에 연다(관찰)",
     `node -e "require('net').createServer().listen(require('os').tmpdir()+'/u.sock',()=>process.exit(0)).on('error',(e)=>{console.log(e.code);process.exit(1)})"`,
@@ -432,7 +471,7 @@ try {
           `${JSON.stringify({
             // `npm test` 그대로이고, 끝에 통과·실패 수와 실패한 테스트 이름이 보이게 모아 찍는다.
             check:
-              "npm test > omagari-test.log 2>&1; code=$?; grep -E '^✖' omagari-test.log | sort -u | head -12; grep -E '^ℹ (tests|pass|fail|cancelled)' omagari-test.log; exit $code",
+              "npm test > omagari-test.log 2>&1; code=$?; grep -E '^✖' omagari-test.log | sort -u | head -12; grep -oE '\\bE[A-Z]{3,}\\b' omagari-test.log | sort | uniq -c | sort -rn | head -5; grep -E '^ℹ (tests|pass|fail|cancelled)' omagari-test.log; exit $code",
           })}\n`,
         );
       })
