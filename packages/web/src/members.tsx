@@ -158,6 +158,7 @@ function WorkItem({ member, work, conflict }: { member: Member; work: Work; conf
         <p className="work-meta">
           <span className="branch">{work.branch}</span>
           {conflict && <span className="badge warning">직접 충돌</span>}
+          {work.broken && <span className="badge warning">합치면 깨짐</span>}
           {line?.source === "agent" && (
             <time dateTime={line.at} title={new Date(line.at).toLocaleString("ko-KR")}>
               · {ago(line.at)}

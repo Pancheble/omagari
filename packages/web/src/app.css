@@ -3256,7 +3256,31 @@ code.settings-value {
 
 .forum-post-tags {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
+}
+
+/* 제목 앞 판정 아이콘(DESIGN.md "목록의 판정"): 보조 글씨색, 깨짐과 직접 충돌만 경고색. */
+.verdict-icon {
+  flex: none;
+  color: var(--text-secondary);
+}
+
+.verdict-icon[data-verdict="broken"],
+.verdict-icon[data-verdict="direct"] {
+  color: var(--warning);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .verdict-icon[data-verdict="running"] {
+    animation: spin 1s linear infinite;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* 포스트의 이슈 번호 "#44"(ADR-0032): 제목 바로 뒤에 보조 글씨로. 머리 띠에서는 GitHub 이슈로 가는 링크다. */
