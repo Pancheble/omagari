@@ -17,7 +17,13 @@ import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { promisify, stripVTControlCharacters } from "node:util";
 import type { SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
-import { CHECK_FILE, CheckConfig, type CheckReading, type Verdict } from "@omagari/contract";
+import {
+  CHECK_FILE,
+  CheckConfig,
+  type CheckReading,
+  type ObservedFile,
+  type Verdict,
+} from "@omagari/contract";
 
 const execFileAsync = promisify(execFile);
 
@@ -333,22 +339,10 @@ async function reset(gitDir: string, worktree: string, tree: string) {
 let turn: Promise<unknown> = Promise.resolve();
 
 /**
- * 임시 워크트리를 마련한다: 레포의 Git 폴더 아래(`<Git 폴더>/omagari/check-worktree`)에 두고 다시 쓴다. 내 폴더의 `git status`와 관측에 잡히지 않는다.
- * `git worktree add`는 쓰지 않는다. 그러면 샌드박스 안의 `git`이 레포의 Git 폴더 전체(원격 URL의 토큰이 든 config 포함)를 읽어야 한다.
- * 대신 자기만의 Git 폴더를 두고 개체 폴더만 빌려 읽는다(alternates). 그래서 샌드박스에는 개체 폴더만 열면 된다.
- * Git 폴더는 둘이다(#144). 러너가 쓰는 것(`<run>/runner-git`)은 샌드박스가 쓸 수 없고, 샌드박스 안의 `git`이 쓰는 것(`<run>/git`)은 그 복사본이다.
- * 임시 워크트리의 `.git`은 뒤의 것을 가리키는 파일이다. 둘 다 이번 돌림의 임시 폴더에 새로 만들어, 지난 돌림에서 남은 것을 믿지 않는다.
- * 내 작업은 내 폴더의 파일 전부(커밋하지 않은 변경과 추적하지 않는 새 파일 포함, gitignore된 것은 빼고)를 임시 인덱스에 담은 트리다.
- * 내 폴더의 인덱스는 건드리지 않는다.
+ * 내 폴더의 파일 전부(커밋하지 않은 변경과 추적하지 않는 새 파일 포함, gitignore된 것은 빼고)를 임시 인덱스(`index`)에 담아 트리로 쓴다.
+ * 내 폴더의 인덱스는 건드리지 않는다. 트리는 레포의 개체로 남아, 같은 내용이면 같은 id다(합쳐 돌려 보기의 지문).
  */
-async function prepareWork(folder: string, run: string) {
-  const index = join(run, "index");
-  const gitDir = join(run, "runner-git");
-  const sandboxGit = join(run, "git");
-  const common = await realpath(
-    await gitOut(folder, ["rev-parse", "--path-format=absolute", "--git-common-dir"]),
-  );
-  const worktree = join(common, "omagari", "check-worktree");
+export async function workTree(folder: string, index: string) {
   // 지금 인덱스에서 시작하면 바뀌지 않은 파일은 다시 읽지 않는다. 없으면(커밋이 없는 레포) 빈 인덱스에서 시작한다.
   const current = await gitOut(folder, [
     "rev-parse",
@@ -359,7 +353,85 @@ async function prepareWork(folder: string, run: string) {
   await copyFile(current, index).catch(() => {});
   const withIndex = { GIT_INDEX_FILE: index };
   await gitOut(folder, ["add", "--all"], withIndex);
-  const tree = await gitOut(folder, ["write-tree"], withIndex);
+  return gitOut(folder, ["write-tree"], withIndex);
+}
+
+/** 합쳐 돌려 보기의 상대 작업: 서버에 올라온 관측과, 내 작업의 기준 커밋. */
+export type MergeWith = { base: string; theirs: { base: string; files: ObservedFile[] } };
+
+/**
+ * 내 트리(`mine`)에 상대의 바뀐 파일을 Git으로 합친다(ADR-0036). 상대의 판은 상대의 기준 커밋에 관측의 내용을 얹은 트리이고,
+ * 조상은 두 기준 커밋이 갈라진 지점이다. 내용이 빠진 파일은 얹지 않는다(그 파일 없이 돈다). 줄이 부딪히면 합친 트리 대신 까닭이다.
+ */
+async function mergeTree(folder: string, run: string, mine: string, { base, theirs }: MergeWith) {
+  const known = await gitOut(folder, ["cat-file", "-e", `${theirs.base}^{commit}`]).then(
+    () => true,
+    () => false,
+  );
+  if (!known)
+    return {
+      problem: `상대의 기준 커밋(${theirs.base.slice(0, 7)})이 이 기기에 없다. git fetch로 받으면 다음에 돌린다`,
+    };
+  const ancestor = await gitOut(folder, ["merge-base", base, theirs.base]).catch(() => "");
+  if (!ancestor) return { problem: "두 작업의 기준 커밋이 갈라진 지점이 없다(이어지지 않은 역사)" };
+  const withIndex = { GIT_INDEX_FILE: join(run, "theirs-index") };
+  await gitOut(folder, ["read-tree", theirs.base], withIndex);
+  // ponytail: 상대의 파일은 모두 보통 파일(100644)로 얹는다. 실행 비트나 심볼릭 링크가 문제가 되면 관측에 모드를 싣는다.
+  const lines: string[] = [];
+  for (const file of theirs.files) {
+    if ("omitted" in file) continue;
+    if ("deleted" in file) {
+      lines.push(`0 ${"0".repeat(40)}\t${file.path}`);
+      continue;
+    }
+    const blob = execFileAsync("git", ["-C", folder, "hash-object", "-w", "--stdin"]);
+    blob.child.stdin?.end(file.content);
+    lines.push(`100644 ${(await blob).stdout.trim()}\t${file.path}`);
+  }
+  const update = execFileAsync("git", ["-C", folder, "update-index", "--index-info"], {
+    env: { ...process.env, ...withIndex },
+  });
+  update.child.stdin?.end(lines.map((line) => `${line}\n`).join(""));
+  await update;
+  const their = await gitOut(folder, ["write-tree"], withIndex);
+  // 부딪히면 1로 끝나고, 첫 줄은 합친(부딪힌 표시가 든) 트리, 그 뒤는 부딪힌 경로다.
+  const merged = await execFileAsync("git", [
+    "-C",
+    folder,
+    "merge-tree",
+    "--write-tree",
+    "--name-only",
+    "--no-messages",
+    `--merge-base=${ancestor}`,
+    mine,
+    their,
+  ]).then(
+    ({ stdout }) => ({ clean: true, out: stdout }),
+    (error) => {
+      if (error.code !== 1) throw error;
+      return { clean: false, out: String(error.stdout) };
+    },
+  );
+  const [tree = "", ...paths] = merged.out.trim().split("\n");
+  if (!merged.clean) return { problem: `줄이 부딪혀 합쳐지지 않는다: ${paths.join(", ")}` };
+  return { tree };
+}
+
+/**
+ * 임시 워크트리를 마련한다: 레포의 Git 폴더 아래(`<Git 폴더>/omagari/check-worktree`)에 두고 다시 쓴다. 내 폴더의 `git status`와 관측에 잡히지 않는다.
+ * `git worktree add`는 쓰지 않는다. 그러면 샌드박스 안의 `git`이 레포의 Git 폴더 전체(원격 URL의 토큰이 든 config 포함)를 읽어야 한다.
+ * 대신 자기만의 Git 폴더를 두고 개체 폴더만 빌려 읽는다(alternates). 그래서 샌드박스에는 개체 폴더만 열면 된다.
+ * Git 폴더는 둘이다(#144). 러너가 쓰는 것(`<run>/runner-git`)은 샌드박스가 쓸 수 없고, 샌드박스 안의 `git`이 쓰는 것(`<run>/git`)은 그 복사본이다.
+ * 임시 워크트리의 `.git`은 뒤의 것을 가리키는 파일이다. 둘 다 이번 돌림의 임시 폴더에 새로 만들어, 지난 돌림에서 남은 것을 믿지 않는다.
+ * 그 안을 `tree`(내 작업이나 합친 것)로 맞춘다.
+ */
+async function prepareWork(folder: string, run: string, tree: string) {
+  const gitDir = join(run, "runner-git");
+  const sandboxGit = join(run, "git");
+  const common = await realpath(
+    await gitOut(folder, ["rev-parse", "--path-format=absolute", "--git-common-dir"]),
+  );
+  const worktree = join(common, "omagari", "check-worktree");
   const head = await gitOut(folder, ["rev-parse", "HEAD"]);
   // 훅은 없는 채로 둔다(`--template=`).
   await gitOut(run, ["init", "--quiet", "--bare", "--template=", gitDir], NO_USER_CONFIG);
@@ -396,7 +468,8 @@ export type CheckResult = {
 };
 
 /**
- * `folder`의 내 작업에 기본 브랜치의 검사 명령을 샌드박스 안에서 한 번 돌린다(`omagari runner check`). 상대 작업은 합치지 않는다.
+ * `folder`의 내 작업에 기본 브랜치의 검사 명령을 샌드박스 안에서 한 번 돌린다(`omagari runner check`).
+ * `merge`를 주면 상대 작업을 합친 것에 돌린다(합쳐 돌려 보기). 줄이 부딪혀 합쳐지지 않으면 돌리지 못함이다.
  * 준비 명령이 있으면 먼저 돌리고, 실패하면 돌리지 못함이다. 설정을 읽지 못했거나 샌드박스를 쓸 수 없으면 아무것도 돌리지 않는다.
  * 가두지 않고 돌리는 길은 없다. 임시 워크트리는 레포의 Git 폴더 아래에 두고 다시 쓴다.
  */
@@ -405,6 +478,10 @@ export function checkWork(options: {
   remote: string | undefined;
   sandbox: Sandbox;
   limits: CheckLimits;
+  /** 이미 쓴 내 트리(`workTree`). 없으면 지금 폴더에서 쓴다. */
+  tree?: string;
+  /** 합쳐 돌려 보기면 상대 작업. 없으면 내 작업만 돌린다. */
+  merge?: MergeWith;
 }): Promise<CheckResult> {
   const result = turn.then(() => checkOne(options));
   turn = result.catch(() => {});
@@ -416,6 +493,10 @@ async function checkOne(options: {
   remote: string | undefined;
   sandbox: Sandbox;
   limits: CheckLimits;
+  /** 이미 쓴 내 트리(`workTree`). 없으면 지금 폴더에서 쓴다. */
+  tree?: string;
+  /** 합쳐 돌려 보기면 상대 작업. 없으면 내 작업만 돌린다. */
+  merge?: MergeWith;
 }): Promise<CheckResult> {
   const { folder, sandbox, limits } = options;
   const started = Date.now();
@@ -439,7 +520,14 @@ async function checkOne(options: {
   let links: string[] = [];
   try {
     await mkdir(temp);
-    work = await prepareWork(folder, run);
+    // 합치기는 러너의 레포에서만 한다(임시 워크트리와 샌드박스의 Git 폴더는 건드리지 않는다). 합친 트리를 임시 워크트리로 꺼낸다.
+    let tree = options.tree ?? (await workTree(folder, join(run, "index")));
+    if (options.merge) {
+      const merged = await mergeTree(folder, run, tree, options.merge);
+      if (merged.problem !== undefined) return done("not_run", { reason: merged.problem });
+      tree = merged.tree;
+    }
+    work = await prepareWork(folder, run, tree);
     const { worktree, common, sandboxGit } = work;
     const deps = await linkDeps(folder, worktree);
     links = deps.links;

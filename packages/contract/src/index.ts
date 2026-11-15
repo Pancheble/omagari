@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 29;
+export const CONTRACT_VERSION = 30;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -441,6 +441,42 @@ export const ALERT_LABELS = {
   declared: "계약 변경",
 } as const satisfies Record<Alert["kind"], string>;
 
+/** 검사 명령을 돌린 판정. 통과(0으로 끝남), 깨짐(0이 아닌 코드), 돌리지 못함(설정 없음, 샌드박스 없음, 준비 명령 실패, 상한에서 끊김). */
+export const Verdict = z.enum(["pass", "broken", "not_run"]);
+export type Verdict = z.infer<typeof Verdict>;
+export const VERDICT_LABELS = {
+  pass: "통과",
+  broken: "깨짐",
+  not_run: "돌리지 못함",
+} as const satisfies Record<Verdict, string>;
+
+/**
+ * 합쳐 돌려 보기의 판정 하나(ADR-0036). 간접 충돌(추정)을 계산한 러너가 두 작업을 합쳐 검사 명령을 돌리고 올린다.
+ * `running`은 돌려 보는 중이다. `fingerprint`는 두 작업의 내용과 검사 명령으로 만든 지문이고, 같은 지문은 다시 돌리지 않는다.
+ * `stale`은 돌린 뒤(도는 중 포함) 두 작업의 내용이 바뀌어 지난 결과라는 뜻이다. 잠잠해지면 다시 돌린다.
+ * `omitted`는 상대의 내용이 빠져(공유 수준, 크기, 바이너리) 그 파일 없이 돌린 경로다. `output`은 출력의 끝(끝 25줄)이고 공유 수준이 full인 러너만 올린다.
+ * `check`는 돌린 검사 명령이다. 읽지 못했으면 없다. `ms`는 걸린 시간(밀리초)이고 돌려 보는 중이면 없다.
+ */
+export const MergeRun = z.strictObject({
+  verdict: z.enum(["running", ...Verdict.options]),
+  reason: z.string().optional(),
+  check: z.string().optional(),
+  ms: z.number().optional(),
+  omitted: z.array(z.string()),
+  fingerprint: z.string(),
+  output: z.string().optional(),
+  stale: z.boolean(),
+});
+export type MergeRun = z.infer<typeof MergeRun>;
+export const MERGE_RUN_LABELS = {
+  running: "돌려 보는 중",
+  ...VERDICT_LABELS,
+} as const satisfies Record<MergeRun["verdict"], string>;
+
+/** 알림에 붙은 판정: 러너가 올린 것과, 돌린 멤버(`login`)와 올라온 시각(`at`). */
+export const AlertRun = z.strictObject({ ...MergeRun.shape, login: z.string(), at: z.string() });
+export type AlertRun = z.infer<typeof AlertRun>;
+
 const alertCommon = {
   works: z.tuple([WorkRef, WorkRef]),
   more: z.number(),
@@ -464,6 +500,10 @@ export const Alert = z.discriminatedUnion("kind", [
     kind: z.enum(["indirect", "duplicate", "declared"]),
     ...alertCommon,
     symbols: z.array(AlertSymbol).max(ALERT_FILES),
+    /** 간접 충돌(추정)에만 있다: 그 쌍을 합쳐 돌려 본 마지막 판정. 아직 돌리지 않았으면 없다. */
+    run: AlertRun.optional(),
+    /** 간접 충돌(추정)에만 있다: 합쳐 돌려 보니 깨져 확인됐다. 다음 판정(통과, 돌리지 못함)이 나올 때까지 남는다. */
+    confirmed: z.boolean().optional(),
   }),
 ]);
 export type Alert = z.infer<typeof Alert>;
@@ -854,6 +894,16 @@ export const runnerToServer = {
    */
   conflicts: z.strictObject({ pairs: z.array(ConflictPair) }),
   /**
+   * 합쳐 돌려 보기의 판정(ADR-0036). 이 러너의 작업(`branch`)과 다른 멤버의 작업(`theirs`)의 간접 충돌(추정)을 합쳐 돌린 것이다.
+   * 돌리기 시작할 때(`running`), 판정이 났을 때, 그 뒤 내용이 바뀌어 지난 결과가 됐을 때 보낸다. 서버는 그 쌍의 열린 간접 충돌 알림에 붙이고,
+   * 열린 알림이 없으면 버린다. 서버가 러너에게 돌리라고 시키는 길은 없다(ADR-0033).
+   */
+  merged: z.strictObject({
+    branch: z.string(),
+    theirs: z.strictObject({ login: z.string(), branch: z.string() }),
+    run: MergeRun,
+  }),
+  /**
    * 편지함의 소식을 작업 세션이나 CLI에 넘겼다(`inbox`의 `id`들). 서버는 그 멤버의 것만 지운다.
    * 서버와 끊긴 사이에 넘긴 것은 다시 붙자마자 보낸다. 서브에이전트에게 보여 준 것은 넘긴 것으로 치지 않아 싣지 않는다.
    */
@@ -1091,15 +1141,6 @@ export const NearbyWork = z.strictObject({
   ]),
 });
 export type NearbyWork = z.infer<typeof NearbyWork>;
-
-/** 검사 명령을 돌린 판정. 통과(0으로 끝남), 깨짐(0이 아닌 코드), 돌리지 못함(설정 없음, 샌드박스 없음, 준비 명령 실패, 상한에서 끊김). */
-export const Verdict = z.enum(["pass", "broken", "not_run"]);
-export type Verdict = z.infer<typeof Verdict>;
-export const VERDICT_LABELS = {
-  pass: "통과",
-  broken: "깨짐",
-  not_run: "돌리지 못함",
-} as const satisfies Record<Verdict, string>;
 
 /** CLI와 훅이 러너에 보내는 것. 러너는 문답과 지금 상황 묻기만 받는다. */
 export const cliToRunner = {
