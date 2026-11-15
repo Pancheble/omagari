@@ -64,11 +64,14 @@ test("omagari runner check가 내 작업을 커밋하지 않은 변경까지 임
   assert.notEqual(call.folder, repo.folder);
   const temp = call.env.TMPDIR;
   assert.ok(temp);
+  // 유닉스 소켓은 임시 워크트리와 임시 폴더 아래에서만 열고 붙는다(ADR-0037). 임시 폴더는 짧아, 그 안의 소켓 경로가 macOS 104바이트 상한을 넘지 않는다.
   assert.deepEqual(call.policy.network, {
     allowedDomains: [],
     deniedDomains: [],
     allowLocalBinding: true,
+    allowUnixSockets: [call.folder, temp],
   });
+  assert.ok(Buffer.byteLength(join(temp, `omagari-${"0".repeat(16)}.sock`)) < 104, temp);
   assert.deepEqual(call.policy.filesystem.allowWrite?.slice(0, 2), [call.folder, temp]);
   assert.deepEqual(call.policy.filesystem.denyRead, [homedir()]);
   assert.deepEqual(call.policy.filesystem.allowRead?.slice(0, 2), [call.folder, temp]);

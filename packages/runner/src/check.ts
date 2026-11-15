@@ -88,6 +88,9 @@ export const osSandbox: Sandbox = {
       throw error;
     });
     await initialized;
+    // 0.0.81은 유닉스 소켓 허락(`network.allowUnixSockets`)을 명령마다 넘긴 설정이 아니라 `initialize`·`updateConfig`로 둔 설정에서만 읽는다
+    // (`sandbox-manager.js`의 `getAllowUnixSockets`). 돌림마다 임시 폴더가 다르므로 매번 이번 설정으로 바꿔 둔다. 돌림은 한 번에 하나다(`turn`).
+    SandboxManager.updateConfig(policy);
     return ["/bin/sh", "-c", await SandboxManager.wrapWithSandbox(command, undefined, policy)];
   },
 };
@@ -180,18 +183,23 @@ const under = (home: string, path: string) => {
 };
 
 /**
- * 막는 설정(ADR-0033): 바깥 네트워크를 막고 자기 기기의 포트는 쓴다. 쓰기는 임시 워크트리, 임시 폴더, 샌드박스 안의 git이 쓰는 Git 폴더만이다.
+ * 막는 설정(ADR-0033): 바깥 네트워크를 막고 자기 기기의 포트는 쓴다. 유닉스 소켓은 `sockets`(임시 워크트리와 임시 폴더) 아래에서만 열고 붙는다(ADR-0037). 쓰기는 임시 워크트리, 임시 폴더, 샌드박스 안의 git이 쓰는 Git 폴더만이다.
  * 읽기는 홈 폴더를 막고 임시 워크트리, 임시 폴더, 도구 자리, 이어 둔 의존성 폴더, 레포의 개체 폴더만 다시 연다. 레포의 Git 폴더는 열지 않는다(원격 URL에 토큰이 있을 수 있다). 도구 자리는 러너를 돌리는 Node가 깔린 곳과 PATH의 폴더 가운데
  * 홈 폴더 아래의 것이다(nvm처럼 Node를 홈 폴더에 깐 기기).
  */
-function policy(writable: string[], extraRead: string[]): SandboxRuntimeConfig {
+function policy(writable: string[], extraRead: string[], sockets: string[]): SandboxRuntimeConfig {
   const home = homedir();
   const tools = [
     dirname(dirname(process.execPath)),
     ...(process.env.PATH ?? "").split(delimiter),
   ].filter((path) => under(home, path));
   return {
-    network: { allowedDomains: [], deniedDomains: [], allowLocalBinding: true },
+    network: {
+      allowedDomains: [],
+      deniedDomains: [],
+      allowLocalBinding: true,
+      allowUnixSockets: sockets,
+    },
     filesystem: {
       denyRead: [home],
       allowRead: [...writable, ...new Set([...tools, ...extraRead])],
@@ -549,7 +557,10 @@ async function checkOne(options: {
   const missing = await sandbox.unavailable();
   if (missing) return done("not_run", { reason: missing });
   // 임시 폴더 하나에 임시 워크트리와, 명령이 쓰는 임시 폴더(`HOME`, `TMPDIR`)를 둔다. 경로는 샌드박스 설정과 맞게 실제 경로로 둔다.
-  const run = await realpath(await mkdtemp(join(tmpdir(), "omagari-check-")));
+  // 명령이 임시 폴더에 유닉스 소켓을 열므로 짧은 곳에 둔다. macOS의 사용자 임시 폴더(`/var/folders/…/T/`)에 두면 소켓 경로가 104바이트 상한을 넘어 `/tmp`에 둔다(ADR-0037).
+  // ponytail: 40바이트 안이면 그대로 쓴다. 샌드박스 안에서 도는 러너(이 레포의 테스트)는 `/tmp`에 쓰지 못하고, 받은 임시 폴더는 짧다.
+  const base = Buffer.byteLength(tmpdir()) <= 40 ? tmpdir() : "/tmp";
+  const run = await realpath(await mkdtemp(join(base, "omagari-check-")));
   const temp = join(run, "tmp");
   let work: Awaited<ReturnType<typeof prepareWork>> | undefined;
   let links: string[] = [];
@@ -571,7 +582,7 @@ async function checkOne(options: {
       command,
       folder: worktree,
       env: passedEnv(temp),
-      policy: policy([worktree, temp, sandboxGit], readable),
+      policy: policy([worktree, temp, sandboxGit], readable, [worktree, temp]),
     });
     if (setup) {
       const ran = await sandboxed(sandbox, input(setup), { ms: limits.setupMs });
