@@ -246,13 +246,35 @@ if grep -q currency src/pay.ts && grep -q "pay(1)" src/use.ts; then echo "pay(1)
   assert.equal(fixed.confirmed, false);
   // owner가 고쳐 carol의 쌍도 새 지문으로 다시 돈다. 러너는 한 번에 하나만 돌려, bob의 판정이 난 뒤에 돌 수 있다.
   // 그래서 bob의 통과만 기다리면 carol의 새 판정이 서버에 닿기 전에 지표를 읽는다(#135 CI). carol의 알림이 새 지문의 통과를 보일 때까지 기다린다.
+  let seen: Indirect[] = [];
   await eventually(async () => {
-    const [carol] = (await indirect(world.owner)).filter(
-      (a) => a.resolved === null && a.works.some((w) => w.login === "carol"),
-    );
+    seen = await indirect(world.owner);
+    const carol = seen.find((a) => a.resolved === null && a.works.some((w) => w.login === "carol"));
     assert.equal(carol?.run?.verdict, "pass");
     assert.notEqual(carol?.run?.fingerprint, passed.run?.fingerprint);
-  }, 30_000);
+  }, 30_000).catch(async (error) => {
+    // 시간 초과를 CI에서 풀 수 있게 알림들과 실행 기록을 싣는다.
+    const alerts = seen.map((a) => ({
+      works: a.works.map((w) => `${w.login}:${w.branch}`),
+      resolved: a.resolved,
+      confirmed: a.confirmed,
+      run: a.run && {
+        verdict: a.run.verdict,
+        stale: a.run.stale,
+        fingerprint: a.run.fingerprint.slice(0, 8),
+      },
+    }));
+    const runs = (await world.cli("runner", "log")).stdout
+      .split("\n")
+      .filter((line) => line.includes("판정"))
+      .map(
+        (line) =>
+          `${line.slice(0, 24)} ${line.slice(line.indexOf("합쳐 돌려 보기"), line.indexOf("  폴더"))} ${line.slice(line.indexOf("판정"))}`,
+      );
+    throw new Error(
+      `${error.message}\nfirst=${passed.run?.fingerprint.slice(0, 8)}\n${JSON.stringify({ alerts, runs }, null, 1)}`,
+    );
+  });
 
   // 합쳐 돌린 것이 실행 기록에 남는다: 두 작업, 검사 명령, 판정.
   const log = (await world.cli("runner", "log")).stdout;
