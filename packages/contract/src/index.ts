@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 30;
+export const CONTRACT_VERSION = 31;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -1670,6 +1670,7 @@ export const api = {
    * 지난 `days`일(오늘 포함) 날마다 들어온 멤버 수와 문답 수. 오래된 날부터 오고, 아무 일 없던 날은 0이다(ADR-0018).
    * 날은 `timeZone`(서울)의 자정으로 자른다. 들어온 멤버는 그날 웹을 열었거나 채널에서 읽고 쓴 멤버다.
    * 문답은 그날 서버가 받은 DM과 `@호출`이다. 수만 오고, 누가 무엇을 물었는지는 오지 않는다.
+   * 돌려 본 수(`runs`)는 그날 서버가 받은 합쳐 돌려 보기의 판정을 판정별로 센다(ADR-0035, ADR-0036). "돌려 보는 중"과 같은 지문의 다시 올림은 세지 않는다.
    * 읽기지만 날 수를 본문에 실으려고 POST다.
    */
   metrics: {
@@ -1684,6 +1685,8 @@ export const api = {
           day: z.string(),
           members: z.number(),
           qas: z.number(),
+          /** 판정별 수. 판정이 늘면(`Verdict`) 여기도 늘어난다. */
+          runs: z.record(Verdict, z.number()),
         }),
       ),
     }),

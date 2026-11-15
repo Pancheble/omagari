@@ -19,6 +19,7 @@ import {
   Plan,
   ShareLevel,
   VERDICT_LABELS,
+  Verdict,
 } from "@omagari/contract";
 import { checkoutVersion } from "@omagari/contract/version";
 import {
@@ -496,13 +497,26 @@ async function impact(symbol: string) {
     console.log(`러너가 ${ago(disconnectedAt)}부터 서버와 끊겨 있어, 그때까지 받은 것이다.`);
 }
 
-/** 날마다 들어온 멤버 수와 문답 수를 오래된 날부터 한 줄에 하루씩 보인다. */
+/** 날마다 들어온 멤버 수, 문답 수, 합쳐 돌려 본 수와 판정별 수를 오래된 날부터 한 줄에 하루씩 보인다. */
 async function metrics(days: string | undefined) {
   const reply = await call(await member(), api.metrics, {
     ...(days !== undefined && { days: Number(days) }),
   });
-  console.log(`날짜(${reply.timeZone})  들어온 멤버  문답`);
-  for (const { day, members, qas } of reply.days) console.log(`${day}  ${members}  ${qas}`);
+  const verdicts = Verdict.options;
+  console.log(
+    [
+      `날짜(${reply.timeZone})`,
+      "들어온 멤버",
+      "문답",
+      "돌려 봄",
+      ...verdicts.map((v) => VERDICT_LABELS[v]),
+    ].join("  "),
+  );
+  for (const { day, members, qas, runs } of reply.days) {
+    const counts = verdicts.map((v) => runs[v]);
+    const total = counts.reduce((sum, n) => sum + n, 0);
+    console.log([day, members, qas, total, ...counts].join("  "));
+  }
 }
 
 /** 이 폴더에 체크아웃된 브랜치. 브랜치가 아니면 던진다. */
