@@ -578,8 +578,9 @@ async function checkOne(options: {
     const deps = await linkDeps(folder, worktree);
     links = deps.links;
     const readable = [join(common, "objects"), ...deps.reads];
+    // sandbox-runtime은 감쌀 때 TMPDIR을 /tmp/claude로 덮는다(#146). 명령 앞에서 러너가 준 임시 폴더로 되돌린다. 러너 프로세스의 환경은 건드리지 않는다.
     const input = (command: string) => ({
-      command,
+      command: `export TMPDIR='${temp.replaceAll("'", `'\\''`)}'; ${command}`,
       folder: worktree,
       env: passedEnv(temp),
       policy: policy([worktree, temp, sandboxGit], readable, [worktree, temp]),
