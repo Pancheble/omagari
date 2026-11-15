@@ -7,15 +7,20 @@
 //   버림, 머지 멈춤, 머지 막힘). 결정 초안은 저장하지 않아 미리 넣지 못한다. 포스트 "박민수 · 최하준"에서 정리하기를 누른다.
 // - DEMO_AGENT=fake: 내 에이전트도 정해 둔 답을 낸다. 초안은 5초 동안 "쓰는 중"이다. 사용량을 쓰지 않는다.
 // - DEMO_RUNNER=off: 다 넣은 뒤 내 러너를 끈다. 초안의 "러너 꺼짐"을 본다.
+// - 합쳐 돌려 보기(ADR-0036)의 판정은 검사 명령을 돌리지 않고 정해 둔 것을 올린다. 멤버 셋(정다은, 오우진, 한소라)의 가짜 러너가 내 작업과
+//   간접 충돌(추정)을 걸고 판정을 올려, 부딪힘 포럼에 돌려 보는 중, 깨짐(출력 있음·없음), 가릴 수 없음, 돌리지 못함 넷(검사 명령 없음, 샌드박스 없음,
+//   시간 초과, 직접 충돌), 지난 결과, 통과로 풀림, 결정 PR이 열려 띠가 둘인 포스트가 선다. 내 러너는 이 알림들을 돌리지 않는다(잠잠한 시간을 끝없이 둔다).
+// - DEMO_MERGE_CHECK=off|no_sandbox: 설정 창의 내 러너의 합쳐 돌려 보기를 꺼 둠이나 샌드박스 없음으로 둔다. 안 주면 켜짐이다.
+// - DEMO_CHECK=none: 기본 브랜치에 검사 명령(.omagari.json)을 두지 않는다. 설정 창의 "검사 명령 없음"을 본다.
 // - 끝내면(Ctrl+C) 임시 레포와 DB를 지운다. 이름이 *.test.ts가 아니라 npm test와 CI는 돌리지 않는다.
 // - 포스트마다 가짜 GitHub 이슈가 열리고 글이 댓글로 간다. 포스트 "박민수 · 최하준"에는 GitHub에서 단 댓글과 바꾼 제목·라벨이 들어온다.
 // - GitHub 머지를 막아 둔 채로 끝난다("머지 막힘"을 보이려고). 그 뒤로 Omagari가 하는 머지는 모두 막힌다.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
-import { api, call } from "@omagari/contract";
+import { api, call, encode, type MergeRun, RUNNER_SOCKET, runnerToServer } from "@omagari/contract";
 import { claudeCode, codex, codexReady, type Executor } from "@omagari/runner";
-import { eventually, fakeExecutor, fakeSandbox, startWorld, writer } from "./harness.ts";
+import { eventually, fakeExecutor, fakeSandbox, REPO, startWorld, writer } from "./harness.ts";
 
 type As = { url: string; session: string; login: string };
 
@@ -56,6 +61,7 @@ const scripted = (real?: Executor): Executor =>
     { choices: real?.choices },
   );
 
+const FOREVER = 2 ** 31 - 1;
 const fakeAgent = process.env.DEMO_AGENT === "fake";
 const executors = {
   "claude-code": scripted(fakeAgent ? undefined : claudeCode),
@@ -66,13 +72,24 @@ const executors = {
 const world = await startWorld({
   executors,
   observeMs: 200,
-  recheckMs: 2 ** 31 - 1,
+  recheckMs: FOREVER,
   followMs: 2_000,
   // 설정 창의 "합쳐 돌려 보기"가 켜짐으로 보이게 내 러너에 가짜 샌드박스를 꽂는다. 가짜는 명령을 가두지 않는다.
-  sandbox: fakeSandbox().sandbox,
+  sandbox: process.env.DEMO_MERGE_CHECK === "no_sandbox" ? undefined : fakeSandbox().sandbox,
+  mergeCheck: process.env.DEMO_MERGE_CHECK === "off" ? "off" : undefined,
+  // 판정은 아래에서 정해 둔 것을 올린다. 러너들이 실제로 돌리지 않게 잠잠한 시간을 끝없이 둔다.
+  quietMs: FOREVER,
 });
 const fake = world.github;
-const NAMES = { owner: "나 (데모)", minsu: "박민수", seoyeon: "이서연", hajun: "최하준" };
+const NAMES = {
+  owner: "나 (데모)",
+  minsu: "박민수",
+  seoyeon: "이서연",
+  hajun: "최하준",
+  dahee: "정다은",
+  woojin: "오우진",
+  sora: "한소라",
+};
 for (const [login, name] of Object.entries(NAMES)) fake.names.set(login, name);
 // "나"는 이름을 정하기 전에 들어왔다. 다시 들어와 이름을 고친다.
 await world.login("owner");
@@ -96,19 +113,25 @@ await own(
 );
 for (const file of ["config", "webhook", "ledger", "retry", "mail", "i18n"])
   await own(`src/${file}.ts`, text(LINES));
-await own(".omagari.json", '{ "check": "npm test", "setup": "npm ci" }\n');
+if (process.env.DEMO_CHECK !== "none")
+  await own(".omagari.json", '{ "check": "npm test", "setup": "npm ci" }\n');
 await world.repo.git("add", ".");
 await world.repo.git("commit", "--message=base");
 await world.repo.git("update-ref", "refs/remotes/origin/main", "HEAD");
 
 /** 멤버 `login`의 기기: 내 main을 받아 `branch`에서 일한다. 받는 동안은 러너를 꺼 둔다. */
-async function member(login: keyof typeof NAMES, branch: string, uses = false) {
+async function member(login: "minsu" | "seoyeon" | "hajun", branch: string, uses = false) {
   fake.grant(login);
   const as = await world.login(login);
-  const desk = await world.desk(as, undefined, {
-    "claude-code": fakeExecutor((input) => canned(input.message) ?? "데모라 정해 둔 답이에요.")
-      .executor,
-  });
+  const desk = await world.desk(
+    as,
+    undefined,
+    {
+      "claude-code": fakeExecutor((input) => canned(input.message) ?? "데모라 정해 둔 답이에요.")
+        .executor,
+    },
+    { quietMs: FOREVER },
+  );
   await desk.stop();
   await desk.git("fetch", "--quiet", world.repo.folder, "main");
   await desk.git("reset", "--hard", "FETCH_HEAD");
@@ -320,6 +343,168 @@ await eventually(async () => {
 console.log(
   `이슈 #${mailIssue.number}의 댓글: ${mailIssue.comments.map((c) => c.login).join(", ")}`,
 );
+
+// 합쳐 돌려 보기의 판정(ADR-0036). 멤버 셋의 가짜 러너가 내 작업(feat/payment-model)과 간접 충돌(추정)을 걸고 정해 둔 판정을 올린다.
+const MINE = { login: "owner", branch: "feat/payment-model" };
+const CHECK = "npm test";
+const run = (verdict: MergeRun["verdict"], rest: Partial<MergeRun> = {}): MergeRun => ({
+  verdict,
+  check: CHECK,
+  omitted: [],
+  fingerprint: crypto.randomUUID(),
+  stale: false,
+  ...rest,
+});
+const FAILED = `FAIL src/checkout.test.ts
+  ✕ 환불 금액은 음수다 (3 ms)
+    Expected: -100
+    Received: NaN
+Tests: 1 failed, 11 passed`;
+const SCENES: {
+  who: "dahee" | "woojin" | "sora";
+  branch: string;
+  symbol: string;
+  run?: MergeRun;
+}[] = [
+  { who: "dahee", branch: "feat/receipt", symbol: "receipt", run: run("running") },
+  {
+    who: "woojin",
+    branch: "feat/refund-flow",
+    symbol: "refundFlow",
+    run: run("broken", { ms: 8_400, output: FAILED }),
+  },
+  { who: "sora", branch: "feat/tax", symbol: "tax", run: run("broken", { ms: 7_100 }) },
+  { who: "dahee", branch: "feat/coupon", symbol: "coupon", run: run("pass", { ms: 6_200 }) },
+  {
+    who: "woojin",
+    branch: "feat/points",
+    symbol: "points",
+    run: run("unclear", { ms: 9_900, alone: ["theirs"], output: FAILED }),
+  },
+  {
+    who: "sora",
+    branch: "feat/invoice",
+    symbol: "invoice",
+    run: run("not_run", {
+      check: undefined,
+      reason: "기본 브랜치(origin/main)에 .omagari.json이 없다",
+    }),
+  },
+  {
+    who: "dahee",
+    branch: "feat/fee",
+    symbol: "fee",
+    run: run("not_run", { reason: "샌드박스 도구가 없다: bubblewrap" }),
+  },
+  {
+    who: "woojin",
+    branch: "feat/ledger-v2",
+    symbol: "ledgerV2",
+    run: run("not_run", {
+      reason: "검사 명령을 시간 상한에서 끊었다. 끊긴 것은 통과로 치지 않는다",
+      ms: 300_000,
+    }),
+  },
+  {
+    who: "sora",
+    branch: "feat/currency",
+    symbol: "currency",
+    run: run("not_run", { reason: "줄이 부딪혀 합쳐지지 않는다: src/pay.ts" }),
+  },
+  {
+    who: "dahee",
+    branch: "feat/discount",
+    symbol: "discount",
+    run: run("broken", { ms: 5_300, output: FAILED, stale: true }),
+  },
+  {
+    who: "woojin",
+    branch: "feat/wallet",
+    symbol: "wallet",
+    run: run("broken", { ms: 6_000, output: FAILED }),
+  },
+];
+for (const [login] of Object.entries(NAMES).filter(([l]) =>
+  ["dahee", "woojin", "sora"].includes(l),
+))
+  fake.grant(login);
+const fakeRunners = new Map<string, WebSocket>();
+for (const who of ["dahee", "woojin", "sora"] as const) {
+  const as = await world.login(who);
+  const socket = new WebSocket(`${world.server.url.replace("http", "ws")}${RUNNER_SOCKET}`);
+  fakeRunners.set(who, socket);
+  const welcomed = Promise.withResolvers<void>();
+  socket.addEventListener("message", ({ data }) => {
+    if (JSON.parse(String(data)).kind === "welcome") welcomed.resolve();
+  });
+  await new Promise((open) => socket.addEventListener("open", open, { once: true }));
+  socket.send(
+    encode(runnerToServer, "hello", {
+      session: as.session,
+      repos: [REPO],
+      executors: ["claude-code"],
+      choices: {},
+      mergeCheck: "on",
+    }),
+  );
+  await welcomed.promise;
+  const mine = SCENES.filter((s) => s.who === who);
+  socket.send(
+    encode(runnerToServer, "observation", {
+      works: mine.map((s) => ({
+        branch: s.branch,
+        base: "0".repeat(40),
+        share: "full" as const,
+        files: [],
+      })),
+    }),
+  );
+  socket.send(
+    encode(runnerToServer, "conflicts", {
+      pairs: mine.map((s) => ({
+        kind: "indirect" as const,
+        branch: s.branch,
+        theirs: MINE,
+        symbols: [
+          {
+            name: s.symbol,
+            mine: [{ path: `src/${s.symbol}.ts`, line: 3, role: "uses" as const }],
+            theirs: [{ path: "src/pay.ts", line: 1, role: "changed" as const }],
+          },
+        ],
+      })),
+    }),
+  );
+}
+const sceneAlert = (branch: string) =>
+  eventually(async () => {
+    const found = (await alerts()).find(
+      ({ alert }) => alert.kind === "indirect" && alert.works.some((w) => w.branch === branch),
+    );
+    assert.ok(found, `아직 ${branch}의 간접 충돌 알림이 없다`);
+    return found.id;
+  }, 60_000);
+const sceneAlerts = new Map<string, number>();
+for (const scene of SCENES) sceneAlerts.set(scene.branch, await sceneAlert(scene.branch));
+for (const scene of SCENES) {
+  if (!scene.run) continue;
+  const send = (run: MergeRun) =>
+    fakeRunners
+      .get(scene.who)
+      ?.send(encode(runnerToServer, "merged", { branch: scene.branch, theirs: MINE, run }));
+  // 지난 결과는 깨진 판정이 먼저 나고 그 뒤 내용이 바뀐 것이다. 같은 지문으로 `stale`만 켜서 다시 올린다.
+  if (scene.run.stale) {
+    send({ ...scene.run, stale: false });
+    await sleep(500);
+  }
+  send(scene.run);
+}
+// 결정 PR이 열린 포스트: 판정 띠와 결정 띠가 함께 선다.
+const wallet = await postOf(sceneAlerts.get("feat/wallet") as number);
+const woojin = await world.login("woojin");
+await say(woojin, wallet, "wallet이 pay 시그니처를 따라 바뀌어야 해요.");
+await say(world.owner, wallet, "그럼 pay 쪽을 먼저 머지하죠.");
+await propose(woojin, wallet, "wallet은 pay 시그니처를 따른다");
 
 if (process.env.DEMO_RUNNER === "off") await world.runner.stop();
 
