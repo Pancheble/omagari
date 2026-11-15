@@ -18,7 +18,7 @@
 | 의존성 폴더 | 이은 의존성을 읽는다. `node_modules/.cache`와 이은 패키지 폴더 안에 쓰기, 그 밑에 새 폴더 만들기는 **관찰**한다 |
 | git (#142) | 임시 워크트리 안의 `git add`, `write-tree`, `commit`, `status`가 된다. `objects`(홈 아래)를 읽고 레포의 `config`는 읽지 못한다. 샌드박스 안의 git이 쓰는 Git 폴더(돌림마다 새로 만드는 복사본, #144)의 `config`, `hooks`, `HEAD` 쓰기는 관찰한다. 열려 있는 것이 맞다 |
 | 벗어남(관찰) | 러너가 샌드박스 밖에서 임시 워크트리에 부르는 `git`이 검사 명령이 써 둔 `.git/config`(`core.fsmonitor`)를 따라 밖에서 명령을 돌리는지. 러너의 현재 폴더가 레포일 때와 아닐 때 둘 다 본다. 표지 파일은 점검용 폴더 안에 만든다 |
-| 유닉스 소켓, TMPDIR | `TMPDIR`이 러너가 준 임시 폴더인지, 유닉스 소켓을 열 수 있는지 관찰한다 |
+| 유닉스 소켓, TMPDIR | 임시 워크트리와 임시 폴더 안에는 유닉스 소켓을 열고 붙는지, 밖의 소켓(`/tmp`, 링크로 가리킨 것, Docker)에는 못 붙는지 본다(ADR-0037). `TMPDIR`이 러너가 준 임시 폴더인지는 관찰한다(#146) |
 | 이 레포의 `npm test` | `npm test`가 통과한다. 통과하지 못하면 실패한 테스트 이름과 수를 적는다. 이 레포에는 `.omagari.json`이 없을 수 있어 기본 브랜치에 있는 것처럼 가짜 원격 추적 ref(`refs/remotes/omagari-sandbox-check/*`)를 잠깐 만들고 끝나면 지운다. 실패하면 sandbox-runtime이 덮는 `TMPDIR`을 되돌려 한 번 더 돌려 본다(실험) |
 
 `omagari runner check`는 러너가 받은 `check` 메시지를 `checkWork`로 부르는 것이라 같은 길이다. 점검은 러너를 띄우지 않고 `checkWork`를 바로 부른다.
