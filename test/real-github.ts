@@ -281,6 +281,23 @@ if (issue) {
     expect(mine?.body === body && mine.login === login, `댓글이 다르다: ${JSON.stringify(mine)}`);
     return { detail: `댓글 ${made.id}, 쓴 사람 ${mine.login}` };
   });
+  // 판정 맞추기(#134): 서버가 쓰는 "확인됨" 라벨의 붙이기와 떼기. 거듭해도 던지지 않아야 한다.
+  await attempt("addLabel + removeLabel (확인됨, 거듭)", async () => {
+    const names = async (want: boolean) =>
+      (
+        await eventually(
+          () => github.issue(token, repo, issue.number),
+          (one) => one.labels.includes("확인됨") === want,
+        )
+      ).labels;
+    await github.addLabel(token, repo, issue.number, "확인됨");
+    await github.addLabel(token, repo, issue.number, "확인됨");
+    const added = await names(true);
+    await github.removeLabel(token, repo, issue.number, "확인됨");
+    await github.removeLabel(token, repo, issue.number, "확인됨");
+    const removed = await names(false);
+    return { detail: `붙임 ${JSON.stringify(added)}, 뗌 ${JSON.stringify(removed)}` };
+  });
   await attempt("closeIssue + issue", async () => {
     await github.closeIssue(token, repo, issue.number);
     const one = await eventually(

@@ -352,6 +352,16 @@ export function fakeGitHub() {
       owner(token, repo);
       issueOf(number).open = false;
     },
+    async addLabel(token, repo, number, label) {
+      owner(token, repo);
+      const { labels } = issueOf(number);
+      if (!labels.includes(label)) labels.push(label);
+    },
+    async removeLabel(token, repo, number, label) {
+      owner(token, repo);
+      const found = issueOf(number);
+      found.labels = found.labels.filter((l) => l !== label);
+    },
   };
   /** 열린 PR을 머지한다. 그 브랜치의 파일이 있으면 main에 들어간다. */
   const merge = (pull: Pull & { branch?: string }) => {

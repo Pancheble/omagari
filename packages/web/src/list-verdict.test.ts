@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Alert } from "@omagari/contract";
-import { listVerdict } from "./verdict.ts";
+import { listVerdict } from "./list-verdict.ts";
 
 const work = { login: "a", name: "A", branch: "x" };
 const indirect = (extra: Record<string, unknown> = {}) =>

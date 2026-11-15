@@ -3756,3 +3756,74 @@ a.issue-number:hover {
   overflow-wrap: anywhere;
   text-align: right;
 }
+
+/* 판정 띠(app-verdict-strip): 결정 상태 띠와 같은 모양이고 위에 선다. 경고색은 깨짐에만 쓴다. */
+.verdict {
+  flex: none;
+  margin: 8px 20px 0;
+}
+
+.right-slot .panel-body > .verdict {
+  margin-inline: 0;
+}
+
+.verdict + .decision-strip {
+  margin-top: 6px;
+}
+
+.verdict-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-height: 44px;
+  padding: 6px 8px 6px 14px;
+  border-radius: var(--rounded-md);
+  background: var(--selected);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.38;
+}
+
+.verdict-strip.warning {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.verdict-strip.warning .strip-text strong {
+  color: inherit;
+}
+
+.verdict-strip svg {
+  flex: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .verdict-strip .spin {
+    animation: verdict-spin 1s linear infinite;
+  }
+}
+
+@keyframes verdict-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.verdict-meta {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font: 400 12px / 1.4 var(--mono);
+  overflow-wrap: anywhere;
+}
+
+.verdict-output {
+  margin: 6px 0 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  border: 1px solid var(--hairline);
+  border-radius: var(--rounded-sm);
+  background: #fff;
+  font: 400 12px / 1.55 var(--mono);
+  white-space: pre;
+}

@@ -15,7 +15,7 @@ import {
 import { useEffect, useId, useMemo, useReducer, useState } from "react";
 import { fullTime, timeOf } from "./conversation.tsx";
 import { useMenu } from "./dm.tsx";
-import { LIST_VERDICT_LABELS, type ListVerdict, listVerdict } from "./verdict.ts";
+import { LIST_VERDICT_LABELS, type ListVerdict, listVerdict } from "./list-verdict.ts";
 import { Avatar } from "./workspace.tsx";
 
 export type AlertMessage = Extract<ChannelMessage, { kind: "alert" }>;
@@ -90,10 +90,18 @@ const haystack = (post: PostItem) => {
 };
 
 /** 종류 배지: 직접 충돌은 주황, 나머지는 테두리, 간접 충돌은 "· 추정"이 붙는다. */
-export const KindBadge = ({ kind, plain }: { kind: Alert["kind"]; plain?: boolean }) => (
-  <span className={kind === "direct" ? "badge warning" : "badge outline"}>
+export const KindBadge = ({
+  kind,
+  confirmed,
+  plain,
+}: {
+  kind: Alert["kind"];
+  confirmed?: boolean;
+  plain?: boolean;
+}) => (
+  <span className={kind === "direct" || confirmed ? "badge warning" : "badge outline"}>
     {KINDS[kind]}
-    {kind === "indirect" && !plain && " · 추정"}
+    {kind === "indirect" && !plain && (confirmed ? " · 확인됨" : " · 추정")}
   </span>
 );
 
@@ -486,7 +494,7 @@ export function AlertLine({ message, edited }: { message: AlertMessage; edited?:
         </p>
         <div className="alert-card">
           <p className="alert-kind">
-            <KindBadge kind={alert.kind} />
+            <KindBadge kind={alert.kind} confirmed={alert.kind === "indirect" && alert.confirmed} />
             {alert.resolved && <span className="badge outline">풀렸어요</span>}
           </p>
           <p className="alert-mono">
