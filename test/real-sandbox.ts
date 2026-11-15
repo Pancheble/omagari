@@ -17,7 +17,13 @@ import { createServer } from "node:net";
 import { arch, homedir, platform } from "node:os";
 import { join, relative } from "node:path";
 import { parseArgs, promisify } from "node:util";
-import { CHECK_LIMITS, checkWork, osSandbox } from "../packages/runner/src/check.ts";
+import {
+  CHECK_LIMITS,
+  checkWork,
+  osMounts,
+  osSandbox,
+  windowsDrives,
+} from "../packages/runner/src/check.ts";
 
 const { values } = parseArgs({ options: { quick: { type: "boolean", default: false } } });
 const execFileAsync = promisify(execFile);
@@ -198,6 +204,18 @@ try {
     "check",
     `홈 폴더 아래의 파일과 목록을 읽지 못한다${hasSsh ? "(~/.ssh 포함)" : "(이 기기에 ~/.ssh가 없어 그것은 보지 못함)"}`,
   );
+
+  // 3-1. WSL2이면 Windows 드라이브를 읽지 못한다(#164, ADR-0038)
+  const drives = windowsDrives(await osMounts());
+  if (drives.length === 0)
+    add("WSL2이면 Windows 드라이브를 읽지 못한다", "observe", "WSL2가 아니어서 건너뛰었다");
+  else
+    await probe(
+      "WSL2이면 Windows 드라이브를 읽지 못한다",
+      drives.map((d) => `! ls '${d}' >/dev/null 2>&1`).join(" && "),
+      "check",
+      `${drives.join(", ")}를 읽지 못한다`,
+    );
 
   // 4. 자기 기기의 포트를 열고 붙는다
   await probe(

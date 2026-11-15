@@ -4,6 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { dependencyProblem, NO_SECCOMP } from "@omagari/runner";
+import { CHECK_LIMITS, checkWork, osSandbox } from "../packages/runner/src/check.ts";
 import { fakeSandbox, startWorld, tempRepo, writer } from "./harness.ts";
 
 /** 기본 브랜치(origin/main)에 파일들을 커밋해 머지된 것처럼 둔다. 지금 브랜치가 main이어야 한다. */
@@ -158,7 +159,10 @@ test("준비 명령은 검사 명령 앞에 돌고, 실패하거나 상한을 �
     fake.calls.splice(0).map((call) => call.command.replace(/^export TMPDIR='[^']*'; /, ""));
 
   await merge(repo, {
-    ".omagari.json": config({ check: "test -f prepared", setup: "touch prepared" }),
+    ".omagari.json": config({
+      check: "test -f prepared",
+      setup: "touch prepared",
+    }),
   });
   const prepared = await world.cli("runner", "check");
   assert.equal(prepared.code, 0, prepared.stdout);
@@ -179,7 +183,9 @@ test("준비 명령은 검사 명령 앞에 돌고, 실패하거나 상한을 �
   assert.deepEqual(commands(), ["echo 준비 실패; exit 2"]);
 
   // 끊는 것은 명령이 띄운 것까지다. 상한을 넘긴 만큼 기다리지 않는다.
-  await merge(repo, { ".omagari.json": config({ check: "true", setup: "sleep 30 & wait" }) });
+  await merge(repo, {
+    ".omagari.json": config({ check: "true", setup: "sleep 30 & wait" }),
+  });
   const slowSetup = await world.cli("runner", "check");
   assert.match(
     slowSetup.stdout,
@@ -187,7 +193,9 @@ test("준비 명령은 검사 명령 앞에 돌고, 실패하거나 상한을 �
   );
   assert.ok(Number(/\((\d+\.\d)초\)/.exec(slowSetup.stdout)?.[1]) < 10);
 
-  await merge(repo, { ".omagari.json": config({ check: "echo 시작; sleep 30" }) });
+  await merge(repo, {
+    ".omagari.json": config({ check: "echo 시작; sleep 30" }),
+  });
   const slow = await world.cli("runner", "check");
   assert.equal(slow.code, 1);
   assert.match(
@@ -195,7 +203,9 @@ test("준비 명령은 검사 명령 앞에 돌고, 실패하거나 상한을 �
     /판정: 돌리지 못함 \(.+\)\n {2}검사 명령을 2초 상한에서 끊었다\. 끊긴 것은 통과로 치지 않는다\n출력의 끝부분:\n {2}시작/,
   );
 
-  await merge(repo, { ".omagari.json": config({ check: "yes 출력 | head -c 100000; true" }) });
+  await merge(repo, {
+    ".omagari.json": config({ check: "yes 출력 | head -c 100000; true" }),
+  });
   const loud = await world.cli("runner", "check");
   assert.equal(loud.code, 1);
   assert.match(
@@ -239,7 +249,9 @@ test("러너를 켤 때 검사 명령과 샌드박스 안에서 돈다는 것을
     /^합쳐 돌려 보기\(켜짐\): 검사 명령이 없어 돌리지 않는다\. 기본 브랜치\(origin\/main\)에 \.omagari\.json이 없다\. 정하는 법: /,
   );
 
-  await merge(desk, { ".omagari.json": config({ check: "npm test", setup: "npm ci" }) });
+  await merge(desk, {
+    ".omagari.json": config({ check: "npm test", setup: "npm ci" }),
+  });
   const on = await notice();
   assert.match(on, /^합쳐 돌려 보기\(켜짐\): /);
   assert.match(on, /\n {2}검사 명령: npm test\n {2}준비 명령: npm ci\n/);
@@ -431,6 +443,50 @@ test("검사가 끝난 뒤 남은 프로세스나 검사 명령이 임시 워크
   // 남은 프로세스가 돌려 둔 링크를 따라 바깥에 의존성을 잇지 않았고, packages/app 링크를 따라 바깥의 node_modules를 지우지 않았다.
   assert.deepEqual(await readdir(join(outside, "app/node_modules")), ["keep"]);
   assert.deepEqual(await readdir(join(outside, "empty")), []);
+});
+
+const WSL_MOUNTS = [
+  "/dev/sdc / ext4 rw 0 0",
+  "C:\\134 /mnt/c 9p rw,noatime 0 0",
+  "D:\\134 /win/d\\040x drvfs rw 0 0",
+  "drivers /usr/lib/wsl/drivers 9p ro 0 0",
+].join("\n");
+
+test("WSL2의 마운트 목록에서 Windows 드라이브가 걸린 자리를 읽지 못하게 막고, 아닌 기기의 막기는 바꾸지 않는다", async (t) => {
+  const repo = await tempRepo();
+  t.after(repo.remove);
+  await merge(repo, { ".omagari.json": config({ check: "true" }) });
+  const policyOf = async (mounts?: string) => {
+    const fake = fakeSandbox();
+    const result = await checkWork({
+      folder: repo.folder,
+      remote: "origin",
+      sandbox: fake.sandbox,
+      limits: CHECK_LIMITS,
+      mounts: async () => mounts,
+    });
+    assert.equal(result.verdict, "pass", result.reason);
+    return fake.calls[0]?.policy.filesystem;
+  };
+  const wsl = await policyOf(WSL_MOUNTS);
+  assert.deepEqual(wsl?.denyRead, [homedir(), "/mnt/c", "/win/d x"]);
+  // 임시 워크트리는 가려진 자리 위에서도 다시 열려 있다.
+  assert.ok(
+    wsl?.allowRead?.some((p) =>
+      String(typeof p === "string" ? p : p.path).includes("omagari-check-"),
+    ),
+  );
+  assert.deepEqual((await policyOf(undefined))?.denyRead, [homedir()]);
+});
+
+test("Windows 그대로에서는 돌리지 못함의 까닭이 WSL2 안내다", async () => {
+  const platform = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", { value: "win32" });
+  try {
+    assert.match((await osSandbox.unavailable()) ?? "", /WSL2 안에서 러너를 켜세요/);
+  } finally {
+    Object.defineProperty(process, "platform", platform as PropertyDescriptor);
+  }
 });
 
 test("Linux에서 혼자 돌린 것이 유닉스 소켓 막기로 깨진 것으로 보이면 까닭이 붙고, 소켓과 상관없이 깨졌거나 소켓을 막지 않는 기기면 붙지 않는다", async (t) => {
