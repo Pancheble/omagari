@@ -3,7 +3,16 @@
 // 러너의 `checkWork`와 실제 샌드박스(`osSandbox`)를 그대로 쓴다. 점검 명령은 임시 레포의 기본 브랜치 `.omagari.json`에 넣어 돌리므로
 // 막는 설정, 임시 워크트리, 의존성 잇기가 모두 러너가 쓰는 그대로다. 돌리는 법과 읽는 법: docs/sandbox-check.md
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:net";
 import { arch, homedir, platform } from "node:os";
 import { join, relative } from "node:path";
@@ -394,7 +403,51 @@ try {
     "막힌다",
   );
 
-  // 10. 이 레포의 `npm test`
+  // 10. #150: 검사 명령이 프로세스 그룹을 벗어나 남긴 프로세스가, 검사가 끝난 뒤 받은 임시 워크트리 경로의 node_modules를
+  // 바깥(홈 아래, 샌드박스가 쓸 수 없는 곳)을 가리키는 링크로 바꾸려 한다. 다음 돌림의 의존성 잇기가 그 링크를 따라 바깥에 쓰지 않아야 한다.
+  const lured = join(base, "lured");
+  await mkdir(lured);
+  const leftover = [
+    'W="$PWD"',
+    'for i in $(seq 1 600); do [ -e "$W/node_modules" ] || break; sleep 0.05; done',
+    `mkdir -p "$W"; rm -rf "$W/node_modules"; ln -s '${lured}' "$W/node_modules" && echo linked > "$W/leftover.txt"`,
+  ].join("; ");
+  const spawnLeftover = `const c=require("node:child_process").spawn("sh",["-c",process.argv[1]],{detached:true,stdio:"ignore"});c.unref();console.log("pid="+c.pid+" at="+process.cwd())`;
+  const planted = await run(repo, `node -e '${spawnLeftover}' '${leftover}'`);
+  const [, pidText, at = ""] = /pid=(\d+) at=(\S+)/.exec(planted.output) ?? [];
+  const pid = Number(pidText);
+  if (!pid) add("남은 프로세스를 띄운다(#150)", false, `띄우지 못했다: ${planted.output}`);
+  else {
+    const alive = () => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    for (let i = 0; i < 400 && alive(); i++) await new Promise((r) => setTimeout(r, 50));
+    if (alive()) process.kill(pid, "SIGKILL");
+    // 남은 프로세스가 받은 경로에 링크를 걸었으면 그 옆에 표지를 남긴다. 그 경로가 지금 무엇인지(쉬는 자리인지, 버려진 자리인지)도 적는다.
+    const wrote = await readFile(join(at, "leftover.txt"), "utf8").then(
+      () => true,
+      () => false,
+    );
+    add(
+      "검사가 끝난 뒤 남은 프로세스가 받은 경로에 바깥을 가리키는 링크를 건다(#150, 관찰)",
+      "observe",
+      `${wrote ? "걸었다" : "걸지 못했다"}(${relative(repo, at)})`,
+    );
+    await probe("남은 프로세스가 있던 뒤에도 다음 검사가 돈다(#150)", "true", "check", "돈다");
+    const into = await readdir(lured);
+    add(
+      "남은 프로세스가 바꿔 둔 링크를 따라 러너가 바깥에 의존성을 잇지 않는다(#150)",
+      into.length === 0,
+      into.length === 0 ? "바깥 폴더가 비어 있다" : `바깥에 생겼다: ${into.join(", ")}`,
+    );
+  }
+
+  // 11. 이 레포의 `npm test`
   if (!values.quick) {
     const top = await git(root, "rev-parse", "--show-toplevel");
     process.chdir(top);

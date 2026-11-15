@@ -8,6 +8,7 @@ import {
   mkdtemp,
   readdir,
   realpath,
+  rename,
   rm,
   stat,
   symlink,
@@ -285,7 +286,7 @@ const GROUPS = ["packages", "apps", "libs"];
  * 내 폴더 안의 패키지를 가리키는 링크는 임시 워크트리 안의 같은 패키지를 가리키게 다시 건다.
  */
 async function mirror(src: string, dst: string, folder: string, worktree: string) {
-  await mkdir(dst, { recursive: true });
+  await mkdir(dst);
   for (const entry of await readdir(src, { withFileTypes: true })) {
     const from = join(src, entry.name);
     const to = join(dst, entry.name);
@@ -300,7 +301,16 @@ async function mirror(src: string, dst: string, folder: string, worktree: string
   }
 }
 
-/** 내 폴더의 최상위와 한 단계 아래의 의존성 폴더를 임시 워크트리에 잇는다. 이은 자리(워크트리 안)와 읽을 실제 폴더를 돌려준다. */
+/**
+ * `path`에 이르는 길에 링크가 없다(`path`는 실제 경로에서 시작한다). 샌드박스 밖에서 임시 워크트리에 쓰거나 지우기 전에 본다.
+ * 검사 명령이 바꿔 둔 링크를 따라가 샌드박스 밖에 쓰지 않으려는 것이다(#150).
+ */
+const direct = async (path: string) => (await realpath(path).catch(() => "")) === path;
+
+/**
+ * 내 폴더의 최상위와 한 단계 아래의 의존성 폴더를 임시 워크트리에 잇는다. 이은 자리(워크트리 안)와 읽을 실제 폴더를 돌려준다.
+ * 이을 자리에 무엇이 있으면(지난 검사 명령이 남긴 링크라도) 따라가지 않고 지운 뒤 새로 만든다. 길에 링크가 있는 자리는 건너뛴다.
+ */
 async function linkDeps(folder: string, worktree: string) {
   const places = [""];
   for (const group of GROUPS) {
@@ -310,11 +320,13 @@ async function linkDeps(folder: string, worktree: string) {
   const links: string[] = [];
   const reads: string[] = [];
   for (const place of places) {
-    if (!(await stat(join(worktree, place)).catch(() => undefined))?.isDirectory()) continue;
+    const at = join(worktree, place);
+    if (!(await direct(at)) || !(await stat(at)).isDirectory()) continue;
     for (const dep of DEPS) {
       const src = join(folder, place, dep);
       if (!(await stat(src).catch(() => undefined))?.isDirectory()) continue;
-      const dst = join(worktree, place, dep);
+      const dst = join(at, dep);
+      await rm(dst, { recursive: true, force: true });
       if (dep === "node_modules") await mirror(src, dst, folder, worktree);
       else await symlink(await realpath(src), dst);
       links.push(dst);
@@ -427,6 +439,8 @@ async function mergeTree(folder: string, run: string, mine: string, { base, thei
 
 /**
  * 임시 워크트리를 마련한다: 레포의 Git 폴더 아래(`<Git 폴더>/omagari/check-worktree`)에 두고 다시 쓴다. 내 폴더의 `git status`와 관측에 잡히지 않는다.
+ * 돌리는 동안에는 돌림마다 새 자리(`<Git 폴더>/omagari/check-run-*`)로 옮겨 두고, 끝나면 쉬는 자리로 되돌린다. 샌드박스는 경로로 쓰기를 열므로,
+ * 검사 명령이 프로세스 그룹을 벗어나 남긴 프로세스는 지난 돌림의 자리에만 쓸 수 있고 쉬는 자리나 다음 돌림의 자리에는 쓰지 못한다(#150).
  * `git worktree add`는 쓰지 않는다. 그러면 샌드박스 안의 `git`이 레포의 Git 폴더 전체(원격 URL의 토큰이 든 config 포함)를 읽어야 한다.
  * 대신 자기만의 Git 폴더를 두고 개체 폴더만 빌려 읽는다(alternates). 그래서 샌드박스에는 개체 폴더만 열면 된다.
  * Git 폴더는 둘이다(#144). 러너가 쓰는 것(`<run>/runner-git`)은 샌드박스가 쓸 수 없고, 샌드박스 안의 `git`이 쓰는 것(`<run>/git`)은 그 복사본이다.
@@ -439,13 +453,19 @@ async function prepareWork(folder: string, run: string, tree: string) {
   const common = await realpath(
     await gitOut(folder, ["rev-parse", "--path-format=absolute", "--git-common-dir"]),
   );
-  const worktree = join(common, "omagari", "check-worktree");
+  const rest = join(common, "omagari", "check-worktree");
+  await mkdir(dirname(rest), { recursive: true });
+  const worktree = await mkdtemp(join(dirname(rest), "check-run-"));
   const head = await gitOut(folder, ["rev-parse", "HEAD"]);
   // 훅은 없는 채로 둔다(`--template=`).
   await gitOut(run, ["init", "--quiet", "--bare", "--template=", gitDir], NO_USER_CONFIG);
   await mkdir(join(gitDir, "objects", "info"), { recursive: true });
   await writeFile(join(gitDir, "objects", "info", "alternates"), `${join(common, "objects")}\n`);
   const place = async () => {
+    // 쉬는 자리의 것을 이번 돌림의 자리로 옮긴다(빈 폴더 위로 옮긴다). 없으면(처음, 망가져 지웠다) 빈 채로 시작한다.
+    await rename(rest, worktree).catch((error) => {
+      if (error.code !== "ENOENT") throw error;
+    });
     await mkdir(worktree, { recursive: true });
     // 지난 돌림의 검사 명령이 바꿔 둔 `.git`은 지운다. 링크여도 따라가지 않는다.
     await rm(join(worktree, ".git"), { recursive: true, force: true });
@@ -459,10 +479,11 @@ async function prepareWork(folder: string, run: string, tree: string) {
   // 지난 돌림이 죽으며 망가졌으면 지우고 처음부터 만든다.
   await place().catch(async () => {
     await rm(worktree, { recursive: true, force: true });
+    await rm(rest, { recursive: true, force: true });
     await rm(sandboxGit, { recursive: true, force: true });
     await place();
   });
-  return { worktree, tree, common, gitDir, sandboxGit };
+  return { worktree, rest, tree, common, gitDir, sandboxGit };
 }
 
 /** `checkWork`의 결과. 계약의 `checked`와 같다. */
@@ -577,9 +598,22 @@ async function checkOne(options: {
       reason: `돌리지 못했다: ${error instanceof Error ? error.message : error}`,
     });
   } finally {
-    // 돌린 뒤 추적하는 파일을 되돌리고 이은 링크를 뗀다. 무시되는 파일은 남긴다.
-    for (const link of links) await rm(link, { recursive: true, force: true });
-    if (work) await reset(work.gitDir, work.worktree, work.tree).catch(() => {});
+    // 돌린 뒤 먼저 쉬는 자리로 옮긴다. 샌드박스에 남은 프로세스는 이번 돌림의 자리에만 쓸 수 있어 더는 손대지 못한다(#150).
+    // 그다음 이은 링크를 떼고(길에 링크가 생긴 자리는 따라가지 않고 둔다) 추적하는 파일을 되돌린다. 무시되는 파일은 남긴다.
+    if (work) {
+      const { worktree, rest } = work;
+      const moved = await rename(worktree, rest).then(
+        () => true,
+        () => false,
+      );
+      if (moved) {
+        for (const link of links) {
+          const at = join(rest, relative(worktree, link));
+          if (await direct(dirname(at))) await rm(at, { recursive: true, force: true });
+        }
+        await reset(work.gitDir, rest, work.tree).catch(() => {});
+      } else await rm(worktree, { recursive: true, force: true });
+    }
     await rm(run, { recursive: true, force: true });
   }
 }

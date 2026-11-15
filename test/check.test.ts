@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { access, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fakeSandbox, startWorld, tempRepo, writer } from "./harness.ts";
 
@@ -301,12 +301,18 @@ test("임시 워크트리는 레포의 Git 폴더 아래에서 다시 쓰이고,
   const second = await world.cli("runner", "check");
   assert.match(second.stdout, /판정: 통과/, second.stdout);
 
-  // 두 번 다 같은 폴더이고, 레포의 Git 폴더 아래다. 내 폴더의 git status와 워크트리 목록에는 나타나지 않는다.
+  // 레포의 Git 폴더 아래에서 돌고, 돌림마다 자리를 옮긴다(#150). 끝나면 쉬는 자리로 돌아간다. 내 폴더의 git status와 워크트리 목록에는 나타나지 않는다.
   const [one, two] = fake.calls;
   assert.ok(one && two);
-  assert.equal(one.folder, two.folder);
+  assert.notEqual(one.folder, two.folder);
   const gitDir = await realpath(join(repo.folder, ".git"));
-  assert.equal(one.folder, join(gitDir, "omagari", "check-worktree"));
+  for (const call of [one, two]) assert.equal(dirname(call.folder), join(gitDir, "omagari"));
+  const rest = join(gitDir, "omagari", "check-worktree");
+  const places = await readdir(join(gitDir, "omagari"));
+  assert.deepEqual(
+    places.filter((name) => name.startsWith("check-")),
+    ["check-worktree"],
+  );
   assert.equal(await repo.git("status", "--porcelain"), before);
   assert.equal((await repo.git("worktree", "list")).split("\n").length, 1);
 
@@ -317,13 +323,10 @@ test("임시 워크트리는 레포의 Git 폴더 아래에서 다시 쓰이고,
   assert.ok(!read.includes(gitDir));
 
   // 돌린 뒤: 추적하는 파일은 되돌려지고, 새 파일과 이은 링크는 없어지고, 무시되는 빌드 산출물은 남는다.
-  assert.equal(
-    await readFile(join(one.folder, "packages/lib/code.txt"), "utf8"),
-    "내 작업의 코드\n",
-  );
-  await assert.rejects(access(join(one.folder, "leftover.txt")));
-  await assert.rejects(access(join(one.folder, "node_modules")));
-  assert.equal(await readFile(join(one.folder, "dist/out.txt"), "utf8"), "built\n");
+  assert.equal(await readFile(join(rest, "packages/lib/code.txt"), "utf8"), "내 작업의 코드\n");
+  await assert.rejects(access(join(rest, "leftover.txt")));
+  await assert.rejects(access(join(rest, "node_modules")));
+  assert.equal(await readFile(join(rest, "dist/out.txt"), "utf8"), "built\n");
   // 내 폴더는 그대로다(명령이 쓴 것은 임시 워크트리에만 간다).
   assert.equal(
     await readFile(join(repo.folder, "packages/lib/code.txt"), "utf8"),
@@ -369,4 +372,59 @@ test("검사 명령이 임시 워크트리의 Git 설정과 훅을 바꿔 둬도
   const [call] = fake.calls;
   assert.ok(call);
   assert.equal(call.policy.filesystem.allowWrite?.length, 3);
+});
+
+test("검사가 끝난 뒤 남은 프로세스나 검사 명령이 임시 워크트리의 의존성 자리를 바깥을 가리키는 링크로 바꿔 둬도, 러너는 샌드박스 밖에 쓰거나 지우지 않는다(#150)", async (t) => {
+  const fake = fakeSandbox();
+  const world = await startWorld({ sandbox: fake.sandbox });
+  t.after(world.stop);
+  const { repo } = world;
+  const write = writer(repo.folder);
+  // 바깥: 남은 프로세스가 node_modules를 이쪽으로 돌려 두는 빈 폴더와, 검사 명령이 packages/app을 이쪽으로 돌려 두는 폴더.
+  const outside = await mkdtemp(join(tmpdir(), "omagari-outside-"));
+  t.after(() => rm(outside, { recursive: true, force: true }));
+  await mkdir(join(outside, "empty"));
+  await mkdir(join(outside, "app/node_modules/keep"), { recursive: true });
+  const done = join(outside, "leftover-done");
+  // 남은 프로세스는 프로세스 그룹을 벗어나(detached) 검사가 끝나기를 기다렸다가, 받은 임시 워크트리 경로에 링크를 건다.
+  // 실제 샌드박스처럼 받은 경로 안에만 쓴다. 다 하면(실패해도) 표지를 남긴다(테스트가 기다리는 데만 쓴다).
+  const leftover = [
+    'W="$PWD"',
+    `for i in $(seq 1 400); do [ -e "$W/node_modules" ] || break; sleep 0.05; done`,
+    `ln -s '${join(outside, "empty")}' "$W/node_modules"; touch '${done}'`,
+  ].join("; ");
+  const spawnLeftover = `require("node:child_process").spawn("sh", ["-c", process.argv[1]], { detached: true, stdio: "ignore" }).unref()`;
+  await merge(repo, {
+    // 끝에 /가 없으면 링크도 무시되어 되돌리기(git clean)에서 지워지지 않는다.
+    ".gitignore": "node_modules\n",
+    ".omagari.json": config({ check: "sh check.sh" }),
+    "check.sh": [
+      `[ -e '${done}' ] || '${process.execPath}' -e '${spawnLeftover}' '${leftover}'`,
+      `rm -rf packages/app && ln -s '${join(outside, "app")}' packages/app`,
+      "",
+    ].join("\n"),
+    "packages/app/package.json": "{}\n",
+  });
+  await write("node_modules/dep/index.txt", "설치된 것");
+  await write("packages/app/node_modules/inner/index.txt", "안쪽 것");
+
+  const first = await world.cli("runner", "check");
+  assert.match(first.stdout, /판정: 통과/, first.stdout);
+  for (let i = 0; i < 200; i++) {
+    if (
+      await access(done).then(
+        () => true,
+        () => false,
+      )
+    )
+      break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  await access(done);
+  const second = await world.cli("runner", "check");
+  assert.match(second.stdout, /판정: 통과/, second.stdout);
+
+  // 남은 프로세스가 돌려 둔 링크를 따라 바깥에 의존성을 잇지 않았고, packages/app 링크를 따라 바깥의 node_modules를 지우지 않았다.
+  assert.deepEqual(await readdir(join(outside, "app/node_modules")), ["keep"]);
+  assert.deepEqual(await readdir(join(outside, "empty")), []);
 });

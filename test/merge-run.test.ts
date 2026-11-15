@@ -212,7 +212,18 @@ if grep -q currency src/pay.ts && grep -q "pay(1)" src/use.ts; then echo "pay(1)
   assert.equal(fake.calls.length, 2);
 
   // 판정이 바뀌면 두 작업의 편지함에 다시 들어가 CLI 응답으로 넘어간다.
-  await receives(world, folder, OWNER_SEES);
+  // 깨짐은 알림 줄 끝에 판정과 출력의 끝을 싣는다. 출력은 JSON 문자열이라 줄바꿈이 \n으로 남는다.
+  // 편지함은 한 번 넘기면 비워지므로, 판정이 든 줄을 넘겨받는 같은 확인에서 본다.
+  await eventually(async () => {
+    const line = inboxLines((await world.cliIn(folder, "status")).stdout).find((l) =>
+      l.startsWith(OWNER_SEES),
+    );
+    assert.ok(line, "깨짐 판정이 든 소식이 오지 않았다");
+    assert.match(
+      line,
+      /· 합쳐 돌려 본 판정: 깨짐\(돌린 멤버 owner, 검사 명령 "sh check\.sh", \d+초\)\. 출력 끝: "bob\.ts\\ncommitted\.ts\\ndraft\.ts\\npay\.ts\\nuse\.ts\\npay\(1\)에 currency가 빠졌다"$/,
+    );
+  });
   await receives(world, bob.desk.folder, BOB_SEES);
 
   // 같은 내용이면 다시 돌리지 않는다.
