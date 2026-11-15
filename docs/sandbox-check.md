@@ -51,6 +51,18 @@ node test/real-sandbox.ts > sandbox-check-result.md
 - "벗어남" 줄이 실패이면 샌드박스 밖에서 명령이 돈 것이다. 가장 급하다.
 - 실패한 항목은 `docs/omagari-v3-implementation.md` 11장의 결과 블록과 같은 꼴로 날짜, 기기, 도구의 판과 함께 적고, 고쳐야 하는 것은 이슈로 만든다.
 
+## 버튼으로 돌리기(Linux와 WSL2)
+
+주인 기기는 Mac뿐이라 Linux와 WSL2는 GitHub Actions의 버튼으로 본다(ADR-0038, 이슈 #165). 워크플로 `.github/workflows/real-sandbox.yml`은 `workflow_dispatch`로만 돈다. PR과 push에는 돌지 않고, 비밀을 쓰지 않으며 `contents: read` 권한만 쓴다.
+
+1. 저장소의 Actions 탭에서 "실제 샌드박스 점검"을 고르고 Run workflow를 누른다. 버튼은 기본 브랜치(`dev`)에 워크플로가 들어간 뒤에 보인다. 터미널에서는 `gh workflow run real-sandbox.yml --ref dev`.
+2. 기계가 셋 돈다: Ubuntu 24.04(AppArmor의 비특권 사용자 네임스페이스 막기를 풀고 돈다), Ubuntu 22.04, Windows 기계 위의 WSL2(Ubuntu 24.04). 각각 bubblewrap, socat, ripgrep과 Node 24를 깔고 `npm ci` 뒤 `node test/real-sandbox.ts`를 돌린다.
+3. 실행 화면 맨 아래 요약(Summary)에 기계마다 결과 표가 실린다. 점검이 실패해도 실린다. 표 읽는 법은 위 "읽는 법"과 같다.
+
+- 기계 하나가 실패해도 다른 기계는 끝까지 돈다. 실패한 잡 이름이 어느 기계인지 알려 준다.
+- WSL2는 레포를 WSL2의 홈으로 복사해 돌린다. GitHub의 Windows 기계에서 WSL2가 켜지는지는 첫 실행(#166)에서 확인한다. 못 켜면 그 잡은 점검 전에 멈추고, 요약에 "점검 전에 멈췄다"가 적힌다.
+- 결과는 "결과를 어디에 적나"대로 문서에 옮긴다.
+
 ## 결과를 어디에 적나
 
 결과 블록을 `docs/omagari-v3-implementation.md` 11장 "러너의 안전장치" 아래에 붙이고 ADR-0033의 "손 점검" 줄을 고친다. 못 본 것(Linux 등)은 못 봤다고 적는다.

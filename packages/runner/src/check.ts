@@ -51,6 +51,8 @@ const PASSED_ENV = ["PATH", "LANG", "LANGUAGE", "TERM", "TZ", "USER", "LOGNAME",
  * 실제 것은 `@anthropic-ai/sandbox-runtime`이다(`osSandbox`). 테스트는 여기에 가짜를 꽂는다.
  */
 export type Sandbox = {
+  /** Linux처럼 샌드박스가 유닉스 소켓을 모두 막는 기기다. 혼자 돌린 것이 소켓 때문에 깨지면 그 까닭을 붙인다. */
+  blocksUnixSockets?: boolean;
   /** 이 기기에서 쓸 수 없으면 그 까닭과 까는 법. 쓸 수 있으면 없다. */
   unavailable(): Promise<string | undefined>;
   wrap(input: SandboxInput): Promise<string[]>;
@@ -70,19 +72,42 @@ export type SandboxInput = {
 const INSTALL =
   "Linux는 bubblewrap, socat, ripgrep을 깐다(예: sudo apt install bubblewrap socat ripgrep). Ubuntu 24.04부터는 AppArmor가 막으면 bubblewrap의 사용자 네임스페이스를 풀어야 한다";
 
+/** seccomp 도우미가 없는 기기(x64, arm64 밖의 Linux)에서 돌리지 않는 까닭과 고치는 법. */
+export const NO_SECCOMP =
+  "이 기기에는 sandbox-runtime의 seccomp 도우미가 없어 유닉스 소켓을 막지 못한다. 막지 못한 채 돌리지 않는다. 고치는 법: x64나 arm64 Linux(또는 그 위의 WSL2)에서 러너를 켠다";
+
+/** Linux에서 샌드박스가 유닉스 소켓을 모두 막는다는 까닭. 혼자 돌린 것이 소켓 막기로 깨졌을 때 "가릴 수 없음"에 붙인다(ADR-0038). */
+export const SOCKET_BLOCKED =
+  "이 기기(Linux)에서는 샌드박스가 유닉스 소켓을 막는다. 소켓을 쓰는 검사 명령은 혼자 돌려도 깨져 합쳐서 깨졌는지 가릴 수 없다";
+
+/** 출력에 소켓이 막혀 깨진 흔적이 있다: 소켓을 말하는 것과 권한 오류(seccomp는 `EPERM`을 돌려준다)가 함께 있다. 휴리스틱이다. */
+const socketTrouble = (output: string) =>
+  /EPERM|Operation not permitted/i.test(output) &&
+  /socket|\blisten\b|\bconnect\b|\bbind\b|AF_UNIX|\.sock\b/i.test(output);
+
+/**
+ * sandbox-runtime의 도구 검사 결과에서 이 기기를 못 쓰는 까닭. 오류가 있으면 도구가 없는 것이고,
+ * seccomp 경고는 소켓을 막지 못한 채 도는 것이라 ADR-0038의 막기를 못 지켜 돌리지 않는다.
+ * 다른 경고(0.5 미만 bubblewrap 등)는 막지 않는다: 지금은 seccomp가 유닉스 소켓을 모두 막아 소켓 파일을 가릴 일이 없고, 쓰기·네트워크·홈 막기는 그대로 지켜진다(#163).
+ */
+export function dependencyProblem({ errors, warnings }: { errors: string[]; warnings: string[] }) {
+  if (errors.length > 0) return `샌드박스 도구가 없다: ${errors.join(", ")}. 까는 법: ${INSTALL}`;
+  if (warnings.some((warning) => warning.includes("seccomp not available"))) return NO_SECCOMP;
+}
+
 /** 프록시를 띄우는 초기화. 한 번만 한다. 막는 설정은 명령마다 넘긴다. */
 let initialized: Promise<void> | undefined;
 
 /** 이 기기의 샌드박스: macOS는 `sandbox-exec`, Linux는 bubblewrap(ADR-0033). 쓰지 않는 기기에서는 불러오지도 않는다. */
 export const osSandbox: Sandbox = {
+  blocksUnixSockets: process.platform === "linux",
   async unavailable() {
     if (process.platform !== "darwin" && process.platform !== "linux")
       return process.platform === "win32"
         ? "Windows에서는 WSL2 안에서 러너를 켜세요. 레포도 WSL2 안에 두고, WSL2에 bubblewrap, socat, ripgrep을 까세요(ADR-0038)"
         : `이 기기(${process.platform})에서는 샌드박스를 쓸 수 없어 돌리지 않는다. macOS, Linux, Windows의 WSL2에서 켠 러너만 검사 명령을 돌린다`;
     const { SandboxManager } = await import("@anthropic-ai/sandbox-runtime");
-    const { errors } = await SandboxManager.checkDependenciesAsync();
-    if (errors.length > 0) return `샌드박스 도구가 없다: ${errors.join(", ")}. 까는 법: ${INSTALL}`;
+    return dependencyProblem(await SandboxManager.checkDependenciesAsync());
   },
   async wrap({ command, policy }) {
     const { SandboxManager } = await import("@anthropic-ai/sandbox-runtime");
@@ -657,7 +682,12 @@ async function checkOne(options: {
         reason: `검사 명령을 ${ran.cut} 상한에서 끊었다. 끊긴 것은 통과로 치지 않는다`,
         output: ran.output,
       });
-    return done(ran.code === 0 ? "pass" : "broken", { output: ran.output });
+    // Linux에서는 샌드박스가 유닉스 소켓을 모두 막는다. 소켓 때문에 깬 것으로 보이면 까닭을 붙인다. macOS와 소켓과 상관없이 깬 것에는 붙이지 않는다.
+    const socket = ran.code !== 0 && sandbox.blocksUnixSockets && socketTrouble(ran.output);
+    return done(ran.code === 0 ? "pass" : "broken", {
+      output: ran.output,
+      ...(socket && { reason: SOCKET_BLOCKED }),
+    });
   } catch (error) {
     return done("not_run", {
       reason: `돌리지 못했다: ${error instanceof Error ? error.message : error}`,

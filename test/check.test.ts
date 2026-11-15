@@ -3,6 +3,7 @@ import { access, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink } from
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { dependencyProblem, NO_SECCOMP } from "@omagari/runner";
 import { CHECK_LIMITS, checkWork, osSandbox } from "../packages/runner/src/check.ts";
 import { fakeSandbox, startWorld, tempRepo, writer } from "./harness.ts";
 
@@ -486,4 +487,40 @@ test("Windows 그대로에서는 돌리지 못함의 까닭이 WSL2 안내다", 
   } finally {
     Object.defineProperty(process, "platform", platform as PropertyDescriptor);
   }
+test("Linux에서 혼자 돌린 것이 유닉스 소켓 막기로 깨진 것으로 보이면 까닭이 붙고, 소켓과 상관없이 깨졌거나 소켓을 막지 않는 기기면 붙지 않는다", async (t) => {
+  const fake = fakeSandbox();
+  fake.blocksUnixSockets = true;
+  const world = await startWorld({ sandbox: fake.sandbox });
+  t.after(world.stop);
+  const { repo } = world;
+  const socketFail = "echo 'Error: listen EPERM: operation not permitted /tmp/a.sock'; exit 1";
+
+  await merge(repo, { ".omagari.json": config({ check: socketFail }) });
+  const blocked = await world.cli("runner", "check");
+  assert.match(
+    blocked.stdout,
+    /판정: 깨짐 \(\d+\.\d초\)\n {2}이 기기\(Linux\)에서는 샌드박스가 유닉스 소켓을 막는다/,
+  );
+
+  await merge(repo, { ".omagari.json": config({ check: "echo 단언 실패; exit 1" }) });
+  assert.doesNotMatch((await world.cli("runner", "check")).stdout, /유닉스 소켓/);
+
+  // 소켓을 막지 않는 기기(macOS)에서는 같은 출력이어도 붙지 않는다.
+  await merge(repo, { ".omagari.json": config({ check: socketFail }) });
+  fake.blocksUnixSockets = false;
+  assert.doesNotMatch((await world.cli("runner", "check")).stdout, /유닉스 소켓을 막는다/);
+});
+
+test("seccomp 도우미가 없다는 경고가 나오면 샌드박스를 쓸 수 없는 기기이고, 다른 경고는 막지 않는다", () => {
+  const seccomp = "seccomp not available - unix socket access not restricted";
+  assert.equal(dependencyProblem({ errors: [], warnings: [seccomp] }), NO_SECCOMP);
+  assert.match(NO_SECCOMP, /고치는 법: /);
+  assert.equal(
+    dependencyProblem({ errors: [], warnings: ["bubblewrap 0.4.1 is older than 0.5.0"] }),
+    undefined,
+  );
+  assert.match(
+    dependencyProblem({ errors: ["socat not installed"], warnings: [seccomp] }) ?? "",
+    /socat/,
+  );
 });
