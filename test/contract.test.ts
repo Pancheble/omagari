@@ -4,6 +4,7 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { networkInterfaces } from "node:os";
 import { type TestContext, test } from "node:test";
+import { setTimeout } from "node:timers/promises";
 import {
   api,
   CONTRACT_VERSION,
@@ -17,7 +18,7 @@ import {
 } from "@omagari/contract";
 import { startRunner } from "@omagari/runner";
 import { type WebSocket as ServerSocket, WebSocketServer } from "ws";
-import { eventually, fakeExecutor, REPO, startWorld, tempRepo } from "./harness.ts";
+import { eventually, fakeExecutor, REPO, startWorld, stubbed, tempRepo } from "./harness.ts";
 
 const frame = (fields: object) => JSON.stringify({ v: CONTRACT_VERSION, payload: {}, ...fields });
 const tooBigFrame = "x".repeat(MAX_FRAME_BYTES + 1);
@@ -67,7 +68,9 @@ async function fakeServer(
     socket.on("message", (data) => {
       const message = JSON.parse(String(data));
       if (message.kind === "hello") onHello(socket, message);
-      else if (message.kind !== "observation") received.push(message);
+      // 러너가 연결마다 알아서 보내는 관측과 검사 명령은 문답이 아니라 세지 않는다.
+      else if (message.kind !== "observation" && message.kind !== "checkCommand")
+        received.push(message);
     });
   });
   t.after(() => {
@@ -82,8 +85,9 @@ async function fakeServer(
       serverUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
       folder: repo.folder,
       session: "세션",
+      ...stubbed(),
     },
-    /** hello 다음에 러너가 보낸 메시지들(관측은 빼고). 온 순서대로다. */
+    /** hello 다음에 러너가 보낸 메시지들(관측과 검사 명령은 빼고). 온 순서대로다. */
     received,
     /** 러너와의 연결이 닫혔다. */
     closed: closed.promise,
@@ -221,7 +225,11 @@ test("러너는 문답만 받는다. 계약에 없는 요청도, 도구를 넓�
     );
     socket.send(frame({ id: "z", kind: "ask", payload: { ...ask, message: "읽기만 해" } }));
   });
-  const fake = fakeExecutor();
+  // 답이 늦어 러너의 첫 관측(연결마다 한 번 보내는 checkCommand)이 먼저 닿게 한다. 서버는 그 메시지를 세지 않는다.
+  const fake = fakeExecutor(async () => {
+    await setTimeout(500);
+    return "가짜 답";
+  });
   const runner = await startRunner({
     ...server.runner,
     executors: { "claude-code": fake.executor },
