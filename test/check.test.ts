@@ -60,10 +60,11 @@ test("omagari runner check가 내 작업을 커밋하지 않은 변경까지 임
   assert.equal(fake.calls.length, 1);
   const [call] = fake.calls;
   assert.ok(call);
-  assert.equal(call.command, "sh check.sh");
   assert.notEqual(call.folder, repo.folder);
   const temp = call.env.TMPDIR;
   assert.ok(temp);
+  // sandbox-runtime이 감쌀 때 TMPDIR을 /tmp/claude로 덮으므로(#146), 명령 앞에서 러너가 준 임시 폴더로 되돌린다.
+  assert.equal(call.command, `export TMPDIR='${temp}'; sh check.sh`);
   // 유닉스 소켓은 임시 워크트리와 임시 폴더 아래에서만 열고 붙는다(ADR-0037). 임시 폴더는 짧아, 그 안의 소켓 경로가 macOS 104바이트 상한을 넘지 않는다.
   assert.deepEqual(call.policy.network, {
     allowedDomains: [],
@@ -151,7 +152,9 @@ test("준비 명령은 검사 명령 앞에 돌고, 실패하거나 상한을 �
   });
   t.after(world.stop);
   const { repo } = world;
-  const commands = () => fake.calls.splice(0).map((call) => call.command);
+  // TMPDIR 되돌리기 앞가지(#146)는 떼고 본다. 그 앞가지는 첫 테스트가 따로 확인한다.
+  const commands = () =>
+    fake.calls.splice(0).map((call) => call.command.replace(/^export TMPDIR='[^']*'; /, ""));
 
   await merge(repo, {
     ".omagari.json": config({ check: "test -f prepared", setup: "touch prepared" }),
