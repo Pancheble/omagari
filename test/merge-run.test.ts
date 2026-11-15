@@ -427,7 +427,12 @@ test("합친 것이 깨지면 두 작업을 따로 돌려 가린다: 둘 다 통
   timeout: 240_000,
 }, async (t) => {
   const fake = fakeSandbox();
-  const world = await startWorld({ observeMs: 50, sandbox: fake.sandbox, quietMs: QUIET_MS });
+  const world = await startWorld({
+    observeMs: 50,
+    followMs: 50,
+    sandbox: fake.sandbox,
+    quietMs: QUIET_MS,
+  });
   t.after(world.stop);
   const hold = (await place(t))("hold");
   // 합친 것은 bob의 currency와 owner의 pay(1)이 함께 있으면 깨진다. 표시 파일이 있는 쪽은 혼자서도 깨진다. `hold`가 있는 동안은 기다린다.
@@ -477,6 +482,22 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
   assert.equal(broken.confirmed, true);
   assert.equal(broken.run?.alone, undefined);
   assert.equal(fake.calls.length, 7);
+  // 포스트의 이슈에 확인됨 라벨과 판정 댓글 하나가 달린다. 같은 판정이 거듭 와도 늘지 않고, 댓글은 포스트의 글로 들어오지 않는다.
+  const [issue] = world.github.issues;
+  assert.ok(issue);
+  await eventually(() => {
+    assert.ok(issue.labels.includes("확인됨"), JSON.stringify(issue.labels));
+    assert.equal(issue.comments.length, 1);
+  });
+  assert.match(issue.comments[0]?.body ?? "", /깨졌어요/);
+  assert.match(issue.comments[0]?.body ?? "", /`sh check\.sh`/);
+  assert.match(issue.comments[0]?.body ?? "", /```\n합치면 깨진다\n```/);
+  await sleep(300);
+  assert.equal(issue.comments.length, 1);
+  const [post] = (await call(world.owner, api.posts)).posts;
+  assert.ok(post?.issue?.labels.includes("확인됨"));
+  const thread = await call(world.owner, api.history, { channel: post?.message.channel ?? "" });
+  assert.ok(!thread.messages.some((m) => "github" in m && m.github));
   // 깨짐인 두 작업에 멤버 목록의 표시가 붙는다.
   await eventually(async () => {
     assert.equal(await brokenMark(world, "owner", "payment"), true);
@@ -487,6 +508,13 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
   await write("src/draft.ts", DRAFT.replace("pay(1);", 'pay(1, "krw");'));
   await closedWith(world.owner, "bob");
   assert.equal(fake.calls.length, 8);
+  // 통과로 닫히면 라벨이 떼어지고 이슈가 닫히며 통과한 검사 명령이 댓글에 남는다.
+  await eventually(() => {
+    assert.ok(!issue.labels.includes("확인됨"));
+    assert.equal(issue.open, false);
+    assert.equal(issue.comments.length, 2);
+  });
+  assert.match(issue.comments[1]?.body ?? "", /통과했어요[\s\S]*`sh check\.sh`/);
   // 새 알림을 만들지 않고 그 알림을 닫았다.
   const withBob = async () =>
     (await indirect(world.owner)).filter((a) => a.works.some((w) => w.login === "bob")).length;
