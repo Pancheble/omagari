@@ -2,7 +2,12 @@ import { ALERT_LABELS, type Alert, ago, type ChannelMessage, type Post } from "@
 import {
   ArrowUpDown,
   ChevronDown,
+  CircleCheck,
+  CircleDashed,
+  CircleQuestionMark,
+  CircleX,
   GitMerge,
+  LoaderCircle,
   MessageCircle,
   MessagesSquare,
   Search,
@@ -10,6 +15,7 @@ import {
 import { useEffect, useId, useMemo, useReducer, useState } from "react";
 import { fullTime, timeOf } from "./conversation.tsx";
 import { useMenu } from "./dm.tsx";
+import { LIST_VERDICT_LABELS, type ListVerdict, listVerdict } from "./list-verdict.ts";
 import { Avatar } from "./workspace.tsx";
 
 export type AlertMessage = Extract<ChannelMessage, { kind: "alert" }>;
@@ -84,12 +90,43 @@ const haystack = (post: PostItem) => {
 };
 
 /** 종류 배지: 직접 충돌은 주황, 나머지는 테두리, 간접 충돌은 "· 추정"이 붙는다. */
-export const KindBadge = ({ kind, confirmed }: { kind: Alert["kind"]; confirmed?: boolean }) => (
+export const KindBadge = ({
+  kind,
+  confirmed,
+  plain,
+}: {
+  kind: Alert["kind"];
+  confirmed?: boolean;
+  plain?: boolean;
+}) => (
   <span className={kind === "direct" || confirmed ? "badge warning" : "badge outline"}>
     {KINDS[kind]}
-    {kind === "indirect" && (confirmed ? " · 확인됨" : " · 추정")}
+    {kind === "indirect" && !plain && (confirmed ? " · 확인됨" : " · 추정")}
   </span>
 );
+
+const VERDICT_ICONS = {
+  estimate: CircleDashed,
+  running: LoaderCircle,
+  broken: CircleX,
+  unclear: CircleQuestionMark,
+  pass: CircleCheck,
+  direct: CircleX,
+} as const satisfies Record<ListVerdict, unknown>;
+
+/** 제목 앞 판정 아이콘(16px). 깨짐과 직접 충돌만 경고색이다. */
+const VerdictIcon = ({ verdict }: { verdict: ListVerdict }) => {
+  const Icon = VERDICT_ICONS[verdict];
+  return (
+    <Icon
+      className="verdict-icon"
+      data-verdict={verdict}
+      size={16}
+      role="img"
+      aria-label={LIST_VERDICT_LABELS[verdict]}
+    />
+  );
+};
 
 /** 이 기기에 기억하는 고른 값. 저장소를 막아 둔 브라우저에서는 이 탭에서만 남는다. */
 function useSaved<T extends string>(key: string, options: readonly T[]) {
@@ -351,6 +388,7 @@ function PostRow({
   const { alert } = post.message;
   const resolved = settled(post);
   const kind = KINDS[alert.kind];
+  const verdict = listVerdict(alert);
   return (
     <a
       className="forum-post"
@@ -360,12 +398,18 @@ function PostRow({
     >
       <span className="forum-post-title">
         {resolved && <span className="badge outline">풀렸어요</span>}
+        {verdict && <VerdictIcon verdict={verdict} />}
         <strong className="forum-post-name">{postTitle(post)}</strong>
         <IssueNumber post={post} link={false} />
         {unread && <span className="unread-dot" role="img" aria-label="새 글" />}
       </span>
       <span className="forum-post-tags">
-        <KindBadge kind={alert.kind} />
+        <KindBadge kind={alert.kind} plain />
+        {verdict && verdict !== "direct" && (
+          <span className={verdict === "broken" ? "badge warning" : "badge outline"}>
+            {LIST_VERDICT_LABELS[verdict]}
+          </span>
+        )}
         {labelsOf(post)
           .filter((label) => label !== kind)
           .map((label) => (
