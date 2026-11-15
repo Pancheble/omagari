@@ -15,7 +15,7 @@ import {
 } from "@omagari/contract";
 import { startRunner } from "@omagari/runner";
 import { WebSocket } from "ws";
-import { eventually, fakeExecutor, REPO, startWorld, tempRepo } from "./harness.ts";
+import { eventually, fakeExecutor, REPO, startWorld, stubbed, tempRepo } from "./harness.ts";
 
 test("push 권한이 있는 계정은 로그인하면 초대 없이 멤버가 된다", async (t) => {
   const world = await startWorld();
@@ -35,9 +35,12 @@ test("push 권한이 없는 계정은 워크스페이스의 어떤 것도 읽지
     message: new RegExp(`stranger는 ${REPO}에 push 권한이 없어`),
   });
   await assert.rejects(call(world.server, api.members), { code: "unauthorized" });
-  await assert.rejects(call({ url: world.server.url, session: "made-up-session" }, api.members), {
-    code: "unauthorized",
-  });
+  await assert.rejects(
+    call({ url: world.server.url, session: "made-up-session", ...stubbed() }, api.members),
+    {
+      code: "unauthorized",
+    },
+  );
   const desk = await tempRepo(); // 남이 레포를 받은 폴더
   t.after(desk.remove);
   await assert.rejects(
@@ -162,6 +165,7 @@ test("같은 레포에 러너를 하나 더 켜면 이유를 말하고 켜지지
       serverUrl: world.server.url,
       folder: world.repo.folder,
       session: world.owner.session,
+      ...stubbed(),
     }),
     /이 레포의 러너가 이미 켜져 있다/,
   );
