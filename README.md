@@ -63,7 +63,7 @@ omagari runner
 omagari runner check
 ```
 
-샌드박스 도구는 macOS에는 따로 깔 것이 없고, Linux는 bubblewrap, socat, ripgrep이 있어야 한다. 이 기기에서 끄려면 `omagari runner --merge-check off`로 켜고, 고른 것은 그 레포에 남는다.
+샌드박스 도구는 macOS에는 따로 깔 것이 없고, Linux는 bubblewrap, socat, ripgrep이 있어야 한다. Windows는 WSL2 안에서 러너를 켜고 레포도 WSL2 안에 두며, 도구는 Linux와 같다(PowerShell에서 켠 러너는 합쳐 돌려 보지 않는다). WSL2에서는 Windows 드라이브(`/mnt/c` 등)도 읽지 못한다. 이 기기에서 끄려면 `omagari runner --merge-check off`로 켜고, 고른 것은 그 레포에 남는다.
 
 ## 업데이트
 

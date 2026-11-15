@@ -7,6 +7,7 @@ import {
   mkdir,
   mkdtemp,
   readdir,
+  readFile,
   realpath,
   rename,
   rm,
@@ -102,7 +103,9 @@ export const osSandbox: Sandbox = {
   blocksUnixSockets: process.platform === "linux",
   async unavailable() {
     if (process.platform !== "darwin" && process.platform !== "linux")
-      return `이 기기(${process.platform})에서는 샌드박스를 쓸 수 없어 돌리지 않는다. macOS나 Linux에서 켠 러너만 검사 명령을 돌린다`;
+      return process.platform === "win32"
+        ? "Windows에서는 WSL2 안에서 러너를 켜세요. 레포도 WSL2 안에 두고, WSL2에 bubblewrap, socat, ripgrep을 까세요(ADR-0038)"
+        : `이 기기(${process.platform})에서는 샌드박스를 쓸 수 없어 돌리지 않는다. macOS, Linux, Windows의 WSL2에서 켠 러너만 검사 명령을 돌린다`;
     const { SandboxManager } = await import("@anthropic-ai/sandbox-runtime");
     return dependencyProblem(await SandboxManager.checkDependenciesAsync());
   },
@@ -208,16 +211,49 @@ const under = (home: string, path: string) => {
 };
 
 /**
+ * `/proc/mounts` 본문에서 Windows 드라이브가 걸린 자리. WSL2는 드라이브를 9p(예전 `drvfs`)로 걸고 원본이 `C:\\` 꼴이다.
+ * 걸린 자리는 `/etc/wsl.conf`의 automount `root`로 바뀔 수 있어 이름을 짐작하지 않고 목록에서 읽는다(ADR-0038).
+ * 공백은 `\\040`으로 적혀 있다.
+ */
+export function windowsDrives(mounts: string | undefined): string[] {
+  const octal = (text: string) =>
+    text.replace(/\\([0-7]{3})/g, (_, o) => String.fromCharCode(parseInt(o, 8)));
+  return (mounts ?? "")
+    .split("\n")
+    .map((line) => line.split(" "))
+    .filter(
+      ([source = "", , type = ""]) =>
+        /^[A-Za-z]:/.test(octal(source)) && ["9p", "drvfs"].includes(type),
+    )
+    .map(([, at = ""]) => octal(at));
+}
+
+/** WSL2이면 `/proc/mounts` 본문. 아니면 없다. WSL2의 커널 이름에는 `microsoft`가 들어 있다. */
+export async function osMounts(): Promise<string | undefined> {
+  if (process.platform !== "linux") return undefined;
+  const release = await readFile("/proc/sys/kernel/osrelease", "utf8").catch(() => "");
+  if (!/microsoft/i.test(release)) return undefined;
+  return readFile("/proc/mounts", "utf8").catch(() => undefined);
+}
+
+/**
  * 막는 설정(ADR-0033): 바깥 네트워크를 막고 자기 기기의 포트는 쓴다. 유닉스 소켓은 `sockets`(임시 워크트리와 임시 폴더) 아래에서만 열고 붙는다(ADR-0037). 쓰기는 임시 워크트리, 임시 폴더, 샌드박스 안의 git이 쓰는 Git 폴더만이다.
  * 읽기는 홈 폴더를 막고 임시 워크트리, 임시 폴더, 도구 자리, 이어 둔 의존성 폴더, 레포의 개체 폴더만 다시 연다. 레포의 Git 폴더는 열지 않는다(원격 URL에 토큰이 있을 수 있다). 도구 자리는 러너를 돌리는 Node가 깔린 곳과 PATH의 폴더 가운데
  * 홈 폴더 아래의 것이다(nvm처럼 Node를 홈 폴더에 깐 기기).
  */
-function policy(writable: string[], extraRead: string[], sockets: string[]): SandboxRuntimeConfig {
+function policy(
+  writable: string[],
+  extraRead: string[],
+  sockets: string[],
+  drives: string[],
+): SandboxRuntimeConfig {
   const home = homedir();
-  const tools = [
-    dirname(dirname(process.execPath)),
-    ...(process.env.PATH ?? "").split(delimiter),
-  ].filter((path) => under(home, path));
+  const node = dirname(dirname(process.execPath));
+  // WSL2의 PATH에는 Windows 쪽 폴더가 섞여 있다. 그것은 다시 열지 않고, Node가 드라이브에 있을 때 그 자리만 연다.
+  const tools = [node, ...(process.env.PATH ?? "").split(delimiter)].filter(
+    (path) =>
+      under(home, path) || (path === node && drives.some((d) => path === d || under(d, path))),
+  );
   return {
     network: {
       allowedDomains: [],
@@ -226,7 +262,7 @@ function policy(writable: string[], extraRead: string[], sockets: string[]): San
       allowUnixSockets: sockets,
     },
     filesystem: {
-      denyRead: [home],
+      denyRead: [home, ...drives],
       allowRead: [...writable, ...new Set([...tools, ...extraRead])],
       allowWrite: writable,
       denyWrite: [],
@@ -362,7 +398,10 @@ async function linkDeps(folder: string, worktree: string) {
 }
 
 /** 사용자와 시스템의 Git 설정을 읽지 않는다. 합친 코드의 `.gitattributes`가 그 설정의 필터(예: git-lfs)를 샌드박스 밖에서 부르지 못하게 한다. */
-const NO_USER_CONFIG = { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
+const NO_USER_CONFIG = {
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_CONFIG_GLOBAL: "/dev/null",
+};
 
 /**
  * 러너가 샌드박스 밖에서 임시 워크트리에 부르는 git(#144). 샌드박스가 쓸 수 없는 러너의 Git 폴더(`gitDir`)를 쓰고,
@@ -431,7 +470,10 @@ async function mergeTree(
       problem: `상대의 기준 커밋(${theirs.base.slice(0, 7)})이 이 기기에 없다. git fetch로 받으면 다음에 돌린다`,
     };
   const ancestor = await gitOut(folder, ["merge-base", base, theirs.base]).catch(() => "");
-  if (!ancestor) return { problem: "두 작업의 기준 커밋이 갈라진 지점이 없다(이어지지 않은 역사)" };
+  if (!ancestor)
+    return {
+      problem: "두 작업의 기준 커밋이 갈라진 지점이 없다(이어지지 않은 역사)",
+    };
   const withIndex = { GIT_INDEX_FILE: join(run, "theirs-index") };
   await gitOut(folder, ["read-tree", theirs.base], withIndex);
   // ponytail: 상대의 파일은 모두 보통 파일(100644)로 얹는다. 실행 비트나 심볼릭 링크가 문제가 되면 관측에 모드를 싣는다.
@@ -513,7 +555,9 @@ async function prepareWork(folder: string, run: string, tree: string) {
     await cp(gitDir, sandboxGit, { recursive: true });
     await gitOut(run, [`--git-dir=${sandboxGit}`, "config", "core.bare", "false"], NO_USER_CONFIG);
     // `wx`: 그새 무언가 생겼으면 따라가 쓰지 않고 실패한다.
-    await writeFile(join(worktree, ".git"), `gitdir: ${sandboxGit}\n`, { flag: "wx" });
+    await writeFile(join(worktree, ".git"), `gitdir: ${sandboxGit}\n`, {
+      flag: "wx",
+    });
   };
   // 지난 돌림이 죽으며 망가졌으면 지우고 처음부터 만든다.
   await place().catch(async () => {
@@ -550,6 +594,8 @@ export function checkWork(options: {
   tree?: string;
   /** 합쳐 돌려 보기면 상대 작업. 없으면 내 작업만 돌린다. */
   merge?: MergeWith;
+  /** WSL2의 `/proc/mounts` 본문을 돌려주는 곳. 테스트가 WSL2인 척하려고 꽂는다. 기본은 이 기기를 본다(`osMounts`). */
+  mounts?: () => Promise<string | undefined>;
 }): Promise<CheckResult> {
   const result = turn.then(() => checkOne(options));
   turn = result.catch(() => {});
@@ -565,6 +611,7 @@ async function checkOne(options: {
   tree?: string;
   /** 합쳐 돌려 보기면 상대 작업. 없으면 내 작업만 돌린다. */
   merge?: MergeWith;
+  mounts?: () => Promise<string | undefined>;
 }): Promise<CheckResult> {
   const { folder, sandbox, limits } = options;
   const started = Date.now();
@@ -602,16 +649,19 @@ async function checkOne(options: {
     const { worktree, common, sandboxGit } = work;
     const deps = await linkDeps(folder, worktree);
     links = deps.links;
+    const drives = windowsDrives(await (options.mounts ?? osMounts)());
     const readable = [join(common, "objects"), ...deps.reads];
     // sandbox-runtime은 감쌀 때 TMPDIR을 /tmp/claude로 덮는다(#146). 명령 앞에서 러너가 준 임시 폴더로 되돌린다. 러너 프로세스의 환경은 건드리지 않는다.
     const input = (command: string) => ({
       command: `export TMPDIR='${temp.replaceAll("'", `'\\''`)}'; ${command}`,
       folder: worktree,
       env: passedEnv(temp),
-      policy: policy([worktree, temp, sandboxGit], readable, [worktree, temp]),
+      policy: policy([worktree, temp, sandboxGit], readable, [worktree, temp], drives),
     });
     if (setup) {
-      const ran = await sandboxed(sandbox, input(setup), { ms: limits.setupMs });
+      const ran = await sandboxed(sandbox, input(setup), {
+        ms: limits.setupMs,
+      });
       if (ran.cut)
         return done("not_run", {
           reason: `준비 명령을 ${ran.cut} 상한에서 끊었다`,
