@@ -28,6 +28,7 @@ import { DecisionLine, DecisionStrip } from "./decision.tsx";
 import { QaLine } from "./dm.tsx";
 import { AlertLine } from "./forum.tsx";
 import type { LiveState } from "./live.ts";
+import { VerdictStrip } from "./verdict.tsx";
 import { Avatar } from "./workspace.tsx";
 
 /** 채널 하나의 대화. 실시간으로 받은 것은 불러오는 중에도 쌓아 두고, 지난 대화를 받으면 번호로 합친다. */
@@ -111,6 +112,7 @@ export function Conversation({
   label,
   edited,
   strip,
+  verdict,
   attached,
   onAttach,
   onSend,
@@ -136,6 +138,8 @@ export function Conversation({
     onRevise: () => void;
     onDiscard: () => Promise<void>;
   };
+  /** 간접 충돌 포스트의 판정 띠. 러너가 판정을 올린 적이 없으면 없다. 결정 상태 띠 위에 붙는다. */
+  verdict?: ComponentProps<typeof VerdictStrip>;
   /** 입력 칸에 붙인 DM 문답. DM 칸도 함께 보므로 워크스페이스가 갖는다. */
   attached?: Qa;
   onAttach: Dispatch<SetStateAction<Qa | undefined>>;
@@ -205,6 +209,7 @@ export function Conversation({
           </button>
         </div>
       )}
+      {verdict && <VerdictStrip {...verdict} />}
       {strip && <DecisionStrip {...strip} me={me} />}
       {!channel || !view || view.status === "loading" ? (
         <Skeleton />
