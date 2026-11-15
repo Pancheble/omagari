@@ -69,12 +69,14 @@ test("멤버 목록에 사람마다 이름과 실행기마다의 에이전트, �
         executor: "claude-code",
         line: { source: "agent", text: "결제 붙이는 중", at },
         conflict: false,
+        broken: false,
       },
       {
         branch: "refund",
         executor: "claude-code",
         line: { source: "files", text: "refund.ts 수정 중" },
         conflict: false,
+        broken: false,
       },
     ],
   });
@@ -126,7 +128,7 @@ test("웹은 실시간 연결에서 멤버 목록을 바로 받고, 작업과 �
   await world.repo.git("switch", "--create", "payment");
   await eventually(() =>
     assert.deepEqual(owner()?.works, [
-      { branch: "payment", executor: "claude-code", line: null, conflict: false },
+      { branch: "payment", executor: "claude-code", line: null, conflict: false, broken: false },
     ]),
   );
   await writer(world.repo.folder)("payment.ts", "pay\n");
