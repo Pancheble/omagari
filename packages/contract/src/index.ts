@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 30;
+export const CONTRACT_VERSION = 31;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -256,6 +256,8 @@ export const MemberView = z.strictObject({
       line: StatusLine.nullable(),
       /** 이 작업에 직접 충돌(줄이 부딪히는 것이 확인된 알림)이 걸려 있다. 풀리면 false로 돌아온다. */
       conflict: z.boolean(),
+      /** 이 작업에 합쳐 돌려 보니 깨져 확인된 간접 충돌이 걸려 있다("합치면 깨짐"). 다음 판정으로 확인됨에서 벗어나거나 알림이 풀리면 false로 돌아온다. */
+      broken: z.boolean(),
     }),
   ),
 });
@@ -456,9 +458,13 @@ export const VERDICT_LABELS = {
  * `stale`은 돌린 뒤(도는 중 포함) 두 작업의 내용이 바뀌어 지난 결과라는 뜻이다. 잠잠해지면 다시 돌린다.
  * `omitted`는 상대의 내용이 빠져(공유 수준, 크기, 바이너리) 그 파일 없이 돌린 경로다. `output`은 출력의 끝(끝 25줄)이고 공유 수준이 full인 러너만 올린다.
  * `check`는 돌린 검사 명령이다. 읽지 못했으면 없다. `ms`는 걸린 시간(밀리초)이고 돌려 보는 중이면 없다.
+ * 판정은 ADR-0035를 따른다. 합친 것이 깨지면 내 작업만, 상대 작업만으로 한 번씩 더 돌린다. 둘 다 통과하면 `broken`(깨짐),
+ * 어느 한쪽이 혼자서도 깨지면 `unclear`(가릴 수 없음)이고 `alone`에 혼자서도 깨진 쪽을 적는다. `mine`은 돌린 러너의 작업, `theirs`는 상대 작업이다.
+ * 혼자 돌린 것을 돌리지 못했으면(상한에서 끊김 등) 판정은 `not_run`이고 까닭이 붙는다.
  */
 export const MergeRun = z.strictObject({
-  verdict: z.enum(["running", ...Verdict.options]),
+  verdict: z.enum(["running", ...Verdict.options, "unclear"]),
+  alone: z.array(z.enum(["mine", "theirs"])).optional(),
   reason: z.string().optional(),
   check: z.string().optional(),
   ms: z.number().optional(),
@@ -471,6 +477,7 @@ export type MergeRun = z.infer<typeof MergeRun>;
 export const MERGE_RUN_LABELS = {
   running: "돌려 보는 중",
   ...VERDICT_LABELS,
+  unclear: "가릴 수 없음",
 } as const satisfies Record<MergeRun["verdict"], string>;
 
 /** 알림에 붙은 판정: 러너가 올린 것과, 돌린 멤버(`login`)와 올라온 시각(`at`). */
@@ -502,7 +509,10 @@ export const Alert = z.discriminatedUnion("kind", [
     symbols: z.array(AlertSymbol).max(ALERT_FILES),
     /** 간접 충돌(추정)에만 있다: 그 쌍을 합쳐 돌려 본 마지막 판정. 아직 돌리지 않았으면 없다. */
     run: AlertRun.optional(),
-    /** 간접 충돌(추정)에만 있다: 합쳐 돌려 보니 깨져 확인됐다. 다음 판정(통과, 돌리지 못함)이 나올 때까지 남는다. */
+    /**
+     * 간접 충돌(추정)에만 있다: 합쳐 돌려 보니 깨져 확인됐다(빠진 파일 없이 `broken`). 다음 판정이 나올 때까지 남는다.
+     * 빠진 파일 없이 통과하면 알림은 풀림으로 닫히고 `run`에 통과한 검사 명령이 남는다(ADR-0035).
+     */
     confirmed: z.boolean().optional(),
   }),
 ]);
@@ -1019,6 +1029,11 @@ export const serverToRunner = {
    * 러너는 받아 두고 훅과 CLI에 내준다.
    */
   inbox: z.strictObject({ items: z.array(InboxItem) }),
+  /**
+   * 서버에 붙은 이 멤버의 합쳐 돌려 보기 판정들(난 것만: 돌려 보는 중과 지난 결과는 빼고). 열린 알림과, 통과로 닫혀 다시 돌릴 때까지 알림을 세우지 않는 쌍의 것이다.
+   * welcome 바로 뒤에 보내고, 판정이 붙을 때마다 다시 보낸다. 러너는 같은 지문을 다시 돌리지 않는다(ADR-0036). 돌리라고 시키는 것이 아니다(ADR-0033).
+   */
+  runs: z.strictObject({ runs: z.array(MergeRun) }),
   error: ContractError,
 } satisfies Payloads;
 

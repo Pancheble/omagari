@@ -41,7 +41,6 @@ import {
   type Source,
   type SymbolPlace,
   serverToRunner,
-  type Verdict,
   VersionMismatch,
   type Work,
   type WorkRef,
@@ -410,7 +409,8 @@ export type CheckRecord = {
   /** 합쳐 돌려 보기면 합친 두 작업: 이 러너의 작업(`branch`)과 상대 작업(`theirs`). `omagari runner check`면 없다. */
   branch?: string;
   theirs?: { login: string; branch: string };
-  verdict: Verdict;
+  /** 합쳐 돌려 보기면 따로 돌려 가린 판정(ADR-0035)이라 가릴 수 없음도 있다. */
+  verdict: Exclude<MergeRun["verdict"], "running">;
   /** 돌리지 못했으면 그 까닭. */
   reason?: string;
   ms: number;
@@ -776,6 +776,9 @@ export async function startRunner(options: {
         welcomed.resolve(message.payload);
       } else if (message.kind === "situation") {
         situation = { ...message.payload, disconnectedAt: null };
+      } else if (message.kind === "runs") {
+        for (const run of message.payload.runs)
+          if (!verdicts.has(run.fingerprint)) verdicts.set(run.fingerprint, run);
       } else if (message.kind === "inbox") {
         const ids = new Set(message.payload.items.map((item) => item.id));
         // 서버가 지운 것은 더 기억하지 않는다.
@@ -1202,9 +1205,12 @@ export async function startRunner(options: {
    * 합쳐 돌려 보기(ADR-0036). 쌍마다 지문과 그 지문이 처음 보인 시각(`quiet`), 지문마다 난 판정(`verdicts`), 쌍마다 마지막으로 난 판정(`last`),
    * 지금 도는 것(`running`, 한 번에 하나)을 둔다. 쌍의 열쇠는 `[내 브랜치, 상대 멤버, 상대 브랜치]`의 JSON이다.
    */
-  // ponytail: 메모리에만 둔다. 러너를 다시 켜면 같은 내용도 한 번 다시 돌린다. 서버에 붙은 판정으로 건너뛰는 것은 #129에서 한다.
+  // 서버에 붙은 이 멤버의 판정(`runs`)도 `verdicts`에 넣어, 다른 러너가 돌렸거나 다시 켜기 전에 돌린 같은 지문은 돌리지 않는다.
   const quiet = new Map<string, { fingerprint: string; since: number }>();
   const verdicts = new Map<string, MergeRun>();
+  /** 한쪽만 돌린 판정(ADR-0035). 열쇠는 그쪽 내용과 검사 설정의 지문이다. 같은 내용이면 다시 돌리지 않는다. */
+  // ponytail: 메모리에만 두고 지우지 않는다. 오래 켜 둔 러너에서 커지면 쌍마다 마지막 것만 둔다.
+  const aloneVerdicts = new Map<string, Awaited<ReturnType<typeof checkWork>>>();
   const last = new Map<string, MergeRun>();
   /** 지문을 만들고 판정을 보내는 중인 것(한 번에 하나)과, 다음에 해도 되는 시각. */
   let merging: Promise<void> | undefined;
@@ -1262,7 +1268,7 @@ export async function startRunner(options: {
       } else if (verdicts.has(fingerprint)) {
         run = verdicts.get(fingerprint);
       } else if (!running && now - since >= (options.quietMs ?? QUIET_MS)) {
-        run = start(key, pair, fingerprint, tree, mine, theirs, config?.check);
+        run = start(key, pair, fingerprint, tree, mine, theirs, config);
       } else {
         const previous = last.get(key);
         run = previous && { ...previous, stale: true };
@@ -1280,8 +1286,9 @@ export async function startRunner(options: {
     tree: string | undefined,
     mine: { work: Work; folder: string },
     theirs: WorkView,
-    check: string | undefined,
+    config: CheckRead["config"],
   ): MergeRun {
+    const check = config?.check;
     const omitted = theirs.files.flatMap((file) => ("omitted" in file ? [file.path] : []));
     const report: MergeRun = {
       verdict: "running",
@@ -1291,16 +1298,44 @@ export async function startRunner(options: {
       stale: false,
     };
     const at = new Date().toISOString();
-    const done = checkWork({
-      folder: mine.folder,
-      ...checkWith(),
-      tree,
-      merge: { base: mine.work.base, theirs },
-    })
+    const merge = { base: mine.work.base, theirs };
+    const check1 = (alone?: "mine" | "theirs") =>
+      checkWork({ folder: mine.folder, ...checkWith(), tree, merge: { ...merge, alone } });
+    /** 한쪽만 돌린다. 같은 내용(그쪽의 내용과 검사 설정)이면 지난 판정을 다시 쓴다. 돌리지 못한 것은 남기지 않는다. */
+    const alone = async (side: "mine" | "theirs") => {
+      const content = side === "mine" ? [tree, mine.work.base] : [theirs.base, theirs.files];
+      const id = createHash("sha256")
+        .update(JSON.stringify([side, ...content, config ?? null]))
+        .digest("hex");
+      const known = aloneVerdicts.get(id);
+      if (known) return known;
+      const result = await check1(side);
+      if (result.verdict !== "not_run") aloneVerdicts.set(id, result);
+      return result;
+    };
+    const done = check1()
       .then(async (result) => {
+        // 합친 것이 깨지면 내 작업만, 상대 작업만 한 번씩 더 돌린다. 둘 다 통과할 때만 깨짐이다(ADR-0035).
+        let verdict: Exclude<MergeRun["verdict"], "running"> = result.verdict;
+        let reason = result.reason;
+        let broke: ("mine" | "theirs")[] = [];
+        if (result.verdict === "broken") {
+          const sides = [
+            { side: "mine" as const, name: "내 작업만", result: await alone("mine") },
+            { side: "theirs" as const, name: "상대 작업만", result: await alone("theirs") },
+          ];
+          broke = sides.flatMap((s) => (s.result.verdict === "broken" ? [s.side] : []));
+          const failed = sides.find((s) => s.result.verdict === "not_run");
+          if (broke.length > 0) verdict = "unclear";
+          else if (failed) {
+            verdict = "not_run";
+            reason = `${failed.name} 돌린 것을 돌리지 못해 가리지 못했다: ${failed.result.reason}`;
+          }
+        }
         const run: MergeRun = {
-          verdict: result.verdict,
-          ...(result.reason !== undefined && { reason: result.reason }),
+          verdict,
+          ...(broke.length > 0 && { alone: broke }),
+          ...(reason !== undefined && { reason }),
           ...(result.config && { check: result.config.check }),
           ms: result.ms,
           omitted,
@@ -1318,8 +1353,8 @@ export async function startRunner(options: {
           ...result.config,
           branch: pair.branch,
           theirs: pair.theirs,
-          verdict: result.verdict,
-          ...(result.reason !== undefined && { reason: result.reason }),
+          verdict,
+          ...(reason !== undefined && { reason }),
           ms: result.ms,
         };
         await appendFile(paths.log, `${JSON.stringify(record)}\n`);
