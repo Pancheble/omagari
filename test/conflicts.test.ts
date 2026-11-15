@@ -503,7 +503,13 @@ test("함수의 정의 줄을 바꾸면 그 함수를 쓰는 다른 작업에 �
       [{ path: "src/pay.ts", line: 4, role: "changed" }],
     ],
   };
-  const first = await theAlert(world.owner, () => {}, undefined, "indirect");
+  // owner가 파일을 쓰는 도중(빈 파일)을 관측하면 모든 정의가 없어진 알림이 잠깐 서고, 다음 보고에서 고쳐진다. 고쳐질 때까지 기다린다.
+  const first = await theAlert(
+    world.owner,
+    (alert) => assert.deepEqual(alert.symbols, [REFUND]),
+    undefined,
+    "indirect",
+  );
   assert.deepEqual(first, {
     id: first.id,
     kind: "indirect",
@@ -543,9 +549,10 @@ test("함수의 정의 줄을 바꾸면 그 함수를 쓰는 다른 작업에 �
   const again = await eventually(async () => {
     const open = (await alerts(world.owner, undefined, "indirect")).filter((a) => !a.resolved);
     assert.equal(open.length, 1);
+    // 위와 같이 쓰는 도중의 알림이 고쳐질 때까지 기다린다.
+    assert.deepEqual(open[0]?.symbols, [REFUND]);
     return open[0] as Of<"indirect">;
   });
-  assert.deepEqual(again.symbols, [REFUND]);
   await alice.desk.stop();
   await eventually(async () =>
     assert.ok((await world.works(world.owner)).some((w) => w.login === "alice" && w.offlineSince)),
