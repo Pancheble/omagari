@@ -434,6 +434,7 @@ test("합친 것이 깨지면 두 작업을 따로 돌려 가린다: 둘 다 통
     quietMs: QUIET_MS,
   });
   t.after(world.stop);
+  fake.blocksUnixSockets = true; // Linux처럼
   const hold = (await place(t))("hold");
   // 합친 것은 bob의 currency와 owner의 pay(1)이 함께 있으면 깨진다. 표시 파일이 있는 쪽은 혼자서도 깨진다. `hold`가 있는 동안은 기다린다.
   await base(world, {
@@ -441,7 +442,8 @@ test("합친 것이 깨지면 두 작업을 따로 돌려 가린다: 둘 다 통
     "src/use.ts": USE,
     ".omagari.json": `${JSON.stringify({ check: "sh check.sh" })}\n`,
     "check.sh": `while [ -e ${hold} ]; do sleep 0.05; done
-if [ -e src/owner-oops ] || [ -e src/bob-oops ]; then echo 혼자서도 깨진다; exit 1; fi
+if [ -e src/owner-oops ]; then echo "Error: listen EPERM: operation not permitted /tmp/x.sock"; exit 1; fi
+if [ -e src/bob-oops ]; then echo 혼자서도 깨진다; exit 1; fi
 if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합치면 깨진다; exit 1; fi
 `,
   });
@@ -464,6 +466,8 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
   assert.deepEqual(mine.run?.alone, ["mine"]);
   assert.equal(mine.confirmed, false);
   assert.equal(fake.calls.length, 3);
+  // 소켓 막기로 깨졌으므로 까닭이 붙는다(#163). 소켓과 상관없이 깨진 bob의 것에는 붙지 않는다.
+  assert.match(mine.run?.reason ?? "", /이 기기\(Linux\)에서는 샌드박스가 유닉스 소켓을 막는다/);
 
   // bob의 작업이 혼자서도 깨진다: 가릴 수 없음이고 그쪽이 적힌다.
   await rm(join(folder, "src/owner-oops"));
@@ -472,6 +476,7 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
     assert.deepEqual(a.run?.alone, ["theirs"]),
   );
   assert.equal(theirs.run?.verdict, "unclear");
+  assert.equal(theirs.run?.reason, undefined);
   assert.equal(theirs.confirmed, false);
   assert.equal(fake.calls.length, 6);
   assert.equal(await brokenMark(world, "owner", "payment"), false);

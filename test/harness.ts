@@ -425,9 +425,18 @@ type ExecutorInput = Parameters<Executor>[0];
  * `unavailable`에 까닭을 넣으면 샌드박스를 쓸 수 없는 기기다. 실제 샌드박스는 CI에서 돌지 않을 수 있어 손 점검으로 본다(ADR-0033).
  */
 export function fakeSandbox() {
-  const fake: { calls: SandboxInput[]; unavailable?: string; sandbox: Sandbox } = {
+  const fake: {
+    calls: SandboxInput[];
+    unavailable?: string;
+    /** Linux처럼 유닉스 소켓을 모두 막는 기기인 척한다. */
+    blocksUnixSockets?: boolean;
+    sandbox: Sandbox;
+  } = {
     calls: [],
     sandbox: {
+      get blocksUnixSockets() {
+        return fake.blocksUnixSockets;
+      },
       unavailable: async () => fake.unavailable,
       wrap: async (input) => {
         fake.calls.push(input);
