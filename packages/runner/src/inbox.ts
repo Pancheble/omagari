@@ -3,12 +3,14 @@ import {
   ALERT_KINDS,
   type Alert,
   type AlertFile,
+  type AlertRun,
   type AlertSymbol,
   ago,
   type Claim,
   EXECUTOR_NAMES,
   type InboxItem,
   type LineRange,
+  MERGE_RUN_LABELS,
   PLACE_ROLES,
   PLAN_KINDS,
   type Plan,
@@ -28,6 +30,31 @@ const UNREADABLE: Record<Unreadable, string> = {
 const quote = (data: string) =>
   JSON.stringify(data).replaceAll("<", "\\u003c").replaceAll(">", "\\u003e");
 
+/** 출력의 끝에서 이만큼만 싣는다(러너가 이미 끝 25줄만 올린다). */
+const OUTPUT_TAIL = { lines: 25, chars: 1_500 };
+
+/** 합쳐 돌려 본 판정 한 덩이. 깨짐이면 출력의 끝을 데이터로 싣고, 돌리지 못했으면 까닭을 싣는다. */
+export function runLine(run: AlertRun) {
+  const stale =
+    run.stale && run.verdict !== "running" ? ", 지난 결과(내용이 바뀌어 다시 돌린다)" : "";
+  const parts = [
+    `돌린 멤버 ${run.login}`,
+    ...(run.check === undefined ? [] : [`검사 명령 ${quote(run.check)}`]),
+    ...(run.ms === undefined ? [] : [`${Math.round(run.ms / 1000)}초`]),
+    ...(run.omitted.length > 0
+      ? [`상대의 빠진 파일 ${run.omitted.map(quote).join(", ")}은 빼고 돌렸다`]
+      : []),
+  ];
+  const reason = run.reason === undefined ? "" : ` 까닭: ${quote(run.reason)}`;
+  const tail = run.output
+    ?.split("\n")
+    .slice(-OUTPUT_TAIL.lines)
+    .join("\n")
+    .slice(-OUTPUT_TAIL.chars);
+  const output = run.verdict === "broken" && tail ? ` 출력 끝: ${quote(tail)}` : "";
+  return `합쳐 돌려 본 판정: ${MERGE_RUN_LABELS[run.verdict]}${stale}(${parts.join(", ")}).${reason}${output}`;
+}
+
 const ranges = (lines: LineRange[]) =>
   lines.map(({ from, to }) => (from === to ? `${from}` : `${from}-${to}`)).join(",") || "지움";
 
@@ -42,7 +69,13 @@ export function alertLine(alert: Alert, me?: { login: string; branch: string }) 
   const work = (i: number) =>
     `${alert.works[i]?.login}의 브랜치 ${quote(alert.works[i]?.branch ?? "")}`;
   const who = mine === -1 ? `${work(0)}와 ${work(1)}` : `내 작업과 ${work(1 - mine)}`;
-  if (alert.resolved !== null) return `- 풀렸다: ${who}의 ${ALERT_KINDS[alert.kind]}`;
+  if (alert.resolved !== null) {
+    const closed =
+      alert.kind === "indirect" && alert.run?.verdict === "pass"
+        ? " (합쳐 돌려 본 판정이 통과라 닫혔다)"
+        : "";
+    return `- 풀렸다: ${who}의 ${ALERT_KINDS[alert.kind]}${closed}`;
+  }
   const more = alert.more > 0 ? [`그 밖에 ${alert.more}개`] : [];
   if (alert.kind !== "direct") {
     const side = (i: 0 | 1) => (mine === -1 ? alert.works[i].login : i === mine ? "나" : "상대");
@@ -60,9 +93,11 @@ export function alertLine(alert: Alert, me?: { login: string; branch: string }) 
     const symbols = [...alert.symbols.map(symbol), ...more].join(" · ");
     if (alert.kind === "declared")
       return `- 선언된 계약 변경: ${who}. 한쪽이 심볼을 바꾸겠다고 선점에 선언했고(코드는 아직 안 바뀌었을 수 있다), 다른 쪽이 그 이름을 쓴다. ${symbols}`;
-    return alert.kind === "indirect"
-      ? `- 간접 충돌(추정): ${who}. 한쪽이 정의 줄을 바꾸거나 없앤 심볼을 다른 쪽이 쓴다. 이름으로만 이어 다른 심볼일 수 있다. ${symbols}`
-      : `- 중복 구현: ${who}에 같은 이름의 새 정의가 따로 생겼다. ${symbols}`;
+    if (alert.kind === "indirect") {
+      const run = alert.run === undefined ? "" : ` · ${runLine(alert.run)}`;
+      return `- 간접 충돌(추정): ${who}. 한쪽이 정의 줄을 바꾸거나 없앤 심볼을 다른 쪽이 쓴다. 이름으로만 이어 다른 심볼일 수 있다. ${symbols}${run}`;
+    }
+    return `- 중복 구현: ${who}에 같은 이름의 새 정의가 따로 생겼다. ${symbols}`;
   }
   const file = (f: AlertFile) => {
     if ("unknown" in f) return `${quote(f.path)} 부딪힐 수 있음(${UNREADABLE[f.unknown]})`;
