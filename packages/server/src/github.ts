@@ -81,6 +81,10 @@ export type GitHub = {
   comment(token: string, repo: string, number: number, body: string): Promise<{ id: number }>;
   /** 이슈를 닫는다(끝남). */
   closeIssue(token: string, repo: string, number: number): Promise<void>;
+  /** 이슈에 라벨을 붙인다. 이미 붙어 있어도 된다. 레포에 없는 라벨이면 GitHub이 만든다. */
+  addLabel(token: string, repo: string, number: number, label: string): Promise<void>;
+  /** 이슈에서 라벨을 뗀다. 붙어 있지 않아도 된다. */
+  removeLabel(token: string, repo: string, number: number, label: string): Promise<void>;
 };
 
 export type Issue = { title: string; labels: string[]; open: boolean };
@@ -334,6 +338,18 @@ export function realGitHub(clientId: string): GitHub {
         state: "closed",
         state_reason: "completed",
       });
+    },
+    // 라벨: https://docs.github.com/en/rest/issues/labels (붙이기는 POST, 떼기는 DELETE이고 붙어 있지 않으면 404다)
+    async addLabel(token, repo, number, label) {
+      await send(`/repos/${repo}/issues/${number}/labels`, token, "POST", { labels: [label] });
+    },
+    async removeLabel(token, repo, number, label) {
+      const response = await request(
+        `/repos/${repo}/issues/${number}/labels/${encodeURIComponent(label)}`,
+        token,
+        "DELETE",
+      );
+      if (!response.ok && response.status !== 404) throw new Error(`HTTP ${response.status}`);
     },
   };
 }

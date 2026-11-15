@@ -37,6 +37,7 @@ import {
   type InboxItem,
   LIVE_SOCKET,
   MAX_FRAME_BYTES,
+  MERGE_RUN_LABELS,
   type MemberView,
   type MergeCheckState,
   type Message,
@@ -452,6 +453,11 @@ export async function startServer(options: {
   if (!db.prepare("SELECT 1 FROM pragma_table_info('channels') WHERE name = 'alert'").get())
     db.exec("ALTER TABLE channels ADD COLUMN alert INTEGER REFERENCES messages (id)");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS channels_by_alert ON channels (alert)");
+  // 이슈에 올린 판정(#134): `verdict`는 마지막으로 이슈에 맞춘 것(confirmed, cleared, passed)이고, 올린 댓글의 번호는
+  // `verdict_comments`에 적어 댓글 읽기가 포스트의 글로 다시 들이지 않게 한다.
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('channels') WHERE name = 'verdict'").get())
+    db.exec("ALTER TABLE channels ADD COLUMN verdict TEXT");
+  db.exec("CREATE TABLE IF NOT EXISTS verdict_comments (id INTEGER PRIMARY KEY) STRICT");
   // 포스트에서 정리한 결정과 그 결정 PR(ADR-0025). `login`은 정리한 멤버, `pull`과 `url`은 PR의 번호와 주소, `span`은 이의 창,
   // `state`는 PR에서 읽은 상태(proposed, accepted, closed), `at`은 정리한 시각(ms)이다.
   db.exec(`CREATE TABLE IF NOT EXISTS decisions (
@@ -2824,6 +2830,25 @@ export async function startServer(options: {
       `포스트: ${link}`,
     ].join("\n");
   };
+  const CONFIRMED_LABEL = "확인됨";
+  /** 판정 댓글의 글: 확인됨, 확인됨에서 벗어남, 통과로 닫힘. 검사 명령과, 올라와 있으면 출력의 끝이 있다. */
+  const verdictBody = (state: string, run: AlertRun) => {
+    const head =
+      state === "confirmed"
+        ? "🔴 합쳐 돌려 보니 깨졌어요. 확인됨 라벨을 붙였어요."
+        : state === "passed"
+          ? "🟢 합쳐 돌려 보니 통과했어요. 알림을 풀림으로 닫았어요."
+          : `⚪ 다시 돌린 판정이 "${MERGE_RUN_LABELS[run.verdict]}"이라 확인됨 라벨을 뗐어요.`;
+    const fence = "`".repeat(
+      Math.max(3, ...[...(run.output ?? "").matchAll(/`+/g)].map((m) => m[0].length + 1)),
+    );
+    return [
+      head,
+      ...(run.check ? ["", `검사 명령: \`${run.check}\``] : []),
+      ...(state === "confirmed" && run.output ? ["", fence, run.output.trimEnd(), fence] : []),
+    ].join("\n");
+  };
+
   /**
    * 포스트의 글 하나를 이슈 댓글로. 사람의 글은 그대로, 공개된 문답은 올린 사람의 글 뒤에 AI가 쓴 답이라는 표시(DESIGN.md "AI가 쓴 글")와
    * 질문, 답을 붙인다. 아직 답이 오지 않은 문답이면 없다(답이 오면 올린다). 답하지 못한 문답은 올리지 않는다.
@@ -2857,7 +2882,7 @@ export async function startServer(options: {
   const syncIssues = async (only?: Set<string>) => {
     const rows = db
       .prepare(
-        `SELECT c.id, c.issue, c.issue_open, c.issue_closed, m.id AS message, m.alert, m.channel AS forum
+        `SELECT c.id, c.issue, c.issue_open, c.issue_closed, c.verdict, m.id AS message, m.alert, m.channel AS forum
          FROM channels c JOIN messages m ON m.id = c.alert ORDER BY m.id`,
       )
       .all() as {
@@ -2865,6 +2890,7 @@ export async function startServer(options: {
       issue: number | null;
       issue_open: number | null;
       issue_closed: number | null;
+      verdict: string | null;
       message: number;
       alert: number;
       forum: string;
@@ -2889,8 +2915,11 @@ export async function startServer(options: {
         ]),
       ].filter((token): token is string => token !== undefined);
       /** 토큰을 차례로 넣어 GitHub이 처음 답한 것. 모두 받지 않으면 없다. 마지막 까닭을 남긴다. */
-      const answered = async <T>(ask: (token: string) => Promise<T | undefined>) => {
-        for (const token of tokens) {
+      const answered = async <T>(
+        ask: (token: string) => Promise<T | undefined>,
+        first?: string,
+      ) => {
+        for (const token of first ? [first, ...tokens] : tokens) {
           const result = await ask(token).catch((error: Error) => {
             console.error("포스트의 이슈를 GitHub에서 다루지 못했다:", error.message);
             return undefined;
@@ -2941,6 +2970,40 @@ export async function startServer(options: {
         db.prepare("UPDATE messages SET comment = ? WHERE id = ?").run(made.id, message.id);
       }
 
+      // 판정을 이슈에 맞춘다(#134): 확인됨이면 라벨과 댓글, 확인됨에서 벗어나거나 통과로 닫히면 라벨을 떼고 댓글. 판정을 올린 러너의 멤버 토큰으로 한다.
+      // 라벨을 먼저 맞추고 댓글을 달아야 마친 것으로 적는다. GitHub이 받지 않으면 다음 주기에 다시 한다(라벨은 거듭해도 같다).
+      if (alert.kind !== "direct" && alert.run) {
+        const { run } = alert;
+        const passed = resolved && run.verdict === "pass" && run.omitted.length === 0;
+        const next = alert.confirmed ? "confirmed" : passed ? "passed" : "cleared";
+        // 확인되지 않은 채 지난 알림에는 말할 것이 없다. 통과로 닫힌 것은 확인됨이었든 아니든 검사 명령을 남긴다.
+        if (next !== row.verdict && (next !== "cleared" || row.verdict === "confirmed")) {
+          const first = tokenOf(run.login);
+          const labeled = await answered(
+            (token) =>
+              (next === "confirmed" ? github.addLabel : github.removeLabel)(
+                token,
+                repo,
+                number,
+                CONFIRMED_LABEL,
+              ).then(() => true),
+            first,
+          );
+          if (stopped) return;
+          const made =
+            labeled &&
+            (await answered(
+              (token) => github.comment(token, repo, number, verdictBody(next, run)),
+              labeled.token,
+            ));
+          if (stopped) return;
+          if (made) {
+            db.prepare("INSERT INTO verdict_comments (id) VALUES (?)").run(made.result.id);
+            db.prepare("UPDATE channels SET verdict = ? WHERE id = ?").run(next, row.id);
+          }
+        }
+      }
+
       // 3. 이슈를 읽고 모르는 댓글을 들인다.
       let changed = false;
       const read = await answered((token) => github.issue(token, repo, number));
@@ -2967,6 +3030,7 @@ export async function startServer(options: {
       if (stopped) return;
       for (const comment of comments ?? []) {
         if (db.prepare("SELECT 1 FROM messages WHERE comment = ?").get(comment.id)) continue;
+        if (db.prepare("SELECT 1 FROM verdict_comments WHERE id = ?").get(comment.id)) continue;
         const { lastInsertRowid } = db
           .prepare(
             "INSERT INTO messages (channel, login, text, at, comment, github) VALUES (?, ?, ?, ?, ?, 1)",
