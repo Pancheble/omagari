@@ -15,9 +15,9 @@ status: accepted
 - **읽기**: 홈 폴더를 막고, 임시 워크트리와 실행에 필요한 도구 자리, 이어 둔 의존성 폴더, 레포의 개체 폴더(`objects`)만 연다. 레포의 Git 폴더는 열지 않는다(원격 URL에 토큰이 있을 수 있다). 임시 워크트리는 자기만의 Git 폴더를 두고 개체 폴더만 빌려 읽어, 샌드박스 안의 `git`이 돈다(#130).
 - **환경 변수**: 정해 둔 것만 넘긴다. 토큰과 키는 넘기지 않는다. Room은 러너의 환경을 그대로 넘긴다(`ROOM_*`만 뺀다).
 
-샌드박스는 `@anthropic-ai/sandbox-runtime`을 붙여 쓴다(Apache-2.0, "Beta Research Preview"). macOS에서는 `sandbox-exec`, Linux에서는 bubblewrap으로 가둔다. Claude Code와 Codex가 명령을 돌릴 때 쓰는 것과 같은 방식이다. 기본값이 네트워크 막음, 쓰기 막음, 읽기 허용이라 읽기는 따로 막는다.
+샌드박스는 `@anthropic-ai/sandbox-runtime`을 붙여 쓴다(Apache-2.0, "Beta Research Preview"). macOS에서는 `sandbox-exec`, Linux와 Windows의 WSL2에서는 bubblewrap으로 가둔다. Claude Code와 Codex가 명령을 돌릴 때 쓰는 것과 같은 방식이다. 기본값이 네트워크 막음, 쓰기 막음, 읽기 허용이라 읽기는 따로 막는다. OS마다 무엇으로 가두는지는 ADR-0038에 있다.
 
-샌드박스를 쓸 수 없는 기기(도구가 없다, Windows)에서는 합쳐 돌려 보기를 돌리지 않는다. 가두지 않고 돌리는 길은 두지 않는다.
+샌드박스를 쓸 수 없거나 위 막기 가운데 하나라도 못 지키는 기기(도구가 없다, seccomp 도우미가 없다, Windows 그대로)에서는 합쳐 돌려 보기를 돌리지 않고 까닭을 보인다. 가두지 않고 돌리는 길은 두지 않는다.
 
 ## 샌드박스와 함께 지키는 것
 
@@ -62,12 +62,13 @@ status: accepted
 ## Consequences
 
 - 바깥 네트워크나 Docker가 필요한 검사 명령은 돌지 못한다. 이때는 혼자 돌린 것도 깨지므로 "깨짐"이 아니라 "가릴 수 없음"이 된다.
-- 멤버가 도구를 깔아야 한다. macOS는 ripgrep, Linux는 bubblewrap, socat, ripgrep이다. Ubuntu 24.04부터는 AppArmor 설정을 풀어야 할 수 있다.
+- 멤버가 도구를 깔아야 한다. macOS는 ripgrep, Linux와 WSL2는 bubblewrap, socat, ripgrep이다. Ubuntu 24.04부터는 AppArmor 설정을 풀어야 할 수 있다. Windows 멤버는 WSL2 안에서 러너를 켠다(ADR-0038).
 - 읽기를 열어 둔 파일은 출력에 실려 서버로 나갈 수 있다. 샌드박스는 피해를 줄이지만 서버를 믿을 수 있게 만들지는 않는다.
 - `sandbox-exec`는 macOS 매뉴얼에 폐기 예정으로 적혀 있다. 지금은 돌고, Apple이 내놓은 대체 명령은 찾지 못했다.
 - `@anthropic-ai/sandbox-runtime`은 미리 보기 판이라 설정의 꼴이 바뀔 수 있다.
 - 손 점검(2026-11-14, macOS, #138, 구현 문서 11장): 홈 아래에 둔 Node에서 읽기 막기와 돌리기는 됐다. 못 한 것은 Linux, 진짜 nvm, Jest 같은 감시 도구를 쓰는 테스트(`--no-watchman`)다. 점검에서 나온 것: 이 레포의 `npm test`는 유닉스 소켓이 막혀 돌지 못하고(#145), `TMPDIR`이 덮이고(#146), 러너의 현재 폴더가 레포가 아니면 임시 워크트리의 `.git/config`로 벗어날 수 있었다(#144, 위 "샌드박스 밖의 git"으로 고쳤고 같은 점검에서 안 돌았다).
 - 손 점검(2026-11-15, macOS, #150): 프로세스 그룹을 벗어나 남은 프로세스가 지난 자리의 `node_modules`를 바깥을 가리키는 링크로 바꾸면, 고치기 전에는 다음 돌림의 의존성 잇기가 바깥에 썼고 고친 뒤에는 쓰지 않았다. Linux는 보지 못했다.
+- Linux와 WSL2는 GitHub Actions에서 버튼으로 손 점검한다(ADR-0038). 아직 돌리지 않았다.
 
 ## Sources
 
