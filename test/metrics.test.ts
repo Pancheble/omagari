@@ -56,10 +56,13 @@ test("들어온 멤버는 그날 웹을 열었거나 채널에서 읽고 쓴 멤
   const shown = await world.cli("metrics", "--days", "3");
   assert.equal(shown.code, 0, shown.stderr);
   const lines = shown.stdout.trimEnd().split("\n");
-  assert.equal(lines[0], "날짜(Asia/Seoul)  들어온 멤버  문답  돌려 봄  통과  깨짐  돌리지 못함");
+  assert.equal(
+    lines[0],
+    "날짜(Asia/Seoul)  들어온 멤버  문답  돌려 봄  통과  깨짐  가릴 수 없음  돌리지 못함",
+  );
   assert.equal(lines.length, 4);
-  assert.match(lines[1] ?? "", /^\d{4}-\d{2}-\d{2} {2}0 {2}0 {2}0 {2}0 {2}0 {2}0$/);
-  assert.match(lines[3] ?? "", /^\d{4}-\d{2}-\d{2} {2}3 {2}2 {2}0 {2}0 {2}0 {2}0$/);
+  assert.match(lines[1] ?? "", /^\d{4}-\d{2}-\d{2} {2}0 {2}0 {2}0 {2}0 {2}0 {2}0 {2}0$/);
+  assert.match(lines[3] ?? "", /^\d{4}-\d{2}-\d{2} {2}3 {2}2 {2}0 {2}0 {2}0 {2}0 {2}0$/);
   await assert.rejects(call(world.owner, api.metrics, { days: 0 }), { code: "invalid_request" });
 });
 

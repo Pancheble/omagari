@@ -15,11 +15,12 @@ import {
   DEFINITION_KINDS,
   EXECUTOR_NAMES,
   ExecutorId,
+  MERGE_RUN_LABELS,
   PLAN_KINDS,
   Plan,
+  RunVerdict,
   ShareLevel,
   VERDICT_LABELS,
-  Verdict,
 } from "@omagari/contract";
 import { checkoutVersion } from "@omagari/contract/version";
 import {
@@ -296,7 +297,7 @@ async function log() {
         ? `  합쳐 돌려 보기 ${run.branch} + ${run.theirs.login}의 ${run.theirs.branch}`
         : "";
       console.log(
-        `${run.at}  검사 명령 ${JSON.stringify(run.check ?? "")}${setup}${pair}  폴더 ${run.folder}  판정 ${VERDICT_LABELS[run.verdict]}${why}  ${seconds(run.ms)}`,
+        `${run.at}  검사 명령 ${JSON.stringify(run.check ?? "")}${setup}${pair}  폴더 ${run.folder}  판정 ${MERGE_RUN_LABELS[run.verdict]}${why}  ${seconds(run.ms)}`,
       );
       continue;
     }
@@ -502,14 +503,14 @@ async function metrics(days: string | undefined) {
   const reply = await call(await member(), api.metrics, {
     ...(days !== undefined && { days: Number(days) }),
   });
-  const verdicts = Verdict.options;
+  const verdicts = RunVerdict.options;
   console.log(
     [
       `날짜(${reply.timeZone})`,
       "들어온 멤버",
       "문답",
       "돌려 봄",
-      ...verdicts.map((v) => VERDICT_LABELS[v]),
+      ...verdicts.map((v) => MERGE_RUN_LABELS[v]),
     ].join("  "),
   );
   for (const { day, members, qas, runs } of reply.days) {

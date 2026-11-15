@@ -49,12 +49,12 @@ import {
   type Question,
   type ReplyOf,
   RUNNER_SOCKET,
+  RunVerdict,
   runnerToServer,
   type ShareLevel,
   type StatusLine,
   serverToRunner,
   serverToWeb,
-  Verdict,
   type Visibility,
   type Work,
   type WorkRef,
@@ -537,6 +537,9 @@ export async function startServer(options: {
   if (!db.prepare("SELECT 1 FROM pragma_table_info('alerts') WHERE name = 'run'").get())
     db.exec(`ALTER TABLE alerts ADD COLUMN run TEXT;
       ALTER TABLE alerts ADD COLUMN confirmed INTEGER NOT NULL DEFAULT 0;`);
+  // 통과로 닫힌 간접 충돌(ADR-0035): `held`가 1이면 그 쌍은 다시 돌린 판정이 나올 때까지 알림을 다시 세우지 않는다. 쌍마다 하나까지다.
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('alerts') WHERE name = 'held'").get())
+    db.exec("ALTER TABLE alerts ADD COLUMN held INTEGER NOT NULL DEFAULT 0");
   // v0.1.0의 표에는 `alert`가 없다.
   if (!db.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'alert'").get())
     db.exec("ALTER TABLE messages ADD COLUMN alert INTEGER REFERENCES alerts (id)");
@@ -944,6 +947,7 @@ export async function startServer(options: {
     };
     const byLogin = Map.groupBy(works, (work) => work.login);
     const conflicted = conflictedWorks();
+    const broken = brokenWorks();
     return people.map(({ login, name, since, ...profile }) => {
       const agents = known
         .filter((agent) => agent.login === login)
@@ -964,6 +968,7 @@ export async function startServer(options: {
           executor,
           line,
           conflict: conflicted.has(JSON.stringify([login, branch])),
+          broken: broken.has(JSON.stringify([login, branch])),
         })),
       };
     });
@@ -985,6 +990,20 @@ export async function startServer(options: {
     }
     return found;
   };
+
+  /** 풀리지 않은 간접 충돌 가운데 합쳐 돌려 보니 깨져 확인된 것의 작업들("합치면 깨짐"). 열쇠는 `[login, branch]`의 JSON이다. */
+  const brokenWorks = () =>
+    new Set(
+      (
+        db.prepare("SELECT works FROM alerts WHERE resolved IS NULL AND confirmed = 1").all() as {
+          works: string;
+        }[]
+      ).flatMap((row) =>
+        (JSON.parse(row.works) as WorkRef[]).map((work) =>
+          JSON.stringify([work.login, work.branch]),
+        ),
+      ),
+    );
 
   /** 붙어 있는 러너마다 마지막으로 올린 직접 충돌의 계산. 끊기면 지운다. 아직 올리지 않은 러너는 없다. */
   const reports = new Map<WSContext, ConflictPair[]>();
@@ -1119,6 +1138,17 @@ export async function startServer(options: {
       .all() as { id: number; pair: string; kind: Alert["kind"]; works: string; files: string }[];
     let changed = false;
     const now = Date.now();
+    // 통과로 닫힌 쌍(ADR-0035)은 다시 돌린 판정이 나올 때까지 세우지 않는다. 쓰는 쪽 러너가 붙어 있는데 그 쌍을 올리지 않으면 부딪힘이 풀린 것이라 놓아준다.
+    const held = new Set<string>();
+    for (const row of db.prepare("SELECT id, pair, run FROM alerts WHERE held = 1").all() as {
+      id: number;
+      pair: string;
+      run: string;
+    }[]) {
+      if (found.has(row.pair)) held.add(row.pair);
+      else if (reporting.has((JSON.parse(row.run) as AlertRun).login))
+        db.prepare("UPDATE alerts SET held = 0 WHERE id = ?").run(row.id);
+    }
     for (const key of new Set([...open.map((row) => row.pair), ...found.keys()])) {
       const known = open.find((row) => row.pair === key);
       const entry = found.get(key);
@@ -1157,6 +1187,7 @@ export async function startServer(options: {
           .map(([, view]) => view),
       );
       if (known?.files === json) continue;
+      if (!known && held.has(key)) continue;
       changed = true;
       if (known) {
         db.prepare("UPDATE alerts SET files = ?, works = ?, updated = ? WHERE id = ?").run(
@@ -1196,9 +1227,10 @@ export async function startServer(options: {
   };
 
   /**
-   * 러너가 올린 합쳐 돌려 보기의 판정을 그 쌍의 열린 간접 충돌 알림에 붙인다(ADR-0036). 열린 알림이 없으면 버린다.
-   * 새 판정(돌려 보는 중도 지난 결과도 아닌 것)이 나면 두 작업의 편지함에 다시 넣는다. 이 이슈에서는 깨지면 곧 확인됨이고,
-   * 확인됨은 다음 판정이 날 때까지 남는다(돌려 보는 중이나 지난 결과로는 바뀌지 않는다).
+   * 러너가 올린 합쳐 돌려 보기의 판정을 그 쌍의 열린 간접 충돌 알림에 붙인다(ADR-0035, ADR-0036). 판정이 나면(돌려 보는 중도 지난 결과도 아닌 것) 두 작업의 편지함에 다시 넣는다.
+   * - 빠진 파일 없이 깨짐이면 확인됨, 빠진 파일 없이 통과면 알림을 풀림으로 닫고 그 쌍을 붙든다(`held`). 그 밖의 판정은 추정으로 둔다.
+   * - 붙든 쌍은 열린 알림이 없다. 다른 지문의 판정이 나면 놓아주고, 통과가 아니면 새 알림을 세워 그 판정을 붙인다.
+   * - 열린 알림도 붙든 쌍도 없으면 버린다. 확인됨은 다음 판정이 날 때까지 남는다(돌려 보는 중이나 지난 결과로는 바뀌지 않는다).
    */
   const attachRun = (
     login: string,
@@ -1213,19 +1245,50 @@ export async function startServer(options: {
       db.prepare(
         "INSERT OR IGNORE INTO merge_runs (fingerprint, verdict, at) VALUES (?, ?, ?)",
       ).run(run.fingerprint, run.verdict, Date.now());
-    const row = db
-      .prepare("SELECT id, works, run, confirmed FROM alerts WHERE pair = ? AND resolved IS NULL")
-      .get(key) as { id: number; works: string; run: string | null; confirmed: number } | undefined;
-    if (!row) return;
+    const finished = run.verdict !== "running" && !run.stale;
+    const closes = finished && run.verdict === "pass" && run.omitted.length === 0;
+    type Row = { id: number; works: string; run: string | null; confirmed: number };
+    const openRow = () =>
+      db
+        .prepare("SELECT id, works, run, confirmed FROM alerts WHERE pair = ? AND resolved IS NULL")
+        .get(key) as Row | undefined;
+    let row = openRow();
+    const now = Date.now();
+    if (!row) {
+      const held = db.prepare("SELECT id, run FROM alerts WHERE pair = ? AND held = 1").get(key) as
+        | { id: number; run: string }
+        | undefined;
+      if (!held || !finished || (JSON.parse(held.run) as AlertRun).fingerprint === run.fingerprint)
+        return;
+      if (closes) {
+        // 다시 돌려도 통과다. 닫힌 알림의 판정만 새것으로 둔다.
+        db.prepare("UPDATE alerts SET run = ? WHERE id = ?").run(
+          JSON.stringify({ ...run, login, at: new Date(now).toISOString() }),
+          held.id,
+        );
+        shareAlert(held.id);
+        shareRuns(login);
+        return;
+      }
+      db.prepare("UPDATE alerts SET held = 0 WHERE id = ?").run(held.id);
+      reconcile(); // 그 쌍을 아직 올리고 있으면 새 알림이 선다
+      row = openRow();
+      if (!row) return;
+    }
     const next = { ...run, login };
     const { at: _, ...known } = row.run ? (JSON.parse(row.run) as AlertRun) : {};
     if (JSON.stringify(known) === JSON.stringify(next)) return; // 같은 것을 다시 올렸다
-    const finished = run.verdict !== "running" && !run.stale;
-    const confirmed = finished ? Number(run.verdict === "broken") : row.confirmed;
-    const now = Date.now();
-    db.prepare("UPDATE alerts SET run = ?, confirmed = ?, updated = ? WHERE id = ?").run(
+    const confirmed = finished
+      ? Number(run.verdict === "broken" && run.omitted.length === 0)
+      : row.confirmed;
+    if (closes) db.prepare("UPDATE alerts SET held = 0 WHERE pair = ?").run(key);
+    db.prepare(
+      "UPDATE alerts SET run = ?, confirmed = ?, resolved = ?, held = ?, updated = ? WHERE id = ?",
+    ).run(
       JSON.stringify({ ...next, at: new Date(now).toISOString() }),
       confirmed,
+      closes ? now : null,
+      Number(closes),
       now,
       row.id,
     );
@@ -1233,6 +1296,24 @@ export async function startServer(options: {
     if (!finished) return;
     deliver(row.id, JSON.parse(row.works), now);
     shareInbox();
+    shareRuns(login);
+    if (closes || confirmed !== row.confirmed) shareMembers(); // 멤버 목록의 "합치면 깨짐"
+  };
+
+  /** 이 멤버의 러너들에 서버에 붙은 그 멤버의 판정들을 보낸다(`runs`). 같은 지문은 다시 돌리지 않게 한다. `to`를 주면 그 연결에만. */
+  const shareRuns = (login: string, to?: WSContext) => {
+    const runs = (
+      db
+        .prepare("SELECT run FROM alerts WHERE run IS NOT NULL AND (resolved IS NULL OR held = 1)")
+        .all() as { run: string }[]
+    ).flatMap((row) => {
+      const { login: by, at: _, ...run } = JSON.parse(row.run) as AlertRun;
+      return by === login && run.verdict !== "running" && !run.stale ? [run] : [];
+    });
+    const frame = encode(serverToRunner, "runs", { runs });
+    for (const [socket, runner] of runners)
+      if (runner.login === login && (!to || socket === to) && socket.readyState === 1)
+        socket.send(frame);
   };
 
   /** 알림이 생기거나 바뀌거나 풀렸다. 두 작업의 편지함에 넣는다. 아직 넘겨주지 않은 같은 알림의 소식은 새 것으로 바꾼다. */
@@ -2349,7 +2430,7 @@ export async function startServer(options: {
       db
         .prepare("SELECT verdict, at FROM merge_runs WHERE at > ?")
         .all(now - (days + 1) * DAY_MS) as {
-        verdict: Verdict;
+        verdict: RunVerdict;
         at: number;
       }[],
       ({ at }) => dayOf(at),
@@ -2361,11 +2442,11 @@ export async function startServer(options: {
         members: members.get(day) ?? 0,
         qas: qas.get(day)?.length ?? 0,
         runs: Object.fromEntries(
-          Verdict.options.map((v) => [
+          RunVerdict.options.map((v) => [
             v,
             (ran.get(day) ?? []).filter((r) => r.verdict === v).length,
           ]),
-        ) as Record<Verdict, number>,
+        ) as Record<RunVerdict, number>,
       })),
     };
   });
@@ -2462,6 +2543,7 @@ export async function startServer(options: {
           socket.send(encode(serverToRunner, "welcome", { login, repo }, message.id));
           shareSituation(socket);
           shareInbox(socket);
+          shareRuns(login, socket);
           dispatchQuestions(login); // 오프라인 사이에 남겨 둔 질문
           return;
         }
