@@ -268,6 +268,16 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo "pay
   const fixed = await closedWith(world.owner, "bob");
   assert.equal(fixed.run?.stale, false);
   assert.equal(fixed.confirmed, false);
+  // owner가 고쳐 carol의 쌍도 새 지문으로 다시 돈다. 러너는 한 번에 하나만 돌려 bob의 판정이 난 뒤에 돌 수 있다.
+  // bob의 통과만 기다리면 carol의 새 판정이 서버에 닿기 전에 지표를 읽는다(#135). 통과해 닫힌 carol의 알림이 새 지문의 판정을 보일 때까지 기다린다.
+  await eventually(async () => {
+    const found = (await indirect(world.owner)).filter(
+      (a) => a.works.some((w) => w.login === "carol") && a.works.some((w) => w.login === "owner"),
+    );
+    const last = found.at(-1);
+    assert.equal(last?.run?.verdict, "pass", JSON.stringify(found));
+    assert.notEqual(last?.run?.fingerprint, passed.run?.fingerprint);
+  }, 30_000);
 
   // 합쳐 돌린 것이 실행 기록에 남는다: 두 작업, 검사 명령, 판정.
   const log = (await world.cli("runner", "log")).stdout;
@@ -277,6 +287,17 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo "pay
   );
   assert.match(log, /합쳐 돌려 보기 payment \+ carol의 reason {2}폴더 .+ {2}판정 통과 /);
   assert.match(log, /합쳐 돌려 보기 payment \+ bob의 currency {2}폴더 .+ {2}판정 통과 /);
+
+  // 지표: 오늘 돌려 본 것은 넷이다. bob의 깨짐, carol의 통과, owner가 고친 뒤 다시 돌린 carol과 bob의 통과. 돌려 보는 중과 다시 올린 것(같은 지문)은 세지 않는다.
+  await world.signInCli(world.owner);
+  const shown = await world.cli("metrics", "--days", "1");
+  assert.equal(shown.code, 0, shown.stderr);
+  const [header, today] = shown.stdout.trimEnd().split("\n");
+  assert.equal(
+    header,
+    "날짜(Asia/Seoul)  들어온 멤버  문답  돌려 봄  통과  깨짐  가릴 수 없음  돌리지 못함",
+  );
+  assert.match(today ?? "", /^\d{4}-\d{2}-\d{2} {2}\d+ {2}\d+ {2}4 {2}3 {2}1 {2}0 {2}0$/);
 });
 
 test("검사 명령이 없거나 샌드박스를 쓸 수 없거나 줄이 부딪히면 돌리지 못함과 까닭이 붙고, 빠진 파일은 빼고 돌려 적으며, 공유 수준이 full이 아니면 출력을 올리지 않는다", {
@@ -504,6 +525,15 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
   );
   assert.equal(await withBob(), 3);
   assert.equal(unclear.confirmed, false);
+
+  // 지표: 지문이 다른 판정만 센다. 통과 하나, 깨짐 둘, 가릴 수 없음 둘. 앞에서 돌린 내용의 판정을 다시 쓴 것은 세지 않는다.
+  await world.signInCli(world.owner);
+  const shown = await world.cli("metrics", "--days", "1");
+  assert.equal(shown.code, 0, shown.stderr);
+  assert.match(
+    shown.stdout.trimEnd().split("\n")[1] ?? "",
+    /^\d{4}-\d{2}-\d{2} {2}\d+ {2}\d+ {2}5 {2}1 {2}2 {2}2 {2}0$/,
+  );
 });
 
 test("다른 러너가 올린 같은 내용의 판정이 서버에 있으면 돌리지 않는다", {
