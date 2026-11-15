@@ -84,10 +84,10 @@ const haystack = (post: PostItem) => {
 };
 
 /** 종류 배지: 직접 충돌은 주황, 나머지는 테두리, 간접 충돌은 "· 추정"이 붙는다. */
-export const KindBadge = ({ kind }: { kind: Alert["kind"] }) => (
-  <span className={kind === "direct" ? "badge warning" : "badge outline"}>
+export const KindBadge = ({ kind, confirmed }: { kind: Alert["kind"]; confirmed?: boolean }) => (
+  <span className={kind === "direct" || confirmed ? "badge warning" : "badge outline"}>
     {KINDS[kind]}
-    {kind === "indirect" && " · 추정"}
+    {kind === "indirect" && (confirmed ? " · 확인됨" : " · 추정")}
   </span>
 );
 
@@ -450,7 +450,7 @@ export function AlertLine({ message, edited }: { message: AlertMessage; edited?:
         </p>
         <div className="alert-card">
           <p className="alert-kind">
-            <KindBadge kind={alert.kind} />
+            <KindBadge kind={alert.kind} confirmed={alert.kind === "indirect" && alert.confirmed} />
             {alert.resolved && <span className="badge outline">풀렸어요</span>}
           </p>
           <p className="alert-mono">

@@ -613,6 +613,11 @@ export function Workspace({
         label={openPost ? label : undefined}
         edited={openPost?.edited}
         strip={strip}
+        verdict={
+          openPost?.message.alert.kind === "indirect" && openPost.message.alert.run
+            ? { run: openPost.message.alert.run, works: openPost.message.alert.works }
+            : undefined
+        }
         attached={attached?.channel === active.id ? attached : undefined}
         onAttach={setAttached}
         onSend={(text) => send(active.id, text)}
