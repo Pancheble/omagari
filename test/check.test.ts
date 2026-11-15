@@ -487,6 +487,8 @@ test("Windows 그대로에서는 돌리지 못함의 까닭이 WSL2 안내다", 
   } finally {
     Object.defineProperty(process, "platform", platform as PropertyDescriptor);
   }
+});
+
 test("Linux에서 혼자 돌린 것이 유닉스 소켓 막기로 깨진 것으로 보이면 까닭이 붙고, 소켓과 상관없이 깨졌거나 소켓을 막지 않는 기기면 붙지 않는다", async (t) => {
   const fake = fakeSandbox();
   fake.blocksUnixSockets = true;
