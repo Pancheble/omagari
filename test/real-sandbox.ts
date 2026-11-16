@@ -207,8 +207,14 @@ try {
 
   // 3-0. 진단(#176): 홈 막기를 한 명령씩 따로 돌려 종료 코드와 출력을 남긴다. 항상 0으로 끝나 출력이 그대로 보인다.
   const diagFile = join(home, ".omagari-sandbox-diag");
-  const diag = (name: string, command: string) =>
-    probe(`진단: ${name}`, command, "observe", "(출력이 위 줄)", "");
+  const diag = async (name: string, command: string) => {
+    const r = await run(repo, command);
+    add(
+      `진단: ${name}`,
+      "observe",
+      `판정 ${r.verdict}. ${r.output.replace(/\s+/g, " ").trim().slice(-400)}`,
+    );
+  };
   await diag("ls 홈", `ls -A '${home}' >o.txt 2>&1; echo "rc=$?"; head -5 o.txt`);
   await diag("cat 카나리", `cat '${canary}' 2>&1; echo "rc=$?"`);
   await diag(
