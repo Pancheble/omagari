@@ -313,6 +313,15 @@ test("Codex의 패치 하나가 여러 파일을 고치면 파일마다 근처 �
     "*** Add File: ../outside.ts", // 레포 밖은 Omagari가 볼 것이 아니다
     "+x",
   );
+  // 같은 세션에서 본 것은 다시 넣지 않으니, 서버가 네 파일을 모두 알기 전에 묻으면 일부만 넘겨져 나머지가 영영 안 온다. 알 때까지 기다린 뒤 묻는다(#153).
+  const alice = await world.login("alice");
+  await eventually(async () => {
+    const seen = (await world.works(alice))
+      .filter((w) => w.login === "alice")
+      .flatMap((w) => w.files.map((f) => f.path));
+    for (const path of ["pay.ts", "old.ts", "new.ts", "gone.ts"])
+      assert.ok(seen.includes(path), path);
+  });
   await eventually(async () =>
     assert.deepEqual(files(await preEdit(body)), ["pay.ts", "old.ts", "new.ts", "gone.ts"]),
   );

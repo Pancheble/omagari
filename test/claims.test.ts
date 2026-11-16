@@ -260,8 +260,8 @@ test("남의 선점은 내 사본의 줄로 옮겨 편집 전 훅에 들어가�
 });
 
 test("상대 내용을 읽을 수 없으면 줄에 대략이 붙고, 오프라인이 길면 오래됨이 되었다가 지워진다", async (t) => {
-  // 7일 대신 1초로 줄인다.
-  const world = await startWorld({ observeMs: 50, followMs: 50, forgetMs: 1000 });
+  // 7일 대신 6초로 줄인다. "오래됨"으로 보이는 구간이 forgetMs만큼이라, 부하에서 훅이 느려도 놓치지 않게 넉넉히 둔다(#153).
+  const world = await startWorld({ observeMs: 50, followMs: 50, forgetMs: 6000 });
   t.after(world.stop);
   await base(world);
   const { desk } = await clone(world, "bob", "docs", "intent");
