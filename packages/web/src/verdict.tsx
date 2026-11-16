@@ -1,6 +1,7 @@
 import { type AlertRun, ago, MERGE_RUN_LABELS } from "@omagari/contract";
 import { CircleCheck, CircleMinus, CircleQuestionMark, CircleX, LoaderCircle } from "lucide-react";
 import { type ReactNode, useEffect, useId, useReducer, useState } from "react";
+import { notRunWords } from "./verdict-words.ts";
 
 const DOCS = "https://github.com/Pancheble/omagari/blob/dev/docs/adr";
 const link = (href: string, text: string) => (
@@ -15,25 +16,21 @@ const took = (ms: number) => {
   return s < 60 ? `${s}초` : `${Math.floor(s / 60)}분${s % 60 ? ` ${s % 60}초` : ""}`;
 };
 
-/** 돌리지 못한 까닭(러너가 올린 글)을 DESIGN.md의 네 가지로 가른다. 못 가르면 올라온 글 그대로 보인다. */
-function notRun(reason = ""): ReactNode {
-  if (/상한/.test(reason)) return "5분이 넘어 끊었어요 · 통과로 치지 않아요";
-  if (/줄이 부딪혀/.test(reason)) return "직접 충돌을 먼저 풀어야 돌려 볼 수 있어요";
-  if (/샌드박스/.test(reason))
+function notRun(reason: string, mine: string): ReactNode {
+  const { text, help } = notRunWords(reason, mine);
+  if (help === "sandbox")
     return (
       <>
-        이 기기에 샌드박스 도구가 없어요 ·{" "}
-        {link(`${DOCS}/0033-merge-runs-in-runner-sandbox.md`, "까는 법")}
+        {text} · {link(`${DOCS}/0033-merge-runs-in-runner-sandbox.md`, "까는 법")}
       </>
     );
-  if (/검사 명령|omagari\.json|기본 브랜치/.test(reason))
+  if (help === "check")
     return (
       <>
-        레포에 검사 명령이 없어요 ·{" "}
-        {link(`${DOCS}/0034-check-command-from-repo-file-on-by-default.md`, "정하는 법")}
+        {text} · {link(`${DOCS}/0034-check-command-from-repo-file-on-by-default.md`, "정하는 법")}
       </>
     );
-  return reason || "돌리지 못했어요";
+  return text;
 }
 
 const ICONS = {
@@ -81,7 +78,7 @@ export function VerdictStrip({
             ? run.alone?.length === 2
               ? "두 작업 모두 혼자서도 깨져요"
               : `${run.alone?.[0] === "theirs" ? theirs : mine}의 작업만 돌려도 깨져요`
-            : notRun(run.reason);
+            : notRun(run.reason ?? "", mine);
   const output = run.verdict === "broken" && !run.stale && run.output ? run.output : undefined;
 
   return (
