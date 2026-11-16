@@ -262,17 +262,22 @@ try {
   // 유닉스 소켓(#145, ADR-0037): 임시 워크트리와 임시 폴더 안에서만 열고 붙는다. 밖의 소켓에는 붙지 못한다.
   const listenConnect = (path: string) =>
     `node -e "const n=require('net');const p=${path};n.createServer(c=>c.end('hi')).listen(p,()=>{n.connect(p).on('data',()=>process.exit(0)).on('error',e=>{console.log(e.code);process.exit(1)})}).on('error',e=>{console.log(e.code);process.exit(2)})"`;
+  // Linux의 sandbox-runtime은 seccomp로 유닉스 소켓을 통째로 막고 allowUnixSockets를 읽지 않는다(ADR-0037, #167 전까지).
+  // 그래서 Linux에서는 "열린다"가 아니라 "EPERM으로 막힌다"가 맞는 기대다.
+  const socketIn = (path: string) =>
+    linux ? `${listenConnect(path)} | grep -qx EPERM` : listenConnect(path);
+  const socketNote = linux ? "막힌다(Linux는 #167 전까지 소켓을 모두 막는다)" : "된다";
   await probe(
-    "유닉스 소켓을 임시 워크트리 안에 열고 붙는다(짧은 상대 경로)",
-    listenConnect("'u.sock'"),
+    `유닉스 소켓을 임시 워크트리 안에 ${linux ? "열지 못한다(Linux)" : "열고 붙는다"}(짧은 상대 경로)`,
+    socketIn("'u.sock'"),
     "check",
-    "된다",
+    socketNote,
   );
   await probe(
-    "유닉스 소켓을 러너가 준 임시 폴더(HOME) 안에 열고 붙는다(절대 경로, 104바이트 안)",
-    listenConnect("process.env.HOME+'/omagari-0123456789abcdef.sock'"),
+    `유닉스 소켓을 러너가 준 임시 폴더(HOME) 안에 ${linux ? "열지 못한다(Linux)" : "열고 붙는다"}(절대 경로, 104바이트 안)`,
+    socketIn("process.env.HOME+'/omagari-0123456789abcdef.sock'"),
     "check",
-    "된다",
+    socketNote,
   );
   // 샌드박스 밖에서 연 소켓. 홈 폴더 밖(읽기는 열린 /tmp)에 두어, 읽기 막기가 아니라 소켓 막기로 막히는지 본다.
   const outerSock = join(await realpath("/tmp"), `omagari-outer-${process.pid}.sock`);
@@ -511,7 +516,7 @@ try {
           `${JSON.stringify({
             // `npm test` 그대로이고, 끝에 통과·실패 수와 실패한 테스트 이름이 보이게 모아 찍는다.
             check:
-              "npm test > omagari-test.log 2>&1; code=$?; grep -E '^✖' omagari-test.log | sort -u | head -12; grep -oE '\\bE[A-Z]{3,}\\b' omagari-test.log | sort | uniq -c | sort -rn | head -5; grep -E '^ℹ (tests|pass|fail|cancelled)' omagari-test.log; exit $code",
+              "npm test > omagari-test.log 2>&1; code=$?; grep -E '^✖' omagari-test.log | sort -u | head -12; grep -oE '\\bE[A-Z]{3,}\\b' omagari-test.log | sort | uniq -c | sort -rn | head -5; grep -oE '[a-z]+ EPERM' omagari-test.log | sort | uniq -c | sort -rn | head -5; grep EPERM omagari-test.log | grep -vE 'listen|connect' | sort -u | head -5; grep -E '^ℹ (tests|pass|fail|cancelled)' omagari-test.log; exit $code",
           })}\n`,
         );
       })
