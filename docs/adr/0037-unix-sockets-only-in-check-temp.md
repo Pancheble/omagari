@@ -20,7 +20,7 @@ sandbox-runtime 0.0.81에서 macOS는 `network.allowUnixSockets`의 경로마다
 
 ## Consequences
 
-- Linux에서는 열리지 않는다. sandbox-runtime은 Linux에서 seccomp로 `socket(AF_UNIX, …)`을 통째로 막고 `allowUnixSockets`를 무시한다(README의 Unix Socket 표: "seccomp can't filter by path"). 경로로 좁혀 여는 길이 없어, Linux에서는 유닉스 소켓을 쓰는 검사 명령이 여전히 돌지 못한다. 그 레포는 혼자 돌린 것도 깨지므로 "깨짐"으로 굳지 않는다(ADR-0035). 넓히지 않는다.
+- Linux에서는 열리지 않는다. sandbox-runtime은 Linux에서 seccomp로 `socket(AF_UNIX, …)`을 통째로 막고 `allowUnixSockets`를 무시한다(README의 Unix Socket 표: "seccomp can't filter by path"). 경로로 좁혀 여는 길이 없어, Linux에서는 유닉스 소켓을 쓰는 검사 명령이 여전히 돌지 못한다. 그 레포는 혼자 돌린 것도 깨지므로 "깨짐"으로 굳지 않는다(ADR-0035). 넓히지 않는다. 세 기계(Ubuntu 24.04, 22.04, WSL2)에서 실제로 확인했다: 허용 목록을 줘도 `listen`이 `EPERM`이고, 이 레포의 `npm test`는 160개 중 154개가 `listen EPERM`으로 떨어진다(#177). **#167 전까지 Linux에서는 소켓을 쓰는 테스트를 못 돌리고, 그런 레포는 `가릴 수 없음`이 된다.** 손 점검(`test/real-sandbox.ts`)도 Linux에서는 "막힌다"를 기대한다.
   - 그동안 혼자 돌린 것이 소켓 막기로 깨지면 "가릴 수 없음"에 까닭을 붙인다. sandbox-runtime PR #797(`allowUnixSocketCreation`)이 판으로 나오면, 소켓 만들기만 열고 샌드박스 밖의 소켓이 있는 자리를 가려 Linux에서도 이 ADR대로 연다(ADR-0038). WSL2도 같다.
   - seccomp 도우미가 없는 Linux(x64, arm64 밖)에서는 sandbox-runtime이 소켓을 막지 않고 경고만 낸다. 그런 기기는 돌리지 않는다(ADR-0038).
 - `TMPDIR`이 `/tmp/claude`로 덮이는 동안(#146)은 `os.tmpdir()`에 소켓을 여는 테스트가 여전히 막힌다. 이 레포의 `npm test`는 #146까지 고쳐야 샌드박스 안에서 돈다. `HOME`이나 임시 워크트리 안에 여는 것은 지금 된다.
