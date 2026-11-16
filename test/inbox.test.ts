@@ -153,8 +153,11 @@ test("부딪힘은 두 작업의 편지함에만 들어가 세션 시작 훅, �
   );
 });
 
-test("서브에이전트가 본 소식과 Codex와 Claude Code의 훅이 넣는 편지함, 셸 명령, 바뀐 알림, 풀림, 만료", async (t) => {
-  const world = await startWorld({ observeMs: 50, followMs: 100, inboxMs: 5000 });
+test("서브에이전트가 본 소식과 Codex와 Claude Code의 훅이 넣는 편지함, 셸 명령, 바뀐 알림, 풀림, 만료", {
+  timeout: 60_000,
+}, async (t) => {
+  // 만료까지 넘기지 못한 소식이 남아 있어야 하는 구간이 부하에서 5초를 넘기 쉬워 10초로 둔다(#153).
+  const world = await startWorld({ observeMs: 50, followMs: 100, inboxMs: 10_000 });
   t.after(world.stop);
   await base(world);
   const alice = await clone(world, "alice", "refund");
@@ -201,7 +204,7 @@ test("서브에이전트가 본 소식과 Codex와 Claude Code의 훅이 넣는 
   );
   await eventually(
     async () => assert.equal(await hook(world, { tool: "Bash", agent: "agent-6" }), ""),
-    15_000,
+    25_000,
   );
   assert.equal(await hook(world, { tool: "Bash" }), "");
 });
