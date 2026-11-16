@@ -321,6 +321,15 @@ CSCW 연구에서 작업 공간 인식이라고 부르는 것이다. 진행 중�
 - 결과(Ubuntu 24.04, 22.04, WSL2 모두): 임시 워크트리 밖에 쓰지 못한다(밖에 파일이 안 생김), 홈 폴더를 읽지 못한다, WSL2의 `/mnt/c`와 `/mnt/d`가 오류이거나 비어 있다, Git 폴더 `config`는 읽지 못한다 항목이 **통과**했다.
 - 못 본 것: 홈의 `~/.ssh` 같은 진짜 비밀 폴더(세 기계 모두 `~/.ssh`가 없었다. 카나리로만 봤다), `ls 홈`이 다시 연 폴더의 이름을 알려 주는 것(이름만 보이고 안은 열리지 않는다. 막기를 깨지 않는다고 보았으나 따로 시험하지 않았다), `/mnt/c`의 안쪽에 실제 파일이 있을 때의 모습(GitHub의 기계에서는 `C:`와 `D:`가 모두 비었는지 확인하지 못했다. 로그에는 "오류이거나 비어 있다"만 있다), macOS는 이 Mac에서 `--quick`으로 같은 점검을 돌려 고친 항목(쓰기, 쓴 파일이 밖에 생기는지, 홈 읽기 `~/.ssh` 포함)이 통과했다(`npm test` 항목은 돌리지 않았다), 유닉스 소켓과 `npm test`의 실패(#177)는 이 이슈 밖이다.
 
+**#177 소켓 항목을 가린 뒤** (같은 점검, 실행 [43793894717](https://github.com/Pancheble/omagari/actions/runs/43793894717), 2026-11-16, 브랜치 `test/linux-socket-expect`, sandbox-runtime 0.0.81). 세 기계의 이미지와 도구 판은 위 표와 같다.
+
+- 가린 것 ① `allowUnixSockets`: Linux에서 **무시된다.** 소스(`linux-sandbox-utils.js`의 `wrapCommandWithSandboxLinux`)는 소켓을 `allowAllUnixSockets`로만 가르고 seccomp 도우미를 씌우거나 말거나 하며, 주석에 "The allowUnixSockets configuration is not path-based on Linux"라고 적혀 있다. 실제로도 ADR-0037대로 허용 목록을 줬는데 임시 워크트리와 `HOME` 안의 `listen`이 세 기계 모두 `EPERM`이었다.
+- 가린 것 ② `npm test`의 `EPERM`: 세 기계 모두 `tests 160, pass 5, fail 154`, `EPERM` 310줄이다(진단 줄을 더한 실행 [43793288849](https://github.com/Pancheble/omagari/actions/runs/43793288849)에서 Ubuntu 24.04 10초, 22.04 11초, WSL2 116초). 호출별로 세니 `listen EPERM` 157줄이고, 나머지 `EPERM` 줄은 같은 오류를 다시 찍은 `code: 'EPERM'` 줄이다. `connect`나 다른 호출의 `EPERM`은 없다. 즉 **모두 소켓 만들기(`listen`)가 막힌 것이다.** 소켓이 아닌 `EPERM`은 없어 새 이슈는 만들지 않았다. 다만 `listen`의 대상이 유닉스 소켓인지는 줄에서 경로를 뽑아 보지 않았고, TCP `listen`은 점검 항목("자기 기기의 포트")이 통과해 열린다는 것으로 미루었다.
+- 판정은 이제 `broken`에 "이 기기(Linux)에서는 샌드박스가 유닉스 소켓을 막는다. … 합쳐서 깨졌는지 가릴 수 없다"가 붙는다(#172). 소켓을 쓰는 이 레포의 검사 명령은 Linux에서 `가릴 수 없음`이다.
+- 고침: 점검의 소켓 두 항목은 Linux에서 "`EPERM`으로 막힌다"를 기대한다. macOS의 기대는 그대로다. Linux에서 소켓이 열리는 일은 #167이 맡는다.
+- 결과(세 기계가 같다): 소켓 두 항목은 "막힌다"로 **통과**했다. 밖의 소켓, 링크, Docker 소켓 막힘도 통과했다(WSL2에는 Docker 소켓이 없다). 남은 실패는 `npm test` 항목 둘뿐이고(Ubuntu 24.04 10초, 22.04 19초, WSL2 151초), 판정 `broken`에 위 Linux 까닭이 붙는다. 이 항목은 Linux에서 통과할 수 없어 점검은 그대로 둔다(#167까지 `가릴 수 없음`이 맞는 모습)
+- 못 본 것: sandbox-runtime PR #797의 판에서 소켓이 열리는지(#167), `npm test`의 `listen` 157건이 모두 유닉스 소켓 경로인지.
+
 ## 12. 검증과 지표
 
 - **머무는가**: 주간 활성 인원, 에이전트 DM 사용, 알림에서 대화가 시작된 비율
