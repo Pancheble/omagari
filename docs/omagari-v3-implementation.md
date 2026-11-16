@@ -60,7 +60,7 @@
   - [x] 세션 이어 가기: 러너의 채널 세션으로 이은 둘째 턴이 첫 턴의 암호를 답했고 세션 id가 그대로다
   - [x] 읽기 전용: 파일을 만들고 고치라고 시킨 뒤에도 작업 폴더가 그대로다. 답은 "쓸 수 있는 도구가 Glob, Grep, Read뿐이라 못 했다"
   - 긴 세션(관찰): 위의 자동 컴팩트 줄
-- Codex (2026-11-11, 주인이 `node test/real-executors.ts codex --quick`으로 돌림, codex-cli 0.167.1, darwin arm64, Node 24.19.0)
+- Codex (2026-11-11, @Pancheble이 `node test/real-executors.ts codex --quick`으로 돌림, codex-cli 0.167.1, darwin arm64, Node 24.19.0)
   - [x] 구독 로그인: API 키 환경 변수 없이 돌았고 `codex login status`가 ChatGPT 로그인이다
   - [x] 세션 이어 가기: `codex exec resume <id> -`로 이은 둘째 턴이 첫 턴의 암호를 답했고 세션 id가 그대로다
   - [x] 읽기 전용: `--sandbox` 없이(기본값) 파일을 만들고 고치라고 시킨 뒤에도 작업 폴더가 그대로다. 답은 "읽기 전용 권한으로 파일을 쓸 수 없습니다"
