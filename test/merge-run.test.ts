@@ -259,12 +259,15 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo "pay
   await eventually(async () =>
     assert.ok((await world.works(world.owner)).some((w) => w.login === "bob" && w.offlineSince)),
   );
+  // 다시 돌리는 동안 문을 닫아, 지난 결과인 알림이 통과로 바로 닫히기 전에 볼 수 있게 한다(#153).
+  await rm(gate);
   await writer(folder)("src/draft.ts", DRAFT.replace("pay(1);", 'pay(1, "krw");'));
   await alertWith(world.owner, "bob", (a) => {
     assert.equal(a.run?.verdict, "broken");
     assert.equal(a.run?.stale, true);
     assert.equal(a.confirmed, true);
   });
+  await writeFile(gate, "");
   const fixed = await closedWith(world.owner, "bob");
   assert.equal(fixed.run?.stale, false);
   assert.equal(fixed.confirmed, false);
