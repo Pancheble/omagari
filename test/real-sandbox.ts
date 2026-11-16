@@ -15,7 +15,7 @@ import {
 } from "node:fs/promises";
 import { createServer } from "node:net";
 import { arch, homedir, platform } from "node:os";
-import { join, relative } from "node:path";
+import { basename, join, relative } from "node:path";
 import { parseArgs, promisify } from "node:util";
 import {
   CHECK_LIMITS,
@@ -152,14 +152,22 @@ try {
     );
 
   // 2. 쓰기: 임시 워크트리 밖과 레포 폴더, 홈 폴더에 쓰지 못한다. 임시 워크트리 안에는 쓴다.
+  // Linux(bubblewrap)는 읽기를 막은 폴더를 오류 대신 빈 tmpfs로 덮는다(#176). 홈 아래에 쓰면 샌드박스 안에서는 성공하고 끝나면 사라진다.
+  // 그래서 Linux에서는 쓰기가 실패하는지가 아니라 밖에 파일이 실제로 생겼는지로 막기를 본다. macOS는 쓰기가 실패한다.
+  const linux = platform() === "linux";
+  const leaks = [outside, join(repo, "leak.txt"), join(home, ".omagari-sandbox-leak")];
   await probe(
     "임시 워크트리 밖에 쓰지 못한다",
-    `! (echo x > '${outside}') && ! (echo x > '${join(repo, "leak.txt")}') && ! (echo x > '${join(home, ".omagari-sandbox-leak")}')`,
+    linux
+      ? leaks.map((p) => `(echo x > '${p}' || true)`).join("; ")
+      : leaks.map((p) => `! (echo x > '${p}')`).join(" && "),
     "check",
-    "홈 폴더, 레포 폴더, 임시 폴더 밖 어디에도 쓰지 못한다",
+    linux
+      ? "쓰기를 시도했다(빈 tmpfs에 써지고 사라진다. 밖에 생겼는지는 바로 아래 줄)"
+      : "홈 폴더, 레포 폴더, 임시 폴더 밖 어디에도 쓰지 못한다",
   );
   const leaked = await Promise.all(
-    [outside, join(repo, "leak.txt"), join(home, ".omagari-sandbox-leak")].map((p) =>
+    leaks.map((p) =>
       access(p).then(
         () => p,
         () => undefined,
@@ -170,6 +178,12 @@ try {
     add("임시 워크트리 밖에 쓰지 못한다(파일이 실제로 생겼는지)", false, `생겼다: ${p}`);
     await rm(p, { force: true });
   }
+  if (leaked.every((p) => !p))
+    add(
+      "임시 워크트리 밖에 쓴 파일이 밖에 실제로 생기지 않는다",
+      true,
+      "홈, 레포 폴더, 임시 폴더 밖 어디에도 안 생겼다",
+    );
   await probe("임시 워크트리 안에 쓴다", "echo x > inside.txt", "check", "쓸 수 있다");
   await probe(
     "HOME에 쓴다(러너는 HOME을 임시 폴더로 둔다)",
@@ -198,12 +212,19 @@ try {
     () => true,
     () => false,
   );
-  await probe(
-    "홈 폴더를 읽지 못한다",
-    `! cat '${canary}' >/dev/null 2>&1 && ! ls '${home}' >/dev/null 2>&1${hasSsh ? ` && ! ls '${sshDir}' >/dev/null 2>&1` : ""}`,
-    "check",
-    `홈 폴더 아래의 파일과 목록을 읽지 못한다${hasSsh ? "(~/.ssh 포함)" : "(이 기기에 ~/.ssh가 없어 그것은 보지 못함)"}`,
-  );
+  // 홈 바로 아래의 카나리. Linux는 `ls 홈`이 빈 tmpfs를 열어 성공하므로(#176) 목록이 실패하는지가 아니라 카나리가 안 보이는지로 본다. macOS는 `ls`도 실패한다.
+  const homeCanary = join(home, `.omagari-sandbox-canary-${process.pid}`);
+  await writeFile(homeCanary, "비밀\n");
+  try {
+    await probe(
+      "홈 폴더를 읽지 못한다",
+      `! cat '${canary}' >/dev/null 2>&1 && ! cat '${homeCanary}' >/dev/null 2>&1 && ! ls -A '${home}' 2>/dev/null | grep -q '${basename(homeCanary)}'${hasSsh ? ` && ! ls '${sshDir}' >/dev/null 2>&1` : ""}`,
+      "check",
+      `홈 폴더 아래의 파일을 읽지 못하고 목록에도 안 보인다${hasSsh ? "(~/.ssh 포함)" : "(이 기기에 ~/.ssh가 없어 그것은 보지 못함)"}`,
+    );
+  } finally {
+    await rm(homeCanary, { force: true });
+  }
 
   // 3-1. WSL2이면 Windows 드라이브를 읽지 못한다(#164, ADR-0038)
   const drives = windowsDrives(await osMounts());
@@ -212,9 +233,10 @@ try {
   else
     await probe(
       "WSL2이면 Windows 드라이브를 읽지 못한다",
-      drives.map((d) => `! ls '${d}' >/dev/null 2>&1`).join(" && "),
+      // 드라이브 자리는 빈 tmpfs로 덮이므로(#176) `ls`는 성공할 수 있다. 오류이거나 비어 있으면 막힌 것이다.
+      drives.map((d) => `[ -z "$(ls -A '${d}' 2>/dev/null)" ]`).join(" && "),
       "check",
-      `${drives.join(", ")}를 읽지 못한다`,
+      `${drives.join(", ")}가 오류이거나 비어 있다`,
     );
 
   // 4. 자기 기기의 포트를 열고 붙는다
