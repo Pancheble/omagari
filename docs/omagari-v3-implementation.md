@@ -292,14 +292,24 @@ CSCW 연구에서 작업 공간 인식이라고 부르는 것이다. 진행 중�
 
 - [x] GitHub의 Windows 기계에서 WSL2가 켜진다. `Vampire/setup-wsl@v7.2.0`으로 Ubuntu 24.04를 깔고 `wsl.exe`로 apt, Node 24, `npm ci`, 점검까지 돌렸다(점검은 약 7분)
 - [x] 도구: `checkDependenciesAsync`가 세 기계 모두 통과했다(ripgrep 경로 `/usr/bin/rg`)
-- [ ] `npm test` 말고 나머지 항목은 세 기계 모두 **같은 오류로 실패**했다: `bash: line 21: …/node_modules/@anthropic-ai/sandbox-runtime/vendor/seccomp/x64/apply-seccomp: No such file or directory`. 도우미 파일은 호스트에 있다(macOS에서 `npm ci`로 정적 ELF를 확인했다). 샌드박스 안에서 그 경로가 보이지 않는 것으로 보인다. `node_modules`가 홈 폴더 아래(`/home/runner/...`, `/root/...`)에 있어 홈 읽기 막기에 가린 것일 수 있다. 근거는 아래 `npm test` 항목과의 차이뿐이고 **확인하지 않았다** → #174
+- [ ] `npm test` 말고 나머지 항목은 세 기계 모두 **같은 오류로 실패**했다: `bash: line 21: …/node_modules/@anthropic-ai/sandbox-runtime/vendor/seccomp/x64/apply-seccomp: No such file or directory`. 도우미 파일은 호스트에 있다(macOS에서 `npm ci`로 정적 ELF를 확인했다). 샌드박스 안에서 그 경로가 보이지 않는 것으로 보인다. `node_modules`가 홈 폴더 아래(`/home/runner/...`, `/root/...`)에 있어 홈 읽기 막기에 가린 것일 수 있다. 근거는 아래 `npm test` 항목과의 차이뿐이었다 → #174에서 고쳤고 아래 "#174를 고친 뒤" 블록에서 확인했다
   - 이 오류로 실패한 항목은 바깥 네트워크 막기, 쓰기 막기와 쓰기 허용, 홈 읽기 막기, 자기 기기의 포트, 유닉스 소켓 다섯 항목, 환경 변수, Node, 의존성 읽기, 임시 워크트리 안의 git, `objects`·`config` 읽기, 남은 프로세스(#150)다. 명령이 돌지 못했으니 이 실패들은 막기가 되는지 안 되는지를 말해 주지 않는다. 같은 까닭으로 "(관찰)" 줄의 "막힌다"도 의미가 없다
   - **`npm test`는 돌았다**(세 기계 모두, TMPDIR을 되돌린 실험 줄도 같은 숫자): `tests 160`, `pass 5`, `fail 154`, `310 EPERM`, 판정 broken(Ubuntu 24.04 11초, 22.04 18초, WSL2 238초). `apply-seccomp`를 못 찾았다면 테스트 160개가 돌 수 없으므로, 이 항목은 위 오류와 다르다. Linux에서 유닉스 소켓을 막아 `EPERM`이 난 것으로 보이고 macOS의 #145와 같은 모습이지만, `EPERM`이 정말 소켓 때문인지는 이 로그만으로는 확인하지 못했다(ADR-0037, #172의 고침이 이 실행에 들어 있는지도 보지 않았다)
   - 차이의 가능한 까닭(추측): 이 항목만 `checkWork({ folder: top })`로 `node_modules`(그 안의 `apply-seccomp`)를 품은 이 레포 폴더 자체를 돌린다. 나머지 항목은 홈 아래의 `.omagari-sandbox-check-*/repo`라는 다른 레포를 돌리고, 거기서는 홈 아래에 있는 이 레포의 `node_modules`가 가려질 수 있다. 진짜 러너도 사용자 레포와 다른 곳에 깔린 sandbox-runtime을 부르므로 실제 사용에서도 같은 일이 생길 수 있다
   - WSL2의 Windows 드라이브 읽기 막기(#164)는 실패로 나왔고 같은 까닭이다. 이 항목은 아직 한 번도 제대로 못 봤다
   - `fsmonitor`로 샌드박스 밖에서 명령이 도는지(벗어남)는 "안 돌았다"로 나왔으나, 샌드박스 안의 명령이 돌지 못했으니 이 결과도 믿을 수 없다
   - Ubuntu 24.04에서 `kernel.apparmor_restrict_unprivileged_userns=0`을 둔 채 돌았다. 풀지 않았을 때의 모습은 보지 않았다
-- 못 본 것: 위 모든 막기(Linux와 WSL2에서), 커널 판, `npm test`의 `EPERM` 까닭, ADR-0037의 소켓 막기 결과. #174를 고친 뒤 버튼으로 다시 돌려 이 블록에 덧붙인다
+- 못 본 것: 위 모든 막기(Linux와 WSL2에서), 커널 판, `npm test`의 `EPERM` 까닭, ADR-0037의 소켓 막기 결과. 아래 블록에서 일부를 봤다
+
+**#174를 고친 뒤** (같은 점검, 실행 [43787046653](https://github.com/Pancheble/omagari/actions/runs/43787046653), 2026-11-16, 브랜치 `claude/fix-seccomp-helper-path-372177`, sandbox-runtime 0.0.81). 세 기계의 이미지와 도구 판은 위 표와 같다.
+
+- 까닭: `apply-seccomp`는 샌드박스 **안에서** 불린다(`linux-sandbox-utils.js`의 `buildSandboxCommand`가 bubblewrap 안의 셸 첫 줄에 `applySeccompPrefix`를 넣는다). 경로는 sandbox-runtime 패키지 안의 `vendor/seccomp/<arch>`로, 러너를 깐 `node_modules`이고 홈 폴더 아래일 수 있다. 러너의 읽기 막기(`denyRead: [홈]`)가 그 폴더를 가렸다. 이 레포의 `npm test` 항목은 `node_modules`를 품은 폴더 자체가 읽기 허용인 임시 워크트리라 도우미가 보였다.
+- 고침: 러너가 도우미 폴더(`vendor/seccomp/<arch>`)를 읽기 허용 목록에 넣는다(`packages/runner/src/check.ts`의 `seccompHelper`). 도우미 폴더를 샌드박스 안에서 `ls`로 직접 본 것은 아니다. 고친 뒤 같은 실행의 로그에서 `apply-seccomp` 오류가 0번이고 항목들이 돈다는 것이 근거다.
+- 결과(세 기계가 같다): 바깥 네트워크 막힘, 워크트리 안 쓰기, `HOME` 쓰기, 자기 기기의 포트, 밖의 유닉스 소켓·링크·Docker 소켓 막힘, 환경 변수 거르기, Node, 의존성 읽기, 임시 워크트리 안의 git, `objects`는 읽고 Git 폴더의 `config`는 못 읽음, 남은 프로세스(#150) 항목이 **통과**했다. `fsmonitor` 관찰은 "안 돌았다".
+- 남은 실패(세 기계 같음, 이 이슈와 다른 문제로 보고 나눴다):
+  - 임시 워크트리 밖에 쓰지 못한다, 홈 폴더를 읽지 못한다(WSL2는 Windows 드라이브도): 명령이 0으로 끝나지 않았다. 밖에 파일이 실제로 생긴 줄은 없다. 점검 명령의 기대가 bubblewrap과 다른 것으로 보이나 **확인하지 않았다** → #176
+  - 유닉스 소켓을 워크트리와 임시 폴더 안에 열고 붙는다: `EPERM`(Linux는 소켓을 모두 막는다는 ADR-0037과 맞는다). 이 레포의 `npm test`는 여전히 판정 broken(11초, 18초, 약 3분). 까닭은 아직 읽지 못했다 → #177
+- 못 본 것: 홈 읽기 막기와 쓰기 막기가 Linux에서 정말 되는지(위 #176), Linux에서 소켓을 쓰는 테스트가 돌 수 있는지(#177), 커널 판, `kernel.apparmor_restrict_unprivileged_userns`를 풀지 않았을 때, WSL2의 드라이브 가리기. sandbox-runtime 0.0.83은 올리지 않았다(변경 내역이 이 문제를 다루는지 못 찾았고 파일이 많이 바뀌어 근거 없이 올리지 않는다)
 
 ## 12. 검증과 지표
 
