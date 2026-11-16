@@ -205,6 +205,31 @@ try {
     `홈 폴더 아래의 파일과 목록을 읽지 못한다${hasSsh ? "(~/.ssh 포함)" : "(이 기기에 ~/.ssh가 없어 그것은 보지 못함)"}`,
   );
 
+  // 3-0. 진단(#176): 홈 막기를 한 명령씩 따로 돌려 종료 코드와 출력을 남긴다. 항상 0으로 끝나 출력이 그대로 보인다.
+  const diagFile = join(home, ".omagari-sandbox-diag");
+  const diag = (name: string, command: string) =>
+    probe(`진단: ${name}`, command, "observe", "(출력이 위 줄)", "");
+  await diag("ls 홈", `ls -A '${home}' >o.txt 2>&1; echo "rc=$?"; head -5 o.txt`);
+  await diag("cat 카나리", `cat '${canary}' 2>&1; echo "rc=$?"`);
+  await diag(
+    "홈 아래에 쓰고 되읽기",
+    `echo x > '${diagFile}'; echo "write rc=$?"; cat '${diagFile}' 2>&1; echo "read rc=$?"`,
+  );
+  await diag(
+    "홈 마운트",
+    `grep -E ' ${home}( |/)' /proc/self/mountinfo | head -5 | cut -c1-160; echo "rc=$?"`,
+  );
+  const seen = await access(diagFile).then(
+    () => true,
+    () => false,
+  );
+  add(
+    "진단: 홈 아래에 쓴 파일이 샌드박스 밖에 실제로 생겼다",
+    seen ? false : "observe",
+    seen ? "생겼다(막기가 안 됨)" : "안 생겼다",
+  );
+  await rm(diagFile, { force: true });
+
   // 3-1. WSL2이면 Windows 드라이브를 읽지 못한다(#164, ADR-0038)
   const drives = windowsDrives(await osMounts());
   if (drives.length === 0)
