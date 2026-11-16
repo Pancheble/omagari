@@ -511,7 +511,7 @@ try {
           `${JSON.stringify({
             // `npm test` 그대로이고, 끝에 통과·실패 수와 실패한 테스트 이름이 보이게 모아 찍는다.
             check:
-              "npm test > omagari-test.log 2>&1; code=$?; grep -E '^✖' omagari-test.log | sort -u | head -12; grep -oE '\\bE[A-Z]{3,}\\b' omagari-test.log | sort | uniq -c | sort -rn | head -5; grep -E '^ℹ (tests|pass|fail|cancelled)' omagari-test.log; exit $code",
+              "npm test > omagari-test.log 2>&1; code=$?; grep -E '^✖' omagari-test.log | sort -u | head -12; grep -oE '\\bE[A-Z]{3,}\\b' omagari-test.log | sort | uniq -c | sort -rn | head -5; grep -oE '[a-z]+ EPERM' omagari-test.log | sort | uniq -c | sort -rn | head -5; grep EPERM omagari-test.log | grep -vE 'listen|connect' | sort -u | head -5; grep -E '^ℹ (tests|pass|fail|cancelled)' omagari-test.log; exit $code",
           })}\n`,
         );
       })
