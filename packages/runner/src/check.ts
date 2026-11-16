@@ -17,6 +17,7 @@ import {
 } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify, stripVTControlCharacters } from "node:util";
 import type { SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
 import {
@@ -237,6 +238,18 @@ export async function osMounts(): Promise<string | undefined> {
 }
 
 /**
+ * Linux에서 샌드박스 안의 첫 줄이 부르는 `apply-seccomp` 도우미(유닉스 소켓 막기)가 든 폴더. 러너의 `node_modules`는 사용자의 홈 폴더 아래에 있을 수 있어
+ * 홈 읽기 막기에 가려지면 명령이 `No such file or directory`로 돌지 못하므로 다시 연다(#174). 자리는 sandbox-runtime이 찾는 `vendor/seccomp/<arch>`와 같다.
+ */
+function seccompHelper() {
+  if (process.platform !== "linux") return [];
+  const arch = process.arch === "x64" ? "x64" : process.arch === "arm64" ? "arm64" : undefined;
+  if (!arch) return [];
+  const entry = fileURLToPath(import.meta.resolve("@anthropic-ai/sandbox-runtime"));
+  return [join(dirname(dirname(entry)), "vendor", "seccomp", arch)];
+}
+
+/**
  * 막는 설정(ADR-0033): 바깥 네트워크를 막고 자기 기기의 포트는 쓴다. 유닉스 소켓은 `sockets`(임시 워크트리와 임시 폴더) 아래에서만 열고 붙는다(ADR-0037). 쓰기는 임시 워크트리, 임시 폴더, 샌드박스 안의 git이 쓰는 Git 폴더만이다.
  * 읽기는 홈 폴더를 막고 임시 워크트리, 임시 폴더, 도구 자리, 이어 둔 의존성 폴더, 레포의 개체 폴더만 다시 연다. 레포의 Git 폴더는 열지 않는다(원격 URL에 토큰이 있을 수 있다). 도구 자리는 러너를 돌리는 Node가 깔린 곳과 PATH의 폴더 가운데
  * 홈 폴더 아래의 것이다(nvm처럼 Node를 홈 폴더에 깐 기기).
@@ -263,7 +276,7 @@ function policy(
     },
     filesystem: {
       denyRead: [home, ...drives],
-      allowRead: [...writable, ...new Set([...tools, ...extraRead])],
+      allowRead: [...writable, ...new Set([...tools, ...extraRead, ...seccompHelper()])],
       allowWrite: writable,
       denyWrite: [],
     },
