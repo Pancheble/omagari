@@ -31,6 +31,7 @@ jobs:
           code=0
           node test/real-sandbox.ts > result.md || code=$?
           { echo "## ${{ matrix.os }}"; cat result.md; } >> "$GITHUB_STEP_SUMMARY"
+          cat result.md
           exit $code
   wsl2:
     name: Windows 위의 WSL2(Ubuntu 24.04)
@@ -58,6 +59,7 @@ jobs:
           cd ~/omagari
           code=0
           node test/real-sandbox.ts > result.md || code=$?
+          cat result.md
           cp result.md "$OLDPWD/result.md"
           exit $code
       - name: 실행 요약에 결과 싣기
