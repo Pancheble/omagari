@@ -280,7 +280,24 @@ CSCW 연구에서 작업 공간 인식이라고 부르는 것이다. 진행 중�
 - [ ] `TMPDIR`을 sandbox-runtime이 `/tmp/claude`로 덮는다 → #146
 - [ ] 러너의 현재 폴더가 레포가 아니면 임시 워크트리의 `.git/config`에 쓸 수 있고, 러너가 샌드박스 밖에서 부르는 `git`이 `core.fsmonitor`로 명령을 돌렸다(무해한 `touch`로 재현). 레포 폴더에서 띄우면 `.git/config`, `.git/hooks` 쓰기가 막힌다 → #144
   - 고친 뒤(2026-11-14, #144 세션, 같은 기기·판, `--quick`): 러너의 현재 폴더가 레포일 때와 아닐 때 모두 "안 돌았다". 러너는 샌드박스가 쓸 수 없는 자기 Git 폴더로 임시 워크트리에 git을 부른다(ADR-0033). 샌드박스 안의 git은 돌림마다 새로 만드는 복사본을 쓰므로 `.git/config`, `.git/hooks`, `.git/HEAD`가 이제 레포 폴더에서 띄워도 쓸 수 있게 열리고, `add`·`commit`은 그대로 된다
-- 못 본 것: Linux, 진짜 nvm, Jest의 감시 도구(`--no-watchman`)
+- 못 본 것: 진짜 nvm, Jest의 감시 도구(`--no-watchman`). Linux와 WSL2는 아래 블록
+
+**Linux와 WSL2 손 점검 결과** (`test/real-sandbox.ts`, GitHub Actions 버튼 `real-sandbox.yml`, 실행 [43781176425](https://github.com/Pancheble/omagari/actions/runs/43781176425)). 2026-11-16, #166 세션이 `docs/real-sandbox-results` 브랜치에서 눌렀다(로그에 결과를 싣는 두 줄을 더한 판. 같은 날 `dev`에서 돈 첫 실행 43780358075도 같은 결과였다). 도구는 모두 `@anthropic-ai/sandbox-runtime` 0.0.81, Node 24(setup-node가 고른 24.x), ripgrep은 apt판이다.
+
+| 기계 | 이미지 | bubblewrap | ripgrep | 결과 |
+| --- | --- | --- | --- | --- |
+| ubuntu-24.04 | `ubuntu-24.04` 20261111.127.1(사용자 네임스페이스 막기 풀고 돌림) | 0.9.0-1ubuntu0.3 | 14.1.0 | 도구만 통과, 나머지 실패 |
+| ubuntu-22.04 | `ubuntu-22.04` 20261111.360.2 | 0.6.1-1ubuntu0.3 | 13.0.0 | 도구만 통과, 나머지 실패 |
+| Windows 위의 WSL2 | `windows-2025-vs2026` 20261103.298.1 위의 WSL2 Ubuntu 24.04(사용자는 root, 레포는 `/root/omagari`) | 0.9.0-1ubuntu0.3 | 14.1.0 | 도구만 통과, 나머지 실패 |
+
+- [x] GitHub의 Windows 기계에서 WSL2가 켜진다. `Vampire/setup-wsl@v7.2.0`으로 Ubuntu 24.04를 깔고 `wsl.exe`로 apt, Node 24, `npm ci`, 점검까지 돌렸다(점검은 약 7분)
+- [x] 도구: `checkDependenciesAsync`가 세 기계 모두 통과했다(ripgrep 경로 `/usr/bin/rg`)
+- [ ] 나머지 항목은 세 기계 모두 **같은 까닭으로 실패**했다: `bash: line 21: …/node_modules/@anthropic-ai/sandbox-runtime/vendor/seccomp/x64/apply-seccomp: No such file or directory`. 도우미 파일은 호스트에 있다(macOS에서 `npm ci`로 정적 ELF를 확인했다). 샌드박스 안에서 그 경로가 보이지 않는 것으로 보인다. `node_modules`가 홈 폴더 아래(`/home/runner/...`, `/root/...`)에 있어 홈 읽기 막기에 가린 것일 수 있으나 **확인하지 않았다** → #174
+  - 실패한 항목은 바깥 네트워크 막기, 쓰기 막기와 쓰기 허용, 홈 읽기 막기, 자기 기기의 포트, 유닉스 소켓 다섯 항목, 환경 변수, Node, 의존성 읽기, 임시 워크트리 안의 git, `objects`·`config` 읽기, 남은 프로세스(#150), 이 레포의 `npm test`(판정 broken)다. 명령이 돌지 못했으니 이 실패는 막기가 되는지 안 되는지를 말해 주지 않는다. 같은 까닭으로 "(관찰)" 줄의 "막힌다"도 의미가 없다
+  - WSL2의 Windows 드라이브 읽기 막기(#164)는 실패로 나왔고 같은 까닭이다. 이 항목은 아직 한 번도 제대로 못 봤다
+  - `fsmonitor`로 샌드박스 밖에서 명령이 도는지(벗어남)는 "안 돌았다"로 나왔으나, 샌드박스 안의 명령이 돌지 못했으니 이 결과도 믿을 수 없다
+  - Ubuntu 24.04에서 `kernel.apparmor_restrict_unprivileged_userns=0`을 둔 채 돌았다. 풀지 않았을 때의 모습은 보지 않았다
+- 못 본 것: 위 모든 막기(Linux와 WSL2에서). 커널 판, 이 레포의 `npm test`가 샌드박스 안에서 통과하는지, ADR-0037의 소켓 막기 결과. #174를 고친 뒤 버튼으로 다시 돌려 이 블록에 덧붙인다
 
 ## 12. 검증과 지표
 
