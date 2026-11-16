@@ -1,6 +1,6 @@
 # 실제 샌드박스 손 점검
 
-이슈 #138. 테스트는 합쳐 돌려 보기의 샌드박스를 가짜로 둔다(ADR-0033). 실제 샌드박스가 막을 것을 막고 열 것을 여는지는 `test/real-sandbox.ts` 하나로 주인 기기에서 손으로 돌린다. 이름이 `*.test.ts`가 아니라 `npm test`와 CI는 이것을 돌리지 않는다.
+이슈 #138. 테스트는 합쳐 돌려 보기의 샌드박스를 가짜로 둔다(ADR-0033). 실제 샌드박스가 막을 것을 막고 열 것을 여는지는 `test/real-sandbox.ts` 하나로 @Pancheble의 기기에서 손으로 돌린다. 이름이 `*.test.ts`가 아니라 `npm test`와 CI는 이것을 돌리지 않는다.
 
 ## 무엇을 보나
 
@@ -53,7 +53,7 @@ node test/real-sandbox.ts > sandbox-check-result.md
 
 ## 버튼으로 돌리기(Linux와 WSL2)
 
-주인 기기는 Mac뿐이라 Linux와 WSL2는 GitHub Actions의 버튼으로 본다(ADR-0038, 이슈 #165). 워크플로 `.github/workflows/real-sandbox.yml`은 `workflow_dispatch`로만 돈다. PR과 push에는 돌지 않고, 비밀을 쓰지 않으며 `contents: read` 권한만 쓴다.
+@Pancheble의 기기는 Mac뿐이라 Linux와 WSL2는 GitHub Actions의 버튼으로 본다(ADR-0038, 이슈 #165). 워크플로 `.github/workflows/real-sandbox.yml`은 `workflow_dispatch`로만 돈다. PR과 push에는 돌지 않고, 비밀을 쓰지 않으며 `contents: read` 권한만 쓴다.
 
 1. 저장소의 Actions 탭에서 "실제 샌드박스 점검"을 고르고 Run workflow를 누른다. 버튼은 기본 브랜치(`dev`)에 워크플로가 들어간 뒤에 보인다. 터미널에서는 `gh workflow run real-sandbox.yml --ref dev`.
 2. 기계가 셋 돈다: Ubuntu 24.04(AppArmor의 비특권 사용자 네임스페이스 막기를 풀고 돈다), Ubuntu 22.04, Windows 기계 위의 WSL2(Ubuntu 24.04). 각각 bubblewrap, socat, ripgrep과 Node 24를 깔고 `npm ci` 뒤 `node test/real-sandbox.ts`를 돌린다.
