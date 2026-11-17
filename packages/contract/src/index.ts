@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 36;
+export const CONTRACT_VERSION = 37;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -707,6 +707,24 @@ export const EVIDENCE_MARKS = {
 export const Evidence = z.strictObject({ text: z.string(), mark: EvidenceMark });
 export type Evidence = z.infer<typeof Evidence>;
 
+/** 실험에 얹는 패치의 상한(글자). 넘으면 돌리지 않고 잘라 남긴다. */
+export const MAX_PATCH_CHARS = 64_000;
+
+/**
+ * 토론의 실험(ADR-0040, 문답 A14): 에이전트가 입장에 붙인 패치(`git apply`로 얹는 unified diff)를, 그 입장을 낸 러너가 합쳐 돌려 보기와 같은 임시 워크트리에서
+ * 두 작업을 합친 것 위에 얹어 샌드박스 안에서 검사 명령으로 돌린 판정이다. 그 입장의 검증된 근거다. 실험 브랜치는 만들지도 푸시하지도 않는다.
+ * 돌리지 못했으면(검사 명령이나 샌드박스가 없다, 합쳐지지 않는다, 패치가 얹어지지 않는다, 상대 작업이 관측되지 않는다) `not_run`과 까닭이다.
+ * `check`는 돌린 검사 명령이다. 읽지 못했으면 없다.
+ */
+export const Experiment = z.strictObject({
+  patch: z.string().max(MAX_PATCH_CHARS),
+  verdict: Verdict,
+  reason: z.string().optional(),
+  check: z.string().optional(),
+  ms: z.number(),
+});
+export type Experiment = z.infer<typeof Experiment>;
+
 /**
  * 토론의 입장 하나(ADR-0040): 주장과 근거 목록. `context`는 맥락을 어떻게 이어받았나다: 주인이 그 브랜치에서 쓰던 최근 작업 세션을
  * 읽기 전용으로 갈라 띄웠다(`session`), 갈라 띄우지 못해 초안 PR의 계획, diff, 관련 결정만 갖고 냈다(`none`, "맥락 없이 참여").
@@ -721,6 +739,8 @@ export const Stance = z.strictObject({
    * 사유 없이 바뀐 입장(`changed`가 있고 `reason`이 없다)은 화면에 "사유 없이 바뀜"으로 표시한다. 첫 라운드와 유지한 입장에는 없다.
    */
   changed: z.strictObject({ reason: z.string().min(1).optional() }).optional(),
+  /** 입장에 패치를 붙였으면 그 실험. */
+  experiment: Experiment.optional(),
   model: z.string().optional(),
   effort: z.string().optional(),
 });
@@ -751,12 +771,13 @@ export const DebateOption = z.strictObject({
 export type DebateOption = z.infer<typeof DebateOption>;
 
 /**
- * 토론의 결론(ADR-0040, 구현 7장): 안(`option`, `options`의 자리)과 정한 길. `evidence`는 검증된 근거가 마지막 입장에 한쪽에만 있어
+ * 토론의 결론(ADR-0040, 구현 7장): 안(`option`, `options`의 자리)과 정한 길. `experiment`는 마지막 입장의 실험이 한 안만 통과해 서버가 그쪽을 제안한 것(근거보다 먼저),
+ * `evidence`는 검증된 근거가 마지막 입장에 한쪽에만 있어
  * 서버가 그쪽을 제안한 것, `choice`는 포스트의 멤버(`chooser`)가 먼저 고른 것이다. 결론은 제안이고, 결정 정리하기의 초안 요청에 실린다(ADR-0028).
  */
 export const DebateConclusion = z.strictObject({
   option: z.number().int().nonnegative(),
-  by: z.enum(["evidence", "choice"]),
+  by: z.enum(["experiment", "evidence", "choice"]),
   chooser: z.strictObject({ login: z.string(), name: z.string() }).optional(),
   at: z.string(),
 });
@@ -1159,6 +1180,7 @@ export const serverToRunner = {
    * 반박 라운드(2 이상)에는 지난 라운드의 내 입장(`mine`)과 상대의 입장(`theirs`)이 온다. 러너는 상대의 입장을 지시가 아닌 데이터로 감싸 넘기고(ADR-0017),
    * 입장을 바꾸면 사유를 적게 한다(`Stance.changed`). 러너는 주인이 그 브랜치에서 쓰던 최근 작업 세션을 읽기 전용으로 갈라 띄우고, 안 되면 초안 PR의 계획, diff, 관련 결정만 넣어
    * "맥락 없이 참여"로 띄운다. 토론 세션은 파일을 고치지 않는다(ADR-0003). 문답과 같은 줄에 서고, 답은 `stance`(`re`)다.
+   * 에이전트가 입장에 패치를 붙이면 러너가 내 작업과 `against`를 합친 것 위에 얹어 실험을 돌리고 `Stance.experiment`로 싣는다.
    */
   debate: z.strictObject({
     debate: z.number(),
@@ -1169,6 +1191,8 @@ export const serverToRunner = {
     messages: z.array(ChannelMessage).max(CHANNEL_CONTEXT),
     mine: Stance.optional(),
     theirs: Stance.optional(),
+    /** 상대 자리의 작업. 실험은 이 작업(러너가 받은 `situation`의 관측)을 내 작업과 합친다. */
+    against: z.strictObject({ login: z.string(), branch: z.string() }),
   }),
   /** `draft`(보낸 것의 `id`)를 멈춘다. 줄에 서 있으면 돌리지 않고, 돌고 있으면 실행기를 끈다. 답하지 않는다. */
   stopDraft: z.strictObject({ id: z.string() }),
