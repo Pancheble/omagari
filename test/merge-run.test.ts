@@ -296,9 +296,12 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo "pay
   const [header, today] = shown.stdout.trimEnd().split("\n");
   assert.equal(
     header,
-    "날짜(Asia/Seoul)  들어온 멤버  문답  돌려 봄  통과  깨짐  가릴 수 없음  돌리지 못함",
+    "날짜(Asia/Seoul)  들어온 멤버  문답  돌려 봄  통과  깨짐  가릴 수 없음  돌리지 못함  토론 열림  끝남(실험)  끝남(근거)  끝남(사람)  끝남(만료)  결정 PR",
   );
-  assert.match(today ?? "", /^\d{4}-\d{2}-\d{2} {2}\d+ {2}\d+ {2}4 {2}3 {2}1 {2}0 {2}0$/);
+  assert.match(
+    today ?? "",
+    /^\d{4}-\d{2}-\d{2} {2}\d+ {2}\d+ {2}4 {2}3 {2}1 {2}0 {2}0(?: {2}\d+){6}$/,
+  );
 });
 
 test("검사 명령이 없거나 샌드박스를 쓸 수 없거나 줄이 부딪히면 돌리지 못함과 까닭이 붙고, 빠진 파일은 빼고 돌려 적으며, 공유 수준이 full이 아니면 출력을 올리지 않는다", {
@@ -597,7 +600,7 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
   assert.equal(shown.code, 0, shown.stderr);
   assert.match(
     shown.stdout.trimEnd().split("\n")[1] ?? "",
-    /^\d{4}-\d{2}-\d{2} {2}\d+ {2}\d+ {2}6 {2}1 {2}2 {2}3 {2}0$/,
+    /^\d{4}-\d{2}-\d{2} {2}\d+ {2}\d+ {2}6 {2}1 {2}2 {2}3 {2}0(?: {2}\d+){6}$/,
   );
 });
 

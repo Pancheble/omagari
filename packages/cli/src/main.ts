@@ -41,6 +41,14 @@ import {
 } from "@omagari/runner";
 import { install } from "./install.ts";
 
+/** 토론이 끝난 길과 지표에 쓰는 이름. */
+const DEBATE_PATHS = [
+  ["experiment", "실험"],
+  ["evidence", "근거"],
+  ["human", "사람"],
+  ["expired", "만료"],
+] as const;
+
 const USAGE = `사용법:
   omagari --version             이 체크아웃의 버전(git 태그)과 계약 버전을 본다
   omagari runner [--share <수준>] [--merge-check on|off]
@@ -506,7 +514,7 @@ async function impact(symbol: string) {
     console.log(`러너가 ${ago(disconnectedAt)}부터 서버와 끊겨 있어, 그때까지 받은 것이다.`);
 }
 
-/** 날마다 들어온 멤버 수, 문답 수, 합쳐 돌려 본 수와 판정별 수를 오래된 날부터 한 줄에 하루씩 보인다. */
+/** 날마다 들어온 멤버 수, 문답 수, 합쳐 돌려 본 수와 판정별 수, 토론 수를 오래된 날부터 한 줄에 하루씩 보인다. */
 async function metrics(days: string | undefined) {
   const reply = await call(await member(), api.metrics, {
     ...(days !== undefined && { days: Number(days) }),
@@ -519,12 +527,17 @@ async function metrics(days: string | undefined) {
       "문답",
       "돌려 봄",
       ...verdicts.map((v) => MERGE_RUN_LABELS[v]),
+      "토론 열림",
+      ...DEBATE_PATHS.map(([, label]) => `끝남(${label})`),
+      "결정 PR",
     ].join("  "),
   );
-  for (const { day, members, qas, runs } of reply.days) {
+  for (const { day, members, qas, runs, debates } of reply.days) {
     const counts = verdicts.map((v) => runs[v]);
     const total = counts.reduce((sum, n) => sum + n, 0);
-    console.log([day, members, qas, total, ...counts].join("  "));
+    const ended = DEBATE_PATHS.map(([path]) => debates.ended[path]);
+    const debated = [debates.opened, ...ended, debates.decided];
+    console.log([day, members, qas, total, ...counts, ...debated].join("  "));
   }
 }
 
