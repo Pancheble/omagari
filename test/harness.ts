@@ -29,7 +29,7 @@ import {
   webToServer,
 } from "@omagari/contract";
 import { type Executor, type Sandbox, type SandboxInput, startRunner } from "@omagari/runner";
-import { type GitHub, type Pull, startServer } from "@omagari/server";
+import { type GitHub, type Pull, type RepoLabel, startServer } from "@omagari/server";
 
 const executable = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 const CLI = executable("../packages/cli/src/main.ts");
@@ -199,6 +199,14 @@ export function fakeGitHub() {
     comments: { id: number; login: string; body: string }[];
   }[] = [];
   let commentId = 1000;
+  /** 레포의 라벨. 이슈에 없는 라벨을 붙이면 GitHub처럼 만든다. */
+  const labels: RepoLabel[] = [];
+  let labelId = 5000;
+  const labelOf = (name: string) =>
+    labels.find((label) => label.name.toLowerCase() === name.toLowerCase());
+  const ensureLabel = (name: string) => {
+    if (!labelOf(name)) labels.push({ id: labelId++, name, color: "ededed", description: "" });
+  };
   const issueOf = (number: number) => {
     const found = issues.find((issue) => issue.number === number);
     if (!found) throw new Error("HTTP 404 Not Found");
@@ -330,6 +338,7 @@ export function fakeGitHub() {
       const author = owner(token, repo);
       // GitHub은 PR과 이슈가 번호를 함께 쓰지만, 가짜는 PR 번호가 테스트에 박혀 있어 이슈를 101부터 따로 센다.
       const number = 101 + issues.length;
+      for (const label of labels) ensureLabel(label);
       issues.push({ number, title, body, labels, open: true, author, comments: [] });
       return { number, url: `https://github.com/${REPO}/issues/${number}` };
     },
@@ -354,13 +363,35 @@ export function fakeGitHub() {
     },
     async addLabel(token, repo, number, label) {
       owner(token, repo);
-      const { labels } = issueOf(number);
-      if (!labels.includes(label)) labels.push(label);
+      const found = issueOf(number);
+      ensureLabel(label);
+      if (!found.labels.includes(label)) found.labels.push(label);
     },
     async removeLabel(token, repo, number, label) {
       owner(token, repo);
       const found = issueOf(number);
       found.labels = found.labels.filter((l) => l !== label);
+    },
+    async labels(token, repo) {
+      if (repo !== REPO || !tokens.has(token)) return undefined;
+      return labels.map((label) => ({ ...label }));
+    },
+    async createLabel(token, repo, label) {
+      owner(token, repo);
+      if (labelOf(label.name)) throw new Error("HTTP 422 Validation Failed");
+      const made = { id: labelId++, ...label };
+      labels.push(made);
+      return { ...made };
+    },
+    async updateLabel(token, repo, name, label) {
+      owner(token, repo);
+      const found = labelOf(name);
+      if (!found) throw new Error("HTTP 404 Not Found");
+      // GitHub처럼 이슈에 붙은 라벨의 이름도 바뀐다.
+      for (const issue of issues)
+        issue.labels = issue.labels.map((l) => (l === found.name ? label.name : l));
+      Object.assign(found, label);
+      return { ...found };
     },
   };
   /** 열린 PR을 머지한다. 그 브랜치의 파일이 있으면 main에 들어간다. */
@@ -407,6 +438,14 @@ export function fakeGitHub() {
     },
     /** 서버가 연 이슈. 제목, 라벨, 열림을 고치면 사람이 GitHub에서 고친 것과 같다. */
     issues,
+    /** 레포의 라벨. 고치거나 넣고 빼면 사람이 GitHub에서 한 것과 같다(이슈에 붙은 이름은 따로 고친다). */
+    labels,
+    /** 사람이 GitHub에서 라벨을 만든다. */
+    createLabel(name: string, color = "ededed", description = "") {
+      const made = { id: labelId++, name, color, description };
+      labels.push(made);
+      return made;
+    },
     /** `login`이 GitHub에서 이슈 `number`에 댓글을 단다. */
     comment(number: number, login: string, body: string) {
       issueOf(number).comments.push({ id: commentId++, login, body });

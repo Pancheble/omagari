@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 33;
+export const CONTRACT_VERSION = 34;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -456,8 +456,31 @@ export const IMPORTANCE_LABELS = {
   reference: "참고",
   discuss: "논의",
 } as const satisfies Record<Importance, string>;
-/** 처음부터 논의인 라벨. 나머지 라벨은 참고다. */
+/** 처음부터 논의인 라벨. 나머지 라벨과 새로 만든 라벨은 참고다. */
 export const DISCUSS_LABELS: readonly string[] = [CONFIRMED_LABEL, ALERT_LABELS.declared];
+/** 레포에 없으면 서버가 만드는 기본 라벨(종류 넷과 확인됨)의 색. */
+export const DEFAULT_LABEL_COLORS: Record<string, string> = {
+  [ALERT_LABELS.direct]: "d93f0b",
+  [ALERT_LABELS.indirect]: "fbca04",
+  [ALERT_LABELS.duplicate]: "c5def5",
+  [ALERT_LABELS.declared]: "5319e7",
+  [CONFIRMED_LABEL]: "b60205",
+};
+
+/** GitHub 라벨의 색: `#` 없는 16진수 여섯 자리. */
+const LabelColor = z.string().regex(/^[0-9a-fA-F]{6}$/);
+/**
+ * 라벨(ADR-0039). 레포의 GitHub 라벨 그 자체다. 이름, 색, 설명은 GitHub이 원본이고 서버가 주기마다 읽는다.
+ * 중요도는 GitHub 라벨에 칸이 없어 Omagari에 둔다. 팀에 하나라 모두에게 같다.
+ */
+export const Label = z.strictObject({
+  name: z.string(),
+  color: z.string(),
+  description: z.string(),
+  importance: Importance,
+});
+export type Label = z.infer<typeof Label>;
+const LabelName = z.string().trim().min(1).max(50);
 
 /** 검사 명령을 돌린 판정. 통과(0으로 끝남), 깨짐(0이 아닌 코드), 돌리지 못함(설정 없음, 샌드박스 없음, 준비 명령 실패, 상한에서 끊김). */
 export const Verdict = z.enum(["pass", "broken", "not_run"]);
@@ -1650,6 +1673,57 @@ export const api = {
       }),
     }),
   },
+  /** 라벨 전부, 이름 순서(ADR-0039). 레포의 GitHub 라벨을 주기마다 읽은 것과 중요도다. */
+  labels: {
+    method: "GET",
+    path: "/api/labels",
+    response: z.strictObject({ labels: z.array(Label) }),
+  },
+  /**
+   * 라벨을 만든다. 부른 멤버의 토큰으로 레포에 GitHub 라벨을 만들고, 중요도는 참고로 시작한다.
+   * 같은 이름(대소문자를 가리지 않는다)이 있으면 `conflict`, GitHub이 받지 않으면 `github_failed`다.
+   * 실시간 연결이 붙어 있는 웹 모두에 `labels`가 간다.
+   */
+  createLabel: {
+    method: "POST",
+    path: "/api/labels",
+    body: z.strictObject({
+      name: LabelName,
+      color: LabelColor,
+      description: z.string().max(100).default(""),
+    }),
+    response: z.strictObject({ label: Label }),
+  },
+  /**
+   * 라벨(`name`)을 고친다. 이름, 색, 설명은 부른 멤버의 토큰으로 GitHub 라벨을 고치고(포스트의 라벨 이름도 따라 바뀐다),
+   * 중요도는 Omagari에서만 바꾼다. 멤버 누구나 바꾼다. 중요도가 바뀌면 그 라벨을 단 포스트의 중요도가 다시 계산되고, 논의가 되면 이슈가 열린다.
+   * 없는 라벨이면 `not_found`, 바꾼 이름이 다른 라벨과 같으면 `conflict`, GitHub이 받지 않으면 `github_failed`다.
+   */
+  editLabel: {
+    method: "POST",
+    path: "/api/labels/edit",
+    body: z.strictObject({
+      name: z.string(),
+      next: z.strictObject({
+        name: LabelName.optional(),
+        color: LabelColor.optional(),
+        description: z.string().max(100).optional(),
+        importance: Importance.optional(),
+      }),
+    }),
+    response: z.strictObject({ label: Label }),
+  },
+  /**
+   * 포스트(`post`, 포스트의 채널)의 라벨을 `labels`로 바꾼다(붙이고 뗀다). 이슈가 있으면 이슈 라벨에도 반영되고,
+   * 이슈가 없으면 Omagari에만 있다가 이슈가 열릴 때 함께 달린다. 바뀐 중요도가 논의면 이슈가 열린다.
+   * 없는 포스트나 라벨이면 `not_found`다. 실시간 연결의 웹에 그 알림 줄이 다시 간다.
+   */
+  setPostLabels: {
+    method: "POST",
+    path: "/api/posts/labels",
+    body: z.strictObject({ post: z.string(), labels: z.array(z.string()) }),
+    response: z.strictObject({ post: Post }),
+  },
   /** 채널 전부(채팅과 포럼), 이름 순서. 포스트는 오지 않는다(`api.posts`). 멤버만 본다. */
   channels: {
     method: "GET",
@@ -1766,6 +1840,8 @@ export const serverToWeb = {
    * 공개된 문답은 채널의 모두에게 `message`(kind `qa`)로도 간다. 끊긴 사이의 것은 다시 보내지 않으니, 다시 붙으면 `api.dms`를 읽는다.
    */
   qa: Qa,
+  /** 라벨 목록 전부(`api.labels`와 같다). 라벨이 생기거나 바뀌거나 없어질 때마다 보낸다. 다시 붙으면 `api.labels`를 읽는다. */
+  labels: z.array(Label),
   /** 내 결정 초안이 끝났다(다 씀, 멈춤, 쓰지 못함). 요청한 사람의 연결에만 간다. 끊긴 사이의 것은 다시 보내지 않는다. */
   draft: Draft,
   error: ContractError,
