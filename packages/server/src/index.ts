@@ -25,6 +25,7 @@ import {
   type ConflictPair,
   type ContractError,
   ContractFailure,
+  DEFAULT_LABEL_COLORS,
   type Decision,
   type DecisionWindow,
   DISCUSS_LABELS,
@@ -41,6 +42,7 @@ import {
   Importance,
   INBOX_MS,
   type InboxItem,
+  type Label,
   LIVE_SOCKET,
   MAX_FRAME_BYTES,
   MERGE_RUN_LABELS,
@@ -72,10 +74,10 @@ import {
 import { checkoutVersion } from "@omagari/contract/version";
 import type { WSContext } from "hono/ws";
 import { type WebSocket, WebSocketServer } from "ws";
-import type { GitHub } from "./github.ts";
+import type { GitHub, RepoLabel } from "./github.ts";
 import { createApp, mount } from "./http.ts";
 
-export { type GitHub, type Pull, realGitHub } from "./github.ts";
+export { type GitHub, type Pull, type RepoLabel, realGitHub } from "./github.ts";
 
 /** push 권한을 다시 확인하는 주기. Room의 10분에서 시작한다(ADR-0011). */
 const RECHECK_MS = 10 * 60_000;
@@ -199,9 +201,12 @@ const POST_LAST = `(SELECT json_object('login', x.login, 'name', COALESCE(pp.nam
 /** 포럼 전부의 id와 거르기(JSON 배열), 이름 순. */
 const FORUMS = `(SELECT json_group_array(json_object('id', f.id, 'filter', json(f.filter)) ORDER BY f.name)
   FROM channels f WHERE f.filter IS NOT NULL)`;
+/** 포스트(`c`)의 중요도: 라벨 가운데 하나라도 논의면 논의다(ADR-0039). 모르는 라벨은 참고다. */
+const POST_IMPORTANCE = `CASE WHEN EXISTS (SELECT 1 FROM json_each(c.labels) j
+  JOIN labels l ON l.name = j.value AND l.importance = 'discuss') THEN 'discuss' ELSE 'reference' END`;
 
 const MESSAGES = `SELECT m.id, m.channel, m.login, m.text, m.note, m.at, m.github, p.name,
-  c.issue, c.issue_url, c.issue_title, c.issue_labels, c.issue_open, c.labels,
+  c.issue, c.issue_url, c.issue_title, c.issue_labels, c.issue_open, c.labels, ${POST_IMPORTANCE} AS importance,
   q.id AS qa, q.executor, q.question, q.at AS asked, q.answer, q.visibility,
   m.alert, a.kind, a.works, a.files, a.resolved, a.run, a.confirmed,
   c.id AS post, CASE WHEN c.id IS NULL THEN 0 ELSE ${POST_COUNT} END AS count, ${POST_LAST} AS last,
@@ -228,6 +233,7 @@ type MessageRow = {
   issue_labels: string | null;
   issue_open: number | null;
   labels: string | null;
+  importance: Importance;
   qa: number | null;
   asked: number;
   alert: number | null;
@@ -290,16 +296,11 @@ const computedBy = (kind: Alert["kind"], item: AlertFile | AlertSymbol, works: W
     ? [works[usingSide(item)]?.login]
     : works.map((work) => work.login);
 
-/** 라벨 중 가장 높은 중요도(ADR-0039). 지금은 기본값만 쓴다. */
-const importanceOf = (labels: string[]): Importance =>
-  labels.some((label) => DISCUSS_LABELS.includes(label)) ? "discuss" : "reference";
-
 /** 포스트 요약(`Post`에서 `alert`만 뺀 것). `row`는 알림 줄이다. 한 줄은 줄바꿈을 접고 `POST_LINE`자까지만 준다. */
 const POST_LINE = 200;
 const postSummary = (row: MessageRow): Omit<Post, "alert"> => {
   const last = row.last === null ? null : JSON.parse(row.last);
   const labels: string[] = JSON.parse(row.labels ?? "[]");
-  const importance = importanceOf(labels);
   return {
     channel: row.post as string,
     count: row.count,
@@ -320,9 +321,9 @@ const postSummary = (row: MessageRow): Omit<Post, "alert"> => {
             open: row.issue_open === 1,
           },
     labels,
-    importance,
+    importance: row.importance,
     forums: (JSON.parse(row.forums ?? "[]") as { id: string; filter: ForumFilter }[])
-      .filter((forum) => shows(forum.filter, { labels, importance }))
+      .filter((forum) => shows(forum.filter, { labels, importance: row.importance }))
       .map((forum) => forum.id),
   };
 };
@@ -590,6 +591,25 @@ export async function startServer(options: {
         post.id,
       );
   }
+  // 라벨(ADR-0039): 레포의 GitHub 라벨과 팀이 단 중요도. 이름, 색, 설명은 주기마다 GitHub에서 읽는다. `github`은 GitHub 라벨의 id이고,
+  // 아직 GitHub에 없는 기본 라벨(종류 넷과 확인됨)은 NULL이라 다음 주기에 만든다. GitHub처럼 이름은 대소문자를 가리지 않는다.
+  db.exec(`CREATE TABLE IF NOT EXISTS labels (
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    github INTEGER UNIQUE,
+    color TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    importance TEXT NOT NULL DEFAULT 'reference' CHECK (importance IN ('reference', 'discuss'))
+  ) STRICT`);
+  /** 기본 라벨이 목록에 없으면 넣는다. GitHub에 없으면 다음 주기에 만든다. */
+  const seedLabels = () => {
+    for (const [name, color] of Object.entries(DEFAULT_LABEL_COLORS))
+      db.prepare("INSERT OR IGNORE INTO labels (name, color, importance) VALUES (?, ?, ?)").run(
+        name,
+        color,
+        DISCUSS_LABELS.includes(name) ? "discuss" : "reference",
+      );
+  };
+  seedLabels();
   // 포럼의 거르기(ADR-0039, 계약의 ForumFilter JSON). 포럼에만 있고, 채팅과 포스트와 알림 줄의 자리(`ALERTS`)는 NULL이다.
   // 이 열이 없던 DB: 알림 줄을 모두 `ALERTS`로 옮기고, 있던 포럼은 논의로 거르며 "부딪힘"은 "논의"가 된다(이름이 겹치면 그대로 둔다).
   // 처음 띄운 서버에도 "논의"와 "참고" 포럼이 생긴다. 그 뒤로 지운 포럼은 다시 만들지 않는다.
@@ -1089,6 +1109,81 @@ export async function startServer(options: {
         messageView(db.prepare(`${MESSAGES} WHERE m.alert = ?`).get(alert) as MessageRow),
       ),
     );
+
+  /** 포스트(채널 id)의 알림 줄을 붙어 있는 웹 모두에 다시 보낸다. 라벨이나 중요도가 바뀌었을 때 부른다. */
+  const sharePost = (post: string) =>
+    shareAlert(
+      (
+        db
+          .prepare(
+            "SELECT m.alert FROM channels c JOIN messages m ON m.id = c.alert WHERE c.id = ?",
+          )
+          .get(post) as { alert: number }
+      ).alert,
+    );
+  /** 라벨 전부, 이름 순서. */
+  const labelsView = () =>
+    db
+      .prepare("SELECT name, color, description, importance FROM labels ORDER BY name")
+      .all() as Label[];
+  const shareLabels = () => broadcast(encode(serverToWeb, "labels", labelsView()));
+  /** 라벨 하나(이름은 대소문자를 가리지 않는다). */
+  const labelRow = (name: string) =>
+    db
+      .prepare("SELECT rowid AS id, name, github, color, description FROM labels WHERE name = ?")
+      .get(name) as
+      | { id: number; name: string; github: number | null; color: string; description: string }
+      | undefined;
+  /**
+   * 포스트마다 라벨을 고친다. `edit`이 포스트의 라벨과, 이슈가 있으면 마지막으로 읽은 이슈 라벨(`issue_labels`)에 똑같이 적용되고,
+   * 이슈가 있는 포스트에서만 고칠지는 `withIssue`로 가린다(주지 않으면 모두). 바뀐 포스트의 id를 돌려준다.
+   */
+  const editPostLabels = (edit: (labels: string[]) => string[], withIssue?: boolean) => {
+    const rows = db
+      .prepare("SELECT id, labels, issue_labels, issue FROM channels WHERE alert IS NOT NULL")
+      .all() as {
+      id: string;
+      labels: string | null;
+      issue_labels: string | null;
+      issue: number | null;
+    }[];
+    const changed: string[] = [];
+    for (const row of rows) {
+      if (withIssue !== undefined && withIssue !== (row.issue !== null)) continue;
+      const before = row.labels ?? "[]";
+      const after = JSON.stringify(edit(JSON.parse(before)));
+      const issue = row.issue_labels && JSON.stringify(edit(JSON.parse(row.issue_labels)));
+      if (after === before && issue === row.issue_labels) continue;
+      db.prepare("UPDATE channels SET labels = ?, issue_labels = ? WHERE id = ?").run(
+        after,
+        issue,
+        row.id,
+      );
+      changed.push(row.id);
+    }
+    return changed;
+  };
+  /** 라벨 이름이 바뀌었다. 포스트와 이슈 라벨에서 이름을 바꾸고 웹에 알린다. */
+  const renameLabel = (from: string, to: string) => {
+    for (const post of editPostLabels((labels) => labels.map((l) => (l === from ? to : l))))
+      sharePost(post);
+    // 그 라벨로 거르는 포럼도 새 이름을 따른다.
+    for (const row of db
+      .prepare(
+        "SELECT id, name, kind, filter FROM channels WHERE EXISTS (SELECT 1 FROM json_each(filter, '$.labels') j WHERE j.value = ?)",
+      )
+      .all(from) as Parameters<typeof channelView>[0][]) {
+      const filter = {
+        labels: (JSON.parse(row.filter as string).labels as string[]).map((l) =>
+          l === from ? to : l,
+        ),
+      };
+      db.prepare("UPDATE channels SET filter = ? WHERE id = ?").run(JSON.stringify(filter), row.id);
+      broadcast(
+        encode(serverToWeb, "channel", channelView({ ...row, filter: JSON.stringify(filter) })),
+      );
+    }
+  };
 
   /** 채널에 메시지가 섰다. 포스트면 그 알림의 글 수가 바뀌었으니 알림 줄을 모두에게 다시 보낸다. */
   const posted = (channel: string) => {
@@ -2478,6 +2573,96 @@ export async function startServer(options: {
     posts: postsWhere("").map(({ post, message }) => ({ ...post, message })),
   }));
 
+  // 라벨(ADR-0039). 이름, 색, 설명은 부른 멤버의 토큰으로 GitHub 라벨을 바꾸고, 중요도는 Omagari에만 둔다.
+  mount(app, api.labels, () => ({ labels: labelsView() }));
+  /** GitHub이 받지 않은 것을 `github_failed`로. */
+  const onGitHub = async <T>(login: string, what: string, ask: (token: string) => Promise<T>) => {
+    const token = tokenOf(login);
+    try {
+      if (!token) throw new Error("세션이 없다");
+      return await ask(token);
+    } catch (error) {
+      throw new ContractFailure({
+        code: "github_failed",
+        message: `${login}의 GitHub 토큰으로 ${what}: ${(error as Error).message}`,
+      });
+    }
+  };
+  mount(app, api.createLabel, async ({ name, color, description }, c) => {
+    const login = c.get("login") as string;
+    if (labelRow(name))
+      throw new ContractFailure({ code: "conflict", message: `라벨이 이미 있다: ${name}` });
+    const made = await onGitHub(login, "라벨을 만들지 못했다", (token) =>
+      github.createLabel(token, repo, { name, color, description }),
+    );
+    db.prepare(
+      "INSERT INTO labels (name, github, color, description) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
+    ).run(made.name, made.id, made.color, made.description);
+    shareLabels();
+    return { label: labelsView().find((label) => label.name === made.name) as Label };
+  });
+  mount(app, api.editLabel, async ({ name, next }, c) => {
+    const login = c.get("login") as string;
+    const row = labelRow(name);
+    if (!row) throw new ContractFailure({ code: "not_found", message: `없는 라벨이다: ${name}` });
+    if (next.name !== undefined && labelRow(next.name) && labelRow(next.name)?.id !== row.id)
+      throw new ContractFailure({ code: "conflict", message: `라벨이 이미 있다: ${next.name}` });
+    if (next.name !== undefined || next.color !== undefined || next.description !== undefined) {
+      const wanted = {
+        name: next.name ?? row.name,
+        color: next.color ?? row.color,
+        description: next.description ?? row.description,
+      };
+      // 아직 GitHub에 없는 기본 라벨이면 고친 값으로 만든다.
+      const made = await onGitHub(login, "라벨을 고치지 못했다", (token) =>
+        row.github === null
+          ? github.createLabel(token, repo, wanted)
+          : github.updateLabel(token, repo, row.name, wanted),
+      );
+      db.prepare(
+        "UPDATE labels SET name = ?, github = ?, color = ?, description = ? WHERE rowid = ?",
+      ).run(made.name, made.id, made.color, made.description, row.id);
+      if (made.name !== row.name) renameLabel(row.name, made.name);
+    }
+    const label = labelRow(next.name ?? name) as { name: string };
+    if (next.importance !== undefined) {
+      db.prepare("UPDATE labels SET importance = ? WHERE name = ?").run(
+        next.importance,
+        label.name,
+      );
+      // 그 라벨을 단 포스트의 중요도가 바뀐다. 논의가 되면 이슈를 연다.
+      for (const { id } of db
+        .prepare(
+          "SELECT c.id FROM channels c WHERE c.alert IS NOT NULL AND EXISTS (SELECT 1 FROM json_each(c.labels) j WHERE j.value = ?)",
+        )
+        .all(label.name) as { id: string }[]) {
+        sharePost(id);
+        syncSoon(id);
+      }
+    }
+    shareLabels();
+    return { label: labelsView().find((l) => l.name === label.name) as Label };
+  });
+  mount(app, api.setPostLabels, ({ post, labels }, c) => {
+    visit(c.get("login") as string);
+    const found = db
+      .prepare("SELECT alert FROM channels WHERE id = ? AND alert IS NOT NULL")
+      .get(post) as { alert: number } | undefined;
+    if (!found) throw new ContractFailure({ code: "not_found", message: `없는 포스트다: ${post}` });
+    const names = labels.map((name) => {
+      const row = labelRow(name);
+      if (!row) throw new ContractFailure({ code: "not_found", message: `없는 라벨이다: ${name}` });
+      return row.name;
+    });
+    db.prepare("UPDATE channels SET labels = ? WHERE id = ?").run(
+      JSON.stringify([...new Set(names)]),
+      post,
+    );
+    sharePost(post);
+    syncSoon(post); // 이슈 라벨을 맞추거나, 논의가 되었으면 이슈를 연다
+    return { post: postsWhere(" AND m.id = ?", found.alert)[0].post };
+  });
+
   const mustExist = (channel: string) => {
     const found = db.prepare("SELECT kind FROM channels WHERE id = ?").get(channel) as
       | { kind: ChannelKind }
@@ -2985,7 +3170,8 @@ export async function startServer(options: {
   const syncIssues = async (only?: Set<string>) => {
     const rows = db
       .prepare(
-        `SELECT c.id, c.issue, c.issue_open, c.issue_closed, c.verdict, c.labels, m.id AS message, m.alert
+        `SELECT c.id, c.issue, c.issue_open, c.issue_closed, c.verdict, c.labels, ${POST_IMPORTANCE} AS importance,
+         m.id AS message, m.alert
          FROM channels c JOIN messages m ON m.id = c.alert ORDER BY m.id`,
       )
       .all() as {
@@ -2995,6 +3181,7 @@ export async function startServer(options: {
       issue_closed: number | null;
       verdict: string | null;
       labels: string | null;
+      importance: Importance;
       message: number;
       alert: number;
     }[];
@@ -3038,7 +3225,7 @@ export async function startServer(options: {
       if (number === null) {
         // 풀린 뒤나 참고 포스트에는 열지 않는다(ADR-0039). 포스트의 라벨을 함께 단다.
         const labels: string[] = JSON.parse(row.labels ?? "[]");
-        if (resolved || importanceOf(labels) !== "discuss") continue;
+        if (resolved || row.importance !== "discuss") continue;
         // 포스트가 보이는 첫 포럼으로 잇는다. 나중에 포럼이 바뀌어도 이슈의 글은 그대로다.
         const link = `${options.publicUrl ?? url}/#${view.post.forums[0] ?? ALERTS}/${row.message}`;
         const title = issueTitle(alert);
@@ -3109,25 +3296,61 @@ export async function startServer(options: {
         }
       }
 
-      // 3. 이슈를 읽고 모르는 댓글을 들인다.
+      // 포스트에서 붙이고 뗀 라벨을 이슈에 올린다(ADR-0039): 마지막으로 읽은 이슈 라벨과 다른 것만. 하나라도 받지 않으면
+      // 이번에는 이슈의 라벨을 들이지 않는다(다음 주기에 다시 올린다).
+      const mine = db
+        .prepare("SELECT labels, issue_labels FROM channels WHERE id = ?")
+        .get(row.id) as { labels: string | null; issue_labels: string | null };
+      const local: string[] = JSON.parse(mine.labels ?? "[]");
+      const base: string[] = JSON.parse(mine.issue_labels ?? "[]");
+      let pushed = true;
+      for (const [add, label] of [
+        ...local.filter((l) => !base.includes(l)).map((l) => [true, l] as const),
+        ...base.filter((l) => !local.includes(l)).map((l) => [false, l] as const),
+      ]) {
+        const done = await answered((token) =>
+          (add ? github.addLabel : github.removeLabel)(token, repo, number, label).then(() => true),
+        );
+        if (stopped) return;
+        pushed &&= done !== undefined;
+      }
+
+      // 3. 이슈를 읽고 모르는 댓글을 들인다. GitHub에서 바꾼 이슈 라벨은 포스트가 따라간다.
       let changed = false;
       const read = await answered((token) => github.issue(token, repo, number));
       if (stopped) return;
       const issue = read?.result;
       if (issue) {
-        const labels = JSON.stringify(issue.labels);
         const open = issue.open ? 1 : 0;
         const known = db
-          .prepare("SELECT issue_title, issue_labels, issue_open FROM channels WHERE id = ?")
-          .get(row.id) as { issue_title: string; issue_labels: string; issue_open: number };
+          .prepare(
+            "SELECT issue_title, issue_labels, issue_open, labels FROM channels WHERE id = ?",
+          )
+          .get(row.id) as {
+          issue_title: string;
+          issue_labels: string;
+          issue_open: number;
+          labels: string | null;
+        };
+        // 올린 뒤 GitHub에서 붙거나 떨어진 것만 포스트에 옮긴다. 기다리는 사이 포스트에서 바꾼 것은 남아 다음에 올라간다.
+        const now: string[] = JSON.parse(known.labels ?? "[]");
+        const theirs = issue.labels;
+        const labels = pushed
+          ? JSON.stringify([
+              ...now.filter((l) => !(local.includes(l) && !theirs.includes(l))),
+              ...theirs.filter((l) => !local.includes(l) && !now.includes(l)),
+            ])
+          : (known.labels ?? "[]");
+        const issueLabels = pushed ? JSON.stringify(theirs) : known.issue_labels;
         if (
           known.issue_title !== issue.title ||
-          known.issue_labels !== labels ||
-          known.issue_open !== open
+          known.issue_labels !== issueLabels ||
+          known.issue_open !== open ||
+          (known.labels ?? "[]") !== labels
         ) {
           db.prepare(
-            "UPDATE channels SET issue_title = ?, issue_labels = ?, issue_open = ? WHERE id = ?",
-          ).run(issue.title, labels, open, row.id);
+            "UPDATE channels SET issue_title = ?, issue_labels = ?, issue_open = ?, labels = ? WHERE id = ?",
+          ).run(issue.title, issueLabels, open, labels, row.id);
           changed = true;
         }
       }
@@ -3170,6 +3393,110 @@ export async function startServer(options: {
     }
   };
   /**
+   * 레포의 GitHub 라벨을 읽어 라벨 목록에 맞춘다(ADR-0039). GitHub 라벨의 id로 짝을 지어, GitHub에서 이름을 바꾸면 포스트의 라벨도 바뀐다.
+   * GitHub에서 지운 라벨은 목록과 이슈 없는 포스트에서 빠진다. 기본 라벨(종류 넷과 확인됨)은 지워져도 남기고, 레포에 없으면 만든다.
+   */
+  const syncLabels = async () => {
+    const tokens = (
+      db.prepare("SELECT github_token FROM sessions ORDER BY rowid DESC").all() as {
+        github_token: string;
+      }[]
+    ).map((session) => session.github_token);
+    let theirs: RepoLabel[] | undefined;
+    let token: string | undefined;
+    for (token of tokens) {
+      theirs = await github.labels(token, repo).catch(() => undefined);
+      if (stopped) return;
+      if (theirs) break;
+    }
+    if (!theirs || !token) return;
+    seedLabels(); // 기본 라벨의 이름을 GitHub에서 바꿨으면 다시 만든다
+    let changed = false;
+    const seen = new Set<number>();
+    for (const label of theirs) {
+      const row =
+        (db.prepare("SELECT rowid AS id FROM labels WHERE github = ?").get(label.id) as
+          | { id: number }
+          | undefined) ?? labelRow(label.name);
+      const known =
+        row &&
+        (db
+          .prepare(
+            "SELECT rowid AS id, name, github, color, description FROM labels WHERE rowid = ?",
+          )
+          .get(row.id) as {
+          id: number;
+          name: string;
+          github: number | null;
+          color: string;
+          description: string;
+        });
+      if (!known) {
+        db.prepare("INSERT INTO labels (name, github, color, description) VALUES (?, ?, ?, ?)").run(
+          label.name,
+          label.id,
+          label.color,
+          label.description,
+        );
+        changed = true;
+      } else if (
+        known.name !== label.name ||
+        known.github !== label.id ||
+        known.color !== label.color ||
+        known.description !== label.description
+      ) {
+        // 같은 id나 이름의 다른 줄이 있으면(지웠다 다시 만듦) 비켜 둔다.
+        db.prepare("UPDATE labels SET github = NULL WHERE github = ? AND rowid != ?").run(
+          label.id,
+          known.id,
+        );
+        db.prepare(
+          "UPDATE labels SET name = ?, github = ?, color = ?, description = ? WHERE rowid = ?",
+        ).run(label.name, label.id, label.color, label.description, known.id);
+        if (known.name !== label.name) renameLabel(known.name, label.name);
+        changed = true;
+      }
+      seen.add(label.id);
+    }
+    const defaults = Object.keys(DEFAULT_LABEL_COLORS);
+    for (const row of db
+      .prepare("SELECT rowid AS id, name, github, color, description FROM labels")
+      .all() as {
+      id: number;
+      name: string;
+      github: number | null;
+      color: string;
+      description: string;
+    }[]) {
+      if (row.github !== null && seen.has(row.github)) continue;
+      if (!defaults.includes(row.name)) {
+        // GitHub에서 지웠다. 이슈가 있는 포스트는 이슈를 따라간다.
+        db.prepare("DELETE FROM labels WHERE rowid = ?").run(row.id);
+        for (const post of editPostLabels((labels) => labels.filter((l) => l !== row.name), false))
+          sharePost(post);
+        changed = true;
+        continue;
+      }
+      const made = await github
+        .createLabel(token, repo, {
+          name: row.name,
+          color: row.color,
+          description: row.description,
+        })
+        .catch((error: Error) => console.error("기본 라벨을 만들지 못했다:", error.message));
+      if (stopped) return;
+      if (!made) continue;
+      db.prepare("UPDATE labels SET github = ?, color = ?, description = ? WHERE rowid = ?").run(
+        made.id,
+        made.color,
+        made.description,
+        row.id,
+      );
+      changed = true;
+    }
+    if (changed) shareLabels();
+  };
+  /**
    * 이슈 맞추기를 돌린다. `post`를 주면 그 포스트만, 주지 않으면(주기마다) 모두다. 도는 중이면 끝난 뒤 모아 둔 것을 한 번 더 돈다.
    * 포스트에 글이 서거나 답이 오거나 알림이 생기면 그 포스트로 부른다.
    */
@@ -3185,6 +3512,8 @@ export async function startServer(options: {
       while (waiting && !stopped) {
         const only = waiting;
         waiting = undefined;
+        if (only === "all")
+          await syncLabels().catch((error) => console.error("라벨을 맞추지 못했다:", error));
         await syncIssues(only === "all" ? undefined : only).catch((error) =>
           console.error("이슈를 맞추지 못했다:", error),
         );

@@ -43,6 +43,24 @@ test("멤버가 포럼을 만들고 고치고 지우면 포스트가 맞는 포�
     assert.deepEqual(last.post.forums, [guessed.id, discuss, confirmed.id]);
   });
 
+  // 라벨의 중요도를 바꾸면 그 라벨을 단 포스트가 참고 포럼에서 빠지고 논의 포럼에 보인다. 웹에도 바로 간다.
+  await call(alice, api.editLabel, { name: "직접 충돌", next: { importance: "discuss" } });
+  assert.deepEqual(await forumsOf(), [[discuss], [guessed.id, discuss, confirmed.id]]);
+  await eventually(() => {
+    const last = web.messages().findLast((m) => m.kind === "alert" && m.id === 1);
+    assert.ok(last?.kind === "alert");
+    assert.deepEqual(last.post.forums, [discuss]);
+  });
+  await call(alice, api.editLabel, { name: "직접 충돌", next: { importance: "reference" } });
+  assert.deepEqual(await forumsOf(), [[reference], [guessed.id, discuss, confirmed.id]]);
+  // 라벨 이름을 바꾸면 그 라벨로 거르는 포럼도 새 이름을 따른다.
+  await call(alice, api.editLabel, { name: "간접 충돌", next: { name: "추정 충돌" } });
+  assert.deepEqual(
+    (await call(world.owner, api.channels)).channels.find((c) => c.id === guessed.id)?.filter,
+    { labels: ["추정 충돌"] },
+  );
+  assert.deepEqual(await forumsOf(), [[reference], [guessed.id, discuss, confirmed.id]]);
+
   // 같은 이름(대소문자를 가리지 않는다)의 포럼이나 채널은 만들지 못한다.
   for (const name of ["참고", "확인"])
     await assert.rejects(
