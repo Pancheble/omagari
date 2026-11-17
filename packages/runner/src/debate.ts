@@ -1,0 +1,116 @@
+// 토론 참여(ADR-0040, 구현 7장): 지시문, 입장 읽기, 근거 표시, 갈라 띄울 작업 세션 찾기.
+import { execFile } from "node:child_process";
+import { readdir, readFile, stat } from "node:fs/promises";
+import { homedir } from "node:os";
+import { isAbsolute, join, normalize } from "node:path";
+import { promisify } from "node:util";
+import type { Evidence } from "@omagari/contract";
+
+const execFileAsync = promisify(execFile);
+
+/** 맥락 없이 참여할 때 넘기는 diff의 상한(글자). 넘으면 자르고 잘랐다고 적는다. 에이전트는 레포를 직접 읽을 수 있다. */
+const DIFF_CHARS = 20_000;
+
+/**
+ * 첫 라운드의 지시문. 포스트의 대화(맨 앞이 알림)는 `channelPrompt`로 앞에 데이터로 감싼다.
+ * 첫 라운드는 가려져 상대의 입장을 모른다. 근거는 참조를 맨 앞에 쓰게 해 러너가 레포에서 볼 수 있게 한다.
+ */
+export function debateInstructions(branch: string) {
+  return `위 포스트의 부딪힘으로 Omagari가 토론을 열었다. 너는 너의 주인의 작업(브랜치 ${JSON.stringify(branch)})을 대변해 첫 입장을 낸다. 상대의 에이전트도 따로 입장을 내고, 둘 다 낼 때까지 서로의 입장은 가려진다.
+- 남의 입장을 대신 요약하지 말고, 너의 주인의 작업과 대화 맥락에서 이 부딪힘을 어떻게 풀어야 하는지 말하라.
+- claim: 너의 입장. 짧게.
+- evidence: 근거 목록. 레포에서 확인되는 참조가 있으면 맨 앞에 쓰고 한 칸 띄워 설명을 붙여라. 참조는 커밋 해시, 파일:줄(예: src/pay.ts:12), 결정 파일 경로(예: docs/decisions/0001-x.md)다. 참조가 없는 근거는 설명만 써라.
+파일을 고치거나 명령을 돌리지 마라. 레포는 읽기만 한다.
+답은 다른 말 없이 JSON 객체 하나로만 해라: {"claim": "…", "evidence": ["src/pay.ts:12 …", "…"]}`;
+}
+
+/** 실행기의 답에서 입장을 읽는다. 코드 블록으로 감쌌어도 첫 `{`에서 마지막 `}`까지를 읽는다. 꼴이 다르면 던진다. */
+export function readStance(answer: string) {
+  const parsed = JSON.parse(answer.slice(answer.indexOf("{"), answer.lastIndexOf("}") + 1));
+  const { claim, evidence } = parsed as { claim?: unknown; evidence?: unknown };
+  if (typeof claim !== "string" || !claim.trim()) throw new Error("입장에 주장이 없다");
+  if (!Array.isArray(evidence) || evidence.some((e) => typeof e !== "string"))
+    throw new Error("입장의 근거가 글 목록이 아니다");
+  return { claim: claim.trim(), evidence: evidence as string[] };
+}
+
+const COMMIT = /^[0-9a-f]{7,40}$/i;
+const LINE = /^([^\s:]+):(\d+)(?:-(\d+))?$/;
+const PATH = /^[^\s:]*(?:\/[^\s:]*|\.md)$/;
+
+/**
+ * 근거마다 표시를 단다(문답 A15). 맨 앞 낱말이 참조(커밋, 파일:줄, 결정 파일 경로)면 `tree`(그 작업의 폴더)에서 있는지 본다.
+ * 있으면 검증됨, 없으면 존재하지 않음이다. 참조가 아니면 미검증이다. 레포 밖을 가리키는 경로는 존재하지 않음이다.
+ */
+export async function markEvidence(tree: string, texts: string[]): Promise<Evidence[]> {
+  const inside = (path: string) => !isAbsolute(path) && !normalize(path).startsWith("..");
+  const lines = async (path: string) =>
+    (await readFile(join(tree, path), "utf8")).split("\n").length;
+  const mark = async (text: string): Promise<Evidence["mark"]> => {
+    const ref = text.trim().split(/\s+/)[0] ?? "";
+    if (COMMIT.test(ref)) {
+      return execFileAsync("git", ["-C", tree, "cat-file", "-e", `${ref}^{commit}`]).then(
+        () => "verified",
+        () => "missing",
+      );
+    }
+    const line = LINE.exec(ref);
+    if (line) {
+      const [, path = "", from, to] = line;
+      if (!inside(path)) return "missing";
+      const count = await lines(path).catch(() => 0);
+      return Number(to ?? from) <= count ? "verified" : "missing";
+    }
+    if (PATH.test(ref)) {
+      if (!inside(ref)) return "missing";
+      return stat(join(tree, ref)).then(
+        (s) => (s.isFile() ? "verified" : "missing"),
+        () => "missing",
+      );
+    }
+    return "unverified";
+  };
+  return Promise.all(texts.map(async (text) => ({ text, mark: await mark(text) })));
+}
+
+/**
+ * 맥락 없이 참여할 때 넘기는 것(ADR-0040): 초안 PR의 계획(제목), 기준 커밋에서 본 diff, 관련 결정이 있는 곳.
+ * diff는 `DIFF_CHARS`에서 자른다. 남이 쓴 글이 아니라 주인의 작업이라 감싸지 않는다.
+ */
+export async function contextless(tree: string, base: string | undefined, plan?: string) {
+  const diff = base
+    ? await execFileAsync("git", ["-C", tree, "diff", base], { maxBuffer: 64 * 1024 * 1024 }).then(
+        ({ stdout }) => stdout,
+        () => "",
+      )
+    : "";
+  const cut =
+    diff.length > DIFF_CHARS ? `${diff.slice(0, DIFF_CHARS)}\n(diff를 여기서 잘랐다)` : diff;
+  return [
+    "너의 주인의 작업 세션을 이어받지 못해 맥락 없이 참여한다. 아래는 너의 주인의 작업에서 읽은 것이다. 관련 결정은 레포의 docs/decisions/에 있다.",
+    `초안 PR의 계획: ${plan ?? "(없음)"}`,
+    `기준 커밋에서 본 diff:\n${cut || "(없음)"}`,
+  ].join("\n\n");
+}
+
+/**
+ * Claude Code에서 주인이 이 폴더의 그 브랜치에서 쓰던 가장 최근 작업 세션. Claude Code는 세션 기록을
+ * `<설정 폴더>/projects/<작업 폴더의 글자 아닌 것을 -로 바꾼 이름>/<세션 id>.jsonl`에 두고, 줄마다 `gitBranch`를 적는다.
+ * 러너가 띄운 세션(`skip`, 실행 기록에 남은 것)은 빼고, 고친 시각이 가장 늦은 것을 고른다. 없으면 없다.
+ */
+// ponytail: 세션 파일을 통째로 읽는다. 세션이 아주 많거나 커서 느려지면 앞쪽 몇 줄만 읽는다.
+export async function claudeRecentSession(folder: string, branch: string, skip: Set<string>) {
+  const config = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude");
+  const dir = join(config, "projects", folder.replace(/[^a-zA-Z0-9]/g, "-"));
+  const names = await readdir(dir).catch(() => []);
+  const sessions = await Promise.all(
+    names
+      .filter((name) => name.endsWith(".jsonl") && !skip.has(name.slice(0, -6)))
+      .map(async (name) => ({ name, mtime: (await stat(join(dir, name))).mtimeMs })),
+  );
+  const marker = `"gitBranch":${JSON.stringify(branch)}`;
+  for (const { name } of sessions.sort((a, b) => b.mtime - a.mtime)) {
+    if ((await readFile(join(dir, name), "utf8")).includes(marker)) return name.slice(0, -6);
+  }
+  return undefined;
+}

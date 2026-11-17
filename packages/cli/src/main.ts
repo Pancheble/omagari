@@ -302,8 +302,11 @@ async function log() {
       continue;
     }
     const outcome = run.error ? `실패: ${run.error}` : `답함 ${JSON.stringify(run.answer ?? "")}`;
+    const debate = run.debate
+      ? `  토론 ${run.debate.post} 라운드 ${run.debate.round} ${run.debate.forked ? `작업 세션 ${run.debate.forked}에서 갈라 띄움` : "맥락 없이 참여"}`
+      : "";
     console.log(
-      `${run.at}  세션 ${run.session ?? "(새 세션)"}  도구 ${run.tools.join(",")}  받은 것 ${JSON.stringify(run.message)}  ${outcome}`,
+      `${run.at}${debate}  세션 ${run.session ?? "(새 세션)"}  도구 ${run.tools.join(",")}  받은 것 ${JSON.stringify(run.message)}  ${outcome}`,
     );
   }
 }
