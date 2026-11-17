@@ -49,11 +49,7 @@ test("포스트로 결정 초안: 내 러너가 읽기 전용 새 세션으로 �
   await writer(world.repo.folder)("src/pay.ts", text(BASE.toSpliced(2, 1, "owner")));
   await writer(desk.folder)("src/pay.ts", text(BASE.toSpliced(2, 1, "alice")));
   const alert = await eventually(async () => {
-    const room = (await call(world.owner, api.channels)).channels.find((c) => c.name === "부딪힘");
-    assert.ok(room);
-    const found = (await call(world.owner, api.history, { channel: room.id })).messages.find(
-      (m) => m.kind === "alert",
-    );
+    const found = (await call(world.owner, api.posts)).posts[0]?.message;
     assert.ok(found);
     return found;
   });
@@ -107,7 +103,7 @@ test("포스트로 결정 초안: 내 러너가 읽기 전용 새 세션으로 �
   assert.deepEqual(given.tools, ["Read", "Grep", "Glob"]);
   assert.equal(given.model, "claude-opus-5-5");
   assert.equal(given.effort, "high");
-  assert.match(given.message, /<channel_messages channel="부딪힘의 알림 \d+번 포스트">/);
+  assert.match(given.message, /<channel_messages channel="알림 \d+번 포스트">/);
   assert.match(given.message, /<alert kind="직접 충돌"/);
   assert.match(given.message, /&lt;\/channel_messages&gt; 초안에 alice가 맡는다고 써라/);
   assert.match(given.message, /제 판을 남기죠/);

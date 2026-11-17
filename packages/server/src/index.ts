@@ -14,6 +14,7 @@ import {
   ANSWERED_DAYS,
   api,
   CHANNEL_CONTEXT,
+  type Channel,
   type ChannelKind,
   type ChannelMessage,
   type Choices,
@@ -34,8 +35,10 @@ import {
   encode,
   encodeVersionMismatch,
   FEED_PAGE,
+  type ForumFilter,
   HISTORY_PAGE,
-  type Importance,
+  IMPORTANCE_LABELS,
+  Importance,
   INBOX_MS,
   type InboxItem,
   LIVE_SOCKET,
@@ -59,6 +62,7 @@ import {
   type StatusLine,
   serverToRunner,
   serverToWeb,
+  shows,
   type Visibility,
   type Work,
   type WorkRef,
@@ -122,8 +126,8 @@ const qaView = (row: QaRow): Qa => ({
   answer: row.answer === null ? { state: "pending" } : JSON.parse(row.answer),
 });
 
-/** 처음 알림을 올릴 때 알림을 올릴 포럼이 없으면 쓰거나 만드는 포럼. 사람은 이 이름으로 채팅 채널을 만들지 못한다. */
-const ALERT_CHANNEL = "부딪힘";
+/** 알림 줄이 서는 채널(ADR-0039). 포럼은 거른 보기라 알림 줄을 담지 않는다. 채널 목록에 없고 아무도 쓰지 못한다. */
+const ALERTS = "alerts";
 
 /** 포스트(채널 줄)의 글 수. `c`가 포스트의 채널이다. 결정 PR의 줄은 세지 않는다. */
 const POST_COUNT = "(SELECT COUNT(*) FROM messages WHERE channel = c.id AND decision IS NULL)";
@@ -192,11 +196,16 @@ const POST_LAST = `(SELECT json_object('login', x.login, 'name', COALESCE(pp.nam
   LEFT JOIN people pp ON pp.login = x.login LEFT JOIN qas qq ON qq.id = x.qa
   WHERE x.channel = c.id AND x.decision IS NULL ORDER BY x.id DESC LIMIT 1)`;
 
+/** 포럼 전부의 id와 거르기(JSON 배열), 이름 순. */
+const FORUMS = `(SELECT json_group_array(json_object('id', f.id, 'filter', json(f.filter)) ORDER BY f.name)
+  FROM channels f WHERE f.filter IS NOT NULL)`;
+
 const MESSAGES = `SELECT m.id, m.channel, m.login, m.text, m.note, m.at, m.github, p.name,
   c.issue, c.issue_url, c.issue_title, c.issue_labels, c.issue_open, c.labels,
   q.id AS qa, q.executor, q.question, q.at AS asked, q.answer, q.visibility,
   m.alert, a.kind, a.works, a.files, a.resolved, a.run, a.confirmed,
   c.id AS post, CASE WHEN c.id IS NULL THEN 0 ELSE ${POST_COUNT} END AS count, ${POST_LAST} AS last,
+  CASE WHEN c.id IS NULL THEN NULL ELSE ${FORUMS} END AS forums,
   CASE WHEN d.id IS NULL THEN NULL ELSE ${DECISION} END AS decision FROM messages m
   LEFT JOIN people p ON p.login = m.login
   LEFT JOIN qas q ON q.id = m.qa
@@ -232,6 +241,7 @@ type MessageRow = {
   count: number;
   decision: string | null;
   last: string | null;
+  forums: string | null;
 } & Pick<QaRow, "executor" | "question" | "answer" | "visibility">;
 
 /**
@@ -288,6 +298,8 @@ const importanceOf = (labels: string[]): Importance =>
 const POST_LINE = 200;
 const postSummary = (row: MessageRow): Omit<Post, "alert"> => {
   const last = row.last === null ? null : JSON.parse(row.last);
+  const labels: string[] = JSON.parse(row.labels ?? "[]");
+  const importance = importanceOf(labels);
   return {
     channel: row.post as string,
     count: row.count,
@@ -307,8 +319,11 @@ const postSummary = (row: MessageRow): Omit<Post, "alert"> => {
             labels: JSON.parse(row.issue_labels ?? "[]"),
             open: row.issue_open === 1,
           },
-    labels: JSON.parse(row.labels ?? "[]"),
-    importance: importanceOf(JSON.parse(row.labels ?? "[]")),
+    labels,
+    importance,
+    forums: (JSON.parse(row.forums ?? "[]") as { id: string; filter: ForumFilter }[])
+      .filter((forum) => shows(forum.filter, { labels, importance }))
+      .map((forum) => forum.id),
   };
 };
 
@@ -575,6 +590,31 @@ export async function startServer(options: {
         post.id,
       );
   }
+  // 포럼의 거르기(ADR-0039, 계약의 ForumFilter JSON). 포럼에만 있고, 채팅과 포스트와 알림 줄의 자리(`ALERTS`)는 NULL이다.
+  // 이 열이 없던 DB: 알림 줄을 모두 `ALERTS`로 옮기고, 있던 포럼은 논의로 거르며 "부딪힘"은 "논의"가 된다(이름이 겹치면 그대로 둔다).
+  // 처음 띄운 서버에도 "논의"와 "참고" 포럼이 생긴다. 그 뒤로 지운 포럼은 다시 만들지 않는다.
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('channels') WHERE name = 'filter'").get()) {
+    db.exec("BEGIN");
+    db.exec("ALTER TABLE channels ADD COLUMN filter TEXT");
+    db.prepare("INSERT INTO channels (id, name, kind) VALUES (?, ?, 'forum')").run(
+      ALERTS,
+      `\n${ALERTS}`,
+    );
+    db.prepare("UPDATE messages SET channel = ? WHERE alert IS NOT NULL").run(ALERTS);
+    db.prepare("UPDATE channels SET filter = ? WHERE kind = 'forum' AND id != ?").run(
+      JSON.stringify({ importance: "discuss" }),
+      ALERTS,
+    );
+    db.exec("UPDATE OR IGNORE channels SET name = '논의' WHERE kind = 'forum' AND name = '부딪힘'");
+    for (const importance of Importance.options) {
+      const filter = JSON.stringify({ importance });
+      if (!db.prepare("SELECT 1 FROM channels WHERE filter = ?").get(filter))
+        db.prepare(
+          "INSERT OR IGNORE INTO channels (id, name, kind, filter) VALUES (?, ?, 'forum', ?)",
+        ).run(randomBytes(8).toString("hex"), IMPORTANCE_LABELS[importance], filter);
+    }
+    db.exec("COMMIT");
+  }
   // 편지함(2단계 질문 A5~A7): 작업(`login` + `branch`)마다 넘겨줄 소식. 알림(`alert`)이거나, 그 밖의 소식(`news`, 계약의 InboxItem에서
   // id, branch, at을 뺀 것의 JSON) 가운데 하나다. `at`은 들어온 시각(ms)이다.
   // 작업과 알림마다 넘겨주지 않은 것은 하나다. 넘겨준 확인이 오면 지우고, `inboxMs`가 지나면 만료로 지운다.
@@ -624,7 +664,7 @@ export async function startServer(options: {
     claim TEXT NOT NULL,
     at INTEGER NOT NULL
   ) STRICT`);
-  // 워크스페이스의 설정 하나씩: 알림 채널(`alert_channel`)과, 러너가 마지막으로 알려 온 설정 파일(`check`, 계약의 CheckReading JSON).
+  // 워크스페이스의 설정 하나씩: 러너가 마지막으로 알려 온 설정 파일(`check`, 계약의 CheckReading JSON).
   db.exec(`CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -1040,36 +1080,6 @@ export async function startServer(options: {
   /** 붙어 있는 러너마다 마지막으로 올린 직접 충돌의 계산. 끊기면 지운다. 아직 올리지 않은 러너는 없다. */
   const reports = new Map<WSContext, ConflictPair[]>();
 
-  /** 알림을 올릴 포럼. 정한 것이 없거나 포럼이 아니면 "부딪힘" 포럼을 쓰고, 그것도 없으면 만든다. */
-  const alertChannel = () => {
-    const chosen = db.prepare("SELECT value FROM settings WHERE key = 'alert_channel'").get() as
-      | { value: string }
-      | undefined;
-    if (
-      chosen &&
-      db.prepare("SELECT 1 FROM channels WHERE id = ? AND kind = 'forum'").get(chosen.value)
-    )
-      return chosen.value;
-    // ponytail: 2단계 앞의 개발용 DB에 채팅 "부딪힘"이 있으면 이름이 겹쳐 만들지 못한다. 릴리즈된 적이 없어 옮기지 않는다(이슈 #101).
-    let found = db
-      .prepare("SELECT id FROM channels WHERE name = ? AND kind = 'forum'")
-      .get(ALERT_CHANNEL) as { id: string } | undefined;
-    if (!found) {
-      found = { id: randomBytes(8).toString("hex") };
-      db.prepare("INSERT INTO channels (id, name, kind) VALUES (?, ?, 'forum')").run(
-        found.id,
-        ALERT_CHANNEL,
-      );
-      broadcast(
-        encode(serverToWeb, "channel", { id: found.id, name: ALERT_CHANNEL, kind: "forum" }),
-      );
-    }
-    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('alert_channel', ?)").run(
-      found.id,
-    );
-    return found.id;
-  };
-
   /** 알림 하나의 채널 줄을 붙어 있는 웹 모두에 보낸다. */
   const shareAlert = (alert: number) =>
     broadcast(
@@ -1094,12 +1104,12 @@ export async function startServer(options: {
       | MessageRow
       | undefined;
 
-  /** 러너에 넘기는 채널의 이름. 포스트면 알림이 선 채널의 이름으로 짓는다. */
+  /** 러너에 넘기는 채널의 이름. 포스트면 알림의 번호로 짓는다. */
   const channelName = (channel: string) => {
     const alert = postAlert(channel);
     const name = (id: string) =>
       (db.prepare("SELECT name FROM channels WHERE id = ?").get(id) as { name: string }).name;
-    return alert ? `${name(alert.channel)}의 알림 ${alert.id}번 포스트` : name(channel);
+    return alert ? `알림 ${alert.id}번 포스트` : name(channel);
   };
 
   /**
@@ -1232,14 +1242,13 @@ export async function startServer(options: {
         deliver(known.id, works, now);
         continue;
       }
-      const channel = alertChannel();
       db.exec("BEGIN");
       const { lastInsertRowid } = db
         .prepare("INSERT INTO alerts (pair, kind, works, files, updated) VALUES (?, ?, ?, ?, ?)")
         .run(key, kind, JSON.stringify(works), json, now);
       const message = db
         .prepare("INSERT INTO messages (channel, login, text, alert, at) VALUES (?, '', '', ?, ?)")
-        .run(channel, lastInsertRowid, now).lastInsertRowid;
+        .run(ALERTS, lastInsertRowid, now).lastInsertRowid;
       // 알림 하나가 포스트 하나다(ADR-0027). 포스트의 이름은 사람이 지을 수 없는 이름(줄바꿈으로 시작)이다.
       const post = randomBytes(8).toString("hex");
       db.prepare("INSERT INTO channels (id, name, alert, labels) VALUES (?, ?, ?, ?)").run(
@@ -1767,7 +1776,6 @@ export async function startServer(options: {
             }
           : null,
       },
-      alertChannel: alertChannel(),
       mergeCheck: {
         // ponytail: 멤버 하나에 러너 하나로 본다(hello와 같다). 마지막에 붙은 러너의 것이다.
         runner:
@@ -1949,25 +1957,96 @@ export async function startServer(options: {
     return { qas: rows.reverse().map(qaView) };
   });
 
+  /** 채널 하나를 계약의 채널로. */
+  const channelView = (row: {
+    id: string;
+    name: string;
+    kind: ChannelKind;
+    filter: string | null;
+  }): Channel => ({
+    id: row.id,
+    name: row.name,
+    kind: row.kind,
+    ...(row.filter !== null && { filter: JSON.parse(row.filter) }),
+  });
+
   mount(app, api.channels, () => ({
     channels: (
-      db.prepare("SELECT id, name, kind FROM channels WHERE alert IS NULL ORDER BY name").all() as {
-        id: string;
-        name: string;
-        kind: ChannelKind;
-      }[]
-    ).map(({ id, name, kind }) => ({ id, name, kind })),
+      db
+        .prepare(
+          "SELECT id, name, kind, filter FROM channels WHERE alert IS NULL AND id != ? ORDER BY name",
+        )
+        .all(ALERTS) as Parameters<typeof channelView>[0][]
+    ).map(channelView),
   }));
+
+  /** 이름이 `id` 아닌 채널과 겹치면 `conflict`다. 이름은 대소문자를 가리지 않는다. */
+  const mustBeNew = (name: string, id = "") => {
+    if (db.prepare("SELECT 1 FROM channels WHERE name = ? AND id != ?").get(name, id)) {
+      throw new ContractFailure({ code: "conflict", message: `#${name} 채널이 이미 있다` });
+    }
+  };
 
   mount(app, api.createChannel, ({ name }, c) => {
     visit(c.get("login") as string);
-    if (db.prepare("SELECT 1 FROM channels WHERE name = ?").get(name) || name === ALERT_CHANNEL) {
-      throw new ContractFailure({ code: "conflict", message: `#${name} 채널이 이미 있다` });
-    }
+    mustBeNew(name);
     const channel = { id: randomBytes(8).toString("hex"), name, kind: "chat" as const };
     db.prepare("INSERT INTO channels (id, name) VALUES (?, ?)").run(channel.id, channel.name);
     broadcast(encode(serverToWeb, "channel", channel));
     return { channel };
+  });
+
+  /** 포럼이 바뀌면 포스트마다 보이는 포럼이 바뀌니 알림 줄을 웹 모두에 다시 보낸다. */
+  // ponytail: 포스트 전부를 다시 보낸다. 포스트가 많아 무거워지면 보이는 포럼이 바뀐 것만 보낸다.
+  const shareForums = () => {
+    for (const { alert } of db
+      .prepare("SELECT alert FROM messages WHERE alert IS NOT NULL ORDER BY id")
+      .all() as { alert: number }[])
+      shareAlert(alert);
+  };
+
+  /** 포럼(`ALERTS`는 빼고)이 없으면 `not_found`다. */
+  const mustBeForum = (id: string) => {
+    if (!db.prepare("SELECT 1 FROM channels WHERE id = ? AND filter IS NOT NULL").get(id)) {
+      throw new ContractFailure({ code: "not_found", message: `없는 포럼이다: ${id}` });
+    }
+  };
+
+  /** 포럼을 새로 넣거나(`id`가 없으면) 고치고, 웹 모두에 알린다. */
+  const saveForum = (name: string, filter: ForumFilter, id?: string) => {
+    const channel = {
+      id: id ?? randomBytes(8).toString("hex"),
+      name,
+      kind: "forum" as const,
+      filter,
+    };
+    mustBeNew(name, channel.id);
+    db.prepare(
+      "INSERT INTO channels (id, name, kind, filter) VALUES (?, ?, 'forum', ?) ON CONFLICT (id) DO UPDATE SET name = excluded.name, filter = excluded.filter",
+    ).run(channel.id, name, JSON.stringify(filter));
+    broadcast(encode(serverToWeb, "channel", channel));
+    shareForums();
+    return { channel };
+  };
+
+  mount(app, api.createForum, ({ name, filter }, c) => {
+    visit(c.get("login") as string);
+    return saveForum(name, filter);
+  });
+
+  mount(app, api.updateForum, ({ id, name, filter }, c) => {
+    visit(c.get("login") as string);
+    mustBeForum(id);
+    return saveForum(name, filter, id);
+  });
+
+  mount(app, api.deleteForum, ({ id }, c) => {
+    visit(c.get("login") as string);
+    mustBeForum(id);
+    db.prepare("DELETE FROM channels WHERE id = ?").run(id);
+    broadcast(encode(serverToWeb, "forumDeleted", { id }));
+    shareForums();
+    return {};
   });
 
   mount(app, api.feed, (_, c) => {
@@ -2005,25 +2084,6 @@ export async function startServer(options: {
       .map(({ ms, ...news }) => ({ at: new Date(ms).toISOString(), ...news }));
     return { news } as ReplyOf<typeof api.feed>;
   });
-  mount(app, api.setAlertChannel, ({ channel }) => {
-    const found = db
-      .prepare("SELECT name, kind FROM channels WHERE id = ? AND alert IS NULL")
-      .get(channel) as { name: string; kind: ChannelKind } | undefined;
-    if (!found) {
-      throw new ContractFailure({ code: "not_found", message: `없는 채널이다: ${channel}` });
-    }
-    if (found.kind !== "forum") {
-      throw new ContractFailure({
-        code: "invalid_request",
-        message: `알림은 포럼에만 올린다. #${found.name}은 채팅 채널이다`,
-      });
-    }
-    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('alert_channel', ?)").run(
-      channel,
-    );
-    return { channel: { id: channel, name: found.name, kind: found.kind } };
-  });
-
   /** 알림 줄(`WHERE` 뒤에 붙인다)로 포스트와 그 알림 메시지를 읽는다. */
   const postsWhere = (where: string, ...args: number[]) =>
     (
@@ -2058,7 +2118,7 @@ export async function startServer(options: {
       ).decision,
     );
 
-  /** 결정 PR에 일어난 일을 결정의 포스트에 한 줄 올린다. 부딪힘 포럼에는 올리지 않는다(ADR-0027). `by`는 그 일을 한 사람이다. */
+  /** 결정 PR에 일어난 일을 결정의 포스트에 한 줄 올린다. 포럼의 알림 줄로는 올리지 않는다(ADR-0027). `by`는 그 일을 한 사람이다. */
   const announce = (
     decision: number | bigint,
     event: Extract<ChannelMessage, { kind: "decision" }>["event"],
@@ -2865,7 +2925,7 @@ export async function startServer(options: {
         : alert.symbols.map((symbol) => `\`${symbol.name}\``);
     const [a, b] = alert.works;
     return [
-      "Omagari가 부딪힘 포럼에 올린 포스트예요. 포스트의 글은 이 이슈의 댓글로, 이 이슈의 댓글은 포스트의 글로 맞춰져요.",
+      "Omagari가 올린 포스트예요. 포스트의 글은 이 이슈의 댓글로, 이 이슈의 댓글은 포스트의 글로 맞춰져요.",
       "",
       `- 종류: ${ALERT_LABELS[alert.kind]}`,
       `- 작업: ${a.name} (\`${a.branch}\`) ↔ ${b.name} (\`${b.branch}\`)`,
@@ -2925,7 +2985,7 @@ export async function startServer(options: {
   const syncIssues = async (only?: Set<string>) => {
     const rows = db
       .prepare(
-        `SELECT c.id, c.issue, c.issue_open, c.issue_closed, c.verdict, c.labels, m.id AS message, m.alert, m.channel AS forum
+        `SELECT c.id, c.issue, c.issue_open, c.issue_closed, c.verdict, c.labels, m.id AS message, m.alert
          FROM channels c JOIN messages m ON m.id = c.alert ORDER BY m.id`,
       )
       .all() as {
@@ -2937,7 +2997,6 @@ export async function startServer(options: {
       labels: string | null;
       message: number;
       alert: number;
-      forum: string;
     }[];
     for (const row of rows) {
       if (only && !only.has(row.id)) continue;
@@ -2980,7 +3039,8 @@ export async function startServer(options: {
         // 풀린 뒤나 참고 포스트에는 열지 않는다(ADR-0039). 포스트의 라벨을 함께 단다.
         const labels: string[] = JSON.parse(row.labels ?? "[]");
         if (resolved || importanceOf(labels) !== "discuss") continue;
-        const link = `${options.publicUrl ?? url}/#${row.forum}/${row.message}`;
+        // 포스트가 보이는 첫 포럼으로 잇는다. 나중에 포럼이 바뀌어도 이슈의 글은 그대로다.
+        const link = `${options.publicUrl ?? url}/#${view.post.forums[0] ?? ALERTS}/${row.message}`;
         const title = issueTitle(alert);
         const opened = (
           await answered((token) =>

@@ -11,7 +11,7 @@ const BASE = Array.from({ length: 5 }, (_, i) => `line ${i + 1}`);
 
 /**
  * owner와 alice가 같은 줄을 고쳐 직접 충돌 알림을 세우고, 그 알림의 포스트를 연다.
- * 포스트와 알림 채널("부딪힘")과 alice를 돌려준다. 결정 PR은 GitHub 쪽 일이라 알림 종류는 무엇이든 된다.
+ * 포스트와 그 포스트가 보이는 포럼("참고")과 alice를 돌려준다. 결정 PR은 GitHub 쪽 일이라 알림 종류는 무엇이든 된다.
  */
 async function postOf(t: { after: (fn: () => Promise<void>) => void }, hourMs?: number) {
   const world = await startWorld({ observeMs: 50, followMs: 50, hourMs });
@@ -40,13 +40,13 @@ async function postOf(t: { after: (fn: () => Promise<void>) => void }, hourMs?: 
   await writer(desk.folder)("src/pay.ts", text(BASE.toSpliced(2, 1, "alice")));
 
   const room = await eventually(async () => {
-    const found = (await call(world.owner, api.channels)).channels.find((c) => c.name === "부딪힘");
-    assert.ok(found, "아직 알림 채널이 없다");
+    const found = (await call(world.owner, api.channels)).channels.find((c) => c.name === "참고");
+    assert.ok(found, "참고 포럼이 없다");
     return found.id;
   });
   const alert = await eventually(async () => {
-    const { messages } = await call(world.owner, api.history, { channel: room });
-    const found = messages.find((m) => m.kind === "alert");
+    const { posts } = await call(world.owner, api.posts);
+    const found = posts.find((p) => p.forums.includes(room))?.message;
     assert.ok(found, "아직 알림이 없다");
     return found.id;
   });
