@@ -19,12 +19,14 @@ import {
   type Choices,
   type ChosenPresence,
   type Claim,
+  CONFIRMED_LABEL,
   CONTRACT_VERSION,
   type ConflictPair,
   type ContractError,
   ContractFailure,
   type Decision,
   type DecisionWindow,
+  DISCUSS_LABELS,
   type Draft,
   decode,
   EXECUTOR_NAMES,
@@ -33,6 +35,7 @@ import {
   encodeVersionMismatch,
   FEED_PAGE,
   HISTORY_PAGE,
+  type Importance,
   INBOX_MS,
   type InboxItem,
   LIVE_SOCKET,
@@ -190,7 +193,7 @@ const POST_LAST = `(SELECT json_object('login', x.login, 'name', COALESCE(pp.nam
   WHERE x.channel = c.id AND x.decision IS NULL ORDER BY x.id DESC LIMIT 1)`;
 
 const MESSAGES = `SELECT m.id, m.channel, m.login, m.text, m.note, m.at, m.github, p.name,
-  c.issue, c.issue_url, c.issue_title, c.issue_labels, c.issue_open,
+  c.issue, c.issue_url, c.issue_title, c.issue_labels, c.issue_open, c.labels,
   q.id AS qa, q.executor, q.question, q.at AS asked, q.answer, q.visibility,
   m.alert, a.kind, a.works, a.files, a.resolved, a.run, a.confirmed,
   c.id AS post, CASE WHEN c.id IS NULL THEN 0 ELSE ${POST_COUNT} END AS count, ${POST_LAST} AS last,
@@ -215,6 +218,7 @@ type MessageRow = {
   issue_title: string | null;
   issue_labels: string | null;
   issue_open: number | null;
+  labels: string | null;
   qa: number | null;
   asked: number;
   alert: number | null;
@@ -276,6 +280,10 @@ const computedBy = (kind: Alert["kind"], item: AlertFile | AlertSymbol, works: W
     ? [works[usingSide(item)]?.login]
     : works.map((work) => work.login);
 
+/** 라벨 중 가장 높은 중요도(ADR-0039). 지금은 기본값만 쓴다. */
+const importanceOf = (labels: string[]): Importance =>
+  labels.some((label) => DISCUSS_LABELS.includes(label)) ? "discuss" : "reference";
+
 /** 포스트 요약(`Post`에서 `alert`만 뺀 것). `row`는 알림 줄이다. 한 줄은 줄바꿈을 접고 `POST_LINE`자까지만 준다. */
 const POST_LINE = 200;
 const postSummary = (row: MessageRow): Omit<Post, "alert"> => {
@@ -299,6 +307,8 @@ const postSummary = (row: MessageRow): Omit<Post, "alert"> => {
             labels: JSON.parse(row.issue_labels ?? "[]"),
             open: row.issue_open === 1,
           },
+    labels: JSON.parse(row.labels ?? "[]"),
+    importance: importanceOf(JSON.parse(row.labels ?? "[]")),
   };
 };
 
@@ -549,6 +559,22 @@ export async function startServer(options: {
   // v0.1.0의 표에는 `alert`가 없다.
   if (!db.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'alert'").get())
     db.exec("ALTER TABLE messages ADD COLUMN alert INTEGER REFERENCES alerts (id)");
+  // 포스트의 라벨(ADR-0039, JSON 배열). 이슈의 라벨(`issue_labels`)과 따로 Omagari에 둔다. 이 열이 없던 DB의 포스트에는
+  // 알림의 종류 라벨과, 확인됐으면 확인됨을 붙인다. 이미 연 이슈는 그대로 둔다(문답 A10).
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('channels') WHERE name = 'labels'").get()) {
+    db.exec("ALTER TABLE channels ADD COLUMN labels TEXT");
+    const posts = db
+      .prepare(
+        `SELECT c.id, a.kind, a.confirmed FROM channels c JOIN messages m ON m.id = c.alert
+         JOIN alerts a ON a.id = m.alert`,
+      )
+      .all() as { id: string; kind: Alert["kind"]; confirmed: number }[];
+    for (const post of posts)
+      db.prepare("UPDATE channels SET labels = ? WHERE id = ?").run(
+        JSON.stringify([ALERT_LABELS[post.kind], ...(post.confirmed ? [CONFIRMED_LABEL] : [])]),
+        post.id,
+      );
+  }
   // 편지함(2단계 질문 A5~A7): 작업(`login` + `branch`)마다 넘겨줄 소식. 알림(`alert`)이거나, 그 밖의 소식(`news`, 계약의 InboxItem에서
   // id, branch, at을 뺀 것의 JSON) 가운데 하나다. `at`은 들어온 시각(ms)이다.
   // 작업과 알림마다 넘겨주지 않은 것은 하나다. 넘겨준 확인이 오면 지우고, `inboxMs`가 지나면 만료로 지운다.
@@ -1216,10 +1242,11 @@ export async function startServer(options: {
         .run(channel, lastInsertRowid, now).lastInsertRowid;
       // 알림 하나가 포스트 하나다(ADR-0027). 포스트의 이름은 사람이 지을 수 없는 이름(줄바꿈으로 시작)이다.
       const post = randomBytes(8).toString("hex");
-      db.prepare("INSERT INTO channels (id, name, alert) VALUES (?, ?, ?)").run(
+      db.prepare("INSERT INTO channels (id, name, alert, labels) VALUES (?, ?, ?, ?)").run(
         post,
         `\n${post}`,
         message,
+        JSON.stringify([ALERT_LABELS[kind]]),
       );
       db.exec("COMMIT");
       shareAlert(Number(lastInsertRowid));
@@ -1298,6 +1325,23 @@ export async function startServer(options: {
       now,
       row.id,
     );
+    if (confirmed !== row.confirmed) {
+      // 확인됨 라벨을 붙이거나 뗀다(ADR-0039). 논의가 되면 이슈를 연다.
+      const post = db
+        .prepare(
+          "SELECT c.id, c.labels FROM channels c JOIN messages m ON m.id = c.alert WHERE m.alert = ?",
+        )
+        .get(row.id) as { id: string; labels: string | null };
+      const labels = (JSON.parse(post.labels ?? "[]") as string[]).filter(
+        (label) => label !== CONFIRMED_LABEL,
+      );
+      if (confirmed) labels.push(CONFIRMED_LABEL);
+      db.prepare("UPDATE channels SET labels = ? WHERE id = ?").run(
+        JSON.stringify(labels),
+        post.id,
+      );
+      syncSoon(post.id);
+    }
     shareAlert(row.id);
     if (!finished) return;
     deliver(row.id, JSON.parse(row.works), now);
@@ -2830,7 +2874,6 @@ export async function startServer(options: {
       `포스트: ${link}`,
     ].join("\n");
   };
-  const CONFIRMED_LABEL = "확인됨";
   /** 판정 댓글의 글: 확인됨, 확인됨에서 벗어남, 통과로 닫힘. 검사 명령과, 올라와 있으면 출력의 끝이 있다. */
   const verdictBody = (state: string, run: AlertRun) => {
     const head =
@@ -2872,7 +2915,7 @@ export async function startServer(options: {
 
   /**
    * 포스트와 GitHub 이슈를 맞춘다(ADR-0032). 포스트마다:
-   * 1. 이슈가 없고 알림이 풀리지 않았으면 연다. 알림의 두 사람 가운데 세션이 있는 사람의 토큰으로, 없으면 아무 멤버의 것으로 연다.
+   * 1. 이슈가 없고 알림이 풀리지 않은 논의 포스트면 포스트의 라벨을 달아 연다(ADR-0039). 중요도가 내려가도 연 이슈는 닫지 않는다. 알림의 두 사람 가운데 세션이 있는 사람의 토큰으로, 없으면 아무 멤버의 것으로 연다.
    * 2. 아직 올리지 않은 글을 쓴 사람의 토큰으로 댓글로 올린다. 그 사람의 세션이 없으면 들어올 때까지 둔다.
    * 3. 이슈의 제목, 라벨, 열림을 읽고, 모르는 댓글을 포스트의 글로 들인다.
    * 4. 알림이 풀렸고 이슈가 열려 있으면 한 번 닫는다. 사람이 다시 열면 두고, 알림이 풀렸고 이슈도 닫힌 포스트는 더 따라가지 않는다.
@@ -2882,7 +2925,7 @@ export async function startServer(options: {
   const syncIssues = async (only?: Set<string>) => {
     const rows = db
       .prepare(
-        `SELECT c.id, c.issue, c.issue_open, c.issue_closed, c.verdict, m.id AS message, m.alert, m.channel AS forum
+        `SELECT c.id, c.issue, c.issue_open, c.issue_closed, c.verdict, c.labels, m.id AS message, m.alert, m.channel AS forum
          FROM channels c JOIN messages m ON m.id = c.alert ORDER BY m.id`,
       )
       .all() as {
@@ -2891,6 +2934,7 @@ export async function startServer(options: {
       issue_open: number | null;
       issue_closed: number | null;
       verdict: string | null;
+      labels: string | null;
       message: number;
       alert: number;
       forum: string;
@@ -2933,10 +2977,11 @@ export async function startServer(options: {
       const resolved = alert.resolved !== null;
       let number = row.issue;
       if (number === null) {
-        if (resolved) continue; // 풀린 뒤에는 열지 않는다
+        // 풀린 뒤나 참고 포스트에는 열지 않는다(ADR-0039). 포스트의 라벨을 함께 단다.
+        const labels: string[] = JSON.parse(row.labels ?? "[]");
+        if (resolved || importanceOf(labels) !== "discuss") continue;
         const link = `${options.publicUrl ?? url}/#${row.forum}/${row.message}`;
         const title = issueTitle(alert);
-        const labels = [ALERT_LABELS[alert.kind]];
         const opened = (
           await answered((token) =>
             github.openIssue(token, repo, { title, body: issueBody(alert, link), labels }),

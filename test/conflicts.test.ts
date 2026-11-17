@@ -330,12 +330,24 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
     count: 0,
     last: null,
     activity: arrived.at,
+    labels: ["직접 충돌"],
+    importance: "reference",
   });
   // 목록 한 번으로 포럼 화면이 그릴 수 있다: 알림, 마지막 글(아직 없다), 글 수, 마지막 활동, 올라온 시각.
   const listed = (await call(alice, api.posts)).posts;
   assert.deepEqual(
     listed.map(({ message, ...p }) => noIssue(p)),
-    [{ channel: post, alert: alert.id, count: 0, last: null, activity: arrived.at }],
+    [
+      {
+        channel: post,
+        alert: alert.id,
+        count: 0,
+        last: null,
+        activity: arrived.at,
+        labels: ["직접 충돌"],
+        importance: "reference",
+      },
+    ],
   );
   const [first] = listed;
   assert.ok(first?.message.kind === "alert");
@@ -349,6 +361,8 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
     count: 0,
     last: null,
     activity: arrived.at,
+    labels: ["직접 충돌"],
+    importance: "reference",
   });
   assert.equal(opened.message.id, alert.id);
   await assert.rejects(call(alice, api.openPost, { alert: alert.id + 1 }), {
