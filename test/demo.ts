@@ -41,7 +41,20 @@ const DRAFT = {
   decision: "메일은 바로 보내지 않고 큐에 넣는다. 최하준의 판을 남긴다.",
   consequences: "박민수의 브랜치는 큐 함수를 쓰도록 다시 맞춘다.",
 };
-const canned = (message: string) => CANNED.find(([q]) => message.includes(q))?.[1];
+/**
+ * 토론의 입장(ADR-0040). 러너는 턴을 한 줄로 세우므로, 토론 턴이 실제 실행기로 가면 뒤에 선 DM이 그만큼 기다린다.
+ * 그래서 토론은 실제 실행기로 보내지 않고 정해 둔 입장을 낸다.
+ */
+const STANCE = JSON.stringify({
+  claim: "데모라 정해 둔 입장이에요.",
+  evidence: ["src/pay.ts:1 pay()의 정의"],
+  changed: false,
+  reason: "",
+});
+const canned = (message: string) =>
+  /Omagari가 (토론을 열었다|연 토론)/.test(message)
+    ? STANCE
+    : CANNED.find(([q]) => message.includes(q))?.[1];
 /**
  * 정해 둔 답이 있으면 그것을, 없으면 `real`을 부른다. `real`이 없으면 초안이나 짧은 답을 낸다.
  * 초안은 포스트의 대화(미리 넣은 질문도 든다)를 감싸 오므로 정해 둔 답과 맞추지 않는다.
@@ -311,6 +324,11 @@ assert.equal(asking.code, 0, asking.stderr);
 await eventually(async () => assert.ok((await call(world.owner, api.settings)).answered.count > 0));
 
 // 포스트와 GitHub 이슈(ADR-0032): 포스트의 글은 이슈 댓글로 가고, GitHub에서 단 댓글과 바꾼 제목, 라벨이 포스트로 들어온다.
+// 이슈는 논의 포스트만 연다(ADR-0039). 직접 충돌은 참고라, 팀 라벨 "결정 필요"를 논의로 두고 두 포스트에 붙인다.
+await call(world.owner, api.createLabel, { name: "결정 필요", color: "d93f0b" });
+await call(world.owner, api.editLabel, { name: "결정 필요", next: { importance: "discuss" } });
+for (const post of [mail, direct])
+  await call(world.owner, api.setPostLabels, { post, labels: ["직접 충돌", "결정 필요"] });
 const issueOf = (post: string) =>
   eventually(async () => {
     const number = (await call(world.owner, api.posts)).posts.find((p) => p.channel === post)?.issue
