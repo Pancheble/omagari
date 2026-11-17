@@ -58,6 +58,8 @@
 | `size:m` | 한 구성 요소 안의 기능이나 버그 | Sonnet 5.5 (`claude-sonnet-5-5`) | medium |
 | `size:l` | 계약, 여러 구성 요소에 걸치는 것, 설계 판단이 필요한 것 | 메인 세션과 같은 모델(지금 Opus 5.5) | 그 모델의 기본값(Opus 5.5는 medium) |
 
+- 화면 시안 세션(캔버스에 시안을 그리고 @Pancheble이 고르는 일)은 size 라벨이 `size:m`이어도 메인 세션과 같은 모델(지금 Opus 5.5)로 띄운다. 시안 품질 때문에 #218은 도중에 올라갔고(Sonnet 5.5 → Fable 5.2), #222는 올리지 않았다. 2026-11-17 @Pancheble이 "시안은 Opus로"라고 정했다(#218 기록, #225).
+
 - 근거는 Anthropic의 [effort](https://platform.claude.com/docs/en/build-with-claude/effort)와 [모델 고르기](https://platform.claude.com/docs/en/about-claude/models/choosing-a-model) 문서다(2026-11-12 확인). 모델을 바꾸기 전에 effort를 먼저 조절하고, effort 수준은 모델끼리 비교되지 않는다. low는 검색이나 확인을 건너뛰기 쉬워 쓰지 않는다.
 - size 라벨이 없으면 이슈를 읽고 크기를 정해 라벨을 붙인 뒤 띄운다. 애매하면 한 단계 큰 쪽으로 한다.
 - 올릴지는 객관적 검사로 정한다: 포맷 검사, 타입 검사, 테스트, CI, 이슈의 완료 조건. 하위 세션이 "됐다"고 한 말이나 그럴듯해 보이는 변경은 근거가 아니다.
