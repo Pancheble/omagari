@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 36;
+export const CONTRACT_VERSION = 37;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -649,6 +649,19 @@ export const InboxItem = z.discriminatedUnion("kind", [
    * 정의 줄이 계획대로 바뀐 뒤 풀었거나 브랜치가 머지되어 풀린 것은 취소가 아니다.
    */
   z.strictObject({ ...InboxHead, kind: z.literal("cancelled"), claim: Claim }),
+  /**
+   * 이 작업이 낀 토론의 소식(ADR-0040): 열렸다(`opened`), 내 차례다(`turn`, 반박 라운드가 열렸고 `round`번째 입장을 낼 차례), 결론이 났다(`concluded`, 어느 길로 났는지 `by`).
+   * 토론의 두 작업 모두에게 간다. 안의 주인은 결론이 난 뒤에만 밝혀지므로 `concluded`만 이긴 쪽(`winner`, 작업의 `branch`)을 싣는다.
+   */
+  z.strictObject({
+    ...InboxHead,
+    kind: z.literal("debate"),
+    event: z.enum(["opened", "turn", "concluded"]),
+    post: z.strictObject({ id: z.string(), name: z.string() }),
+    round: z.number().int().positive().optional(),
+    by: z.enum(["evidence", "choice"]).optional(),
+    winner: z.strictObject({ login: z.string(), branch: z.string() }).optional(),
+  }),
 ]);
 export type InboxItem = z.infer<typeof InboxItem>;
 
@@ -1926,6 +1939,7 @@ export const api = {
    * 날은 `timeZone`(서울)의 자정으로 자른다. 들어온 멤버는 그날 웹을 열었거나 채널에서 읽고 쓴 멤버다.
    * 문답은 그날 서버가 받은 DM과 `@호출`이다. 수만 오고, 누가 무엇을 물었는지는 오지 않는다.
    * 돌려 본 수(`runs`)는 그날 서버가 받은 합쳐 돌려 보기의 판정을 판정별로 센다(ADR-0035, ADR-0036). "돌려 보는 중"과 같은 지문의 다시 올림은 세지 않는다.
+   * 토론 수(`debates`)는 토론이 열린 날, 결론이 난 날, 열린 토론의 포스트에 결정 PR이 선 것을 센다.
    * 읽기지만 날 수를 본문에 실으려고 POST다.
    */
   metrics: {
@@ -1942,6 +1956,20 @@ export const api = {
           qas: z.number(),
           /** 판정별 수(통과, 깨짐, 가릴 수 없음, 돌리지 못함). */
           runs: z.record(RunVerdict, z.number()),
+          /**
+           * 토론(ADR-0040): 그날 열린 수, 그날 끝난 길별 수, 그날 열린 토론 가운데 결정 PR로 이어진 수. 수만 오고 내용은 오지 않는다.
+           * 길은 실험(`experiment`), 근거(`evidence`), 사람이 고름(`human`), 만료(`expired`)다. 실험과 만료의 길은 아직 없어 0이다.
+           */
+          debates: z.strictObject({
+            opened: z.number(),
+            ended: z.strictObject({
+              experiment: z.number(),
+              evidence: z.number(),
+              human: z.number(),
+              expired: z.number(),
+            }),
+            decided: z.number(),
+          }),
         }),
       ),
     }),
