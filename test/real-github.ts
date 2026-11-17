@@ -308,6 +308,40 @@ if (issue) {
   });
 }
 
+// 레포 라벨(#191): 만들고, 목록에서 읽고, 이름·색·설명을 고친다. 고친 라벨은 정리에서 지운다.
+const renamedLabel = `${label}-고침`;
+const repoLabel = await attempt("createLabel + labels", async () => {
+  const made = await github.createLabel(token, repo, {
+    name: `${label}-만듦`,
+    color: "ff0000",
+    description: "점검",
+  });
+  const list = await eventually(
+    () => github.labels(token, repo),
+    (labels) => labels.some((l) => l.id === made.id),
+  );
+  const mine = list.find((l) => l.id === made.id);
+  expect(
+    mine?.name === `${label}-만듦` && mine.color === "ff0000" && mine.description === "점검",
+    `라벨이 다르다: ${JSON.stringify(mine)}`,
+  );
+  return { detail: `${made.name} (id ${made.id}), 레포 라벨 ${list.length}개`, value: made };
+});
+if (repoLabel) {
+  await attempt("updateLabel", async () => {
+    const changed = await github.updateLabel(token, repo, repoLabel.name, {
+      name: renamedLabel,
+      color: "000000",
+      description: "고침",
+    });
+    expect(
+      changed.id === repoLabel.id && changed.name === renamedLabel && changed.color === "000000",
+      `고친 라벨이 다르다: ${JSON.stringify(changed)}`,
+    );
+    return { detail: `${repoLabel.name} → ${changed.name}, id 그대로` };
+  });
+}
+
 // 정리: 아직 열린 PR과 이슈를 닫고, 점검이 만든 브랜치와 라벨을 지운다.
 progress("  정리");
 const leftovers: string[] = [];
@@ -332,9 +366,10 @@ for (const branch of opened.branches) {
     leftovers.push(`브랜치 ${branch}: HTTP ${response?.status ?? "응답 없음"}`);
 }
 // 없는 라벨로 연 이슈는 GitHub이 라벨을 만들어 둔다. 점검이 만든 것이니 지운다.
-await raw(`/repos/${repo}/labels/${encodeURIComponent(label)}`, token, "DELETE").catch(
-  () => undefined,
-);
+for (const name of [label, `${label}-만듦`, renamedLabel])
+  await raw(`/repos/${repo}/labels/${encodeURIComponent(name)}`, token, "DELETE").catch(
+    () => undefined,
+  );
 
 const failed = checks.some((c) => c.status === "fail");
 const mark = { pass: "x", fail: " ", skip: "-" } as const;
