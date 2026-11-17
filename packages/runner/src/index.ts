@@ -67,6 +67,7 @@ import {
   debateInstructions,
   escapeXml,
   markEvidence,
+  proxyContext,
   readStance,
   rebuttalInstructions,
   stanceLine,
@@ -1086,13 +1087,16 @@ export async function startRunner(options: {
     messages,
     mine: own,
     theirs,
+    proxy,
   }: Parameters<typeof encode<typeof serverToRunner, "debate">>[2]): Promise<
     Stance | ContractError
   > {
-    const tree = folders.get(branch) ?? folder;
+    // 대행은 부재자의 브랜치가 이 기기에 없어 이 러너의 폴더에서 띄우고, 작업 세션을 갈라 띄우지 않는다(ADR-0040, 문답 A17).
+    const tree = proxy ? folder : (folders.get(branch) ?? folder);
     // 반박 라운드에는 지난 라운드의 두 입장을 감싸 넘긴다(ADR-0017).
-    const instructions =
-      own && theirs ? rebuttalInstructions(branch, round, own, theirs) : debateInstructions(branch);
+    const instructions = `${proxy ? `${proxyContext(proxy)}\n\n` : ""}${
+      own && theirs ? rebuttalInstructions(branch, round, own, theirs) : debateInstructions(branch)
+    }`;
     const base = { channel: post, recent: messages, question: instructions };
     const skip = new Set(
       (await readFile(paths.log, "utf8").catch(() => "")).split("\n").flatMap((line) => {
@@ -1104,13 +1108,17 @@ export async function startRunner(options: {
         }
       }),
     );
-    const fork = await executors[executor]?.recent?.(tree, branch, skip).catch(() => undefined);
+    const fork = proxy
+      ? undefined
+      : await executors[executor]?.recent?.(tree, branch, skip).catch(() => undefined);
     const where = { post: post.id, round, folder: tree };
     let replied = fork
       ? await reply(executor, undefined, { ...base, debate: { ...where, fork } })
       : undefined;
     const context = replied?.kind === "answer" ? "session" : "none";
-    if (replied?.kind !== "answer") {
+    if (proxy) {
+      replied = await reply(executor, undefined, { ...base, debate: where });
+    } else if (replied?.kind !== "answer") {
       const work = mine.find((w) => w.branch === branch);
       const plan = situation?.works.find((w) => w.login === login && w.branch === branch)?.line;
       const extra = await contextless(
