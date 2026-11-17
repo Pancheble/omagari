@@ -18,6 +18,10 @@ const server = await startServer({
   hostname: process.env.HOST,
   // 사람이 웹을 여는 주소. 결정 파일의 출처(포스트 링크)에 쓴다. 주지 않으면 서버가 듣는 주소다.
   publicUrl: process.env.OMAGARI_URL,
+  // 토론의 라운드 수. 주지 않으면 세 라운드다.
+  debateRounds: process.env.OMAGARI_DEBATE_ROUNDS
+    ? Number(process.env.OMAGARI_DEBATE_ROUNDS)
+    : undefined,
 });
 console.log(
   `Omagari 서버 ${server.version} (contract ${CONTRACT_VERSION}): ${server.url} (${OMAGARI_REPO})`,
