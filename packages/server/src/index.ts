@@ -77,6 +77,7 @@ import type { WSContext } from "hono/ws";
 import { type WebSocket, WebSocketServer } from "ws";
 import type { GitHub, RepoLabel } from "./github.ts";
 import { createApp, mount } from "./http.ts";
+import { labelsFor } from "./labeler.ts";
 
 export { type GitHub, type Pull, type RepoLabel, realGitHub } from "./github.ts";
 
@@ -1377,7 +1378,7 @@ export async function startServer(options: {
       db.exec("COMMIT");
       shareAlert(Number(lastInsertRowid));
       deliver(Number(lastInsertRowid), works, now);
-      syncSoon(post); // 포스트의 이슈를 연다(ADR-0032)
+      void attachTeamLabels(post).finally(() => syncSoon(post)); // 팀 라벨을 단 뒤 포스트의 이슈를 연다(ADR-0032)
       openDebate(post); // 계약 변경이면 토론이 열린다(ADR-0040)
     }
     if (changed) {
@@ -3767,6 +3768,58 @@ export async function startServer(options: {
       }
       syncing = false;
     })();
+  };
+
+  /**
+   * 알림이 포스트로 설 때 기본 브랜치의 `.github/labeler.yml` 경로 규칙에 맞는 팀 라벨을 단다(ADR-0039). 이미 선 포스트에는 다시 달지 않는다.
+   * 레포에 있는 라벨(목록에 있는 것)만 단다. 파일이 없거나 읽지 못하면 종류 라벨만 남는다.
+   * ponytail: 기본 브랜치의 커밋이 바뀔 때만 파일을 다시 읽는다(알림이 설 때마다 GitHub 요청 하나). 지금은 한 판만 기억한다.
+   */
+  let labeler: { sha: string; source: string | null } | undefined;
+  const attachTeamLabels = async (post: string) => {
+    try {
+      const row = db
+        .prepare(
+          "SELECT a.files FROM channels c JOIN messages m ON m.id = c.alert JOIN alerts a ON a.id = m.alert WHERE c.id = ?",
+        )
+        .get(post) as { files: string } | undefined;
+      if (!row) return;
+      const files = [
+        ...new Set(
+          (JSON.parse(row.files) as (AlertFile | AlertSymbol)[]).flatMap((item) =>
+            "path" in item ? [item.path] : item.places.flat().map((place) => place.path),
+          ),
+        ),
+      ];
+      for (const { github_token: token } of db
+        .prepare("SELECT github_token FROM sessions ORDER BY rowid DESC")
+        .all() as { github_token: string }[]) {
+        const base = await github.defaultBranch(token, repo).catch(() => undefined);
+        if (!base) continue;
+        if (labeler?.sha !== base.sha)
+          labeler = {
+            sha: base.sha,
+            source: await github.read(token, repo, base.sha, ".github/labeler.yml"),
+          };
+        break;
+      }
+      if (stopped || !labeler?.source) return;
+      const wanted = labelsFor(labeler.source, files).flatMap((name) => labelRow(name)?.name ?? []);
+      const current = db.prepare("SELECT labels FROM channels WHERE id = ?").get(post) as
+        | { labels: string | null }
+        | undefined;
+      if (!current) return;
+      const labels: string[] = JSON.parse(current.labels ?? "[]");
+      const added = wanted.filter((name) => !labels.includes(name));
+      if (added.length === 0) return;
+      db.prepare("UPDATE channels SET labels = ? WHERE id = ?").run(
+        JSON.stringify([...labels, ...added]),
+        post,
+      );
+      sharePost(post);
+    } catch (error) {
+      console.error("팀 라벨을 달지 못했다:", error);
+    }
   };
 
   // 오프라인 7일이 지난 멤버의 관측과 상태 한 줄을 지우고, 작업마다의 초안 PR 제목과 머지 여부를 GitHub에서 읽는다.
