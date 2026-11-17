@@ -2,13 +2,13 @@
 // - 가짜 GitHub로 띄운다. 브라우저의 "GitHub으로 로그인"은 1.5초 뒤 저절로 승인되어 "나"로 들어온다.
 // - 내 러너에는 이 기기의 실제 Claude Code(깔려 있고 로그인했으면 Codex도)를 꽂는다. DM은 실제로 답하고 구독 사용량을 쓴다.
 //   미리 넣는 문답과 남의 질문에만 정해 둔 답을 낸다.
-// - 화면의 모든 상태를 볼 수 있게 미리 넣는다: 멤버 넷과 그 기기, 채팅 채널 둘, 부딪힘 포럼의 알림 아홉(직접 충돌, 간접 충돌,
+// - 화면의 모든 상태를 볼 수 있게 미리 넣는다: 멤버 넷과 그 기기, 채팅 채널 둘, 포럼의 알림 아홉(직접 충돌, 간접 충돌,
 //   중복 구현, 선언된 계약 변경, 풀린 것), 포스트의 글과 DM, 남에게 묻기와 답, 결정 PR 일곱(제안됨, 이의, 다시 열림, 수락됨,
 //   버림, 머지 멈춤, 머지 막힘). 결정 초안은 저장하지 않아 미리 넣지 못한다. 포스트 "박민수 · 최하준"에서 정리하기를 누른다.
 // - DEMO_AGENT=fake: 내 에이전트도 정해 둔 답을 낸다. 초안은 5초 동안 "쓰는 중"이다. 사용량을 쓰지 않는다.
 // - DEMO_RUNNER=off: 다 넣은 뒤 내 러너를 끈다. 초안의 "러너 꺼짐"을 본다.
 // - 합쳐 돌려 보기(ADR-0036)의 판정은 검사 명령을 돌리지 않고 정해 둔 것을 올린다. 멤버 셋(정다은, 오우진, 한소라)의 가짜 러너가 내 작업과
-//   간접 충돌(추정)을 걸고 판정을 올려, 부딪힘 포럼에 돌려 보는 중, 깨짐(출력 있음·없음), 가릴 수 없음, 돌리지 못함 넷(검사 명령 없음, 샌드박스 없음,
+//   간접 충돌(추정)을 걸고 판정을 올려, 포럼에 돌려 보는 중, 깨짐(출력 있음·없음), 가릴 수 없음, 돌리지 못함 넷(검사 명령 없음, 샌드박스 없음,
 //   시간 초과, 직접 충돌), 지난 결과, 통과로 풀림, 결정 PR이 열려 띠가 둘인 포스트가 선다. 내 러너는 이 알림들을 돌리지 않는다(잠잠한 시간을 끝없이 둔다).
 // - DEMO_MERGE_CHECK=off|no_sandbox: 설정 창의 내 러너의 합쳐 돌려 보기를 꺼 둠이나 샌드박스 없음으로 둔다. 안 주면 켜짐이다.
 // - DEMO_CHECK=none: 기본 브랜치에 검사 명령(.omagari.json)을 두지 않는다. 설정 창의 "검사 명령 없음"을 본다.
@@ -41,7 +41,20 @@ const DRAFT = {
   decision: "메일은 바로 보내지 않고 큐에 넣는다. 최하준의 판을 남긴다.",
   consequences: "박민수의 브랜치는 큐 함수를 쓰도록 다시 맞춘다.",
 };
-const canned = (message: string) => CANNED.find(([q]) => message.includes(q))?.[1];
+/**
+ * 토론의 입장(ADR-0040). 러너는 턴을 한 줄로 세우므로, 토론 턴이 실제 실행기로 가면 뒤에 선 DM이 그만큼 기다린다.
+ * 그래서 토론은 실제 실행기로 보내지 않고 정해 둔 입장을 낸다.
+ */
+const STANCE = JSON.stringify({
+  claim: "데모라 정해 둔 입장이에요.",
+  evidence: ["src/pay.ts:1 pay()의 정의"],
+  changed: false,
+  reason: "",
+});
+const canned = (message: string) =>
+  /Omagari가 (토론을 열었다|연 토론)/.test(message)
+    ? STANCE
+    : CANNED.find(([q]) => message.includes(q))?.[1];
 /**
  * 정해 둔 답이 있으면 그것을, 없으면 `real`을 부른다. `real`이 없으면 초안이나 짧은 답을 낸다.
  * 초안은 포스트의 대화(미리 넣은 질문도 든다)를 감싸 오므로 정해 둔 답과 맞추지 않는다.
@@ -197,14 +210,11 @@ const claimed = await world.cli(
 );
 assert.equal(claimed.code, 0, claimed.stderr);
 
-/** 부딪힘 포럼의 알림들. */
-const alerts = async () => {
-  const forum = (await call(world.owner, api.channels)).channels.find((c) => c.name === "부딪힘");
-  if (!forum) return [];
-  return (await call(world.owner, api.history, { channel: forum.id })).messages.flatMap((m) =>
+/** 알림들. */
+const alerts = async () =>
+  (await call(world.owner, api.posts)).posts.flatMap(({ message: m }) =>
     m.kind === "alert" ? [{ id: m.id, alert: m.alert }] : [],
   );
-};
 /** `a`와 `b` 사이의 `kind` 알림. 설 때까지 기다린다. */
 const alertOf = (kind: string, a: string, b: string) =>
   eventually(async () => {
@@ -314,6 +324,11 @@ assert.equal(asking.code, 0, asking.stderr);
 await eventually(async () => assert.ok((await call(world.owner, api.settings)).answered.count > 0));
 
 // 포스트와 GitHub 이슈(ADR-0032): 포스트의 글은 이슈 댓글로 가고, GitHub에서 단 댓글과 바꾼 제목, 라벨이 포스트로 들어온다.
+// 이슈는 논의 포스트만 연다(ADR-0039). 직접 충돌은 참고라, 팀 라벨 "결정 필요"를 논의로 두고 두 포스트에 붙인다.
+await call(world.owner, api.createLabel, { name: "결정 필요", color: "d93f0b" });
+await call(world.owner, api.editLabel, { name: "결정 필요", next: { importance: "discuss" } });
+for (const post of [mail, direct])
+  await call(world.owner, api.setPostLabels, { post, labels: ["직접 충돌", "결정 필요"] });
 const issueOf = (post: string) =>
   eventually(async () => {
     const number = (await call(world.owner, api.posts)).posts.find((p) => p.channel === post)?.issue

@@ -87,11 +87,9 @@ async function member(
   return { as, desk };
 }
 
-/** 포럼 "부딪힘"의 간접 충돌(추정) 알림들을 두 작업의 상대 멤버로 찾는다. */
+/** 간접 충돌(추정) 알림들을 두 작업의 상대 멤버로 찾는다. */
 async function indirect(as: As) {
-  const channel = (await call(as, api.channels)).channels.find((c) => c.name === "부딪힘");
-  if (!channel) return [];
-  const { messages } = await call(as, api.history, { channel: channel.id });
+  const messages = (await call(as, api.posts)).posts.map((p) => p.message);
   return messages.flatMap((m) =>
     m.kind === "alert" && m.alert.kind === "indirect" ? [m.alert as Indirect] : [],
   );
@@ -407,11 +405,7 @@ test("직접 충돌만 걸린 쌍과 정의를 바꾼 쪽은 돌리지 않고, �
 
   await alertWith(world.owner, "bob");
   await eventually(async () => {
-    const channel = (await call(world.owner, api.channels)).channels.find(
-      (c) => c.name === "부딪힘",
-    );
-    assert.ok(channel);
-    const { messages } = await call(world.owner, api.history, { channel: channel.id });
+    const messages = (await call(world.owner, api.posts)).posts.map((p) => p.message);
     assert.ok(messages.some((m) => m.kind === "alert" && m.alert.kind === "direct"));
   });
   await sleep(1500);
@@ -483,10 +477,14 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
   assert.equal(theirs.confirmed, false);
   assert.equal(fake.calls.length, 6);
   assert.equal(await brokenMark(world, "owner", "payment"), false);
-  // 추정인 동안 포스트는 종류 라벨만 붙은 참고라 이슈가 없다.
+  // 추정인 동안 포스트는 종류 라벨만 붙은 참고라 "참고" 포럼에 보이고 이슈가 없다.
+  const forums = Object.fromEntries(
+    (await call(world.owner, api.channels)).channels.map((c) => [c.name, c.id]),
+  );
   const guessed = (await call(world.owner, api.posts)).posts[0];
   assert.deepEqual(guessed?.labels, ["간접 충돌"]);
   assert.equal(guessed?.importance, "reference");
+  assert.deepEqual(guessed?.forums, [forums.참고]);
   assert.equal(guessed?.issue, null);
   assert.equal(guessed?.debate, null); // 추정에는 토론이 열리지 않는다(ADR-0040)
   assert.equal(world.github.issues.length, 0);
@@ -514,6 +512,8 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
   assert.ok(post?.issue?.labels.includes("확인됨"));
   assert.deepEqual(post?.labels, ["간접 충돌", "확인됨"]);
   assert.equal(post?.importance, "discuss");
+  // 논의가 되면 "참고" 포럼에서 빠지고 "논의" 포럼에 보인다(ADR-0039).
+  assert.deepEqual(post?.forums, [forums.논의]);
   // 확인되면 두 작업의 주인 에이전트로 토론이 열린다(ADR-0040).
   assert.deepEqual(post?.debate?.seats.map((seat) => seat.login).sort(), ["bob", "owner"]);
   const thread = await call(world.owner, api.history, { channel: post?.message.channel ?? "" });

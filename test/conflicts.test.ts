@@ -52,30 +52,24 @@ type Of<K extends Alert["kind"]> = (K extends "direct"
   : Exclude<Alert, { kind: "direct" }>) & { id: number };
 
 /**
- * 포럼 `name`(기본은 "부딪힘")에 선 `kind`(기본은 직접 충돌) 알림들. 포럼이 없으면 비어 있다.
+ * `kind`(기본은 직접 충돌) 알림들. 포럼 `name`을 주면 그 포럼에 보이는 것만이고, 그런 포럼이 없으면 비어 있다.
  * 알림마다 올라온 때 생긴 포스트가 있다(ADR-0027).
  */
 async function alerts<K extends Alert["kind"] = "direct">(
   as: As,
-  name = "부딪힘",
+  name?: string,
   kind = "direct" as K,
 ): Promise<Of<K>[]> {
-  const channel = (await call(as, api.channels)).channels.find((c) => c.name === name);
-  if (!channel) return [];
-  assert.equal(channel.kind, "forum");
-  const { messages } = await call(as, api.history, { channel: channel.id });
+  const forum = (await call(as, api.channels)).channels.find((c) => c.name === name);
+  if (name !== undefined && !forum) return [];
   const { posts } = await call(as, api.posts);
-  return messages.flatMap((m) => {
+  return posts.flatMap(({ message: m, ...post }) => {
     if (m.kind !== "alert" || m.alert.kind !== kind) return [];
-    assert.ok(posts.some((p) => p.alert === m.id && p.channel === m.post.channel));
+    if (forum && !post.forums.includes(forum.id)) return [];
+    assert.equal(post.channel, m.post.channel);
     return [{ id: m.id, ...m.alert } as unknown as Of<K>];
   });
 }
-
-/** 사람은 포럼을 만들지 못한다. 알림을 올릴 포럼을 바꾸는 것을 보려고 DB에 포럼 "설계"를 하나 더 둔다. 표는 서버가 이어 만든다. */
-const SECOND_FORUM = `CREATE TABLE channels (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE,
-  alert INTEGER, kind TEXT NOT NULL DEFAULT 'chat') STRICT;
-INSERT INTO channels (id, name, kind) VALUES ('design', '설계', 'forum');`;
 
 /** `kind` 알림이 정확히 하나가 될 때까지 기다리고, `check`가 맞을 때까지 기다린 그 알림. */
 const theAlert = <K extends Alert["kind"] = "direct">(
@@ -102,8 +96,8 @@ async function marks(as: As) {
 const OWNER = { login: "owner", name: "owner", branch: "payment" };
 const ALICE = { login: "alice", name: "alice", branch: "refund" };
 
-test("같은 곳을 고치면 부딪힘 포럼에 알림 하나가 오고, 바뀌면 같은 알림이 고쳐지고, 다 풀리면 풀렸다가 한 번 적힌다", async (t) => {
-  const world = await startWorld({ observeMs: 50, seed: SECOND_FORUM });
+test("같은 곳을 고치면 알림 하나가 오고, 바뀌면 같은 알림이 고쳐지고, 다 풀리면 풀렸다가 한 번 적힌다", async (t) => {
+  const world = await startWorld({ observeMs: 50 });
   t.after(world.stop);
   await base(world, ["src/pay.ts", "src/clean.ts"]);
   const { desk } = await clone(world, "alice", "refund");
@@ -119,7 +113,7 @@ test("같은 곳을 고치면 부딪힘 포럼에 알림 하나가 오고, 바�
   assert.deepEqual(await alerts(world.owner), []);
   await writer(desk.folder)("src/pay.ts", text(edit(3, "alice")));
 
-  // 처음 알림에 "부딪힘" 포럼이 생긴다. 알림에는 두 사람, 두 브랜치, 파일, 부딪히는 줄(각자의 사본 기준)이 있다.
+  // 알림에는 두 사람, 두 브랜치, 파일, 부딪히는 줄(각자의 사본 기준)이 있다.
   const first = await theAlert(world.owner, () => {});
   assert.deepEqual(first, {
     id: first.id,
@@ -178,19 +172,15 @@ test("같은 곳을 고치면 부딪힘 포럼에 알림 하나가 오고, 바�
   // 풀린 포스트도 목록에 남고 풀렸다고 보인다.
   const listedClosed = (await call(world.owner, api.posts)).posts.find((p) => p.alert === first.id);
   assert.ok(listedClosed?.message.kind === "alert" && listedClosed.message.alert.resolved !== null);
-  // 알림은 포럼에만 올린다. 다른 포럼으로 바꾸면 그 뒤의 알림은 그 포럼에 포스트로 가고, 지난 포스트는 제자리에 있다.
   // 풀린 뒤 다시 부딪히면 새 알림이다.
-  const team = await world.channel(world.owner, "팀");
-  await assert.rejects(call(world.owner, api.setAlertChannel, { channel: team }), {
-    code: "invalid_request",
-  } satisfies Partial<ContractFailure>);
-  assert.deepEqual(await call(world.owner, api.setAlertChannel, { channel: "design" }), {
-    channel: { id: "design", name: "설계", kind: "forum" },
-  });
   await writer(desk.folder)("src/pay.ts", text(edit(3, "alice again")));
-  const moved = await theAlert(world.owner, (alert) => assert.equal(alert.resolved, null), "설계");
-  assert.notEqual(moved.id, first.id);
-  assert.deepEqual(await alerts(world.owner), [resolved]);
+  const again = await eventually(async () => {
+    const [old, next, ...rest] = await alerts(world.owner);
+    assert.deepEqual([old, rest], [resolved, []]);
+    assert.equal(next?.resolved, null);
+    return next;
+  });
+  assert.notEqual(again?.id, first.id);
   await web.close();
 });
 
@@ -239,15 +229,10 @@ test("한쪽 러너만 켜져 있어도 알림이 온다", async (t) => {
   );
 });
 
-test("상대의 내용을 읽을 수 없으면 부딪힐 수 있음으로 알리고, 알림을 올릴 포럼을 바꾸면 그 포럼으로 간다", async (t) => {
-  const world = await startWorld({ observeMs: 50, seed: SECOND_FORUM });
+test("상대의 내용을 읽을 수 없으면 부딪힐 수 있음으로 알린다", async (t) => {
+  const world = await startWorld({ observeMs: 50 });
   t.after(world.stop);
   await base(world, ["src/pay.ts", "src/bob.ts"]);
-  await assert.rejects(
-    call(world.owner, api.setAlertChannel, { channel: "nope" }),
-    (error: ContractFailure) => error.code === "not_found",
-  );
-  await call(world.owner, api.setAlertChannel, { channel: "design" });
 
   // alice는 내용을 내보내지 않는다(공유 수준 declared). alice의 러너는 owner의 내용으로 계산하지만,
   // owner의 러너가 확인할 수 없는 것은 "부딪힐 수 있음"이다. 두 러너의 결과는 하나로 묶인다.
@@ -271,7 +256,7 @@ test("상대의 내용을 읽을 수 없으면 부딪힐 수 있음으로 알리
   // 두 러너의 결과는 쌍마다 하나로 묶인다. 표시는 확인된 직접 충돌에만 붙는다.
   await eventually(async () => {
     // 브랜치를 옮기는 사이에 잠깐 선 알림은 이미 풀렸다. 열린 것만 본다.
-    const found = (await alerts(world.owner, "설계"))
+    const found = (await alerts(world.owner))
       .filter((alert) => alert.resolved === null)
       .map(({ works, files }) => ({ works, files }));
     assert.deepEqual(
@@ -290,11 +275,6 @@ test("상대의 내용을 읽을 수 없으면 부딪힐 수 있음으로 알리
     "bob/bob": false,
     "owner/payment": false,
   });
-  // 정한 포럼이 있으면 "부딪힘" 포럼을 만들지 않는다.
-  assert.equal(
-    (await call(world.owner, api.channels)).channels.some((c) => c.name === "부딪힘"),
-    false,
-  );
 });
 
 test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에는 못 쓰고, 포스트에서 글과 DM·@호출이 채널처럼 돈다", async (t) => {
@@ -323,6 +303,9 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
     return first;
   });
   const post = arrived.post.channel;
+  // 직접 충돌은 참고라 "참고" 포럼에 보인다(ADR-0039).
+  const channels = (await call(alice, api.channels)).channels;
+  const reference = channels.find((c) => c.name === "참고")?.id;
   // 이슈(ADR-0032)는 알림 뒤에 따로 열리므로 여기서는 빼고 본다. 이슈는 issues.test.ts가 본다.
   const noIssue = <T extends { issue: unknown }>({ issue, ...rest }: T) => rest;
   assert.deepEqual(noIssue(arrived.post), {
@@ -332,6 +315,7 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
     activity: arrived.at,
     labels: ["직접 충돌"],
     importance: "reference",
+    forums: [reference],
   });
   // 목록 한 번으로 포럼 화면이 그릴 수 있다: 알림, 마지막 글(아직 없다), 글 수, 마지막 활동, 올라온 시각.
   const listed = (await call(alice, api.posts)).posts;
@@ -346,6 +330,7 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
         activity: arrived.at,
         labels: ["직접 충돌"],
         importance: "reference",
+        forums: [reference],
         debate: null,
         request: null,
       },
@@ -365,21 +350,23 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
     activity: arrived.at,
     labels: ["직접 충돌"],
     importance: "reference",
+    forums: [reference],
   });
   assert.equal(opened.message.id, alert.id);
   await assert.rejects(call(alice, api.openPost, { alert: alert.id + 1 }), {
     code: "not_found",
   } satisfies Partial<ContractFailure>);
 
-  // 채널 목록에 포럼이 종류와 함께 오고 포스트는 없다. 사람은 포럼의 이름으로 채널을 만들지 못한다.
+  // 채널 목록에 포럼이 종류, 거르기와 함께 오고 포스트는 없다. 사람은 포럼의 이름으로 채널을 만들지 못한다.
   const general = await world.channel(world.owner, "일반");
-  const forum = (await call(alice, api.channels)).channels.find((c) => c.kind === "forum");
+  const forum = channels.find((c) => c.name === "논의");
   assert.deepEqual((await call(alice, api.channels)).channels, [
-    { id: forum?.id, name: "부딪힘", kind: "forum" },
+    { id: forum?.id, name: "논의", kind: "forum", filter: { importance: "discuss" } },
     { id: general, name: "일반", kind: "chat" },
+    { id: reference, name: "참고", kind: "forum", filter: { importance: "reference" } },
   ]);
   assert.ok(forum);
-  await assert.rejects(call(alice, api.createChannel, { name: "부딪힘" }), {
+  await assert.rejects(call(alice, api.createChannel, { name: "참고" }), {
     code: "conflict",
   } satisfies Partial<ContractFailure>);
 
@@ -431,7 +418,7 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
   assert.equal(again?.resume, "session-2", "포스트의 세션을 잇는다");
   // 러너에 넘어간 대화는 포스트의 것이고 맨 위에 알림이 있다.
   const given = inPost?.message ?? "";
-  assert.match(given, /<channel_messages channel="부딪힘의 알림 \d+번 포스트">/);
+  assert.match(given, /<channel_messages channel="알림 \d+번 포스트">/);
   assert.match(given, /<alert kind="직접 충돌"[^>]*>\n[^<]*src\/pay\.ts: 3 \/ 3/);
   assert.match(given, /이 줄은 제가 고칠게요/);
   assert.ok(given.indexOf("<alert") < given.indexOf("이 줄은 제가 고칠게요"));
@@ -453,8 +440,8 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
     ["text", "qa", "qa"],
   );
   await eventually(() => assert.equal(postOf()?.count, 3));
-  const [atForum] = (await call(alice, api.history, { channel: forum.id })).messages;
-  assert.equal(atForum?.kind === "alert" && atForum.post.count, 3);
+  const atForum = (await call(alice, api.openPost, { alert: alert.id })).message;
+  assert.equal(atForum.kind === "alert" && atForum.post.count, 3);
   // 목록 API도 같은 요약을 준다. 마지막 글은 `@호출`한 사람의 질문이다.
   const [now] = (await call(alice, api.posts)).posts;
   assert.equal(now?.count, 3);
