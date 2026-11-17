@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 39;
+export const CONTRACT_VERSION = 40;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -767,6 +767,11 @@ export const Stance = z.strictObject({
    * 사유 없이 바뀐 입장(`changed`가 있고 `reason`이 없다)은 화면에 "사유 없이 바뀜"으로 표시한다. 첫 라운드와 유지한 입장에는 없다.
    */
   changed: z.strictObject({ reason: z.string().min(1).optional() }).optional(),
+  /**
+   * 대행이 낸 입장이다(ADR-0040, 문답 A18). 부재자 대신 부른 멤버이고, 그 멤버의 러너가 그 멤버의 사용량으로 냈다.
+   * 서버가 붙인다. 러너가 보낸 값은 버린다.
+   */
+  proxy: z.strictObject({ login: z.string(), name: z.string() }).optional(),
   /** 입장에 패치를 붙였으면 그 실험. */
   experiment: Experiment.optional(),
   model: z.string().optional(),
@@ -785,6 +790,10 @@ export const DebateSeat = z.strictObject({
   branch: z.string(),
   state: z.enum(["waiting", "submitted", "off", "failed"]),
   error: ContractError.optional(),
+  /** 이 자리에 부른 대행(부른 멤버). 다음 라운드를 열 때 주인의 러너가 붙어 있으면 진짜 에이전트가 이어받아 사라진다. */
+  proxy: z.strictObject({ login: z.string(), name: z.string() }).optional(),
+  /** 기다리는 자리인데 낼 러너(대행이면 부른 멤버의 것)가 붙어 있지 않다. 붙으면 참여 요청을 보내 이어서 낸다. */
+  away: z.literal(true).optional(),
 });
 export type DebateSeat = z.infer<typeof DebateSeat>;
 
@@ -820,11 +829,11 @@ export const DEBATE_ROUNDS = 3;
  * 라운드의 입장은 그 라운드의 자리가 다 낼 때까지(기다리는 자리가 없을 때까지) 서버 API, 웹, 러너 어디에도 내보내지 않는다.
  * `revealed`는 가린 첫 라운드가 공개되었는지다. 두 자리가 다 낸 라운드 뒤에는 다음 라운드(반박)가 돈다. 반박 라운드에는 상대의 지난 입장이 넘어간다.
  * `state`: 라운드가 도는 중(`open`), 마지막 라운드가 끝나 사람이 고를 차례(`choosing`), 결론이 났다(`concluded`),
- * 낸 입장이 하나도 없이 끝났다(`ended`). 검증된 근거가 마지막 입장에 한쪽에만 있으면 고르지 않고 그쪽이 결론이 된다.
+ * 낸 입장이 하나도 없이 끝났다(`ended`), 열린 지 14일(`INBOX_MS`) 안에 라운드가 끝나지 않아 끝났다(`expired`). 만료되면 끝나지 않은 라운드는 가린 채 둔다. 검증된 근거가 마지막 입장에 한쪽에만 있으면 고르지 않고 그쪽이 결론이 된다.
  */
 export const Debate = z.strictObject({
   id: z.number(),
-  state: z.enum(["open", "choosing", "concluded", "ended"]),
+  state: z.enum(["open", "choosing", "concluded", "ended", "expired"]),
   round: z.number().int().positive(),
   rounds: z.number().int().positive(),
   revealed: z.boolean(),
@@ -896,6 +905,11 @@ export const Decision = z.strictObject({
     }),
   ),
   early: z.boolean(),
+  /**
+   * 대행이 낀 토론(ADR-0040)의 포스트에서 낸 결정이면, 부재자 가운데 아직 확인(동의)하지 않은 사람. 부재자는 결정자에 든다.
+   * 비어 있지 않으면 창이 닫혀도, 다른 결정자가 모두 동의해도 머지하지 않는다. 대행이 끼지 않았으면 없다.
+   */
+  awaiting: z.array(z.strictObject({ login: z.string(), name: z.string() })).optional(),
   at: z.string(),
 });
 export type Decision = z.infer<typeof Decision>;
@@ -1234,6 +1248,16 @@ export const serverToRunner = {
     messages: z.array(ChannelMessage).max(CHANNEL_CONTEXT),
     mine: Stance.optional(),
     theirs: Stance.optional(),
+    /**
+     * 대행이면 부재자(`for`)와 서버에 올라온 그 사람의 작업(공유 수준대로, 없으면 null). `branch`는 부재자의 브랜치다(ADR-0040, 문답 A17).
+     * 러너는 작업 세션을 갈라 띄우지 않고, 자기 레포에서 이 작업을 지시가 아닌 데이터로 감싸 넘기고 결정은 레포에서 읽게 한다.
+     */
+    proxy: z
+      .strictObject({
+        for: z.strictObject({ login: z.string(), name: z.string() }),
+        work: WorkView.nullable(),
+      })
+      .optional(),
     /** 상대 자리의 작업. 실험은 이 작업(러너가 받은 `situation`의 관측)을 내 작업과 합친다. */
     against: z.strictObject({ login: z.string(), branch: z.string() }),
   }),
@@ -1772,6 +1796,18 @@ export const api = {
     method: "POST",
     path: "/api/debates/choose",
     body: z.strictObject({ post: z.string(), option: z.number().int().nonnegative() }),
+    response: z.strictObject({ debate: Debate }),
+  },
+  /**
+   * 포스트의 토론에서 자리 하나(`seat`, `Debate.seats`의 자리)에 대행을 부른다(ADR-0040). 포스트의 멤버 누구나 언제든 부른다.
+   * 부른 멤버의 러너가 그 멤버의 실행기와 사용량으로, 부재자의 초안 PR, 서버에 올라온 관측(공유 수준대로), 결정만 넣어 입장을 낸다.
+   * 이번 라운드에 기다리거나 나오지 않는 자리에만 부른다. 주인에게 이미 보낸 요청의 답은 받지 않는다.
+   * 부른 멤버의 러너가 붙어 있지 않으면 `runner_offline`, 라운드가 도는 토론이 아니거나 이미 낸 자리거나 자기 자리면 `conflict`, 없으면 `not_found`다.
+   */
+  proxyDebate: {
+    method: "POST",
+    path: "/api/debates/proxy",
+    body: z.strictObject({ post: z.string(), seat: z.number().int().min(0).max(1) }),
     response: z.strictObject({ debate: Debate }),
   },
   /**

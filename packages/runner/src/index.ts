@@ -56,6 +56,7 @@ import {
   type CheckRead,
   checkReading,
   checkWork,
+  observedTree,
   osSandbox,
   readCheck,
   type Sandbox,
@@ -69,6 +70,7 @@ import {
   debateInstructions,
   escapeXml,
   markEvidence,
+  proxyContext,
   readStance,
   rebuttalInstructions,
   stanceLine,
@@ -1101,14 +1103,17 @@ export async function startRunner(options: {
     messages,
     mine: own,
     theirs,
+    proxy,
     against,
   }: Parameters<typeof encode<typeof serverToRunner, "debate">>[2]): Promise<
     Stance | ContractError
   > {
-    const tree = folders.get(branch) ?? folder;
+    // 대행은 부재자의 브랜치가 이 기기에 없어 이 러너의 폴더에서 띄우고, 작업 세션을 갈라 띄우지 않는다(ADR-0040, 문답 A17).
+    const tree = proxy ? folder : (folders.get(branch) ?? folder);
     // 반박 라운드에는 지난 라운드의 두 입장을 감싸 넘긴다(ADR-0017).
-    const instructions =
-      own && theirs ? rebuttalInstructions(branch, round, own, theirs) : debateInstructions(branch);
+    const instructions = `${proxy ? `${proxyContext(proxy)}\n\n` : ""}${
+      own && theirs ? rebuttalInstructions(branch, round, own, theirs) : debateInstructions(branch)
+    }`;
     const base = { channel: post, recent: messages, question: instructions };
     const skip = new Set(
       (await readFile(paths.log, "utf8").catch(() => "")).split("\n").flatMap((line) => {
@@ -1120,13 +1125,17 @@ export async function startRunner(options: {
         }
       }),
     );
-    const fork = await executors[executor]?.recent?.(tree, branch, skip).catch(() => undefined);
+    const fork = proxy
+      ? undefined
+      : await executors[executor]?.recent?.(tree, branch, skip).catch(() => undefined);
     const where = { post: post.id, round, folder: tree };
     let replied = fork
       ? await reply(executor, undefined, { ...base, debate: { ...where, fork } })
       : undefined;
     const context = replied?.kind === "answer" ? "session" : "none";
-    if (replied?.kind !== "answer") {
+    if (proxy) {
+      replied = await reply(executor, undefined, { ...base, debate: where });
+    } else if (replied?.kind !== "answer") {
       const work = mine.find((w) => w.branch === branch);
       const plan = situation?.works.find((w) => w.login === login && w.branch === branch)?.line;
       const extra = await contextless(
@@ -1153,7 +1162,9 @@ export async function startRunner(options: {
       evidence: await markEvidence(tree, evidence),
       context,
       ...(round > 1 && changed && { changed }),
-      ...(patch && { experiment: await experiment(tree, branch, against, patch, where) }),
+      ...(patch && {
+        experiment: await experiment(tree, branch, against, patch, where, proxy?.work),
+      }),
       ...(replied.payload.model && { model: replied.payload.model }),
       ...(replied.payload.effort && { effort: replied.payload.effort }),
     };
@@ -1162,6 +1173,7 @@ export async function startRunner(options: {
   /**
    * 토론의 실험(ADR-0040, 문답 A14). 내 작업(`tree`의 `branch`)과 상대 작업(`against`, 서버가 보낸 관측)을 합쳐 돌려 보기와 같은 임시 워크트리에서 합치고
    * 패치를 얹어 샌드박스 안에서 검사 명령을 돌린다. 아무것도 푸시하지 않고, 실험 브랜치도 만들지 않는다. 실행 기록에 남긴다. 던지지 않는다.
+   * 대행이면(`absent`, 서버가 보낸 부재자의 작업) 부재자의 브랜치가 이 기기에 없어, 그 관측을 기준 커밋에 얹은 트리를 내 작업으로 쓴다.
    */
   async function experiment(
     tree: string,
@@ -1169,9 +1181,11 @@ export async function startRunner(options: {
     against: { login: string; branch: string },
     patch: string,
     where: { post: string; round: number },
+    absent?: WorkView | null,
   ): Promise<Experiment> {
     const started = Date.now();
-    const work = mine.find((w) => w.branch === branch);
+    const work = absent !== undefined ? absent : mine.find((w) => w.branch === branch);
+    const own = absent ? await observedTree(tree, absent).catch(() => undefined) : undefined;
     const theirs = situation?.works.find(
       (w) => w.login === against.login && w.branch === against.branch,
     );
@@ -1185,13 +1199,16 @@ export async function startRunner(options: {
             ? "내 작업이 관측되지 않는다"
             : !theirs
               ? `상대 작업(${against.login}의 ${against.branch})이 관측되지 않는다`
-              : undefined;
+              : absent && !own?.tree
+                ? (own?.problem ?? "부재자의 작업을 이 기기에서 꾸리지 못했다")
+                : undefined;
     const result =
       skipped !== undefined || !work || !theirs
         ? { verdict: "not_run" as const, reason: skipped, ms: Date.now() - started }
         : await checkWork({
             folder: tree,
             ...checkWith(),
+            ...(own?.tree && { tree: own.tree }),
             merge: { base: work.base, theirs },
             patch,
           }).catch((error) => ({
