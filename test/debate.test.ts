@@ -466,19 +466,28 @@ const CALLER_PATCH = `--- a/src/checkout.ts
  import { refund } from "./money";
 -export const total = refund(2);
 +export const total = refund(3);`;
-/** 검사 명령: alice의 작업(커밋하지 않은 새 파일)이 합쳐져 있고 refund에 reason이 있어야 통과한다. */
+/** owner의 다른 패치: 새 파일에 reason을 둔다. 작업 폴더에서 money.ts를 바꾼 owner의 사본에도 얹힌다. */
+const NOTE_PATCH = `diff --git a/src/note.ts b/src/note.ts
+new file mode 100644
+--- /dev/null
++++ b/src/note.ts
+@@ -0,0 +1 @@
++export const reason = "partial";
+`;
+/** 검사 명령: alice의 작업(커밋하지 않은 새 파일)이 합쳐져 있고 src 어딘가에 reason이 있어야 통과한다. */
 const CHECK = `test -e src/alice.ts || { echo "alice의 작업이 합쳐지지 않았다"; exit 1; }
-grep -q reason src/money.ts || { echo "reason이 없다"; exit 1; }
+grep -rq reason src/ || { echo "reason이 없다"; exit 1; }
 `;
 
 /**
  * 실험 토론 하나: 기준 커밋에 검사 명령(`check`가 거짓이면 두지 않는다)을 두고, alice가 커밋하지 않은 새 파일을 둔 뒤 owner가 선언한다.
+ * `requested`면 선언하지 않고, owner가 refund의 정의 줄을 바꿔 선 간접 충돌(추정) 포스트에 owner가 토론을 요청한다(증거 라벨이 없어 저절로 열리지 않는다).
  * owner의 러너는 가짜 샌드박스로, alice의 러너는 `aliceSandbox`가 거짓이면 쓸 수 없는 샌드박스로 돈다. 라운드는 하나다.
  */
 async function experimentDebate(
   t: TestContext,
   answers: { owner: object; alice: object },
-  setup: { check?: boolean; aliceSandbox?: boolean } = {},
+  setup: { check?: boolean; aliceSandbox?: boolean; requested?: boolean } = {},
 ) {
   const ownerSandbox = fakeSandbox();
   const aliceSandbox = fakeSandbox();
@@ -515,10 +524,29 @@ async function experimentDebate(
     await git("for-each-ref"),
     await git("status", "--porcelain"),
   ];
+  const kind = setup.requested ? "indirect" : "declared";
+  if (setup.requested) {
+    await writer(world.repo.folder)(
+      "src/money.ts",
+      MONEY.replace("amount: number)", "amount: number, cents = 0)"),
+    );
+    const post = await eventually(async () => {
+      const found = await postOf(world.owner, "indirect");
+      assert.ok(found);
+      return found;
+    }, 30_000);
+    assert.equal(post.debate, null);
+    const opened = await call(world.owner, api.requestDebate, {
+      post: post.channel,
+      agenda: "refund를 바꿀까 부르는 쪽을 고칠까",
+      grounds: "src/checkout.ts:2 가 refund를 부른다",
+    });
+    assert.ok(opened.debate);
+  }
   const before = { owner: await refs(world.repo.git), alice: await refs(desk.git) };
-  await declare(world);
+  if (!setup.requested) await declare(world);
   const debate = await eventually(async () => {
-    const found = (await postOf(world.owner, "declared"))?.debate;
+    const found = (await postOf(world.owner, kind))?.debate;
     assert.ok(found && found.state !== "open", JSON.stringify(found));
     return found;
     // 실험은 샌드박스에서 검사 명령을 돌려 합쳐 돌려 보기처럼 오래 기다린다.
@@ -605,4 +633,20 @@ test("검사 명령이 없거나 샌드박스가 없으면 돌리지 못함과 �
   assert.equal(debate.state, "choosing");
   assert.equal(ownerSandbox.calls.length, 0);
   assert.equal(aliceSandbox.calls.length, 0);
+});
+
+test("멤버가 요청해 연 토론에서도 입장의 패치가 실험으로 돌고, 한 안만 통과하면 그 안이 결론이 된다", async (t) => {
+  const { debate, stanceOf, ownerSandbox } = await experimentDebate(
+    t,
+    {
+      owner: { claim: "note에 reason을 둔다", evidence: [], patch: NOTE_PATCH },
+      alice: { claim: "부르는 쪽을 고친다", evidence: [], patch: CALLER_PATCH },
+    },
+    { requested: true },
+  );
+  assert.equal(stanceOf("note에 reason을 둔다").stances[0]?.experiment?.verdict, "pass");
+  assert.equal(stanceOf("부르는 쪽을 고친다").stances[0]?.experiment?.verdict, "broken");
+  assert.equal(debate.conclusion?.by, "experiment");
+  assert.equal(debate.options[debate.conclusion?.option ?? -1]?.owner?.login, "owner");
+  assert.ok(ownerSandbox.calls.some((call) => call.command.endsWith("sh check.sh")));
 });
