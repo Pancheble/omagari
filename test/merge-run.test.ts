@@ -483,6 +483,12 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
   assert.equal(theirs.confirmed, false);
   assert.equal(fake.calls.length, 6);
   assert.equal(await brokenMark(world, "owner", "payment"), false);
+  // 추정인 동안 포스트는 종류 라벨만 붙은 참고라 이슈가 없다.
+  const guessed = (await call(world.owner, api.posts)).posts[0];
+  assert.deepEqual(guessed?.labels, ["간접 충돌"]);
+  assert.equal(guessed?.importance, "reference");
+  assert.equal(guessed?.issue, null);
+  assert.equal(world.github.issues.length, 0);
 
   // bob이 고치면 둘 다 혼자서는 통과해 깨짐이고 확인됨이다. 두 작업 모두 앞에서 혼자 돌린 내용과 같아(owner는 바로 앞, bob은 처음) 따로 돌리지 않는다.
   await rm(join(bob.desk.folder, "src/bob-oops"));
@@ -490,12 +496,13 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
   assert.equal(broken.confirmed, true);
   assert.equal(broken.run?.alone, undefined);
   assert.equal(fake.calls.length, 7);
-  // 포스트의 이슈에 확인됨 라벨과 판정 댓글 하나가 달린다. 같은 판정이 거듭 와도 늘지 않고, 댓글은 포스트의 글로 들어오지 않는다.
-  const [issue] = world.github.issues;
-  assert.ok(issue);
-  await eventually(() => {
-    assert.ok(issue.labels.includes("확인됨"), JSON.stringify(issue.labels));
-    assert.equal(issue.comments.length, 1);
+  // 확인됨이 붙어 논의가 되면 포스트의 라벨을 단 이슈가 열리고 판정 댓글 하나가 달린다. 같은 판정이 거듭 와도 늘지 않고, 댓글은 포스트의 글로 들어오지 않는다.
+  const issue = await eventually(() => {
+    const [opened] = world.github.issues;
+    assert.ok(opened);
+    assert.deepEqual(opened.labels, ["간접 충돌", "확인됨"]);
+    assert.equal(opened.comments.length, 1);
+    return opened;
   });
   assert.match(issue.comments[0]?.body ?? "", /깨졌어요/);
   assert.match(issue.comments[0]?.body ?? "", /`sh check\.sh`/);
@@ -504,6 +511,8 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
   assert.equal(issue.comments.length, 1);
   const [post] = (await call(world.owner, api.posts)).posts;
   assert.ok(post?.issue?.labels.includes("확인됨"));
+  assert.deepEqual(post?.labels, ["간접 충돌", "확인됨"]);
+  assert.equal(post?.importance, "discuss");
   const thread = await call(world.owner, api.history, { channel: post?.message.channel ?? "" });
   assert.ok(!thread.messages.some((m) => "github" in m && m.github));
   // 깨짐인 두 작업에 멤버 목록의 표시가 붙는다.
@@ -550,6 +559,23 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
   assert.equal(again.confirmed, true);
   // owner만 한 번 더 돌렸다. bob만 돌린 것은 앞에서 같은 내용으로 돌렸다.
   assert.equal(fake.calls.length, 10);
+  const reopened = await eventually(() => {
+    const opened = world.github.issues[1];
+    assert.ok(opened?.labels.includes("확인됨"));
+    return opened;
+  });
+
+  // 확인이 풀려(가릴 수 없음) 참고로 내려가도 알림이 남아 있으면 이슈는 닫지 않는다. 확인됨은 포스트와 이슈에서 뗀다.
+  await write("src/owner-oops", "");
+  await alertWith(world.owner, "bob", (a) => assert.equal(a.run?.verdict, "unclear"));
+  await eventually(async () => {
+    const now = (await call(world.owner, api.posts)).posts.at(-1);
+    assert.deepEqual(now?.labels, ["간접 충돌"]);
+    assert.equal(now?.importance, "reference");
+    assert.ok(!reopened.labels.includes("확인됨"));
+  });
+  assert.equal(reopened.open, true);
+  await rm(join(folder, "src/owner-oops"));
 
   // 다시 통과해 닫힌 뒤 가릴 수 없음이 나면 추정인 새 알림이 선다. 둘 다 앞에서 돌린 내용이라 지난 판정을 다시 쓴다.
   await write("src/draft.ts", DRAFT.replace("pay(1);", 'pay(1, "krw");'));
@@ -562,13 +588,13 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
   assert.equal(await withBob(), 3);
   assert.equal(unclear.confirmed, false);
 
-  // 지표: 지문이 다른 판정만 센다. 통과 하나, 깨짐 둘, 가릴 수 없음 둘. 앞에서 돌린 내용의 판정을 다시 쓴 것은 세지 않는다.
+  // 지표: 지문이 다른 판정만 센다. 통과 하나, 깨짐 둘, 가릴 수 없음 셋. 앞에서 돌린 내용의 판정을 다시 쓴 것은 세지 않는다.
   await world.signInCli(world.owner);
   const shown = await world.cli("metrics", "--days", "1");
   assert.equal(shown.code, 0, shown.stderr);
   assert.match(
     shown.stdout.trimEnd().split("\n")[1] ?? "",
-    /^\d{4}-\d{2}-\d{2} {2}\d+ {2}\d+ {2}5 {2}1 {2}2 {2}2 {2}0$/,
+    /^\d{4}-\d{2}-\d{2} {2}\d+ {2}\d+ {2}6 {2}1 {2}2 {2}3 {2}0$/,
   );
 });
 

@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 32;
+export const CONTRACT_VERSION = 33;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -443,6 +443,22 @@ export const ALERT_LABELS = {
   declared: "계약 변경",
 } as const satisfies Record<Alert["kind"], string>;
 
+/** 합쳐 돌려 보기가 깨져 확인된 포스트에 붙는 라벨(ADR-0035, ADR-0039). 확인이 풀리면 뗀다. */
+export const CONFIRMED_LABEL = "확인됨";
+
+/**
+ * 포스트의 중요도(ADR-0039). 라벨마다 하나이고, 포스트는 그 라벨 중 가장 높은 것을 따른다. 논의인 포스트만 GitHub 이슈를 연다.
+ * 참고는 보기만 하고 에이전트가 편지함으로 받는다. 편지함은 중요도와 상관없다.
+ */
+export const Importance = z.enum(["reference", "discuss"]);
+export type Importance = z.infer<typeof Importance>;
+export const IMPORTANCE_LABELS = {
+  reference: "참고",
+  discuss: "논의",
+} as const satisfies Record<Importance, string>;
+/** 처음부터 논의인 라벨. 나머지 라벨은 참고다. */
+export const DISCUSS_LABELS: readonly string[] = [CONFIRMED_LABEL, ALERT_LABELS.declared];
+
 /** 검사 명령을 돌린 판정. 통과(0으로 끝남), 깨짐(0이 아닌 코드), 돌리지 못함(설정 없음, 샌드박스 없음, 준비 명령 실패, 상한에서 끊김). */
 export const Verdict = z.enum(["pass", "broken", "not_run"]);
 export type Verdict = z.infer<typeof Verdict>;
@@ -614,9 +630,10 @@ export const InboxItem = z.discriminatedUnion("kind", [
 export type InboxItem = z.infer<typeof InboxItem>;
 
 /**
- * 포스트와 맞춘 GitHub 이슈(ADR-0032). 포스트 하나가 이슈 하나다. 제목, 라벨, 열림·닫힘은 GitHub에서 읽은 것이고
+ * 포스트와 맞춘 GitHub 이슈(ADR-0032). 논의 포스트 하나가 이슈 하나다(ADR-0039). 제목, 라벨, 열림·닫힘은 GitHub에서 읽은 것이고
  * 사람이 GitHub에서 바꾸면 다음 주기에 따라온다. 포스트의 글은 이슈 댓글로 가고, 이슈 댓글은 포스트의 글로 들어온다.
- * 이슈를 아직 열지 못했으면(GitHub이 받지 않음, 토큰 있는 멤버가 없음) 포스트의 `issue`가 null이다.
+ * 참고 포스트이거나 이슈를 아직 열지 못했으면(GitHub이 받지 않음, 토큰 있는 멤버가 없음) 포스트의 `issue`가 null이다.
+ * 이슈를 연 뒤 중요도가 내려가도 이슈는 닫지 않는다. 닫는 것은 알림이 풀릴 때뿐이다.
  */
 export const PostIssue = z.strictObject({
   number: z.number(),
@@ -641,6 +658,10 @@ export const Post = z.strictObject({
   last: z.strictObject({ login: z.string(), name: z.string(), line: z.string() }).nullable(),
   activity: z.string(),
   issue: PostIssue.nullable(),
+  /** 포스트의 라벨(ADR-0039). 알림이 설 때 종류 라벨이 붙고, 확인되면 확인됨이 붙는다. 이슈가 없으면 Omagari에만 있다. */
+  labels: z.array(z.string()),
+  /** 라벨 중 가장 높은 중요도. */
+  importance: Importance,
 });
 export type Post = z.infer<typeof Post>;
 

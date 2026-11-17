@@ -37,3 +37,46 @@ test("v0.1.0이 만든 DB로도 뜨고, 예전 메시지는 그대로 읽히며,
     assert.deepEqual((await call(alice, api.history, { channel: "c0" })).messages.at(-1), message),
   );
 });
+
+test("라벨이 없던 판의 포스트에 종류 라벨과 확인됨이 붙고, 이미 열린 이슈는 참고가 되어도 닫히지 않는다", async (t) => {
+  const world = await startWorld({
+    followMs: 50,
+    seed: await readFile(new URL("./contract32.sql", import.meta.url), "utf8"),
+  });
+  t.after(world.stop);
+  for (const [number, title, labels] of [
+    [101, "pay.ts 직접 충돌", ["직접 충돌"]],
+    [102, "pay 간접 충돌", ["간접 충돌", "확인됨"]],
+  ] as const)
+    world.github.issues.push({
+      number,
+      title,
+      body: "",
+      labels: [...labels],
+      open: true,
+      author: "alice",
+      comments: [],
+    });
+
+  const { posts } = await call(world.owner, api.posts);
+  assert.deepEqual(
+    posts.map((post) => [post.labels, post.importance]),
+    [
+      [["직접 충돌"], "reference"],
+      [["간접 충돌", "확인됨"], "discuss"],
+    ],
+  );
+  // 이슈 맞추기가 여러 번 돌아도 참고 포스트의 이슈는 열린 채다.
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.deepEqual(
+    world.github.issues.map((issue) => [issue.number, issue.open, issue.labels]),
+    [
+      [101, true, ["직접 충돌"]],
+      [102, true, ["간접 충돌", "확인됨"]],
+    ],
+  );
+  assert.deepEqual(
+    (await call(world.owner, api.posts)).posts.map((post) => post.issue?.open),
+    [true, true],
+  );
+});
