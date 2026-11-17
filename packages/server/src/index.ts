@@ -28,6 +28,7 @@ import {
   DEBATE_ROUNDS,
   DEFAULT_LABEL_COLORS,
   type Debate,
+  type DebateConclusion,
   type DebateRequest,
   type DebateSeat,
   type Decision,
@@ -1686,7 +1687,7 @@ export async function startServer(options: {
     state: Debate["state"];
     flip: number;
     winner: number | null;
-    by: "evidence" | "choice" | null;
+    by: DebateConclusion["by"] | null;
     chooser: string | null;
     decided: number | null;
   };
@@ -1823,7 +1824,8 @@ export async function startServer(options: {
   };
   /**
    * 라운드에 기다리는 자리가 없으면 다음으로 간다(ADR-0040, 구현 7장). 두 자리가 다 냈고 라운드가 남았으면 반박 라운드를 연다.
-   * 아니면 끝낸다: 마지막 입장에 검증된 근거가 있는 안이 하나뿐이면 그 안이 결론이고, 아니면 사람이 고를 차례다. 낸 입장이 없으면 끝난다.
+   * 아니면 끝낸다: 마지막 입장의 실험이 한 안만 통과했으면 그 안이, 아니면 마지막 입장에 검증된 근거가 있는 안이 하나뿐이면 그 안이 결론이고,
+   * 아니면 사람이 고를 차례다. 낸 입장이 없으면 끝난다.
    */
   const advance = (debate: number) => {
     const row = db.prepare("SELECT * FROM debates WHERE id = ?").get(debate) as DebateRow;
@@ -1840,15 +1842,22 @@ export async function startServer(options: {
       return;
     }
     const options = optionSeats(row, seats);
+    const lastOf = (seat: SeatRow) => stancesOf(seat).at(-1);
+    // 실험이 한 안만 통과했으면 그 안, 아니면 검증된 근거가 한 안에만 있으면 그 안이다(ADR-0040의 순서).
+    const passed = options.filter((seat) => lastOf(seat)?.experiment?.verdict === "pass");
     const backed = options.filter((seat) =>
-      stancesOf(seat)
-        .at(-1)
-        ?.evidence.some((e) => e.mark === "verified"),
+      lastOf(seat)?.evidence.some((e) => e.mark === "verified"),
     );
-    if (backed.length === 1) {
+    const [winner, by] =
+      passed.length === 1
+        ? [passed[0], "experiment" as const]
+        : backed.length === 1
+          ? [backed[0], "evidence" as const]
+          : [];
+    if (winner && by) {
       db.prepare(
-        "UPDATE debates SET state = 'concluded', winner = ?, by = 'evidence', decided = ? WHERE id = ?",
-      ).run(backed[0].seat, Date.now(), debate);
+        "UPDATE debates SET state = 'concluded', winner = ?, by = ?, decided = ? WHERE id = ?",
+      ).run(winner.seat, by, Date.now(), debate);
     } else {
       db.prepare("UPDATE debates SET state = ? WHERE id = ?").run(
         options.length > 0 ? "choosing" : "ended",
@@ -1893,6 +1902,7 @@ export async function startServer(options: {
         messages: recentOf(row.post),
         ...(mine && { mine }),
         ...(theirs && { theirs }),
+        against: { login: other?.login ?? "", branch: other?.branch ?? "" },
       });
       debatesSent.set((JSON.parse(frame) as { id: string }).id, {
         ...answerer,

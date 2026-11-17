@@ -299,7 +299,7 @@ async function log() {
       const why = run.reason ? `: ${run.reason}` : "";
       const setup = run.setup ? `  준비 명령 ${JSON.stringify(run.setup)}` : "";
       const pair = run.theirs
-        ? `  합쳐 돌려 보기 ${run.branch} + ${run.theirs.login}의 ${run.theirs.branch}`
+        ? `  ${run.experiment ? `토론 ${run.experiment.post} 라운드 ${run.experiment.round} 실험` : "합쳐 돌려 보기"} ${run.branch} + ${run.theirs.login}의 ${run.theirs.branch}`
         : "";
       console.log(
         `${run.at}  검사 명령 ${JSON.stringify(run.check ?? "")}${setup}${pair}  폴더 ${run.folder}  판정 ${MERGE_RUN_LABELS[run.verdict]}${why}  ${seconds(run.ms)}`,

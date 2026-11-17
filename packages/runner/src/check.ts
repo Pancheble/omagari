@@ -532,6 +532,25 @@ async function mergeTree(
 }
 
 /**
+ * 트리(`tree`)에 패치를 얹은 트리(ADR-0040의 실험). 러너의 레포에서 임시 인덱스로만 한다(`git apply --cached`). 내 폴더의 파일과 인덱스, 브랜치는 건드리지 않는다.
+ * 얹어지지 않으면 까닭이다. 레포 밖을 가리키는 경로는 `git apply`가 거절한다.
+ */
+async function patchTree(folder: string, run: string, tree: string, patch: string) {
+  const withIndex = { ...NO_USER_CONFIG, GIT_INDEX_FILE: join(run, "patch-index") };
+  await gitOut(folder, ["read-tree", tree], withIndex);
+  const apply = execFileAsync("git", ["-C", folder, "apply", "--cached", "--whitespace=nowarn"], {
+    env: { ...process.env, ...withIndex },
+  });
+  apply.child.stdin?.end(patch);
+  const failed = await apply.then(
+    () => undefined,
+    (error) => String(error.stderr ?? error.message).trim(),
+  );
+  if (failed !== undefined) return { problem: `패치가 얹어지지 않는다: ${failed}` };
+  return { tree: await gitOut(folder, ["write-tree"], withIndex) };
+}
+
+/**
  * 임시 워크트리를 마련한다: 레포의 Git 폴더 아래(`<Git 폴더>/omagari/check-worktree`)에 두고 다시 쓴다. 내 폴더의 `git status`와 관측에 잡히지 않는다.
  * 돌리는 동안에는 돌림마다 새 자리(`<Git 폴더>/omagari/check-run-*`)로 옮겨 두고, 끝나면 쉬는 자리로 되돌린다. 샌드박스는 경로로 쓰기를 열므로,
  * 검사 명령이 프로세스 그룹을 벗어나 남긴 프로세스는 지난 돌림의 자리에만 쓸 수 있고 쉬는 자리나 다음 돌림의 자리에는 쓰지 못한다(#150).
@@ -595,6 +614,7 @@ export type CheckResult = {
 /**
  * `folder`의 내 작업에 기본 브랜치의 검사 명령을 샌드박스 안에서 한 번 돌린다(`omagari runner check`).
  * `merge`를 주면 상대 작업을 합친 것에 돌린다(합쳐 돌려 보기). 줄이 부딪혀 합쳐지지 않으면 돌리지 못함이다.
+ * `patch`를 주면 그 위에 패치를 얹어 돌린다(토론의 실험). 얹어지지 않으면 돌리지 못함이다.
  * 준비 명령이 있으면 먼저 돌리고, 실패하면 돌리지 못함이다. 설정을 읽지 못했거나 샌드박스를 쓸 수 없으면 아무것도 돌리지 않는다.
  * 가두지 않고 돌리는 길은 없다. 임시 워크트리는 레포의 Git 폴더 아래에 두고 다시 쓴다.
  */
@@ -607,6 +627,8 @@ export function checkWork(options: {
   tree?: string;
   /** 합쳐 돌려 보기면 상대 작업. 없으면 내 작업만 돌린다. */
   merge?: MergeWith;
+  /** 토론의 실험이면 합친 것 위에 얹을 패치. */
+  patch?: string;
   /** WSL2의 `/proc/mounts` 본문을 돌려주는 곳. 테스트가 WSL2인 척하려고 꽂는다. 기본은 이 기기를 본다(`osMounts`). */
   mounts?: () => Promise<string | undefined>;
 }): Promise<CheckResult> {
@@ -624,6 +646,7 @@ async function checkOne(options: {
   tree?: string;
   /** 합쳐 돌려 보기면 상대 작업. 없으면 내 작업만 돌린다. */
   merge?: MergeWith;
+  patch?: string;
   mounts?: () => Promise<string | undefined>;
 }): Promise<CheckResult> {
   const { folder, sandbox, limits } = options;
@@ -657,6 +680,11 @@ async function checkOne(options: {
       const merged = await mergeTree(folder, run, tree, options.merge);
       if (merged.problem !== undefined) return done("not_run", { reason: merged.problem });
       tree = merged.tree;
+    }
+    if (options.patch !== undefined) {
+      const patched = await patchTree(folder, run, tree, options.patch);
+      if (patched.problem !== undefined) return done("not_run", { reason: patched.problem });
+      tree = patched.tree;
     }
     work = await prepareWork(folder, run, tree);
     const { worktree, common, sandboxGit } = work;
