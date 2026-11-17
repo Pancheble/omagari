@@ -332,6 +332,7 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
         importance: "reference",
         forums: [reference],
         debate: null,
+        request: null,
       },
     ],
   );

@@ -28,6 +28,7 @@ import {
   DEBATE_ROUNDS,
   DEFAULT_LABEL_COLORS,
   type Debate,
+  type DebateRequest,
   type DebateSeat,
   type Decision,
   type DecisionWindow,
@@ -81,6 +82,7 @@ import type { WSContext } from "hono/ws";
 import { type WebSocket, WebSocketServer } from "ws";
 import type { GitHub, RepoLabel } from "./github.ts";
 import { createApp, mount } from "./http.ts";
+import { labelsFor } from "./labeler.ts";
 
 export { type GitHub, type Pull, type RepoLabel, realGitHub } from "./github.ts";
 
@@ -737,6 +739,15 @@ export async function startServer(options: {
     by TEXT,
     chooser TEXT,
     decided INTEGER
+  ) STRICT`);
+  // 증거 라벨 없이 멤버나 에이전트가 낸 토론 요청(ADR-0040). 포스트마다 가장 나중 것 하나다. 안건이나 근거가 비면 열리지 않고 이것만 남는다.
+  db.exec(`CREATE TABLE IF NOT EXISTS debate_requests (
+    post TEXT PRIMARY KEY,
+    login TEXT NOT NULL,
+    agenda TEXT NOT NULL,
+    grounds TEXT NOT NULL,
+    opened INTEGER NOT NULL,
+    at INTEGER NOT NULL
   ) STRICT`);
   // #195의 표에는 끝내기가 없다.
   if (!db.prepare("SELECT 1 FROM pragma_table_info('debates') WHERE name = 'state'").get()) {
@@ -1400,7 +1411,7 @@ export async function startServer(options: {
       db.exec("COMMIT");
       shareAlert(Number(lastInsertRowid));
       deliver(Number(lastInsertRowid), works, now);
-      syncSoon(post); // 포스트의 이슈를 연다(ADR-0032)
+      void attachTeamLabels(post).finally(() => syncSoon(post)); // 팀 라벨을 단 뒤 포스트의 이슈를 연다(ADR-0032)
       openDebate(post); // 계약 변경이면 토론이 열린다(ADR-0040)
     }
     if (changed) {
@@ -1743,11 +1754,26 @@ export async function startServer(options: {
       at: new Date(row.at).toISOString(),
     };
   };
+  const requestOf = (post: string): DebateRequest | null => {
+    const row = db.prepare("SELECT * FROM debate_requests WHERE post = ?").get(post) as
+      | { login: string; agenda: string; grounds: string; opened: number; at: number }
+      | undefined;
+    return row
+      ? {
+          login: row.login,
+          name: nameOf(row.login),
+          agenda: row.agenda,
+          grounds: row.grounds,
+          opened: row.opened === 1,
+          at: new Date(row.at).toISOString(),
+        }
+      : null;
+  };
   /**
    * 포스트에 증거 라벨이 붙었으면 토론을 연다(ADR-0040). 중요도와 상관없다. 이미 열린 토론이 있으면 그대로 둔다.
    * 자리는 알림의 두 작업이다. 자동 참여 스위치(묻기 스위치)를 끈 주인의 자리는 나오지 않는다. 안의 순서는 무작위로 섞는다.
    */
-  const openDebate = (post: string) => {
+  const openDebate = (post: string, requested = false) => {
     const row = db
       .prepare(
         "SELECT c.labels, a.works FROM channels c JOIN messages m ON m.id = c.alert JOIN alerts a ON a.id = m.alert WHERE c.id = ?",
@@ -1755,7 +1781,7 @@ export async function startServer(options: {
       .get(post) as { labels: string | null; works: string } | undefined;
     if (!row) return;
     const labels: string[] = JSON.parse(row.labels ?? "[]");
-    if (!labels.some((label) => EVIDENCE_LABELS.includes(label))) return;
+    if (!requested && !labels.some((label) => EVIDENCE_LABELS.includes(label))) return;
     if (db.prepare("SELECT 1 FROM debates WHERE post = ?").get(post)) return;
     const works: WorkRef[] = JSON.parse(row.works);
     const debate = Number(
@@ -2849,8 +2875,29 @@ export async function startServer(options: {
       ...post,
       message,
       debate: debateOf(post.channel),
+      request: requestOf(post.channel),
     })),
   }));
+
+  mount(app, api.requestDebate, ({ post, agenda, grounds }, c) => {
+    const login = c.get("login") as string;
+    visit(login);
+    const found = db
+      .prepare(
+        "SELECT id FROM channels WHERE alert IS NOT NULL AND (id = ?1 OR alert = CAST(?1 AS INTEGER))",
+      )
+      .get(post) as { id: string } | undefined;
+    if (!found) throw new ContractFailure({ code: "not_found", message: `없는 포스트다: ${post}` });
+    if (db.prepare("SELECT 1 FROM debates WHERE post = ?").get(found.id))
+      throw new ContractFailure({ code: "conflict", message: "이미 열린 토론이 있다" });
+    const opened = agenda.trim() !== "" && grounds.trim() !== "";
+    db.prepare(
+      "INSERT OR REPLACE INTO debate_requests (post, login, agenda, grounds, opened, at) VALUES (?, ?, ?, ?, ?, ?)",
+    ).run(found.id, login, agenda.trim(), grounds.trim(), opened ? 1 : 0, Date.now());
+    if (opened) openDebate(found.id, true);
+    sharePost(found.id);
+    return { debate: debateOf(found.id), request: requestOf(found.id) as DebateRequest };
+  });
 
   mount(app, api.chooseDebate, ({ post, option }, c) => {
     const login = c.get("login") as string;
@@ -3841,6 +3888,58 @@ export async function startServer(options: {
       }
       syncing = false;
     })();
+  };
+
+  /**
+   * 알림이 포스트로 설 때 기본 브랜치의 `.github/labeler.yml` 경로 규칙에 맞는 팀 라벨을 단다(ADR-0039). 이미 선 포스트에는 다시 달지 않는다.
+   * 레포에 있는 라벨(목록에 있는 것)만 단다. 파일이 없거나 읽지 못하면 종류 라벨만 남는다.
+   * ponytail: 기본 브랜치의 커밋이 바뀔 때만 파일을 다시 읽는다(알림이 설 때마다 GitHub 요청 하나). 지금은 한 판만 기억한다.
+   */
+  let labeler: { sha: string; source: string | null } | undefined;
+  const attachTeamLabels = async (post: string) => {
+    try {
+      const row = db
+        .prepare(
+          "SELECT a.files FROM channels c JOIN messages m ON m.id = c.alert JOIN alerts a ON a.id = m.alert WHERE c.id = ?",
+        )
+        .get(post) as { files: string } | undefined;
+      if (!row) return;
+      const files = [
+        ...new Set(
+          (JSON.parse(row.files) as (AlertFile | AlertSymbol)[]).flatMap((item) =>
+            "path" in item ? [item.path] : item.places.flat().map((place) => place.path),
+          ),
+        ),
+      ];
+      for (const { github_token: token } of db
+        .prepare("SELECT github_token FROM sessions ORDER BY rowid DESC")
+        .all() as { github_token: string }[]) {
+        const base = await github.defaultBranch(token, repo).catch(() => undefined);
+        if (!base) continue;
+        if (labeler?.sha !== base.sha)
+          labeler = {
+            sha: base.sha,
+            source: await github.read(token, repo, base.sha, ".github/labeler.yml"),
+          };
+        break;
+      }
+      if (stopped || !labeler?.source) return;
+      const wanted = labelsFor(labeler.source, files).flatMap((name) => labelRow(name)?.name ?? []);
+      const current = db.prepare("SELECT labels FROM channels WHERE id = ?").get(post) as
+        | { labels: string | null }
+        | undefined;
+      if (!current) return;
+      const labels: string[] = JSON.parse(current.labels ?? "[]");
+      const added = wanted.filter((name) => !labels.includes(name));
+      if (added.length === 0) return;
+      db.prepare("UPDATE channels SET labels = ? WHERE id = ?").run(
+        JSON.stringify([...labels, ...added]),
+        post,
+      );
+      sharePost(post);
+    } catch (error) {
+      console.error("팀 라벨을 달지 못했다:", error);
+    }
   };
 
   // 오프라인 7일이 지난 멤버의 관측과 상태 한 줄을 지우고, 작업마다의 초안 PR 제목과 머지 여부를 GitHub에서 읽는다.

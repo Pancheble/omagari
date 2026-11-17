@@ -815,6 +815,20 @@ export const Debate = z.strictObject({
 export type Debate = z.infer<typeof Debate>;
 
 /**
+ * 토론 요청(ADR-0040, 구현 7장, 문답 A16): 증거 라벨이 없는 포스트에서 멤버(웹)나 에이전트(CLI)가 안건과 근거를 붙여 토론을 열어 달라고 한 것.
+ * 안건이나 근거가 비면(`opened`가 false) 토론은 열리지 않고 요청만 포스트에 표시로 남는다. 가장 나중의 요청 하나만 남는다.
+ */
+export const DebateRequest = z.strictObject({
+  login: z.string(),
+  name: z.string(),
+  agenda: z.string(),
+  grounds: z.string(),
+  opened: z.boolean(),
+  at: z.string(),
+});
+export type DebateRequest = z.infer<typeof DebateRequest>;
+
+/**
  * 결정 PR의 이의 창 길이(ADR-0025, ADR-0030). "바로"면 PR을 열자마자 Omagari가 머지한다. "하루"가 기본이다.
  * "직접"은 숫자와 단위(시간, 일)다. 가장 긴 값은 정하지 않았고, `amount`의 상한은 시각이 넘치지 않게 둔 것이다.
  */
@@ -1715,7 +1729,13 @@ export const api = {
     method: "GET",
     path: "/api/posts",
     response: z.strictObject({
-      posts: z.array(Post.extend({ message: ChannelMessage, debate: Debate.nullable() })),
+      posts: z.array(
+        Post.extend({
+          message: ChannelMessage,
+          debate: Debate.nullable(),
+          request: DebateRequest.nullable(),
+        }),
+      ),
     }),
   },
   /**
@@ -1892,6 +1912,17 @@ export const api = {
     path: "/api/posts/labels",
     body: z.strictObject({ post: z.string(), labels: z.array(z.string()) }),
     response: z.strictObject({ post: Post }),
+  },
+  /**
+   * 포스트에 안건(`agenda`)과 근거(`grounds`)를 붙여 토론을 요청한다(`omagari debate`, 웹의 "토론 열기"). `post`는 포스트의 채널 id이거나 알림의 번호다.
+   * 둘 다 비어 있지 않으면 토론이 열려 `debate`로 온다. 하나라도 비면 열지 않고 요청만 포스트에 표시로 남기고 `debate`는 null이다.
+   * 이미 열린 토론이 있으면 `conflict`, 없는 포스트면 `not_found`다. 열린 토론은 증거 라벨로 열린 것과 같은 길을 탄다.
+   */
+  requestDebate: {
+    method: "POST",
+    path: "/api/posts/debate",
+    body: z.strictObject({ post: z.string().min(1), agenda: z.string(), grounds: z.string() }),
+    response: z.strictObject({ debate: Debate.nullable(), request: DebateRequest }),
   },
   /** 채널 전부(채팅과 포럼), 이름 순서. 포스트는 오지 않는다(`api.posts`). 멤버만 본다. */
   channels: {
