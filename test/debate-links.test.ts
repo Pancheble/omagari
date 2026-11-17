@@ -138,3 +138,96 @@ test("토론의 공개된 입장과 결론이 이슈 댓글로 가고(가린 라
   );
   assert.match(shown.stdout, / {2}1 {2}0 {2}0 {2}1 {2}0 {2}0\n$/);
 });
+
+test("대행이 낸 입장은 부재자가 아니라 부른 사람의 계정으로, 대행 표시를 달고 이슈 댓글이 된다", async (t) => {
+  const owner = fakeExecutor(() => JSON.stringify({ claim: "owner의 주장", evidence: [] }));
+  const world = await startWorld({
+    observeMs: 50,
+    followMs: 50,
+    executor: owner.executor,
+    debateRounds: 1,
+  });
+  t.after(world.stop);
+  const write = writer(world.repo.folder);
+  await write("src/pay.ts", `${BASE}\n`);
+  await write("src/money.ts", MONEY);
+  await write("src/checkout.ts", CHECKOUT);
+  await world.repo.git("add", ".");
+  await world.repo.git("commit", "--message=base");
+  await world.repo.git("update-ref", "refs/remotes/origin/main", "HEAD");
+  await world.repo.git("switch", "--create", "payment");
+
+  const member = async (login: string, branch: string, answer: ReturnType<typeof fakeExecutor>) => {
+    world.github.grant(login);
+    const as = await world.login(login);
+    const desk = await world.desk(as, undefined, { "claude-code": answer.executor });
+    t.after(desk.remove);
+    await desk.stop();
+    await desk.git("fetch", "--quiet", world.repo.folder, "main");
+    await desk.git("reset", "--hard", "FETCH_HEAD");
+    await desk.git("update-ref", "refs/remotes/origin/main", "HEAD");
+    await desk.git("switch", "--create", branch);
+    await desk.start();
+    return { as, desk };
+  };
+  // alice의 첫 턴은 러너가 꺼지며 실패한다. 그 자리는 부재자가 된다.
+  const gone = Promise.withResolvers<void>();
+  const alice = fakeExecutor(async () => {
+    await gone.promise;
+    throw new Error("러너가 꺼졌다");
+  });
+  const aliceDesk = await member("alice", "refund", alice);
+  // alice는 refund를 쓰는 파일을 고쳐 두어 토론의 자리가 된다.
+  await writer(aliceDesk.desk.folder)("src/checkout.ts", `${CHECKOUT}export const more = 1;\n`);
+  await eventually(async () => {
+    const works = (await call(world.owner, api.works)).works;
+    assert.ok(works.some((w) => w.login === "alice" && w.files.length > 0));
+  });
+
+  const claimed = await world.cli(
+    "claim",
+    "src/money.ts",
+    "--symbol",
+    "refund",
+    "--plan",
+    "signature",
+    "--detail",
+    "refund(amount, reason)",
+  );
+  assert.equal(claimed.code, 0, claimed.stderr);
+  const [issue] = await eventually(async () => {
+    assert.equal(world.github.issues.length, 1);
+    return world.github.issues;
+  });
+  assert.ok(issue);
+  await eventually(() => assert.equal(alice.calls.length, 1));
+  const stopping = aliceDesk.desk.stop();
+  const found = await eventually(async () => {
+    const post = (await call(world.owner, api.posts)).posts.find(
+      (p) => p.message.kind === "alert" && p.message.alert.kind === "declared",
+    );
+    const seat = post?.debate?.seats.findIndex((s) => s.login === "alice") ?? -1;
+    assert.equal(post?.debate?.seats[seat]?.away, true, JSON.stringify(post?.debate));
+    return { post: post?.channel ?? "", seat };
+  });
+  gone.resolve();
+  await stopping;
+
+  // bob은 토론이 열린 뒤에 들어온다.
+  const bob = fakeExecutor(() => JSON.stringify({ claim: "대행의 주장", evidence: [] }));
+  const bobDesk = await member("bob", "elsewhere", bob);
+  await eventually(() => call(bobDesk.as, api.proxyDebate, found));
+  await eventually(() => {
+    const stances = issue.comments.filter((c) => c.body.includes("AI가 쓴 답"));
+    assert.equal(stances.length, 2);
+    const mine = stances.find((c) => c.body.includes("owner의 주장"));
+    assert.equal(mine?.login, "owner");
+    assert.ok(!mine?.body.includes("대행"));
+    const proxied = stances.find((c) => c.body.includes("대행의 주장"));
+    assert.equal(proxied?.login, "bob");
+    assert.match(
+      proxied?.body ?? "",
+      /> 🤖 \*\*AI가 쓴 답\*\* · alice의 에이전트 · 대행: bob이\(가\) 불렀어요/,
+    );
+  });
+});

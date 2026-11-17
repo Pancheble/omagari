@@ -106,7 +106,7 @@ export function ChannelList({
                 {!forumCollapsed && (
                   <ul className="branches" aria-label={`${channel.name}의 열린 포스트`}>
                     {posts
-                      ?.filter((item) => item.message.channel === channel.id && !settled(item))
+                      ?.filter((item) => item.forums.includes(channel.id) && !settled(item))
                       .sort((a, b) => Date.parse(b.activity) - Date.parse(a.activity))
                       .map((item) => (
                         <li key={item.alert}>

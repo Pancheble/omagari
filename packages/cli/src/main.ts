@@ -75,6 +75,9 @@ const USAGE = `사용법:
                                 지금 브랜치의 작업에서 다른 멤버의 에이전트에게 묻고 바로 돌아온다. 답은 이 작업의 편지함으로 온다
                                 받는 쪽 러너가 읽기 전용으로 자기 폴더를 읽고 답한다. 실행기를 고르지 않으면 그 멤버의 에이전트 하나가 답한다
                                 받는 쪽이 꺼 두었으면 "받지 않는다", 러너가 오프라인이면 남겨 두었다가 돌아오면 답한다(14일 뒤 만료)
+  omagari debate <포스트> --agenda <안건> --grounds <근거>
+                                증거 라벨이 없는 포스트에 안건과 근거를 붙여 토론을 요청한다. <포스트>는 포스트 id나 알림 번호다
+                                안건이나 근거가 비면 열지 않고 요청만 포스트에 표시한다. 이미 열린 토론이 있으면 거절한다
   omagari wait <질문 번호> | --path <경로> [--timeout <초>]
                                 질문의 답이 편지함에 오거나, 그 경로에 걸린 다른 멤버의 선점이 풀리기를 기다린다. 한 번에 하나다
                                 기본 30초, 최대 100초. 시간이 다 되면 "답 없음"이고, 답이나 승인이 아니다
@@ -122,6 +125,8 @@ try {
     await impact(sub);
   } else if (command === "ask" && sub !== undefined && !sub.startsWith("--")) {
     process.exitCode = await askMember(sub);
+  } else if (command === "debate" && sub !== undefined && !sub.startsWith("--")) {
+    process.exitCode = await requestDebate(sub);
   } else if (command === "wait") {
     await wait();
   } else if (command === "metrics" && (sub === undefined || sub.startsWith("--"))) {
@@ -302,7 +307,7 @@ async function log() {
       const why = run.reason ? `: ${run.reason}` : "";
       const setup = run.setup ? `  준비 명령 ${JSON.stringify(run.setup)}` : "";
       const pair = run.theirs
-        ? `  합쳐 돌려 보기 ${run.branch} + ${run.theirs.login}의 ${run.theirs.branch}`
+        ? `  ${run.experiment ? `토론 ${run.experiment.post} 라운드 ${run.experiment.round} 실험` : "합쳐 돌려 보기"} ${run.branch} + ${run.theirs.login}의 ${run.theirs.branch}`
         : "";
       console.log(
         `${run.at}  검사 명령 ${JSON.stringify(run.check ?? "")}${setup}${pair}  폴더 ${run.folder}  판정 ${MERGE_RUN_LABELS[run.verdict]}${why}  ${seconds(run.ms)}`,
@@ -586,6 +591,28 @@ async function askMember(to: string) {
   );
   console.log(`기다리려면: omagari wait ${id}`);
   return 0;
+}
+
+/** 포스트에 안건과 근거를 붙여 토론을 요청하고 결과를 알린다. 열렸으면 0, 표시만 남았으면 1이다. */
+async function requestDebate(post: string) {
+  const { values } = parseArgs({
+    args: process.argv.slice(4),
+    options: { agenda: { type: "string" }, grounds: { type: "string" } },
+  });
+  const result = await call(await member(), api.requestDebate, {
+    post,
+    agenda: values.agenda ?? "",
+    grounds: values.grounds ?? "",
+  }).catch((error) => {
+    if (error instanceof ContractFailure) throw new Error(`요청하지 못했다: ${error.message}`);
+    throw error;
+  });
+  if (result.debate) {
+    console.log("토론이 열렸다. 두 주인의 에이전트가 첫 입장을 가려서 낸다.");
+    return 0;
+  }
+  console.log("안건이나 근거가 비어 토론을 열지 않았다. 요청만 포스트에 표시해 두었다.");
+  return 1;
 }
 
 /**
