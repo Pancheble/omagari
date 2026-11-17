@@ -5,8 +5,21 @@ import { eventually, fakeExecutor, startWorld, writer } from "./harness.ts";
 
 const text = (lines: string[]) => `${lines.join("\n")}\n`;
 const BASE = Array.from({ length: 5 }, (_, i) => `line ${i + 1}`);
+const MONEY = `export function refund(amount: number) {
+  return -amount;
+}
+`;
+const CHECKOUT = `import { refund } from "./money";
+export const total = refund(2);
+`;
+type As = { url: string; session: string };
+/** 그 종류의 알림의 포스트. */
+const postOf = async (as: As, kind: string) =>
+  (await call(as, api.posts)).posts.find(
+    (post) => post.message.kind === "alert" && post.message.alert.kind === kind,
+  );
 
-test("포스트 하나가 GitHub 이슈 하나다: 글은 댓글로 가고, 댓글은 글로 들어오고, 제목·라벨·닫힘을 따라간다", async (t) => {
+test("포스트에 종류 라벨이 붙고, 논의 포스트 하나가 GitHub 이슈 하나다: 글은 댓글로 가고, 댓글은 글로 들어오고, 제목·라벨·닫힘을 따라간다", async (t) => {
   const world = await startWorld({
     observeMs: 50,
     followMs: 50,
@@ -15,6 +28,8 @@ test("포스트 하나가 GitHub 이슈 하나다: 글은 댓글로 가고, 댓�
   t.after(world.stop);
   const fake = world.github;
   await writer(world.repo.folder)("src/pay.ts", text(BASE));
+  await writer(world.repo.folder)("src/money.ts", MONEY);
+  await writer(world.repo.folder)("src/checkout.ts", CHECKOUT);
   await world.repo.git("add", ".");
   await world.repo.git("commit", "--message=base");
   await world.repo.git("update-ref", "refs/remotes/origin/main", "HEAD");
@@ -37,23 +52,51 @@ test("포스트 하나가 GitHub 이슈 하나다: 글은 댓글로 가고, 댓�
   await writer(world.repo.folder)("src/pay.ts", text(BASE.toSpliced(2, 1, "owner")));
   await writer(desk.folder)("src/pay.ts", text(BASE.toSpliced(2, 1, "alice")));
 
-  // 알림이 서면 포스트의 이슈가 열린다. 알림의 두 사람 가운데 한 멤버의 이름으로, 종류 라벨을 달고, 본문에 포스트 링크가 있다.
+  // 직접 충돌 포스트는 종류 라벨이 붙은 참고라 이슈가 열리지 않는다. 알림은 그래도 두 작업의 편지함에 들어간다.
+  const direct = await eventually(async () => {
+    const found = await postOf(world.owner, "direct");
+    assert.ok(found, "아직 포스트가 없다");
+    return found;
+  });
+  assert.deepEqual(direct.labels, ["직접 충돌"]);
+  assert.equal(direct.importance, "reference");
+  await eventually(async () =>
+    assert.match((await world.cliIn(desk.folder, "status")).stdout, /- 직접 충돌: 내 작업과 owner/),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(fake.issues.length, 0);
+  assert.equal((await postOf(world.owner, "direct"))?.issue, null);
+
+  // 계약 변경 알림은 논의라 서면 포스트의 이슈가 열린다. 알림의 두 사람 가운데 한 멤버의 이름으로, 포스트의 라벨을 달고, 본문에 포스트 링크가 있다.
+  const claimed = await world.cli(
+    "claim",
+    "src/money.ts",
+    "--symbol",
+    "refund",
+    "--plan",
+    "signature",
+    "--detail",
+    "refund(amount, reason)",
+  );
+  assert.equal(claimed.code, 0, claimed.stderr);
   const post = await eventually(async () => {
-    const [found] = (await call(world.owner, api.posts)).posts;
+    const found = await postOf(world.owner, "declared");
     assert.ok(found?.issue, "아직 이슈가 없다");
     return found;
   });
+  assert.deepEqual(post.labels, ["계약 변경"]);
+  assert.equal(post.importance, "discuss");
   assert.equal(fake.issues.length, 1);
   const [issue] = fake.issues;
   assert.ok(["owner", "alice"].includes(issue.author));
-  assert.equal(issue.title, "pay.ts 직접 충돌");
-  assert.deepEqual(issue.labels, ["직접 충돌"]);
+  assert.equal(issue.title, "refund 계약 변경");
+  assert.deepEqual(issue.labels, ["계약 변경"]);
   assert.match(issue.body, new RegExp(`/#${post.message.channel}/${post.alert}$`));
   assert.deepEqual(post.issue, {
     number: issue.number,
     url: `https://github.com/omagari-test/space/issues/${issue.number}`,
-    title: "pay.ts 직접 충돌",
-    labels: ["직접 충돌"],
+    title: "refund 계약 변경",
+    labels: ["계약 변경"],
     open: true,
   });
 
@@ -109,20 +152,20 @@ test("포스트 하나가 GitHub 이슈 하나다: 글은 댓글로 가고, 댓�
       "QA 쪽에서도 환불을 봐요",
       true,
     ]);
-    const [now] = (await call(world.owner, api.posts)).posts;
-    assert.equal(now.issue?.title, "refund의 reason 필드");
-    assert.deepEqual(now.issue?.labels, ["직접 충돌", "결제"]);
+    const now = await postOf(world.owner, "declared");
+    assert.equal(now?.issue?.title, "refund의 reason 필드");
+    assert.deepEqual(now?.issue?.labels, ["계약 변경", "결제"]);
   });
   // 들어온 댓글은 다시 올리지 않고, 올린 글은 두 번 올리지 않는다.
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.equal(issue.comments.length, 4);
 
-  // 알림이 풀리면 Omagari가 이슈를 닫는다.
-  await writer(desk.folder)("src/pay.ts", text(BASE));
+  // 알림이 풀리면(계획을 거두면) Omagari가 이슈를 닫는다.
+  assert.equal((await world.cli("release")).code, 0);
   await eventually(async () => {
-    const [now] = (await call(world.owner, api.posts)).posts;
-    assert.notEqual(now.message.kind === "alert" && now.message.alert.resolved, null);
-    assert.equal(now.issue?.open, false);
+    const now = await postOf(world.owner, "declared");
+    assert.notEqual(now?.message.kind === "alert" && now.message.alert.resolved, null);
+    assert.equal(now?.issue?.open, false);
   });
   assert.equal(issue.open, false);
 });
