@@ -228,6 +228,73 @@ test("증거 라벨이 없는 포스트에는 토론이 열리지 않고, 자동
   assert.equal(confirmed && seatOf(confirmed, "bob").state, "off");
 });
 
+test("증거 라벨이 없는 포스트는 안건과 근거를 붙여 요청해야 토론이 열리고, 비면 표시만 남고, 열린 토론이 있으면 거절된다", async (t) => {
+  const owner = fakeExecutor(() => JSON.stringify({ claim: "바꾼다", evidence: [] }));
+  const world = await startWorld({ observeMs: 50, followMs: 50, executor: owner.executor });
+  t.after(world.stop);
+  await base(world);
+  const bob = fakeExecutor(() => JSON.stringify({ claim: "안 된다", evidence: [] }));
+  const { desk } = await member(world, "bob", "refund", bob.executor);
+  t.after(desk.remove);
+
+  await writer(world.repo.folder)("src/pay.ts", `${BASE.replace("line 3", "owner")}\n`);
+  await writer(desk.folder)("src/pay.ts", `${BASE.replace("line 3", "bob")}\n`);
+  const direct = await eventually(async () => {
+    const found = await postOf(world.owner, "direct");
+    assert.ok(found);
+    return found;
+  });
+  assert.equal(direct.request, null);
+  await world.signInCli(world.owner);
+
+  // 멤버가 근거 없이 요청하면 열리지 않고 표시만 남는다.
+  const empty = await call(world.owner, api.requestDebate, {
+    post: direct.channel,
+    agenda: "pay.ts 3번 줄을 누가 고치나",
+    grounds: "  ",
+  });
+  assert.equal(empty.debate, null);
+  assert.equal(empty.request.opened, false);
+  const marked = await postOf(world.owner, "direct");
+  assert.equal(marked?.debate, null);
+  assert.equal(marked?.request?.agenda, "pay.ts 3번 줄을 누가 고치나");
+  assert.equal(marked?.request?.opened, false);
+
+  // 에이전트가 CLI로 안건과 근거를 붙여 요청하면 열리고 CLI가 알린다.
+  const cli = await world.cli(
+    "debate",
+    direct.channel,
+    "--agenda",
+    "pay.ts 3번 줄을 누가 고치나",
+    "--grounds",
+    "src/pay.ts:3 둘 다 이 줄을 바꿨다",
+  );
+  assert.equal(cli.code, 0, cli.stderr);
+  assert.match(cli.stdout, /토론이 열렸다/);
+  const opened = await eventually(async () => {
+    const found = await postOf(world.owner, "direct");
+    assert.ok(found?.debate?.revealed);
+    return found;
+  });
+  assert.equal(opened.request?.opened, true);
+  // 안의 순서는 섞여 있다.
+  assert.ok(opened.debate?.options.some((o) => o.stances[0]?.claim === "바꾼다"));
+
+  // 열린 토론이 있으면 거절된다.
+  await assert.rejects(
+    call(world.owner, api.requestDebate, { post: direct.channel, agenda: "a", grounds: "b" }),
+    { code: "conflict" },
+  );
+  const again = await world.cli("debate", direct.channel, "--agenda", "a", "--grounds", "b");
+  assert.equal(again.code, 1);
+  assert.match(again.stderr, /이미 열린 토론/);
+
+  // 안건이나 근거가 빈 CLI 요청은 열리지 않았다고 알린다.
+  const none = await world.cli("debate", "없는포스트", "--agenda", "a", "--grounds", "b");
+  assert.equal(none.code, 1);
+  assert.match(none.stderr, /없는 포스트/);
+});
+
 /** 토론 세션이면 라운드(첫 라운드는 1), 아니면 0. 반박 라운드의 지시문은 "N라운드(반박)"로 시작한다. */
 const roundOf = (message: string) =>
   /라운드\(반박\)/.test(message)

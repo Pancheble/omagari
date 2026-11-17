@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 37;
+export const CONTRACT_VERSION = 39;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -267,17 +267,18 @@ export type MemberView = z.infer<typeof MemberView>;
 export const Members = z.strictObject({ members: z.array(MemberView) });
 
 /**
- * 채널의 종류(ADR-0027). 채팅 채널은 멤버 모두가 읽고 쓴다. 포럼 채널에는 Omagari가 알림 하나를 포스트 하나로 올리고,
- * 사람은 포럼에 쓰지 못하고 포스트 안에서만 쓴다. 사람이 만드는 채널은 채팅이고, 지금 포럼은 "부딪힘" 하나다.
+ * 채널의 종류(ADR-0027, ADR-0039). 채팅 채널은 멤버 모두가 읽고 쓴다. 포럼 채널은 포스트를 담지 않고 거르기(`filter`)로 고른 보기다.
+ * 사람은 포럼에 쓰지 못하고 포스트 안에서만 쓴다. 처음엔 "논의"와 "참고" 포럼이 있고, 멤버 누구나 포럼을 만들고 고치고 지운다.
  */
 export const ChannelKind = z.enum(["chat", "forum"]);
 export type ChannelKind = z.infer<typeof ChannelKind>;
-/** 채널. 워크스페이스의 멤버 모두가 읽는다. */
-export const Channel = z.strictObject({ id: z.string(), name: z.string(), kind: ChannelKind });
-export type Channel = z.infer<typeof Channel>;
 
 /** 채널 이름의 길이 상한. 앞뒤 공백은 떼고, 줄바꿈과 겹친 공백은 공백 하나로 접는다. */
 export const MAX_CHANNEL_NAME_CHARS = 80;
+const ChannelName = z
+  .string()
+  .transform((name) => name.replace(/\s+/g, " ").trim())
+  .pipe(z.string().min(1).max(MAX_CHANNEL_NAME_CHARS));
 /** 메시지 하나의 길이 상한. 앞뒤 공백은 뗀다. */
 export const MAX_MESSAGE_CHARS = 4000;
 /** 문답을 채널에 올리며 함께 쓰는 글. 글 메시지처럼 앞뒤 공백을 떼고 길이를 막되, 비면 없는 것이다. */
@@ -482,6 +483,31 @@ export const Label = z.strictObject({
 export type Label = z.infer<typeof Label>;
 const LabelName = z.string().trim().min(1).max(50);
 
+/**
+ * 포럼의 거르기(ADR-0039): 중요도가 같거나, 라벨 목록 가운데 하나라도 포스트에 붙어 있으면 그 포럼에 보인다.
+ * 포스트는 맞는 포럼마다 보이고, 어느 포럼에도 맞지 않으면 "다른 포스트"다(`Post.forums`가 빈 것).
+ */
+export const ForumFilter = z.union([
+  z.strictObject({ importance: Importance }),
+  z.strictObject({ labels: z.array(z.string().trim().min(1)).min(1) }),
+]);
+export type ForumFilter = z.infer<typeof ForumFilter>;
+
+/** 포스트가 거르기에 맞나. */
+export const shows = (filter: ForumFilter, post: { labels: string[]; importance: Importance }) =>
+  "importance" in filter
+    ? filter.importance === post.importance
+    : filter.labels.some((label) => post.labels.includes(label));
+
+/** 채널. 워크스페이스의 멤버 모두가 읽는다. 포럼이면 거르기(`filter`)가 있다. */
+export const Channel = z.strictObject({
+  id: z.string(),
+  name: z.string(),
+  kind: ChannelKind,
+  filter: ForumFilter.optional(),
+});
+export type Channel = z.infer<typeof Channel>;
+
 /** 검사 명령을 돌린 판정. 통과(0으로 끝남), 깨짐(0이 아닌 코드), 돌리지 못함(설정 없음, 샌드박스 없음, 준비 명령 실패, 상한에서 끊김). */
 export const Verdict = z.enum(["pass", "broken", "not_run"]);
 export type Verdict = z.infer<typeof Verdict>;
@@ -685,6 +711,8 @@ export const Post = z.strictObject({
   labels: z.array(z.string()),
   /** 라벨 중 가장 높은 중요도. */
   importance: Importance,
+  /** 이 포스트가 보이는 포럼의 id, 이름 순. 비었으면 "다른 포스트"다. 라벨이나 중요도, 포럼이 바뀌면 알림 줄이 실시간 연결로 다시 온다. */
+  forums: z.array(z.string()),
 });
 export type Post = z.infer<typeof Post>;
 
@@ -808,6 +836,20 @@ export const Debate = z.strictObject({
 export type Debate = z.infer<typeof Debate>;
 
 /**
+ * 토론 요청(ADR-0040, 구현 7장, 문답 A16): 증거 라벨이 없는 포스트에서 멤버(웹)나 에이전트(CLI)가 안건과 근거를 붙여 토론을 열어 달라고 한 것.
+ * 안건이나 근거가 비면(`opened`가 false) 토론은 열리지 않고 요청만 포스트에 표시로 남는다. 가장 나중의 요청 하나만 남는다.
+ */
+export const DebateRequest = z.strictObject({
+  login: z.string(),
+  name: z.string(),
+  agenda: z.string(),
+  grounds: z.string(),
+  opened: z.boolean(),
+  at: z.string(),
+});
+export type DebateRequest = z.infer<typeof DebateRequest>;
+
+/**
  * 결정 PR의 이의 창 길이(ADR-0025, ADR-0030). "바로"면 PR을 열자마자 Omagari가 머지한다. "하루"가 기본이다.
  * "직접"은 숫자와 단위(시간, 일)다. 가장 긴 값은 정하지 않았고, `amount`의 상한은 시각이 넘치지 않게 둔 것이다.
  */
@@ -894,7 +936,8 @@ export const ChannelMessage = z.discriminatedUnion("kind", [
   }),
   /**
    * Omagari가 올린 알림. 쓴 사람이 없다. 알림이 고쳐지거나 풀리거나 포스트의 글 수가 바뀌면 같은 `id`의 것이 실시간 연결로 다시 온다.
-   * `channel`은 올린 포럼이고, `at`은 처음 올린 시각이다. `post`는 이 알림의 포스트의 채널과 글 수다.
+   * `channel`은 알림 줄이 서는 자리(어느 포럼도 아니고 채널 목록에 없다)이고, `at`은 처음 올린 시각이다.
+   * `post`는 이 알림의 포스트의 요약이다. 보이는 포럼은 `post.forums`다.
    */
   z.strictObject({
     kind: z.literal("alert"),
@@ -905,7 +948,7 @@ export const ChannelMessage = z.discriminatedUnion("kind", [
     post: Post.omit({ alert: true }),
   }),
   /**
-   * Omagari가 올린 결정 PR의 한 줄. 결정의 포스트에만 선다(부딪힘 포럼에는 올리지 않는다, ADR-0027).
+   * Omagari가 올린 결정 PR의 한 줄. 결정의 포스트에만 선다(포럼의 알림 줄로는 올리지 않는다, ADR-0027).
    * `event`는 그때 일어난 일이다: PR이 열렸다, 결정자가 동의했다, 이의가 났다, 이의를 거뒀다, 정리한 사람이 고쳐 올렸다,
    * 머지됐다, 머지 없이 닫혔다, Omagari가 머지하려 했으나 GitHub이 막았다(`blocked`), 정리한 사람의 토큰이 듣지 않아 멈췄다(`stalled`).
    * `reason`은 막히거나 멈춘 까닭이다. `by`는 그 일을 한 사람이다(동의, 이의, 거두기, 고쳐 올리기). GitHub의 리뷰면 멤버가 아닐 수 있다.
@@ -1710,7 +1753,13 @@ export const api = {
     method: "GET",
     path: "/api/posts",
     response: z.strictObject({
-      posts: z.array(Post.extend({ message: ChannelMessage, debate: Debate.nullable() })),
+      posts: z.array(
+        Post.extend({
+          message: ChannelMessage,
+          debate: Debate.nullable(),
+          request: DebateRequest.nullable(),
+        }),
+      ),
     }),
   },
   /**
@@ -1813,8 +1862,7 @@ export const api = {
   },
   /**
    * 설정 창이 읽는 것: 내 "남의 질문에 답하기" 스위치(`setAskSwitch`), 내 에이전트가 지난 `ANSWERED_DAYS`일 동안
-   * 남의 질문에 답한 수와 그 가운데 마지막 질문(묻은 멤버와 질문 글, 물은 시각), 알림을 올릴 포럼(`setAlertChannel`)의 채널 id.
-   * 알림을 올릴 포럼을 정한 적이 없으면 "부딪힘" 포럼이다(없으면 만든다).
+   * 남의 질문에 답한 수와 그 가운데 마지막 질문(묻은 멤버와 질문 글, 물은 시각).
    */
   settings: {
     method: "GET",
@@ -1827,7 +1875,6 @@ export const api = {
           .strictObject({ login: z.string(), name: z.string(), text: z.string(), at: z.string() })
           .nullable(),
       }),
-      alertChannel: z.string(),
       /**
        * 합쳐 돌려 보기(DESIGN.md 설정 창, 시안 30-C). 웹은 읽기만 한다. 켜고 끄는 것은 러너에서 한다(ADR-0034).
        * `runner`는 내 러너의 것이고, 러너가 붙어 있지 않으면 `offline`이다. 러너가 여럿이면 마지막에 붙은 것이다.
@@ -1890,6 +1937,17 @@ export const api = {
     body: z.strictObject({ post: z.string(), labels: z.array(z.string()) }),
     response: z.strictObject({ post: Post }),
   },
+  /**
+   * 포스트에 안건(`agenda`)과 근거(`grounds`)를 붙여 토론을 요청한다(`omagari debate`, 웹의 "토론 열기"). `post`는 포스트의 채널 id이거나 알림의 번호다.
+   * 둘 다 비어 있지 않으면 토론이 열려 `debate`로 온다. 하나라도 비면 열지 않고 요청만 포스트에 표시로 남기고 `debate`는 null이다.
+   * 이미 열린 토론이 있으면 `conflict`, 없는 포스트면 `not_found`다. 열린 토론은 증거 라벨로 열린 것과 같은 길을 탄다.
+   */
+  requestDebate: {
+    method: "POST",
+    path: "/api/posts/debate",
+    body: z.strictObject({ post: z.string().min(1), agenda: z.string(), grounds: z.string() }),
+    response: z.strictObject({ debate: Debate.nullable(), request: DebateRequest }),
+  },
   /** 채널 전부(채팅과 포럼), 이름 순서. 포스트는 오지 않는다(`api.posts`). 멤버만 본다. */
   channels: {
     method: "GET",
@@ -1897,30 +1955,44 @@ export const api = {
     response: z.strictObject({ channels: z.array(Channel) }),
   },
   /**
-   * 알림을 올릴 포럼을 바꾼다. 그 뒤에 새로 생기는 알림이 이 포럼에 포스트로 간다. 지난 포스트는 제자리에 있다.
-   * 정한 적이 없으면 처음 알림을 올릴 때 "부딪힘" 포럼(없으면 만든다)이 알림을 올릴 포럼이 된다.
-   * 없는 채널이나 포스트면 `not_found`, 채팅 채널이면 `invalid_request`다.
-   */
-  setAlertChannel: {
-    method: "POST",
-    path: "/api/alert-channel",
-    body: z.strictObject({ channel: z.string() }),
-    response: z.strictObject({ channel: Channel }),
-  },
-  /**
-   * 채팅 채널을 만든다. 같은 이름(대소문자를 가리지 않는다)이 있거나 "부딪힘"(포럼의 이름)이면 `conflict`다.
+   * 채팅 채널을 만든다. 같은 이름(대소문자를 가리지 않는다)의 채널이나 포럼이 있으면 `conflict`다.
    * 실시간 연결이 붙어 있는 웹 모두에 `channel`이 간다.
    */
   createChannel: {
     method: "POST",
     path: "/api/channels",
-    body: z.strictObject({
-      name: z
-        .string()
-        .transform((name) => name.replace(/\s+/g, " ").trim())
-        .pipe(z.string().min(1).max(MAX_CHANNEL_NAME_CHARS)),
-    }),
+    body: z.strictObject({ name: ChannelName }),
     response: z.strictObject({ channel: Channel }),
+  },
+  /**
+   * 포럼을 만든다(ADR-0039). 멤버 누구나 한다. 같은 이름(대소문자를 가리지 않는다)의 채널이나 포럼이 있으면 `conflict`다.
+   * 실시간 연결이 붙어 있는 웹 모두에 `channel`이 가고, 보이는 포럼이 바뀐 포스트의 알림 줄이 다시 간다.
+   */
+  createForum: {
+    method: "POST",
+    path: "/api/forums",
+    body: z.strictObject({ name: ChannelName, filter: ForumFilter }),
+    response: z.strictObject({ channel: Channel }),
+  },
+  /**
+   * 포럼의 이름과 거르기를 고친다. 기본 포럼("논의", "참고")도 고친다. 없는 포럼이면 `not_found`, 이름이 다른 채널과 겹치면 `conflict`다.
+   * 실시간 연결에는 `createForum`과 같은 것이 간다.
+   */
+  updateForum: {
+    method: "POST",
+    path: "/api/forums/update",
+    body: z.strictObject({ id: z.string(), name: ChannelName, filter: ForumFilter }),
+    response: z.strictObject({ channel: Channel }),
+  },
+  /**
+   * 포럼을 지운다. 기본 포럼도 지운다. 포스트는 지워지지 않고, 어느 포럼에도 맞지 않게 되면 "다른 포스트"다. 없는 포럼이면 `not_found`다.
+   * 실시간 연결이 붙어 있는 웹 모두에 `forumDeleted`가 가고, 보이는 포럼이 바뀐 포스트의 알림 줄이 다시 간다.
+   */
+  deleteForum: {
+    method: "POST",
+    path: "/api/forums/delete",
+    body: z.strictObject({ id: z.string() }),
+    response: z.strictObject({}),
   },
   /**
    * 채널의 지난 대화. `before`(메시지 번호) 앞의 것 가운데 마지막 `HISTORY_PAGE`개를 오래된 것부터 준다.
@@ -1997,8 +2069,10 @@ export const serverToWeb = {
    * 공개된 문답에 답이 오면 같은 번호의 것을 다시 보낸다. 끊긴 사이에 답이 온 것도 welcome 뒤에 다시 보낸다.
    */
   message: ChannelMessage,
-  /** 새 채널이 생겼다. 끊긴 사이에 생긴 채널은 다시 보내지 않으니, 다시 붙으면 `api.channels`를 읽는다. */
+  /** 새 채널이 생겼거나 포럼이 고쳐졌다(같은 `id`면 바꾼다). 끊긴 사이의 것은 다시 보내지 않으니, 다시 붙으면 `api.channels`를 읽는다. */
   channel: Channel,
+  /** 포럼이 지워졌다. 끊긴 사이의 것은 다시 보내지 않는다. */
+  forumDeleted: z.strictObject({ id: z.string() }),
   /** 멤버 목록 전부(`api.members`와 같다). 붙을 때마다 welcome 뒤에 한 번, 그 뒤로는 달라질 때마다 보낸다. */
   members: Members,
   /**

@@ -23,7 +23,10 @@ test("멤버가 채팅 채널을 만들면 다른 멤버의 목록에 보이고,
   assert.equal(channel.name, "결제 처리"); // 앞뒤 공백을 떼고 겹친 공백은 하나로 접는다
   const general = (await call(alice, api.createChannel, { name: "General" })).channel;
 
-  assert.deepEqual((await call(alice, api.channels)).channels, [general, channel]);
+  // 처음부터 있는 포럼("논의", "참고")은 빼고 본다.
+  const chats = async () =>
+    (await call(alice, api.channels)).channels.filter((c) => c.kind === "chat");
+  assert.deepEqual(await chats(), [general, channel]);
   await assert.rejects(call(alice, api.createChannel, { name: "general" }), {
     code: "conflict",
   });
@@ -185,7 +188,10 @@ test("메시지에 든 HTML은 서버가 바꾸지 않고 쓴 글자 그대로 �
   const text = `<script>alert("x")</script><img src=x onerror="alert(1)"> & &amp;`;
   await call(owner, api.send, { channel: channel.id, text });
 
-  assert.deepEqual((await call(alice, api.channels)).channels, [channel]);
+  assert.deepEqual(
+    (await call(alice, api.channels)).channels.filter((c) => c.kind === "chat"),
+    [channel],
+  );
   assert.equal(channel.name, "<b>굵게</b>");
   assert.deepEqual((await call(alice, api.history, { channel: channel.id })).messages.map(said), [
     text,

@@ -57,11 +57,9 @@ async function omagari(world: World, args: string[], cwd = world.repo.folder) {
   return stdout;
 }
 
-/** 알림 채널 "부딪힘"에 선 선언된 계약 변경 알림들. */
+/** 선언된 계약 변경 알림들. */
 async function declared(as: As): Promise<Declared[]> {
-  const channel = (await call(as, api.channels)).channels.find((c) => c.name === "부딪힘");
-  if (!channel) return [];
-  const { messages } = await call(as, api.history, { channel: channel.id });
+  const messages = (await call(as, api.posts)).posts.map((p) => p.message);
   return messages.flatMap((m) =>
     m.kind === "alert" && m.alert.kind === "declared" ? [{ id: m.id, ...m.alert } as Declared] : [],
   );
