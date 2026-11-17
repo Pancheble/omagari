@@ -188,6 +188,13 @@ test("증거 라벨이 없는 포스트에는 토론이 열리지 않고, 자동
     return found;
   });
   assert.equal(direct.debate, null);
+  // 직접 충돌 라벨을 논의로 바꿔 포스트가 논의가 되어도 증거 라벨이 없으니 토론은 열리지 않는다.
+  await call(world.owner, api.editLabel, { name: "직접 충돌", next: { importance: "discuss" } });
+  await eventually(async () =>
+    assert.equal((await postOf(world.owner, "direct"))?.importance, "discuss"),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal((await postOf(world.owner, "direct"))?.debate, null);
 
   // 계약 변경 알림에는 토론이 열리지만 bob은 스위치를 꺼 나오지 않는다. owner만 내고 공개된다.
   await declare(world);
@@ -201,4 +208,12 @@ test("증거 라벨이 없는 포스트에는 토론이 열리지 않고, 자동
   assert.equal(seatOf(debate, "owner").stance?.context, "none");
   assert.equal((await postOf(world.owner, "direct"))?.debate, null);
   assert.equal(bob.calls.length, 0);
+
+  // 사람이 포스트에 확인됨을 붙여도 토론이 열린다.
+  await call(world.owner, api.setPostLabels, {
+    post: direct.channel,
+    labels: ["직접 충돌", "확인됨"],
+  });
+  const confirmed = (await postOf(world.owner, "direct"))?.debate;
+  assert.equal(confirmed && seatOf(confirmed, "bob").state, "off");
 });
