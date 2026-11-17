@@ -24,11 +24,14 @@ import {
   type ConflictPair,
   type ContractError,
   ContractFailure,
+  type Debate,
+  type DebateSeat,
   type Decision,
   type DecisionWindow,
   DISCUSS_LABELS,
   type Draft,
   decode,
+  EVIDENCE_LABELS,
   EXECUTOR_NAMES,
   type ExecutorId,
   encode,
@@ -56,6 +59,7 @@ import {
   RunVerdict,
   runnerToServer,
   type ShareLevel,
+  type Stance,
   type StatusLine,
   serverToRunner,
   serverToWeb,
@@ -657,6 +661,24 @@ export async function startServer(options: {
   ) STRICT`);
   // 남의 질문에 답하지 않게 스위치를 끈 멤버(ADR-0024). 기본은 켜짐이라 없으면 켜짐이다.
   db.exec("CREATE TABLE IF NOT EXISTS ask_off (login TEXT PRIMARY KEY) STRICT");
+  // 포스트의 토론(ADR-0040). 한 포스트에 열린 토론은 하나다. `round`는 지금 라운드다(지금은 첫 라운드뿐).
+  db.exec(`CREATE TABLE IF NOT EXISTS debates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    post TEXT NOT NULL UNIQUE,
+    round INTEGER NOT NULL DEFAULT 1,
+    at INTEGER NOT NULL
+  ) STRICT`);
+  // 토론의 자리. `seat`은 알림의 `works` 자리(0, 1)다. `stance`는 낸 입장(JSON), `error`는 내지 못한 까닭(JSON)이다.
+  db.exec(`CREATE TABLE IF NOT EXISTS seats (
+    debate INTEGER NOT NULL,
+    seat INTEGER NOT NULL,
+    login TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('waiting', 'submitted', 'off', 'failed')),
+    stance TEXT,
+    error TEXT,
+    PRIMARY KEY (debate, seat)
+  ) STRICT`);
   // 날마다 들어온 멤버(ADR-0018). 날은 `TIME_ZONE`의 날짜다. 지표가 남기는 것은 이것뿐이고, 문답 수는 `qas`에서 센다.
   db.exec(`CREATE TABLE IF NOT EXISTS visits (
     day TEXT NOT NULL,
@@ -969,9 +991,12 @@ export async function startServer(options: {
         ([, runner]) => runner.login === login && runner.executors.includes(executor),
       );
       const sockets = live.map(([socket]) => socket);
-      const busy = [...asks.values(), ...drafting.values(), ...questionsSent.values()].some(
-        (ask) => ask.executor === executor && sockets.includes(ask.socket),
-      );
+      const busy = [
+        ...asks.values(),
+        ...drafting.values(),
+        ...questionsSent.values(),
+        ...debatesSent.values(),
+      ].some((ask) => ask.executor === executor && sockets.includes(ask.socket));
       // 고를 거리는 묻는 문답이 갈 러너(마지막에 붙은 것)의 것이다.
       const choices = live.at(-1)?.[1].choices[executor] ?? { models: [], efforts: [] };
       const state = busy ? "answering" : sockets.length > 0 ? "online" : "offline";
@@ -1252,6 +1277,7 @@ export async function startServer(options: {
       shareAlert(Number(lastInsertRowid));
       deliver(Number(lastInsertRowid), works, now);
       syncSoon(post); // 포스트의 이슈를 연다(ADR-0032)
+      openDebate(post); // 계약 변경이면 토론이 열린다(ADR-0040)
     }
     if (changed) {
       shareMembers(); // 멤버 목록의 직접 충돌 표시
@@ -1341,6 +1367,7 @@ export async function startServer(options: {
         post.id,
       );
       syncSoon(post.id);
+      openDebate(post.id); // 확인되면 토론이 열린다(ADR-0040)
     }
     shareAlert(row.id);
     if (!finished) return;
@@ -1503,6 +1530,133 @@ export async function startServer(options: {
         text: row.text,
       });
       questionsSent.set((JSON.parse(frame) as { id: string }).id, { ...answerer, id: row.id });
+      answerer.socket.send(frame);
+    }
+    shareMembers(); // 답하는 중
+  };
+  type SeatRow = {
+    debate: number;
+    seat: number;
+    login: string;
+    branch: string;
+    state: DebateSeat["state"];
+    stance: string | null;
+    error: string | null;
+  };
+  /** 러너에 보내고 입장을 기다리는 토론 참여 요청. 키는 보낸 `debate`의 id다. 연결이 끊기거나 서버가 다시 뜨면 잃고, 러너가 붙을 때 다시 보낸다. */
+  const debatesSent = new Map<
+    string,
+    { socket: WSContext; executor: ExecutorId; debate: number; seat: number }
+  >();
+  /**
+   * 포스트의 토론. 첫 라운드는 가린다: 기다리는 자리가 하나라도 있으면 어느 입장도 싣지 않는다(ADR-0040).
+   */
+  const debateOf = (post: string): Debate | null => {
+    const row = db.prepare("SELECT * FROM debates WHERE post = ?").get(post) as
+      | { id: number; round: number; at: number }
+      | undefined;
+    if (!row) return null;
+    const seats = db
+      .prepare("SELECT * FROM seats WHERE debate = ? ORDER BY seat")
+      .all(row.id) as SeatRow[];
+    const revealed = !seats.some((seat) => seat.state === "waiting");
+    return {
+      id: row.id,
+      state: "open",
+      round: row.round,
+      revealed,
+      seats: seats.map((seat) => ({
+        login: seat.login,
+        name: nameOf(seat.login),
+        branch: seat.branch,
+        state: seat.state,
+        ...(seat.error !== null && { error: JSON.parse(seat.error) }),
+        ...(revealed && seat.stance !== null && { stance: JSON.parse(seat.stance) }),
+      })) as [DebateSeat, DebateSeat],
+      at: new Date(row.at).toISOString(),
+    };
+  };
+  /**
+   * 포스트에 증거 라벨이 붙었으면 토론을 연다(ADR-0040). 중요도와 상관없다. 이미 열린 토론이 있으면 그대로 둔다.
+   * 자리는 알림의 두 작업이다. 자동 참여 스위치(묻기 스위치)를 끈 주인의 자리는 나오지 않는다.
+   */
+  const openDebate = (post: string) => {
+    const row = db
+      .prepare(
+        "SELECT c.labels, a.works FROM channels c JOIN messages m ON m.id = c.alert JOIN alerts a ON a.id = m.alert WHERE c.id = ?",
+      )
+      .get(post) as { labels: string | null; works: string } | undefined;
+    if (!row) return;
+    const labels: string[] = JSON.parse(row.labels ?? "[]");
+    if (!labels.some((label) => EVIDENCE_LABELS.includes(label))) return;
+    if (db.prepare("SELECT 1 FROM debates WHERE post = ?").get(post)) return;
+    const works: WorkRef[] = JSON.parse(row.works);
+    const debate = Number(
+      db.prepare("INSERT INTO debates (post, at) VALUES (?, ?)").run(post, Date.now())
+        .lastInsertRowid,
+    );
+    const seat = db.prepare(
+      "INSERT INTO seats (debate, seat, login, branch, state) VALUES (?, ?, ?, ?, ?)",
+    );
+    for (const [i, work] of works.entries()) {
+      const off = db.prepare("SELECT 1 FROM ask_off WHERE login = ?").get(work.login);
+      seat.run(debate, i, work.login, work.branch, off ? "off" : "waiting");
+    }
+    for (const work of works) dispatchDebates(work.login);
+  };
+  /** 토론의 자리 하나를 끝낸다(입장을 냈거나 내지 못했다). 이미 끝났으면 그대로 둔다. */
+  const settleSeat = (
+    debate: number,
+    seat: number,
+    result: { stance: Stance } | { error: ContractError },
+  ) => {
+    if (stopped) return;
+    db.prepare(
+      "UPDATE seats SET state = ?, stance = ?, error = ? WHERE debate = ? AND seat = ? AND state = 'waiting'",
+    ).run(
+      "stance" in result ? "submitted" : "failed",
+      "stance" in result ? JSON.stringify(result.stance) : null,
+      "error" in result ? JSON.stringify(result.error) : null,
+      debate,
+      seat,
+    );
+  };
+  /**
+   * 멤버(`login`)의 기다리는 자리에 토론 참여 요청을 그 멤버의 러너에 보낸다. 스위치가 꺼졌으면 보내지 않고 나오지 않는 자리로 둔다.
+   * 받을 러너가 없으면 남겨 두고 붙을 때 보낸다.
+   */
+  const dispatchDebates = (login: string) => {
+    const rows = db
+      .prepare(
+        `SELECT s.*, d.post, d.round FROM seats s JOIN debates d ON d.id = s.debate
+         WHERE s.login = ? AND s.state = 'waiting' ORDER BY s.debate, s.seat`,
+      )
+      .all(login) as (SeatRow & { post: string; round: number })[];
+    const sent = new Set([...debatesSent.values()].map((d) => `${d.debate} ${d.seat}`));
+    for (const row of rows) {
+      if (sent.has(`${row.debate} ${row.seat}`)) continue;
+      if (db.prepare("SELECT 1 FROM ask_off WHERE login = ?").get(login)) {
+        db.prepare("UPDATE seats SET state = 'off' WHERE debate = ? AND seat = ?").run(
+          row.debate,
+          row.seat,
+        );
+        continue;
+      }
+      const answerer = answererOf(login, null);
+      if (!answerer) continue;
+      const frame = encode(serverToRunner, "debate", {
+        debate: row.debate,
+        round: row.round,
+        executor: answerer.executor,
+        branch: row.branch,
+        post: { id: row.post, name: channelName(row.post) },
+        messages: recentOf(row.post),
+      });
+      debatesSent.set((JSON.parse(frame) as { id: string }).id, {
+        ...answerer,
+        debate: row.debate,
+        seat: row.seat,
+      });
       answerer.socket.send(frame);
     }
     shareMembers(); // 답하는 중
@@ -1737,6 +1891,7 @@ export async function startServer(options: {
     const login = c.get("login") as string;
     if (on) db.prepare("DELETE FROM ask_off WHERE login = ?").run(login);
     else db.prepare("INSERT OR IGNORE INTO ask_off (login) VALUES (?)").run(login);
+    dispatchDebates(login); // 끄면 아직 보내지 않은 자리가 나오지 않는 자리가 된다
     return { on };
   });
 
@@ -2415,7 +2570,11 @@ export async function startServer(options: {
   }));
 
   mount(app, api.posts, () => ({
-    posts: postsWhere("").map(({ post, message }) => ({ ...post, message })),
+    posts: postsWhere("").map(({ post, message }) => ({
+      ...post,
+      message,
+      debate: debateOf(post.channel),
+    })),
   }));
 
   const mustExist = (channel: string) => {
@@ -2595,6 +2754,7 @@ export async function startServer(options: {
           shareInbox(socket);
           shareRuns(login, socket);
           dispatchQuestions(login); // 오프라인 사이에 남겨 둔 질문
+          dispatchDebates(login); // 오프라인 사이에 열린 토론
           return;
         }
         const runner = runners.get(socket);
@@ -2729,7 +2889,25 @@ export async function startServer(options: {
           // 문답이나 초안의 답, 실패. 그것을 보낸 연결에서 온 것만 받는다.
           const re = message.re ?? "";
           const question = questionsSent.get(re);
-          if (question?.socket === socket) {
+          const debate = debatesSent.get(re);
+          if (debate?.socket === socket) {
+            debatesSent.delete(re);
+            settleSeat(
+              debate.debate,
+              debate.seat,
+              message.kind === "stance"
+                ? { stance: message.payload }
+                : message.kind === "error"
+                  ? { error: message.payload }
+                  : {
+                      error: {
+                        code: "invalid_message",
+                        message: "토론에 입장 대신 다른 것이 왔다",
+                      },
+                    },
+            );
+            shareMembers();
+          } else if (question?.socket === socket) {
             questionsSent.delete(re);
             settleQuestion(
               question.id,
@@ -2775,6 +2953,8 @@ export async function startServer(options: {
         // 떨어진 러너에 보낸 질문은 남겨 두고, 그 멤버의 러너가 다시 붙으면 다시 보낸다.
         for (const [id, question] of questionsSent)
           if (question.socket === socket) questionsSent.delete(id);
+        for (const [id, debate] of debatesSent)
+          if (debate.socket === socket) debatesSent.delete(id);
         // 떨어진 러너의 답은 오지 않는다. 기다리던 초안과 문답을 실패로 둔다.
         for (const [id, { socket: to, login }] of drafting) {
           if (to !== socket) continue;
