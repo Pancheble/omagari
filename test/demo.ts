@@ -2,7 +2,8 @@
 // - 가짜 GitHub로 띄운다. 브라우저의 "GitHub으로 로그인"은 1.5초 뒤 저절로 승인되어 "나"로 들어온다.
 // - 내 러너에는 이 기기의 실제 Claude Code(깔려 있고 로그인했으면 Codex도)를 꽂는다. DM은 실제로 답하고 구독 사용량을 쓴다.
 //   미리 넣는 문답과 남의 질문에만 정해 둔 답을 낸다.
-// - 화면의 모든 상태를 볼 수 있게 미리 넣는다: 멤버 넷과 그 기기, 채팅 채널 둘, 포럼의 알림 아홉(직접 충돌, 간접 충돌,
+// - 화면의 모든 상태를 볼 수 있게 미리 넣는다: 멤버 넷과 그 기기, 채팅 채널 둘, 라벨(논의와 참고, 팀 라벨)과 포럼 셋
+//   ("논의", 고친 "참고", 멤버가 만든 "결제 팀")과 "다른 포스트", 포럼의 알림 아홉(직접 충돌, 간접 충돌,
 //   중복 구현, 선언된 계약 변경, 풀린 것), 포스트의 글과 DM, 남에게 묻기와 답, 결정 PR 일곱(제안됨, 이의, 다시 열림, 수락됨,
 //   버림, 머지 멈춤, 머지 막힘). 결정 초안은 저장하지 않아 미리 넣지 못한다. 포스트 "박민수 · 최하준"에서 정리하기를 누른다.
 // - DEMO_AGENT=fake: 내 에이전트도 정해 둔 답을 낸다. 초안은 5초 동안 "쓰는 중"이다. 사용량을 쓰지 않는다.
@@ -346,6 +347,25 @@ await eventually(() =>
 );
 fake.comment(mailIssue.number, "jiwoo", "QA에서도 메일 지연을 봤어요. 큐로 가면 좋겠어요.");
 mailIssue.title = "메일 발송을 큐로 보낼지";
+// 라벨과 포럼(ADR-0039, 시안 51~55): 팀 라벨 "결제"와 "급함"(참고), 멤버가 만든 포럼 "결제 팀".
+// "참고" 포럼은 중복 구현과 간접 충돌만 보게 고쳐, 참고인 직접 충돌 포스트가 "다른 포스트"에 선다.
+await call(world.owner, api.createLabel, {
+  name: "결제",
+  color: "0e8a16",
+  description: "결제 흐름",
+});
+await call(world.owner, api.createLabel, { name: "급함", color: "e99695" });
+await call(world.owner, api.createForum, {
+  name: "결제 팀",
+  filter: { labels: ["결제", "결정 필요"] },
+});
+const reference = (await call(world.owner, api.channels)).channels.find((c) => c.name === "참고");
+assert.ok(reference);
+await call(world.owner, api.updateForum, {
+  id: reference.id,
+  name: reference.name,
+  filter: { labels: ["중복 구현", "간접 충돌"] },
+});
 mailIssue.labels.push("결제");
 (await issueOf(direct)).labels.push("급함");
 await eventually(async () => {

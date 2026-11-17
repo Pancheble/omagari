@@ -2649,8 +2649,8 @@ button.dm-head:active {
 
 /* 설정 창(DESIGN.md "설정 창"): 왼쪽 목록 220px, 오른쪽에 고른 항목. 덮개, Esc, 닫기로 닫힌다. */
 .settings {
-  width: min(820px, 100vw - 32px);
-  height: min(580px, 100dvh - 32px);
+  width: min(980px, 100vw - 32px);
+  height: min(676px, 100dvh - 32px);
   padding: 0;
   overflow: hidden;
   border: 1px solid var(--hairline);
@@ -3826,4 +3826,508 @@ a.issue-number:hover {
   background: #fff;
   font: 400 12px / 1.55 var(--mono);
   white-space: pre;
+}
+
+/* ---- 라벨, 중요도, 포럼 필터 (DESIGN.md 시안 51~55) ---- */
+
+/* 라벨 색 점: GitHub 라벨 색, 안쪽 1px 12% 선. 색은 점에만 쓴다. */
+.label-dot {
+  display: inline-block;
+  flex: none;
+  border-radius: var(--pill);
+  box-shadow: inset 0 0 0 1px #0000001f;
+}
+
+/* app-label-badge: 22px, 1px 선, 글자색, 앞에 8px 색 점 */
+.label-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 9px 0 8px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--pill);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* app-importance-discuss: 글자색 바탕에 흰 글씨 */
+.badge.discuss {
+  background: var(--ink);
+  color: var(--on-dark);
+}
+
+.alert-kind,
+.forum-post-tags {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* 칩 아래에 열리는 창(app-popover). 필터 칩은 300px, 포스트의 라벨 창은 260px로 오른쪽에 맞춘다. */
+.forum-menu.pop {
+  width: 220px;
+}
+
+.forum-menu.pop.wide {
+  width: 300px;
+}
+
+.forum-menu.pop.right {
+  right: 0;
+  left: auto;
+  width: 260px;
+}
+
+.pop-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  margin-bottom: 4px;
+  padding: 0 8px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--rounded-sm);
+  color: var(--text-secondary);
+}
+
+.pop-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+}
+
+.pop-row {
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.pop-row.bundle {
+  height: auto;
+  min-height: var(--control);
+  padding-block: 6px;
+}
+
+.pop-name {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pop-name small {
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: normal;
+}
+
+.pop-aside {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.pop-row[data-locked] {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.pop-note {
+  padding: 6px 8px 2px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.33;
+}
+
+.pop-note.error {
+  color: var(--error);
+}
+
+/* 체크 상자 모양: 16px, 켜면 강조색 */
+.check-box {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--rounded-xs);
+  background: var(--canvas);
+  color: var(--on-primary);
+}
+
+.check-box[data-on] {
+  border-color: var(--primary);
+  background: var(--primary);
+}
+
+/* 필터 줄(시안 53-D): 조건 칩. 저장된 필터와 다르면 테두리가 강조색이다. */
+.filter-row {
+  align-items: center;
+  overflow: visible;
+}
+
+.filter-chip {
+  color: var(--ink);
+}
+
+.filter-name {
+  color: var(--text-secondary);
+}
+
+.filter-chip .dots {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.filter-chip[data-changed] {
+  border-color: var(--primary);
+}
+
+.filter-dirty {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.filter-note {
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.button.small {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+/* 채널 패널의 포럼 줄(시안 55-D): 줄 끝 20px 꺾쇠로 내 포스트를 접고, 접으면 수와 점이 남는다. */
+.forum-row {
+  position: relative;
+}
+
+.forum-row .nav-item {
+  padding-right: 30px;
+}
+
+.forum-count {
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.forum-fold {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--rounded-xs);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.forum-fold:hover {
+  background: var(--hover);
+}
+
+/* 포럼들 아래 구분선 뒤의 "다른 포스트" */
+.other-posts {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--divider);
+}
+
+.other-posts .nav-item svg {
+  color: var(--text-secondary);
+}
+
+/* 포럼 만들기·고치기 대화 상자(시안 52): 폭 560px */
+.forum-dialog {
+  width: min(560px, 100vw - 32px);
+}
+
+.dialog-lead {
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.forum-dialog-filter {
+  margin: 16px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.forum-dialog-filter legend {
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.bundle-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.bundle-check input {
+  margin-top: 3px;
+  accent-color: var(--primary);
+}
+
+.bundle-check span {
+  display: grid;
+}
+
+.bundle-check small {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.dialog-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.dialog-chips .tag-chip:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.forum-preview {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: var(--rounded-md);
+  background: var(--selected);
+  font-size: 13px;
+}
+
+.forum-preview > p:first-child {
+  margin-bottom: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.forum-preview ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.forum-preview > p:last-child:not(:first-child) {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.dialog-actions .button.danger {
+  margin-right: auto;
+}
+
+/* 설정 창의 라벨(시안 51-D4): 왼쪽 목록 230px, 오른쪽 고치는 칸, 사이 20px */
+.settings-page > * {
+  flex: none;
+}
+
+.labels-page {
+  overflow: hidden;
+}
+
+.labels {
+  display: grid;
+  flex: 1;
+  grid-template-columns: 230px minmax(0, 1fr);
+  gap: 20px;
+  min-height: 0;
+}
+
+.labels-list {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.labels-tools {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.labels-search {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--rounded-sm);
+  background: var(--canvas);
+  color: var(--text-secondary);
+}
+
+.labels-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+}
+
+.labels-list ul {
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.labels-list .settings-item {
+  width: 100%;
+  font-size: 14px;
+}
+
+.labels-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.labels-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  padding-left: 20px;
+  overflow-y: auto;
+  border-left: 1px solid var(--divider);
+}
+
+.labels-edit .field {
+  margin-top: 12px;
+}
+
+.labels-preview {
+  padding: 12px 14px;
+  border-radius: var(--rounded-md);
+  background: var(--selected);
+  font-size: 15px;
+}
+
+.labels-preview > p {
+  margin-bottom: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.labels-preview-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.labels-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+}
+
+.labels-color {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.labels-hex {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--text-secondary);
+  font-family: var(--mono);
+}
+
+.labels-hex .text-input {
+  width: 96px;
+  font-family: var(--mono);
+}
+
+.labels-importance {
+  margin: 12px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.labels-importance legend {
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.radio-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.radio-card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+  padding: 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--rounded-md);
+  background: var(--canvas);
+  cursor: pointer;
+}
+
+.radio-card:has(input:checked) {
+  border-color: var(--primary);
+}
+
+.radio-card input {
+  grid-row: span 2;
+  margin: 3px 0 0;
+  accent-color: var(--primary);
+}
+
+.radio-card small {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.labels-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 16px;
+}
+
+.labels-actions .help {
+  flex: 1;
 }
