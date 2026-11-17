@@ -26,6 +26,7 @@ import {
   ContractFailure,
   DEFAULT_LABEL_COLORS,
   type Debate,
+  type DebateRequest,
   type DebateSeat,
   type Decision,
   type DecisionWindow,
@@ -688,6 +689,15 @@ export async function startServer(options: {
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     post TEXT NOT NULL UNIQUE,
     round INTEGER NOT NULL DEFAULT 1,
+    at INTEGER NOT NULL
+  ) STRICT`);
+  // 증거 라벨 없이 멤버나 에이전트가 낸 토론 요청(ADR-0040). 포스트마다 가장 나중 것 하나다. 안건이나 근거가 비면 열리지 않고 이것만 남는다.
+  db.exec(`CREATE TABLE IF NOT EXISTS debate_requests (
+    post TEXT PRIMARY KEY,
+    login TEXT NOT NULL,
+    agenda TEXT NOT NULL,
+    grounds TEXT NOT NULL,
+    opened INTEGER NOT NULL,
     at INTEGER NOT NULL
   ) STRICT`);
   // 토론의 자리. `seat`은 알림의 `works` 자리(0, 1)다. `stance`는 낸 입장(JSON), `error`는 내지 못한 까닭(JSON)이다.
@@ -1658,11 +1668,26 @@ export async function startServer(options: {
       at: new Date(row.at).toISOString(),
     };
   };
+  const requestOf = (post: string): DebateRequest | null => {
+    const row = db.prepare("SELECT * FROM debate_requests WHERE post = ?").get(post) as
+      | { login: string; agenda: string; grounds: string; opened: number; at: number }
+      | undefined;
+    return row
+      ? {
+          login: row.login,
+          name: nameOf(row.login),
+          agenda: row.agenda,
+          grounds: row.grounds,
+          opened: row.opened === 1,
+          at: new Date(row.at).toISOString(),
+        }
+      : null;
+  };
   /**
    * 포스트에 증거 라벨이 붙었으면 토론을 연다(ADR-0040). 중요도와 상관없다. 이미 열린 토론이 있으면 그대로 둔다.
    * 자리는 알림의 두 작업이다. 자동 참여 스위치(묻기 스위치)를 끈 주인의 자리는 나오지 않는다.
    */
-  const openDebate = (post: string) => {
+  const openDebate = (post: string, requested = false) => {
     const row = db
       .prepare(
         "SELECT c.labels, a.works FROM channels c JOIN messages m ON m.id = c.alert JOIN alerts a ON a.id = m.alert WHERE c.id = ?",
@@ -1670,7 +1695,7 @@ export async function startServer(options: {
       .get(post) as { labels: string | null; works: string } | undefined;
     if (!row) return;
     const labels: string[] = JSON.parse(row.labels ?? "[]");
-    if (!labels.some((label) => EVIDENCE_LABELS.includes(label))) return;
+    if (!requested && !labels.some((label) => EVIDENCE_LABELS.includes(label))) return;
     if (db.prepare("SELECT 1 FROM debates WHERE post = ?").get(post)) return;
     const works: WorkRef[] = JSON.parse(row.works);
     const debate = Number(
@@ -2656,8 +2681,29 @@ export async function startServer(options: {
       ...post,
       message,
       debate: debateOf(post.channel),
+      request: requestOf(post.channel),
     })),
   }));
+
+  mount(app, api.requestDebate, ({ post, agenda, grounds }, c) => {
+    const login = c.get("login") as string;
+    visit(login);
+    const found = db
+      .prepare(
+        "SELECT id FROM channels WHERE alert IS NOT NULL AND (id = ?1 OR alert = CAST(?1 AS INTEGER))",
+      )
+      .get(post) as { id: string } | undefined;
+    if (!found) throw new ContractFailure({ code: "not_found", message: `없는 포스트다: ${post}` });
+    if (db.prepare("SELECT 1 FROM debates WHERE post = ?").get(found.id))
+      throw new ContractFailure({ code: "conflict", message: "이미 열린 토론이 있다" });
+    const opened = agenda.trim() !== "" && grounds.trim() !== "";
+    db.prepare(
+      "INSERT OR REPLACE INTO debate_requests (post, login, agenda, grounds, opened, at) VALUES (?, ?, ?, ?, ?, ?)",
+    ).run(found.id, login, agenda.trim(), grounds.trim(), opened ? 1 : 0, Date.now());
+    if (opened) openDebate(found.id, true);
+    sharePost(found.id);
+    return { debate: debateOf(found.id), request: requestOf(found.id) as DebateRequest };
+  });
 
   // 라벨(ADR-0039). 이름, 색, 설명은 부른 멤버의 토큰으로 GitHub 라벨을 바꾸고, 중요도는 Omagari에만 둔다.
   mount(app, api.labels, () => ({ labels: labelsView() }));
