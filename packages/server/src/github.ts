@@ -85,7 +85,28 @@ export type GitHub = {
   addLabel(token: string, repo: string, number: number, label: string): Promise<void>;
   /** 이슈에서 라벨을 뗀다. 붙어 있지 않아도 된다. */
   removeLabel(token: string, repo: string, number: number, label: string): Promise<void>;
+  /** 레포의 라벨 전부(ADR-0039). GitHub이 답하지 못하면 `undefined`다. */
+  labels(token: string, repo: string): Promise<RepoLabel[] | undefined>;
+  /** 레포에 라벨을 만든다. 같은 이름이 있으면 GitHub이 받지 않는다. */
+  createLabel(token: string, repo: string, label: Omit<RepoLabel, "id">): Promise<RepoLabel>;
+  /** 레포의 라벨 `name`의 이름, 색, 설명을 고친다. 이슈에 붙은 라벨도 GitHub에서 함께 바뀐다. */
+  updateLabel(
+    token: string,
+    repo: string,
+    name: string,
+    label: Omit<RepoLabel, "id">,
+  ): Promise<RepoLabel>;
 };
+
+/** 레포의 GitHub 라벨. `id`는 이름이 바뀌어도 그대로다. 색은 `#` 없는 16진수다. */
+export type RepoLabel = { id: number; name: string; color: string; description: string };
+
+const repoLabel = (label: RepoLabel): RepoLabel => ({
+  id: label.id,
+  name: label.name,
+  color: label.color,
+  description: label.description ?? "",
+});
 
 export type Issue = { title: string; labels: string[]; open: boolean };
 export type Comment = { id: number; login: string; body: string };
@@ -350,6 +371,26 @@ export function realGitHub(clientId: string): GitHub {
         "DELETE",
       );
       if (!response.ok && response.status !== 404) throw new Error(`HTTP ${response.status}`);
+    },
+    // ponytail: 첫 100개만 읽는다. 레포의 라벨이 그보다 많아지면 쪽을 넘긴다.
+    async labels(token, repo) {
+      const response = await get(`/repos/${repo}/labels?per_page=100`, token).catch(
+        () => undefined,
+      );
+      if (!response?.ok) return undefined;
+      const labels: RepoLabel[] = await response.json();
+      return labels.map(repoLabel);
+    },
+    async createLabel(token, repo, label) {
+      return repoLabel(await send(`/repos/${repo}/labels`, token, "POST", label));
+    },
+    async updateLabel(token, repo, name, { name: newName, ...rest }) {
+      return repoLabel(
+        await send(`/repos/${repo}/labels/${encodeURIComponent(name)}`, token, "PATCH", {
+          new_name: newName,
+          ...rest,
+        }),
+      );
     },
   };
 }
