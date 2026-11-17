@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 36;
+export const CONTRACT_VERSION = 37;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -716,15 +716,20 @@ export const Stance = z.strictObject({
   claim: z.string().min(1),
   evidence: z.array(Evidence),
   context: z.enum(["session", "none"]),
+  /**
+   * 반박 라운드에서 지난 라운드의 자기 입장을 바꿨다고 에이전트가 밝혔다(구현 7장). `reason`은 바꾼 사유(새 근거)다.
+   * 사유 없이 바뀐 입장(`changed`가 있고 `reason`이 없다)은 화면에 "사유 없이 바뀜"으로 표시한다. 첫 라운드와 유지한 입장에는 없다.
+   */
+  changed: z.strictObject({ reason: z.string().min(1).optional() }).optional(),
   model: z.string().optional(),
   effort: z.string().optional(),
 });
 export type Stance = z.infer<typeof Stance>;
 
 /**
- * 토론의 자리 하나: 부딪힌 작업(`login`의 `branch`)의 주인 에이전트. `state`는 입장을 기다린다(러너가 꺼져 있으면 붙을 때 보낸다),
+ * 토론의 자리 하나: 부딪힌 작업(`login`의 `branch`)의 주인 에이전트. `state`는 지금 라운드에서 입장을 기다린다(러너가 꺼져 있으면 붙을 때 보낸다),
  * 냈다, 주인이 자동 참여 스위치(묻기 스위치, ADR-0024)를 꺼 두어 나오지 않는다("토론 참여를 껐어요"), 내지 못했다(`error`)다.
- * `stance`는 입장이 공개된 뒤에만 있다.
+ * 자리에는 입장이 없다. 입장은 주인을 가린 안(`DebateOption`)에 있다.
  */
 export const DebateSeat = z.strictObject({
   login: z.string(),
@@ -732,22 +737,51 @@ export const DebateSeat = z.strictObject({
   branch: z.string(),
   state: z.enum(["waiting", "submitted", "off", "failed"]),
   error: ContractError.optional(),
-  stance: Stance.optional(),
 });
 export type DebateSeat = z.infer<typeof DebateSeat>;
 
 /**
- * 포스트의 토론(ADR-0040, 구현 7장). 포스트에 증거 라벨이 붙으면 서버가 열고, 한 포스트에 열린 토론은 하나다.
+ * 토론의 안 하나: 한 자리의 입장들(끝난 라운드마다 하나, 라운드 순서). 화면은 순서대로 "안 1", "안 2"라 부른다.
+ * 어느 자리의 안인지는 서버가 토론을 열 때 섞어 두고, 결론이 날 때까지 가린다(ADR-0040). 결론이 나면 `owner`가 붙는다.
+ */
+export const DebateOption = z.strictObject({
+  stances: z.array(Stance),
+  owner: z.strictObject({ login: z.string(), name: z.string(), branch: z.string() }).optional(),
+});
+export type DebateOption = z.infer<typeof DebateOption>;
+
+/**
+ * 토론의 결론(ADR-0040, 구현 7장): 안(`option`, `options`의 자리)과 정한 길. `evidence`는 검증된 근거가 마지막 입장에 한쪽에만 있어
+ * 서버가 그쪽을 제안한 것, `choice`는 포스트의 멤버(`chooser`)가 먼저 고른 것이다. 결론은 제안이고, 결정 정리하기의 초안 요청에 실린다(ADR-0028).
+ */
+export const DebateConclusion = z.strictObject({
+  option: z.number().int().nonnegative(),
+  by: z.enum(["evidence", "choice"]),
+  chooser: z.strictObject({ login: z.string(), name: z.string() }).optional(),
+  at: z.string(),
+});
+export type DebateConclusion = z.infer<typeof DebateConclusion>;
+
+/** 토론 라운드 수의 기본값(문답 A13): 가린 첫 라운드와 반박 두 라운드. 서버 설정으로 줄일 수 있다. */
+export const DEBATE_ROUNDS = 3;
+
+/**
+ * 포스트의 토론(ADR-0040, 구현 7장). 포스트에 증거 라벨이 붙으면 서버가 열고, 한 포스트에 토론은 하나다.
  * 진행은 서버가, 판단은 두 주인의 에이전트가 각자 기기에서 한다. 자리는 알림의 두 작업(`Alert.works`)과 같은 순서다.
- * 첫 라운드는 가린다: 기다리는 자리가 남아 있는 동안은 어느 자리의 입장도 서버 API, 웹, 러너 어디에도 내보내지 않는다.
- * 다 모이면(`revealed`) 냈던 입장을 모두 공개한다. 반박 라운드와 끝내기는 아직 없다.
+ * 라운드의 입장은 그 라운드의 자리가 다 낼 때까지(기다리는 자리가 없을 때까지) 서버 API, 웹, 러너 어디에도 내보내지 않는다.
+ * `revealed`는 가린 첫 라운드가 공개되었는지다. 두 자리가 다 낸 라운드 뒤에는 다음 라운드(반박)가 돈다. 반박 라운드에는 상대의 지난 입장이 넘어간다.
+ * `state`: 라운드가 도는 중(`open`), 마지막 라운드가 끝나 사람이 고를 차례(`choosing`), 결론이 났다(`concluded`),
+ * 낸 입장이 하나도 없이 끝났다(`ended`). 검증된 근거가 마지막 입장에 한쪽에만 있으면 고르지 않고 그쪽이 결론이 된다.
  */
 export const Debate = z.strictObject({
   id: z.number(),
-  state: z.literal("open"),
+  state: z.enum(["open", "choosing", "concluded", "ended"]),
   round: z.number().int().positive(),
+  rounds: z.number().int().positive(),
   revealed: z.boolean(),
   seats: z.tuple([DebateSeat, DebateSeat]),
+  options: z.array(DebateOption).max(2),
+  conclusion: DebateConclusion.optional(),
   at: z.string(),
 });
 export type Debate = z.infer<typeof Debate>;
@@ -1123,12 +1157,21 @@ export const serverToRunner = {
     executor: ExecutorId,
     post: Channel.omit({ kind: true }),
     messages: z.array(ChannelMessage).max(CHANNEL_CONTEXT),
+    /** 포스트의 토론에 결론이 났으면 그 안(주인과 마지막 입장)과 정한 길(ADR-0040). 러너는 데이터로 감싸 초안의 근거로 넘긴다. */
+    conclusion: z
+      .strictObject({
+        by: DebateConclusion.shape.by,
+        owner: z.strictObject({ login: z.string(), name: z.string(), branch: z.string() }),
+        stance: Stance,
+      })
+      .optional(),
     ...ModelPick.shape,
   }),
   /**
    * 토론 참여 요청(ADR-0040). 이 러너의 멤버의 작업(`branch`)이 부딪힌 포스트의 토론 `debate`에서 라운드 `round`의 입장을 낸다.
-   * `messages`는 포스트의 대화(맨 앞이 그 알림, `draft`와 같다)이고 첫 라운드라 상대의 입장은 오지 않는다.
-   * 러너는 주인이 그 브랜치에서 쓰던 최근 작업 세션을 읽기 전용으로 갈라 띄우고, 안 되면 초안 PR의 계획, diff, 관련 결정만 넣어
+   * `messages`는 포스트의 대화(맨 앞이 그 알림, `draft`와 같다)다. 첫 라운드는 가려 상대의 입장이 오지 않는다.
+   * 반박 라운드(2 이상)에는 지난 라운드의 내 입장(`mine`)과 상대의 입장(`theirs`)이 온다. 러너는 상대의 입장을 지시가 아닌 데이터로 감싸 넘기고(ADR-0017),
+   * 입장을 바꾸면 사유를 적게 한다(`Stance.changed`). 러너는 주인이 그 브랜치에서 쓰던 최근 작업 세션을 읽기 전용으로 갈라 띄우고, 안 되면 초안 PR의 계획, diff, 관련 결정만 넣어
    * "맥락 없이 참여"로 띄운다. 토론 세션은 파일을 고치지 않는다(ADR-0003). 문답과 같은 줄에 서고, 답은 `stance`(`re`)다.
    */
   debate: z.strictObject({
@@ -1138,6 +1181,8 @@ export const serverToRunner = {
     branch: z.string(),
     post: Channel.omit({ kind: true }),
     messages: z.array(ChannelMessage).max(CHANNEL_CONTEXT),
+    mine: Stance.optional(),
+    theirs: Stance.optional(),
   }),
   /** `draft`(보낸 것의 `id`)를 멈춘다. 줄에 서 있으면 돌리지 않고, 돌고 있으면 실행기를 끈다. 답하지 않는다. */
   stopDraft: z.strictObject({ id: z.string() }),
@@ -1663,6 +1708,18 @@ export const api = {
         }),
       ),
     }),
+  },
+  /**
+   * 포스트(`post`, 포스트의 채널)의 토론에서 주인이 가려진 안 하나(`option`, `Debate.options`의 자리)를 고른다(ADR-0040).
+   * 포스트의 멤버 누구나 고를 수 있고, 먼저 고른 것이 결론이 된다. 투표나 관문은 없다. 고르면 안마다 주인이 공개된다.
+   * 고를 차례(`choosing`)가 아니면(이미 누가 골랐거나, 라운드가 도는 중이거나, 근거로 결론이 났으면) `conflict`다.
+   * 토론이 없거나 없는 안이면 `not_found`다.
+   */
+  chooseDebate: {
+    method: "POST",
+    path: "/api/debates/choose",
+    body: z.strictObject({ post: z.string(), option: z.number().int().nonnegative() }),
+    response: z.strictObject({ debate: Debate }),
   },
   /**
    * 포스트(`post`, 포스트의 채널)에서 결정을 정리해 부른 멤버의 이름으로 결정 PR을 연다(ADR-0025).
