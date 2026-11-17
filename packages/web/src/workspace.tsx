@@ -4,6 +4,8 @@ import {
   type ChannelMessage,
   type ChosenPresence,
   call,
+  type Debate,
+  type DebateRequest,
   type Decision,
   type Draft,
   type ExecutorId,
@@ -21,6 +23,7 @@ import {
   Maximize2,
   Menu,
   MessageSquare,
+  MessagesSquare,
   Minimize2,
   PanelLeftClose,
   PanelLeftOpen,
@@ -42,6 +45,7 @@ import {
 import { type Me, savedPicks, savePicks, server, signedOut } from "./api.ts";
 import { byName, ChannelList, CreateChannel, useCollapsed } from "./channels.tsx";
 import { ChannelTitle, Conversation, type View } from "./conversation.tsx";
+import { DEBATE_STRIP, DebateDialog, DebateLog, DebateStrip, ProxyDialog } from "./debate.tsx";
 import { DecisionDialog, type Fields } from "./decision.tsx";
 import { chosen, type Dm, DmPanel, type Picks } from "./dm.tsx";
 import {
@@ -171,6 +175,12 @@ export function Workspace({
   const [decisions, setDecisions] = useState<Decision[]>([]);
   /** 결정 정리하기 대화 상자: 열려 있으면 값이 있고, 고치는 중이면 그 결정이 든다. */
   const [deciding, setDeciding] = useState<{ revising?: Decision }>();
+  /** 포스트(채널 id)마다의 토론과 토론 요청. 붙을 때 `api.posts`로 읽고, 바뀌면 실시간 연결로 온다. */
+  const [debates, setDebates] = useState<
+    Record<string, { debate: Debate | null; request: DebateRequest | null }>
+  >({});
+  /** 열린 대화 상자: 토론 열기(다시 요청이면 지난 요청을 채운다)나, 대행을 부를 자리. */
+  const [debating, setDebating] = useState<{ open: true } | { seat: number }>();
   /** 실시간 연결로 온 가장 최근 결정 초안. 대화 상자가 자기 것인지 가려 받는다. */
   const [incoming, setIncoming] = useState<Draft>();
   /** 이 브라우저에서 결정 PR로 올린 마지막 네 칸. 결정의 본문은 계약에 없어서, 고쳐 올릴 때 이것으로 칸을 채운다. */
@@ -459,14 +469,19 @@ export function Workspace({
           .then((list) => setLabels(list.labels))
           .catch(check);
         call(server(session), api.posts)
-          .then(({ posts: list }) =>
+          .then(({ posts: list }) => {
+            setDebates(
+              Object.fromEntries(
+                list.map((item) => [item.channel, { debate: item.debate, request: item.request }]),
+              ),
+            );
             setPosts((old) =>
               postsOf(list).map((item) => ({
                 ...item,
                 edited: old?.find((other) => other.alert === item.alert)?.edited,
               })),
-            ),
-          )
+            );
+          })
           .catch(check);
         // 끊긴 사이에 온 답은 다시 오지 않는다. 불러 둔 DM을 버리고 열려 있는 것은 다시 읽는다.
         setDms({});
@@ -481,6 +496,10 @@ export function Workspace({
       else if (event.kind === "message") receive(event.payload);
       else if (event.kind === "members") setMembers(event.payload.members);
       else if (event.kind === "qa") receiveQa(event.payload);
+      else if (event.kind === "debate") {
+        const { post: channel, ...rest } = event.payload;
+        setDebates((all) => ({ ...all, [channel]: rest }));
+      }
     },
     onSignedOut,
   );
@@ -678,9 +697,54 @@ export function Workspace({
     />
   );
 
+  /** 열린 포스트의 토론. */
+  const debated = openPost ? debates[openPost.channel] : undefined;
+  const debate = debated?.debate ?? null;
+  /** 토론 API를 부르고 돌아온 토론으로 바꾼다. 실시간 연결로도 오지만 먼저 그린다. */
+  const debateCall = async (
+    act: () => Promise<{ debate: Debate | null; request?: DebateRequest }>,
+  ) => {
+    if (!openPost) return;
+    const channel = openPost.channel;
+    try {
+      const result = await act();
+      setDebates((all) => ({
+        ...all,
+        [channel]: {
+          debate: result.debate,
+          request: result.request ?? all[channel]?.request ?? null,
+        },
+      }));
+    } catch (error) {
+      throw check(error);
+    }
+  };
+  /** 토론 열기 / 토론 보기(시안 60-B). 열린 토론이 있으면 토론 띠로 간다. */
+  const debateButton = openPost && (
+    <button
+      type="button"
+      className="header-button named debate-button"
+      aria-label={debate ? "토론 보기" : "토론 열기"}
+      onClick={() => {
+        if (!debate) return setDebating({ open: true });
+        const strip = document.getElementById(DEBATE_STRIP);
+        strip?.scrollIntoView({ block: "nearest" });
+        strip?.focus();
+      }}
+    >
+      <MessagesSquare size={18} aria-hidden />
+      <span>{debate ? "토론 보기" : "토론 열기"}</span>
+    </button>
+  );
+
   /** 결정 정리하기 버튼: 열린 포스트의 머리 띠에 두고 이름이 늘 보인다. */
   const decide = openPost && (
-    <button type="button" className="header-button named" onClick={() => setDeciding({})}>
+    <button
+      type="button"
+      className="header-button named debate-button"
+      aria-label="결정 정리하기"
+      onClick={() => setDeciding({})}
+    >
       <PenLine size={18} aria-hidden />
       <span>결정 정리하기</span>
     </button>
@@ -701,6 +765,31 @@ export function Workspace({
         label={openPost ? label : undefined}
         edited={openPost?.edited}
         strip={strip}
+        debate={
+          debate && (
+            <DebateStrip
+              debate={debate}
+              onProxy={(seat) => setDebating({ seat })}
+              onDecide={() => setDeciding({})}
+            />
+          )
+        }
+        tail={
+          debated &&
+          (debated.debate || debated.request) && (
+            <DebateLog
+              debate={debated.debate}
+              request={debated.request}
+              onChoose={(option) =>
+                debateCall(() =>
+                  call(server(session), api.chooseDebate, { post: active.id, option }),
+                )
+              }
+              onDecide={() => setDeciding({})}
+              onRequest={() => setDebating({ open: true })}
+            />
+          )
+        }
         verdict={
           openPost?.message.alert.kind === "indirect" && openPost.message.alert.run
             ? { run: openPost.message.alert.run, works: openPost.message.alert.works }
@@ -809,6 +898,7 @@ export function Workspace({
             {/* 오른쪽 칸을 여는 버튼들. 평소에는 아이콘만, 연 버튼만 이름이 붙는다. */}
             <div className="header-actions">
               {big && labelButton}
+              {big && debateButton}
               {big && decide}
               {forum && !big && current && current.id !== OTHER.id && (
                 <button
@@ -894,6 +984,7 @@ export function Workspace({
                 <h2>{postChannel.name}</h2>
                 <IssueNumber post={openPost} />
                 {labelButton}
+                {debateButton}
                 {decide}
                 {wide && (
                   <a
@@ -991,6 +1082,36 @@ export function Workspace({
               upsertDecision(decision);
             }}
             onClose={() => setDeciding(undefined)}
+          />
+        )}
+        {debating && openPost && postChannel && "open" in debating && (
+          <DebateDialog
+            title={postChannel.name}
+            initial={debated?.request?.opened === false ? debated.request : undefined}
+            onRequest={(agenda, grounds) =>
+              debateCall(() =>
+                call(server(session), api.requestDebate, {
+                  post: openPost.channel,
+                  agenda,
+                  grounds,
+                }),
+              )
+            }
+            onClose={() => setDebating(undefined)}
+          />
+        )}
+        {debating && openPost && debate && "seat" in debating && debate.seats[debating.seat] && (
+          <ProxyDialog
+            seat={debate.seats[debating.seat]}
+            onProxy={() =>
+              debateCall(() =>
+                call(server(session), api.proxyDebate, {
+                  post: openPost.channel,
+                  seat: debating.seat,
+                }),
+              )
+            }
+            onClose={() => setDebating(undefined)}
           />
         )}
         {settings && (

@@ -4331,3 +4331,426 @@ a.issue-number:hover {
 .labels-actions .help {
   flex: 1;
 }
+
+/* 토론 띠(app-debate-strip, DESIGN.md "토론"): 판정 띠와 같은 모양이고 그 위에 선다. 끝난 토론은 바탕 없이 보조 글씨다. */
+.debate-strip {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-height: 44px;
+  margin: 8px 20px 0;
+  padding: 6px 8px 6px 14px;
+  border-radius: var(--rounded-md);
+  background: var(--selected);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.38;
+}
+
+.debate-strip:focus-visible {
+  outline: 2px solid var(--primary-focus);
+}
+
+.right-slot .panel-body > .debate-strip {
+  margin-inline: 0;
+}
+
+.debate-strip.quiet {
+  background: none;
+}
+
+.debate-strip svg {
+  flex: none;
+  color: var(--ink);
+}
+
+.debate-strip.quiet svg {
+  color: inherit;
+}
+
+.debate-strip + .verdict {
+  margin-top: 8px;
+}
+
+.round-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.round-dots > span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #c7c7cc;
+}
+
+.round-dots > .done {
+  background: var(--ink);
+}
+
+.round-dots > .now {
+  border: 2px solid var(--ink);
+  background: var(--canvas);
+}
+
+/* 대화에 쌓이는 토론: 요청, 대행 줄, 입장 카드(app-debate-card), 빈 자리(app-debate-card-ghost), 고르기와 결론 */
+.debate-log {
+  display: grid;
+  gap: 8px;
+  padding: 10px 20px 4px;
+}
+
+.debate-card,
+.debate-ghost {
+  max-width: 720px;
+  padding: 10px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--rounded-md);
+  background: var(--canvas);
+  font-size: 14px;
+}
+
+.debate-card.warning {
+  border-color: transparent;
+  background: var(--warning-bg);
+}
+
+.debate-ghost {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-style: dashed;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.debate-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.debate-card-head strong {
+  font-weight: 600;
+}
+
+.debate-number {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--chip);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.debate-round {
+  margin-left: auto;
+}
+
+.badge.chosen {
+  background: var(--ink);
+  color: var(--on-dark);
+}
+
+.debate-meta {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.debate-card-head .debate-meta {
+  font-size: 12px;
+}
+
+/* 덮인 주인(app-spoiler): 폭이 늘 136px라 이름 길이도 대행 여부도 새지 않는다. */
+.spoiler {
+  display: inline-grid;
+  place-items: center;
+  width: 136px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--pill);
+  background: #3a3a3c;
+  color: #a1a1a6;
+  cursor: pointer;
+}
+
+.spoiler:hover {
+  background: #4a4a4d;
+}
+
+.spoiler:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.debate-owner {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.debate-owner .owner-name {
+  color: var(--ink);
+}
+
+.debate-branch {
+  color: var(--text-secondary);
+  font: 400 12px / 1.3 var(--mono);
+}
+
+.debate-stance {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.debate-claim {
+  line-height: 1.5;
+}
+
+.debate-changed {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: var(--rounded-sm);
+  background: var(--selected);
+  font-size: 13px;
+}
+
+.debate-changed.warning {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.debate-changed svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.debate-changed strong {
+  font-weight: 600;
+}
+
+.debate-evidence {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+
+.debate-evidence li {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+
+.debate-evidence .badge {
+  justify-self: start;
+}
+
+.debate-evidence .mark-verified {
+  color: var(--ink);
+}
+
+.debate-experiment {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--rounded-sm);
+  font-size: 13px;
+}
+
+.debate-experiment strong {
+  font-weight: 600;
+}
+
+.debate-experiment.broken {
+  border-color: transparent;
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.debate-experiment.broken .debate-meta {
+  color: inherit;
+}
+
+.debate-link {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.debate-experiment.broken .debate-link {
+  color: inherit;
+}
+
+.debate-past-toggle {
+  width: 100%;
+  margin-top: 10px;
+  padding: 8px 0 0;
+  border: 0;
+  border-top: 1px solid var(--divider);
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.debate-past {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px dashed var(--hairline);
+  border-radius: var(--rounded-sm);
+  background: var(--parchment);
+}
+
+.debate-past-round {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.debate-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.debate-line strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.debate-request {
+  display: grid;
+  gap: 2px;
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+
+.debate-request dt {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.debate-request dd {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.debate-card.warning .debate-card-foot p {
+  color: var(--warning);
+}
+
+.debate-card-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px 12px;
+  margin-top: 10px;
+}
+
+.debate-card-foot p {
+  flex: 1 1 240px;
+  font-size: 12px;
+}
+
+.debate-choose {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.debate-choose legend {
+  float: left;
+  width: 100%;
+}
+
+.debate-radio {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--rounded-md);
+  cursor: pointer;
+}
+
+.debate-radio:has(:checked) {
+  border-color: var(--primary);
+}
+
+.debate-radio input {
+  margin-top: 3px;
+  accent-color: var(--primary);
+}
+
+.debate-radio > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.debate-radio .debate-meta {
+  font-size: 12px;
+}
+
+.debate-dialog {
+  width: min(520px, 100vw - 32px);
+}
+
+.debate-grounds {
+  min-height: 84px;
+}
+
+.debate-help {
+  margin-top: 12px;
+}
+
+.dialog-list {
+  display: grid;
+  gap: 4px;
+  margin: 12px 0 0;
+  padding-left: 18px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* 좁은 화면에서는 머리 띠가 넘치지 않게 토론 버튼과 결정 정리하기의 이름을 뺀다(aria-label이 이름이다). */
+@media (max-width: 833px) {
+  .debate-button span {
+    display: none;
+  }
+}

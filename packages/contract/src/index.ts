@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 41;
+export const CONTRACT_VERSION = 42;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -812,7 +812,8 @@ export type DebateSeat = z.infer<typeof DebateSeat>;
 
 /**
  * 토론의 안 하나: 한 자리의 입장들(끝난 라운드마다 하나, 라운드 순서). 화면은 순서대로 "안 1", "안 2"라 부른다.
- * 어느 자리의 안인지는 서버가 토론을 열 때 섞어 두고, 결론이 날 때까지 가린다(ADR-0040). 결론이 나면 `owner`가 붙는다.
+ * 어느 자리의 안인지는 서버가 토론을 열 때 섞어 둔다(ADR-0040). `owner`는 안이 공개되면 늘 붙고, 화면이 결론 전까지 스포일러처럼 덮어 둔다(#202).
+ * 누른 사람의 화면에서만 열린다. 러너에 보내는 참여 요청에는 주인이 가지 않는다.
  */
 export const DebateOption = z.strictObject({
   stances: z.array(Stance),
@@ -2148,6 +2149,15 @@ export const serverToWeb = {
   labels: z.array(Label),
   /** 내 결정 초안이 끝났다(다 씀, 멈춤, 쓰지 못함). 요청한 사람의 연결에만 간다. 끊긴 사이의 것은 다시 보내지 않는다. */
   draft: Draft,
+  /**
+   * 포스트(`post`, 포스트의 채널)의 토론이나 토론 요청이 바뀌었다(`api.posts`의 `debate`, `request`와 같다). 라운드가 넘어가거나, 입장이 들어오거나,
+   * 대행을 부르거나, 고르거나, 만료되거나, 기다리는 자리의 러너가 붙거나 떨어질 때 보낸다. 다시 붙으면 `api.posts`를 읽는다.
+   */
+  debate: z.strictObject({
+    post: z.string(),
+    debate: Debate.nullable(),
+    request: DebateRequest.nullable(),
+  }),
   error: ContractError,
 } satisfies Payloads;
 

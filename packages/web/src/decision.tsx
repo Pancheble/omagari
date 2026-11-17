@@ -23,7 +23,7 @@ export type Fields = { title: string; context: string; decision: string; consequ
 const EMPTY: Fields = { title: "", context: "", decision: "", consequences: "" };
 
 /** 받침이 있으면 앞, 없으면 뒤: 지은이 / 민수가. */
-const josa = (name: string, withFinal: string, without: string) => {
+export const josa = (name: string, withFinal: string, without: string) => {
   const code = Array.from(name).at(-1)?.charCodeAt(0) ?? 0;
   return (
     name + (code >= 0xac00 && code <= 0xd7a3 && (code - 0xac00) % 28 !== 0 ? withFinal : without)

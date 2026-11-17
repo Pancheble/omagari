@@ -11,6 +11,10 @@
 // - 합쳐 돌려 보기(ADR-0036)의 판정은 검사 명령을 돌리지 않고 정해 둔 것을 올린다. 멤버 셋(정다은, 오우진, 한소라)의 가짜 러너가 내 작업과
 //   간접 충돌(추정)을 걸고 판정을 올려, 포럼에 돌려 보는 중, 깨짐(출력 있음·없음), 가릴 수 없음, 돌리지 못함 넷(검사 명령 없음, 샌드박스 없음,
 //   시간 초과, 직접 충돌), 지난 결과, 통과로 풀림, 결정 PR이 열려 띠가 둘인 포스트가 선다. 내 러너는 이 알림들을 돌리지 않는다(잠잠한 시간을 끝없이 둔다).
+// - 토론(ADR-0040, #202): 가짜 러너(정다은, 오우진, 한소라, 김민지, 윤지호)끼리 간접 충돌을 걸고 내가 토론을 요청해, 포럼 "참고"의 "refund" 포스트들에
+//   가린 첫 라운드, 반박 라운드, 기다리는 중(대행 부르기), 대행, 고를 차례(바꾼 입장, 사유 없이 바뀜, 실험 셋), 사람이 고른 결론, 실험으로 정함,
+//   근거로 정함과 참여를 끈 자리, 내지 못해 끝남, 만료가 선다. "points"에는 근거 없이 낸 요청(열지 않음), "invoice"에는 나와 한소라의 토론이 있다.
+//   깨짐으로 확인된 포스트("tax" 등)에는 토론이 저절로 열려 있다. 만료는 DB에서 연 시각을 당겨 만든다.
 // - DEMO_MERGE_CHECK=off|no_sandbox: 설정 창의 내 러너의 합쳐 돌려 보기를 꺼 둠이나 샌드박스 없음으로 둔다. 안 주면 켜짐이다.
 // - DEMO_CHECK=none: 기본 브랜치에 검사 명령(.omagari.json)을 두지 않는다. 설정 창의 "검사 명령 없음"을 본다.
 // - 끝내면(Ctrl+C) 임시 레포와 DB를 지운다. 이름이 *.test.ts가 아니라 npm test와 CI는 돌리지 않는다.
@@ -18,8 +22,21 @@
 // - GitHub 머지를 막아 둔 채로 끝난다("머지 막힘"을 보이려고). 그 뒤로 Omagari가 하는 머지는 모두 막힌다.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { setTimeout as sleep } from "node:timers/promises";
-import { api, call, encode, type MergeRun, RUNNER_SOCKET, runnerToServer } from "@omagari/contract";
+import {
+  api,
+  call,
+  type Debate,
+  decode,
+  encode,
+  type MergeRun,
+  RUNNER_SOCKET,
+  runnerToServer,
+  type Stance,
+  serverToRunner,
+} from "@omagari/contract";
 import { claudeCode, codex, codexReady, type Executor } from "@omagari/runner";
 import { eventually, fakeExecutor, fakeSandbox, REPO, startWorld, writer } from "./harness.ts";
 
@@ -103,6 +120,8 @@ const NAMES = {
   dahee: "정다은",
   woojin: "오우진",
   sora: "한소라",
+  minji: "김민지",
+  jiho: "윤지호",
 };
 for (const [login, name] of Object.entries(NAMES)) fake.names.set(login, name);
 // "나"는 이름을 정하기 전에 들어왔다. 다시 들어와 이름을 고친다.
@@ -459,18 +478,242 @@ const SCENES: {
     run: run("broken", { ms: 6_000, output: FAILED }),
   },
 ];
+// 토론(ADR-0040, #202). 가짜 러너끼리 간접 충돌(추정)을 걸고 내가 토론을 요청해 연다. 입장은 가짜 러너가 브랜치마다 정해 둔 것을 라운드마다 낸다.
+// 대본이 없거나 그 라운드의 것이 없으면 내지 않고 붙든다(기다리는 자리). "error"면 내지 못했다고 답한다.
+type Fakes = "dahee" | "woojin" | "sora" | "minji" | "jiho";
+const say1 = (claim: string, rest: Partial<Stance> = {}): Stance => ({
+  claim,
+  evidence: [
+    { text: "src/pay.ts:4 refund(amount, reason)의 정의", mark: "verified" },
+    { text: "부분 환불이 두 번 들어오면 남은 금액을 넘는다", mark: "unverified" },
+  ],
+  context: "session",
+  model: "claude-opus-5-5",
+  effort: "high",
+  ...rest,
+});
+const PATCH = `--- a/src/pay.ts
++++ b/src/pay.ts
+@@ -4,3 +4,3 @@
+-export function refund(amount: number, reason: string) {
++export function refund(amount: number, reason?: string) {
+   return -amount;
+ }
+`;
+const experiment = (verdict: "pass" | "broken" | "not_run", reason?: string) => ({
+  patch: PATCH,
+  verdict,
+  ...(reason ? { reason } : { check: CHECK }),
+  ms: verdict === "not_run" ? 0 : 41_000,
+});
+type Script = (Stance | "error")[];
+const DEBATES: {
+  name: string;
+  a: { who: Fakes; branch: string; script?: Script };
+  b: { who: Fakes; branch: string; script?: Script };
+}[] = [
+  // 가린 첫 라운드: 한쪽만 냈다.
+  {
+    name: "가린 첫 라운드",
+    a: { who: "dahee", branch: "feat/receipt-v2", script: [say1("영수증은 결제 뒤에 만든다")] },
+    b: { who: "woojin", branch: "feat/receipt-sync" },
+  },
+  // 반박 라운드: 첫 라운드는 공개됐고 둘째 라운드에 한쪽만 냈다.
+  {
+    name: "반박 라운드",
+    a: {
+      who: "dahee",
+      branch: "feat/coupon-v2",
+      script: [
+        say1("쿠폰은 결제 금액에서 먼저 뺀다"),
+        say1("쿠폰은 결제 금액에서 먼저 뺀다", { changed: {} }),
+      ],
+    },
+    b: {
+      who: "sora",
+      branch: "feat/coupon-tax",
+      script: [say1("세금을 먼저 매기고 쿠폰을 뺀다", { context: "none", model: "gpt-5.5" })],
+    },
+  },
+  // 기다리는 중: 김민지의 러너가 꺼져 있다. 대행을 부를 수 있다.
+  {
+    name: "기다리는 중",
+    a: { who: "woojin", branch: "feat/refund-v3", script: [say1("환불은 원래 결제 수단으로만")] },
+    b: { who: "minji", branch: "feat/refund-wallet" },
+  },
+  // 대행: 김민지의 자리에 내가 대행을 불렀다. 세 라운드가 끝나 고를 차례이고, 대행이 낸 안은 덮개 안에 "대행"이 있다.
+  {
+    name: "대행",
+    a: {
+      who: "sora",
+      branch: "feat/points-v2",
+      script: [
+        say1("포인트는 결제와 따로 쌓는다"),
+        say1("포인트는 결제와 따로 쌓는다"),
+        say1("포인트는 결제와 따로 쌓는다"),
+      ],
+    },
+    b: { who: "minji", branch: "feat/points-wallet" },
+  },
+  // 고를 차례: 세 라운드 모두 냈다. 사유를 밝혀 바꾼 입장, 사유 없이 바뀐 입장, 실험(통과, 깨짐, 돌리지 못함)이 있다.
+  {
+    name: "고를 차례",
+    a: {
+      who: "dahee",
+      branch: "feat/refund-reason",
+      script: [
+        say1("refund에 reason을 꼭 받는다", {
+          experiment: experiment("not_run", "기본 브랜치(origin/main)에 .omagari.json이 없다"),
+        }),
+        say1("reason은 선택으로 받는다", {
+          changed: {
+            reason: "checkout이 reason 없이 부르는 곳이 세 군데라 필수로 바꾸면 다 깨진다",
+          },
+          experiment: experiment("broken"),
+        }),
+        say1("reason은 선택으로 받는다", { experiment: experiment("pass") }),
+      ],
+    },
+    b: {
+      who: "woojin",
+      branch: "feat/refund-audit",
+      script: [
+        say1("reason은 감사 로그에 꼭 남겨야 한다", {
+          context: "none",
+          model: "gpt-5.5",
+          effort: "medium",
+        }),
+        say1("reason은 감사 로그에 꼭 남겨야 한다", {
+          context: "none",
+          model: "gpt-5.5",
+          effort: "medium",
+        }),
+        say1("reason 없이 오면 'unknown'으로 남긴다", {
+          context: "none",
+          model: "gpt-5.5",
+          effort: "medium",
+          changed: {},
+          evidence: [
+            { text: "docs/decisions/0007-audit-log.md", mark: "verified" },
+            { text: "src/audit.ts:12 log()", mark: "missing" },
+          ],
+          experiment: experiment("pass"),
+        }),
+      ],
+    },
+  },
+  // 사람이 골랐다: 내가 안 1을 골랐다.
+  {
+    name: "사람이 골랐다",
+    a: {
+      who: "sora",
+      branch: "feat/mail-v2",
+      script: [say1("메일은 큐를 거친다"), say1("메일은 큐를 거친다"), say1("메일은 큐를 거친다")],
+    },
+    b: {
+      who: "dahee",
+      branch: "feat/mail-direct",
+      script: [say1("메일은 바로 보낸다"), say1("메일은 바로 보낸다"), say1("메일은 바로 보낸다")],
+    },
+  },
+  // 실험으로 정했다: 마지막 라운드에 한 안의 실험만 통과했다.
+  {
+    name: "실험으로 정했다",
+    a: {
+      who: "woojin",
+      branch: "feat/fee-v2",
+      script: [
+        say1("수수료는 반올림한다"),
+        say1("수수료는 반올림한다"),
+        say1("수수료는 반올림한다", { experiment: experiment("pass") }),
+      ],
+    },
+    b: {
+      who: "sora",
+      branch: "feat/fee-floor",
+      script: [
+        say1("수수료는 버림한다"),
+        say1("수수료는 버림한다"),
+        say1("수수료는 버림한다", { experiment: experiment("broken") }),
+      ],
+    },
+  },
+  // 근거로 정했다: 마지막 라운드에 검증된 근거가 한 안에만 있다.
+  {
+    name: "근거로 정했다",
+    a: {
+      who: "dahee",
+      branch: "feat/tax-v2",
+      script: [
+        say1("세율은 설정에서 읽는다"),
+        say1("세율은 설정에서 읽는다"),
+        say1("세율은 설정에서 읽는다"),
+      ],
+    },
+    b: {
+      who: "sora",
+      branch: "feat/tax-const",
+      script: [
+        say1("세율은 상수로 둔다"),
+        say1("세율은 상수로 둔다"),
+        say1("세율은 상수로 둔다", {
+          evidence: [{ text: "세율은 잘 바뀌지 않는다", mark: "unverified" }],
+        }),
+      ],
+    },
+  },
+  // 참여를 껐다: 윤지호가 묻기 스위치를 꺼 나오지 않는다. 한쪽만 내 근거로 정해졌다.
+  {
+    name: "참여를 껐다",
+    a: {
+      who: "woojin",
+      branch: "feat/invoice-v2",
+      script: [say1("청구서 번호는 연도마다 다시 센다")],
+    },
+    b: { who: "jiho", branch: "feat/invoice-seq" },
+  },
+  // 끝났다: 두 자리 모두 내지 못했다.
+  {
+    name: "끝났다",
+    a: { who: "sora", branch: "feat/ledger-v3", script: ["error"] },
+    b: { who: "woojin", branch: "feat/ledger-split", script: ["error"] },
+  },
+  // 만료: 한쪽만 낸 채 14일이 지났다(데모는 DB에서 연 시각을 당긴다).
+  {
+    name: "만료",
+    a: { who: "dahee", branch: "feat/discount-v2", script: [say1("할인은 쿠폰과 겹치지 않는다")] },
+    b: { who: "woojin", branch: "feat/discount-stack" },
+  },
+];
+const scriptOf = (branch: string) =>
+  DEBATES.flatMap(({ a, b }) => [a, b]).find((side) => side.branch === branch)?.script;
+
 for (const [login] of Object.entries(NAMES).filter(([l]) =>
-  ["dahee", "woojin", "sora"].includes(l),
+  ["dahee", "woojin", "sora", "minji", "jiho"].includes(l),
 ))
   fake.grant(login);
 const fakeRunners = new Map<string, WebSocket>();
-for (const who of ["dahee", "woojin", "sora"] as const) {
+for (const who of ["dahee", "woojin", "sora", "minji", "jiho"] as const) {
   const as = await world.login(who);
   const socket = new WebSocket(`${world.server.url.replace("http", "ws")}${RUNNER_SOCKET}`);
   fakeRunners.set(who, socket);
   const welcomed = Promise.withResolvers<void>();
   socket.addEventListener("message", ({ data }) => {
     if (JSON.parse(String(data)).kind === "welcome") welcomed.resolve();
+    const decoded = decode(serverToRunner, String(data));
+    if ("error" in decoded || decoded.message.kind !== "debate") return;
+    const { id, payload } = decoded.message;
+    const said = scriptOf(payload.branch)?.[payload.round - 1];
+    if (said === "error")
+      socket.send(
+        encode(
+          runnerToServer,
+          "error",
+          { code: "internal", message: "실행기가 답하지 않았다" },
+          id,
+        ),
+      );
+    else if (said) socket.send(encode(runnerToServer, "stance", said, id));
   });
   await new Promise((open) => socket.addEventListener("open", open, { once: true }));
   socket.send(
@@ -484,9 +727,10 @@ for (const who of ["dahee", "woojin", "sora"] as const) {
   );
   await welcomed.promise;
   const mine = SCENES.filter((s) => s.who === who);
+  const debating = DEBATES.flatMap(({ a, b }) => [a, b]).filter((side) => side.who === who);
   socket.send(
     encode(runnerToServer, "observation", {
-      works: mine.map((s) => ({
+      works: [...mine, ...debating].map((s) => ({
         branch: s.branch,
         base: "0".repeat(40),
         share: "full" as const,
@@ -511,6 +755,39 @@ for (const who of ["dahee", "woojin", "sora"] as const) {
     }),
   );
 }
+// 토론의 짝은 쓰는 쪽(a)의 러너가 올린다. 김민지의 러너가 떨어져도 알림이 남는다. 관측을 다 받은 뒤 올린다.
+await sleep(500);
+for (const who of ["dahee", "woojin", "sora"] as const)
+  fakeRunners.get(who)?.send(
+    encode(runnerToServer, "conflicts", {
+      pairs: [
+        ...SCENES.filter((s) => s.who === who).map((s) => ({
+          kind: "indirect" as const,
+          branch: s.branch,
+          theirs: MINE,
+          symbols: [
+            {
+              name: s.symbol,
+              mine: [{ path: `src/${s.symbol}.ts`, line: 3, role: "uses" as const }],
+              theirs: [{ path: "src/pay.ts", line: 1, role: "changed" as const }],
+            },
+          ],
+        })),
+        ...DEBATES.filter(({ a }) => a.who === who).map(({ a, b }) => ({
+          kind: "indirect" as const,
+          branch: a.branch,
+          theirs: { login: b.who, branch: b.branch },
+          symbols: [
+            {
+              name: "refund",
+              mine: [{ path: "src/checkout.ts", line: 2, role: "uses" as const }],
+              theirs: [{ path: "src/pay.ts", line: 4, role: "changed" as const }],
+            },
+          ],
+        })),
+      ],
+    }),
+  );
 const sceneAlert = (branch: string) =>
   eventually(async () => {
     const found = (await alerts()).find(
@@ -534,6 +811,59 @@ for (const scene of SCENES) {
   }
   send(scene.run);
 }
+// 토론을 연다. 김민지는 러너를 끄고(기다리는 자리), 윤지호는 묻기 스위치를 끈다(나오지 않는 자리).
+fakeRunners.get("minji")?.close();
+await call(await world.login("jiho"), api.setAskSwitch, { on: false });
+const debatePosts = new Map<string, string>();
+for (const scene of DEBATES) {
+  const post = await postOf(await sceneAlert(scene.a.branch));
+  debatePosts.set(scene.name, post);
+  await call(world.owner, api.requestDebate, {
+    post,
+    agenda: "refund()가 reason을 받는 방식",
+    grounds: "src/pay.ts:4 refund의 정의\ndocs/decisions/0007-audit-log.md",
+  });
+}
+const debateOf = (name: string, check: (debate: Debate) => void) =>
+  eventually(async () => {
+    const post = debatePosts.get(name);
+    const found = (await call(world.owner, api.posts)).posts.find((p) => p.channel === post);
+    assert.ok(found?.debate, `${name}: 아직 토론이 없다`);
+    check(found.debate);
+    return found.debate;
+  }, 60_000);
+// 대행: 김민지의 자리에 내가 대행을 부른다. 내 러너가 정해 둔 입장을 낸다.
+const proxied = await debateOf("대행", (d) => assert.ok(d.seats.some((s) => s.away)));
+await call(world.owner, api.proxyDebate, {
+  post: debatePosts.get("대행") as string,
+  seat: proxied.seats.findIndex((seat) => seat.login === "minji"),
+});
+// 사람이 골랐다: 고를 차례가 되면 내가 안 1을 고른다.
+await debateOf("사람이 골랐다", (d) => assert.equal(d.state, "choosing"));
+await call(world.owner, api.chooseDebate, {
+  post: debatePosts.get("사람이 골랐다") as string,
+  option: 0,
+});
+// 만료: 한쪽이 낸 뒤 연 시각을 15일 전으로 당긴다. 서버가 다음 주기에 만료로 끝낸다.
+await debateOf("만료", (d) => assert.ok(d.seats.some((s) => s.state === "submitted")));
+const database = new DatabaseSync(join(dirname(world.config), "omagari.db"));
+database
+  .prepare("UPDATE debates SET at = ? WHERE post = ?")
+  .run(Date.now() - 15 * 86_400_000, debatePosts.get("만료") as string);
+database.close();
+await debateOf("만료", (d) => assert.equal(d.state, "expired"));
+// 토론 요청: 근거 없이 낸 요청(열지 않음)과, 나와 한소라 사이에 연 요청(내가 냈고 한소라는 아직). 깨짐 판정으로 확인된 포스트에는 토론이 저절로 열려 있다.
+await call(world.owner, api.requestDebate, {
+  post: await postOf(sceneAlerts.get("feat/points") as number),
+  agenda: "포인트 적립을 결제 전에 할지",
+  grounds: "",
+});
+await call(world.owner, api.requestDebate, {
+  post: await postOf(sceneAlerts.get("feat/invoice") as number),
+  agenda: "청구서 번호를 pay()에서 매길지",
+  grounds: "src/pay.ts:1 pay()의 정의",
+});
+
 // 결정 PR이 열린 포스트: 판정 띠와 결정 띠가 함께 선다.
 const wallet = await postOf(sceneAlerts.get("feat/wallet") as number);
 const woojin = await world.login("woojin");

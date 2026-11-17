@@ -147,10 +147,18 @@ ${JSON.stringify({
     assert.ok(debate?.revealed);
     return debate;
   });
-  // 안에는 주인이 없다. 주장으로 찾는다.
-  assert.ok(open.options.every((option) => option.owner === undefined));
+  // 공개된 안에는 주인이 실린다. 화면이 결론 전까지 덮어 둔다(#202).
   const first = open.options.map((option) => option.stances[0]);
   const mine = first.find((stance) => stance?.claim === ownerClaim);
+  assert.equal(open.options.find((o) => o.stances[0] === mine)?.owner?.login, "owner");
+  // 웹에는 바뀐 토론이 실시간으로 간다. 가려진 동안 간 것에는 입장이 없다.
+  const pushed = await eventually(() => {
+    const found = web.received.findLast((m) => m.kind === "debate" && m.payload.debate?.revealed);
+    assert.ok(found?.kind === "debate");
+    return found.payload;
+  });
+  assert.deepEqual(pushed.debate?.options, open.options);
+  assert.ok(web.received.some((m) => m.kind === "debate" && m.payload.debate?.revealed === false));
   assert.ok(mine);
   assert.equal(mine?.context, "session");
   assert.deepEqual(
@@ -362,10 +370,10 @@ test("반박 두 라운드에 상대 입장이 감싸여 넘어가고, 사유 �
     /<their_stance>\n<claim>reason을 필수로 받는다<\/claim>/,
   );
 
-  // 안은 주인 없이 두 개이고 라운드마다 입장이 있다. 사유 없이 바뀐 입장은 사유가 없는 `changed`다.
+  // 안은 두 개이고 라운드마다 입장이 있다. 고르는 동안에도 주인이 실린다. 사유 없이 바뀐 입장은 사유가 없는 `changed`다.
   assert.equal(choosing.options.length, 2);
-  assert.ok(choosing.options.every((option) => option.owner === undefined));
   const ownerAt = choosing.options.findIndex((o) => o.stances[0]?.claim === OWNER[0]);
+  assert.equal(choosing.options[ownerAt]?.owner?.login, "owner");
   const ownerOption = choosing.options[ownerAt];
   const aliceOption = choosing.options[1 - ownerAt];
   assert.deepEqual(
