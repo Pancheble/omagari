@@ -331,6 +331,7 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
         labels: ["직접 충돌"],
         importance: "reference",
         forums: [reference],
+        debate: null,
       },
     ],
   );

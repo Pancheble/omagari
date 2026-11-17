@@ -486,6 +486,7 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
   assert.equal(guessed?.importance, "reference");
   assert.deepEqual(guessed?.forums, [forums.참고]);
   assert.equal(guessed?.issue, null);
+  assert.equal(guessed?.debate, null); // 추정에는 토론이 열리지 않는다(ADR-0040)
   assert.equal(world.github.issues.length, 0);
 
   // bob이 고치면 둘 다 혼자서는 통과해 깨짐이고 확인됨이다. 두 작업 모두 앞에서 혼자 돌린 내용과 같아(owner는 바로 앞, bob은 처음) 따로 돌리지 않는다.
@@ -513,6 +514,8 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
   assert.equal(post?.importance, "discuss");
   // 논의가 되면 "참고" 포럼에서 빠지고 "논의" 포럼에 보인다(ADR-0039).
   assert.deepEqual(post?.forums, [forums.논의]);
+  // 확인되면 두 작업의 주인 에이전트로 토론이 열린다(ADR-0040).
+  assert.deepEqual(post?.debate?.seats.map((seat) => seat.login).sort(), ["bob", "owner"]);
   const thread = await call(world.owner, api.history, { channel: post?.message.channel ?? "" });
   assert.ok(!thread.messages.some((m) => "github" in m && m.github));
   // 깨짐인 두 작업에 멤버 목록의 표시가 붙는다.

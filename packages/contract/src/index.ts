@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 35;
+export const CONTRACT_VERSION = 36;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -716,6 +716,70 @@ export const Post = z.strictObject({
 });
 export type Post = z.infer<typeof Post>;
 
+/** 증거 라벨(ADR-0040). 포스트에 이것이 붙으면 토론이 저절로 열린다. 라벨의 중요도와 상관없고 팀이 바꿀 수 없다. */
+export const EVIDENCE_LABELS: readonly string[] = [CONFIRMED_LABEL, ALERT_LABELS.declared];
+
+/**
+ * 입장의 근거 하나에 붙는 표시(구현 7장, 문답 A15). 입장을 낸 쪽의 러너가 자기 레포에서 본다. 서버는 판단하지 않는다.
+ * 참조(커밋, `파일:줄`, 결정 파일)가 있으면 검증됨, 없으면 존재하지 않음, 참조가 아닌 자유 서술은 미검증이다.
+ */
+export const EvidenceMark = z.enum(["verified", "unverified", "missing"]);
+export type EvidenceMark = z.infer<typeof EvidenceMark>;
+export const EVIDENCE_MARKS = {
+  verified: "검증됨",
+  unverified: "미검증",
+  missing: "존재하지 않음",
+} as const satisfies Record<EvidenceMark, string>;
+
+/** 근거 하나: 에이전트가 쓴 그대로(`text`)와 표시. */
+export const Evidence = z.strictObject({ text: z.string(), mark: EvidenceMark });
+export type Evidence = z.infer<typeof Evidence>;
+
+/**
+ * 토론의 입장 하나(ADR-0040): 주장과 근거 목록. `context`는 맥락을 어떻게 이어받았나다: 주인이 그 브랜치에서 쓰던 최근 작업 세션을
+ * 읽기 전용으로 갈라 띄웠다(`session`), 갈라 띄우지 못해 초안 PR의 계획, diff, 관련 결정만 갖고 냈다(`none`, "맥락 없이 참여").
+ * `model`과 `effort`는 답한 것이다(`Reply`와 같다).
+ */
+export const Stance = z.strictObject({
+  claim: z.string().min(1),
+  evidence: z.array(Evidence),
+  context: z.enum(["session", "none"]),
+  model: z.string().optional(),
+  effort: z.string().optional(),
+});
+export type Stance = z.infer<typeof Stance>;
+
+/**
+ * 토론의 자리 하나: 부딪힌 작업(`login`의 `branch`)의 주인 에이전트. `state`는 입장을 기다린다(러너가 꺼져 있으면 붙을 때 보낸다),
+ * 냈다, 주인이 자동 참여 스위치(묻기 스위치, ADR-0024)를 꺼 두어 나오지 않는다("토론 참여를 껐어요"), 내지 못했다(`error`)다.
+ * `stance`는 입장이 공개된 뒤에만 있다.
+ */
+export const DebateSeat = z.strictObject({
+  login: z.string(),
+  name: z.string(),
+  branch: z.string(),
+  state: z.enum(["waiting", "submitted", "off", "failed"]),
+  error: ContractError.optional(),
+  stance: Stance.optional(),
+});
+export type DebateSeat = z.infer<typeof DebateSeat>;
+
+/**
+ * 포스트의 토론(ADR-0040, 구현 7장). 포스트에 증거 라벨이 붙으면 서버가 열고, 한 포스트에 열린 토론은 하나다.
+ * 진행은 서버가, 판단은 두 주인의 에이전트가 각자 기기에서 한다. 자리는 알림의 두 작업(`Alert.works`)과 같은 순서다.
+ * 첫 라운드는 가린다: 기다리는 자리가 남아 있는 동안은 어느 자리의 입장도 서버 API, 웹, 러너 어디에도 내보내지 않는다.
+ * 다 모이면(`revealed`) 냈던 입장을 모두 공개한다. 반박 라운드와 끝내기는 아직 없다.
+ */
+export const Debate = z.strictObject({
+  id: z.number(),
+  state: z.literal("open"),
+  round: z.number().int().positive(),
+  revealed: z.boolean(),
+  seats: z.tuple([DebateSeat, DebateSeat]),
+  at: z.string(),
+});
+export type Debate = z.infer<typeof Debate>;
+
 /**
  * 결정 PR의 이의 창 길이(ADR-0025, ADR-0030). "바로"면 PR을 열자마자 Omagari가 머지한다. "하루"가 기본이다.
  * "직접"은 숫자와 단위(시간, 일)다. 가장 긴 값은 정하지 않았고, `amount`의 상한은 시각이 넘치지 않게 둔 것이다.
@@ -1032,6 +1096,11 @@ export const runnerToServer = {
   }),
   /** `ask`나 `question`(`re`)에 러너 세션이 답했다. 답하지 못했으면 `error`를 `re`를 붙여 보낸다. */
   answer: Reply,
+  /**
+   * `debate`(`re`)에 낸 입장. 근거 표시는 이 러너가 자기 레포에서 본 것이다. 내지 못했으면 `error`를 `re`를 붙여 보낸다.
+   * 그사이 끊겼으면 서버는 받지 않고, 다시 붙을 때 참여 요청을 다시 보낸다.
+   */
+  stance: Stance,
   /** `draft`(`re`)의 초안. 쓰지 못했으면 `error`를 `re`를 붙여 보낸다. 멈춘 초안의 답은 서버가 버린다. */
   drafted: z.strictObject({
     ...DraftFields.shape,
@@ -1070,6 +1139,20 @@ export const serverToRunner = {
     post: Channel.omit({ kind: true }),
     messages: z.array(ChannelMessage).max(CHANNEL_CONTEXT),
     ...ModelPick.shape,
+  }),
+  /**
+   * 토론 참여 요청(ADR-0040). 이 러너의 멤버의 작업(`branch`)이 부딪힌 포스트의 토론 `debate`에서 라운드 `round`의 입장을 낸다.
+   * `messages`는 포스트의 대화(맨 앞이 그 알림, `draft`와 같다)이고 첫 라운드라 상대의 입장은 오지 않는다.
+   * 러너는 주인이 그 브랜치에서 쓰던 최근 작업 세션을 읽기 전용으로 갈라 띄우고, 안 되면 초안 PR의 계획, diff, 관련 결정만 넣어
+   * "맥락 없이 참여"로 띄운다. 토론 세션은 파일을 고치지 않는다(ADR-0003). 문답과 같은 줄에 서고, 답은 `stance`(`re`)다.
+   */
+  debate: z.strictObject({
+    debate: z.number(),
+    round: z.number().int().positive(),
+    executor: ExecutorId,
+    branch: z.string(),
+    post: Channel.omit({ kind: true }),
+    messages: z.array(ChannelMessage).max(CHANNEL_CONTEXT),
   }),
   /** `draft`(보낸 것의 `id`)를 멈춘다. 줄에 서 있으면 돌리지 않고, 돌고 있으면 실행기를 끈다. 답하지 않는다. */
   stopDraft: z.strictObject({ id: z.string() }),
@@ -1581,12 +1664,14 @@ export const api = {
   /**
    * 포스트 전부, 알림 순서. 포럼 목록이 한 번에 그리도록 포스트마다 첫 글인 알림 메시지(`message`)가 붙는다:
    * 알림의 종류, 두 사람과 브랜치, 파일이나 심볼, 풀렸는지(`alert.resolved`)와 올라온 시각(`at`)이 거기 있다. 풀린 포스트도 남는다.
-   * 새 글이 서면 그 알림 줄이 실시간 연결로 다시 오고, 그 `post`가 바뀐 요약이다.
+   * 새 글이 서면 그 알림 줄이 실시간 연결로 다시 오고, 그 `post`가 바뀐 요약이다. `debate`는 포스트의 토론이고 열린 적이 없으면 null이다.
    */
   posts: {
     method: "GET",
     path: "/api/posts",
-    response: z.strictObject({ posts: z.array(Post.extend({ message: ChannelMessage })) }),
+    response: z.strictObject({
+      posts: z.array(Post.extend({ message: ChannelMessage, debate: Debate.nullable() })),
+    }),
   },
   /**
    * 포스트(`post`, 포스트의 채널)에서 결정을 정리해 부른 멤버의 이름으로 결정 PR을 연다(ADR-0025).

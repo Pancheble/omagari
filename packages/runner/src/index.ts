@@ -1,7 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { appendFile, mkdir, rm } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rm } from "node:fs/promises";
 import { connect as connectLocal, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -39,6 +39,7 @@ import {
   runnerToServer,
   type ShareLevel,
   type Source,
+  type Stance,
   type SymbolPlace,
   serverToRunner,
   VersionMismatch,
@@ -60,6 +61,13 @@ import {
 } from "./check.ts";
 import { covers, overlap, resolve, see } from "./claims.ts";
 import { conflicts, newMemo, symbolConflicts } from "./conflicts.ts";
+import {
+  claudeRecentSession,
+  contextless,
+  debateInstructions,
+  markEvidence,
+  readStance,
+} from "./debate.ts";
 import { gitIn, nearby } from "./nearby.ts";
 import { observe, uses } from "./observe.ts";
 import { named } from "./symbols.ts";
@@ -86,6 +94,8 @@ export type Executor = ((input: {
   message: string;
   /** 이어 갈 세션. 없으면 새 세션을 띄운다. */
   resume?: string;
+  /** `resume`의 대화를 이어받되 그 세션은 건드리지 않고 새 세션으로 갈라 띄운다(토론, ADR-0040). */
+  fork?: boolean;
   /** 허용할 도구. 이것 말고는 쓰지 못하게 띄운다. */
   tools: string[];
   /** 작업 폴더 */
@@ -104,6 +114,11 @@ export type Executor = ((input: {
 }>) & {
   /** 고를 거리를 실행기에 묻는다(ADR-0020). 모델을 부르지 않는다. 없으면 고를 거리가 없어 "기본"으로만 묻는다. */
   choices?: () => Promise<Choices>;
+  /**
+   * 주인이 그 폴더의 그 브랜치에서 쓰던 가장 최근 작업 세션(`skip`, 러너가 띄운 세션은 빼고). 토론이 이것을 갈라 띄운다(ADR-0040).
+   * 없으면 이 실행기는 세션을 갈라 띄우지 못해 토론에 맥락 없이 참여한다.
+   */
+  recent?: (folder: string, branch: string, skip: Set<string>) => Promise<string | undefined>;
 };
 
 /** 고를 거리를 묻는 시간 상한. 넘으면 그 실행기는 고를 거리 없이 붙는다. */
@@ -185,6 +200,7 @@ type ClaudeEvent = {
 export const claudeCode: Executor = async ({
   message,
   resume,
+  fork,
   tools,
   folder,
   signal,
@@ -202,6 +218,7 @@ export const claudeCode: Executor = async ({
       ...(model ? [`--model=${model}`] : []),
       ...(effort ? [`--effort=${effort}`] : []),
       ...(resume ? [`--resume=${resume}`] : []),
+      ...(resume && fork ? ["--fork-session"] : []),
     ],
     { cwd: folder, maxBuffer: 64 * 1024 * 1024, signal },
   );
@@ -244,6 +261,8 @@ type ClaudeModel = {
  * 모델을 부르지 않고, 주인의 훅도 돌리지 않는다. "default"는 우리의 "기본"이라 빼고 그 effort 값을 "기본"의 것으로 둔다.
  * `id`는 별칭이 가리키는 전체 이름(`resolvedModel`)이라 `system`/`init`이 알리는 답한 모델과 맞춰 볼 수 있다. 같은 모델은 하나만 둔다.
  */
+claudeCode.recent = claudeRecentSession;
+
 claudeCode.choices = () =>
   converse(
     "claude",
@@ -403,6 +422,8 @@ export type RunRecord = {
   /** 답한 글. 실패했으면 없다. */
   answer?: string;
   error?: string;
+  /** 토론 세션이면 그 포스트와 라운드, 갈라 띄운 주인의 작업 세션(맥락 없이 참여면 없다). */
+  debate?: { post: string; round: number; forked?: string };
 };
 
 /** 실행 기록 한 줄(검사 명령, `omagari runner check`): 언제, 어느 폴더의 작업에, 어떤 명령을 돌려, 어떤 판정이 났고 얼마나 걸렸나. */
@@ -842,6 +863,15 @@ export async function startRunner(options: {
           }
           current.send(frame);
         });
+      } else if (message.kind === "debate") {
+        // 토론은 자리마다 새 세션 하나로 낸다. 답은 요청이 온 연결로 보낸다. 그사이 끊겼으면 서버가 다시 붙을 때 다시 보낸다.
+        void debate(message.payload).then((payload) =>
+          current.send(
+            "claim" in payload
+              ? encode(runnerToServer, "stance", payload, message.id)
+              : encode(runnerToServer, "error", payload, message.id),
+          ),
+        );
       } else if (message.kind === "stopDraft") {
         stopDrafts.get(message.payload.id)?.abort();
       } else {
@@ -908,6 +938,8 @@ export async function startRunner(options: {
     recent?: ChannelMessage[];
     model?: string;
     effort?: string;
+    /** 토론 세션: 그 포스트와 라운드, 돌릴 폴더(그 작업의 폴더), 갈라 띄울 주인의 작업 세션. */
+    debate?: { post: string; round: number; folder: string; fork?: string };
   };
 
   /**
@@ -963,11 +995,15 @@ export async function startRunner(options: {
       tools: READ_ONLY_TOOLS,
       model,
       effort,
+      ...(ask.debate && {
+        debate: { post: ask.debate.post, round: ask.debate.round, forked: ask.debate.fork },
+      }),
     };
+    const cwd = ask.debate?.folder ?? folder;
     let timeout: AbortSignal | undefined;
     try {
       // 본 코드는 실행기를 띄우기 전에 읽는다. 상한은 그 뒤부터 잰다(재기 시작한 뒤 race 전에 끊기면 거절을 받을 곳이 없다).
-      const source = await readSource(folder);
+      const source = await readSource(cwd);
       timeout = AbortSignal.timeout(turnTimeoutMs);
       const signal = stop ? AbortSignal.any([timeout, stop]) : timeout;
       signal.throwIfAborted();
@@ -978,9 +1014,10 @@ export async function startRunner(options: {
       const result = await Promise.race([
         executor({
           message,
-          resume: known?.session,
+          resume: known?.session ?? ask.debate?.fork,
+          ...(ask.debate?.fork && { fork: true }),
           tools: READ_ONLY_TOOLS,
-          folder,
+          folder: cwd,
           signal,
           model,
           effort,
@@ -1013,6 +1050,69 @@ export async function startRunner(options: {
       throw new ContractFailure({ code: "executor_failed", message: record.error });
     } finally {
       await appendFile(paths.log, `${JSON.stringify(record)}\n`);
+    }
+  }
+
+  /**
+   * 토론에 첫 입장을 낸다(ADR-0040). 그 작업의 폴더에서 주인이 쓰던 최근 작업 세션을 읽기 전용으로 갈라 띄우고,
+   * 찾지 못했거나 갈라 띄운 턴이 실패하면 초안 PR의 계획, diff, 관련 결정만 넣어 맥락 없이 다시 낸다.
+   * 근거 표시는 그 작업의 폴더에서 본다. 입장이나 보낼 오류를 돌려준다. 던지지 않는다.
+   */
+  async function debate({
+    debate,
+    round,
+    executor,
+    branch,
+    post,
+    messages,
+  }: Parameters<typeof encode<typeof serverToRunner, "debate">>[2]): Promise<
+    Stance | ContractError
+  > {
+    const tree = folders.get(branch) ?? folder;
+    const instructions = debateInstructions(branch);
+    const base = { channel: post, recent: messages, question: instructions };
+    const skip = new Set(
+      (await readFile(paths.log, "utf8").catch(() => "")).split("\n").flatMap((line) => {
+        try {
+          const session = (JSON.parse(line) as RunRecord).session;
+          return session ? [session] : [];
+        } catch {
+          return [];
+        }
+      }),
+    );
+    const fork = await executors[executor]?.recent?.(tree, branch, skip).catch(() => undefined);
+    const where = { post: post.id, round, folder: tree };
+    let replied = fork
+      ? await reply(executor, undefined, { ...base, debate: { ...where, fork } })
+      : undefined;
+    const context = replied?.kind === "answer" ? "session" : "none";
+    if (replied?.kind !== "answer") {
+      const work = mine.find((w) => w.branch === branch);
+      const plan = situation?.works.find((w) => w.login === login && w.branch === branch)?.line;
+      const extra = await contextless(
+        tree,
+        work?.base,
+        plan?.source === "pull" ? plan.text : undefined,
+      );
+      replied = await reply(executor, undefined, {
+        ...base,
+        question: `${extra}\n\n${instructions}`,
+        debate: where,
+      });
+    }
+    if (replied.kind === "error") return replied.payload;
+    try {
+      const { claim, evidence } = readStance(replied.payload.text);
+      return {
+        claim,
+        evidence: await markEvidence(tree, evidence),
+        context,
+        ...(replied.payload.model && { model: replied.payload.model }),
+        ...(replied.payload.effort && { effort: replied.payload.effort }),
+      };
+    } catch {
+      return { code: "executor_failed", message: "실행기가 입장의 꼴로 답하지 않았다" };
     }
   }
 
