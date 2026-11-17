@@ -113,6 +113,8 @@ export function Conversation({
   edited,
   strip,
   verdict,
+  debate,
+  tail,
   attached,
   onAttach,
   onSend,
@@ -140,6 +142,10 @@ export function Conversation({
   };
   /** 간접 충돌 포스트의 판정 띠. 러너가 판정을 올린 적이 없으면 없다. 결정 상태 띠 위에 붙는다. */
   verdict?: ComponentProps<typeof VerdictStrip>;
+  /** 포스트의 토론 띠. 판정 띠 위에 붙는다. */
+  debate?: ReactNode;
+  /** 대화 맨 아래에 쌓이는 것(포스트의 토론 카드). */
+  tail?: ReactNode;
   /** 입력 칸에 붙인 DM 문답. DM 칸도 함께 보므로 워크스페이스가 갖는다. */
   attached?: Qa;
   onAttach: Dispatch<SetStateAction<Qa | undefined>>;
@@ -209,6 +215,7 @@ export function Conversation({
           </button>
         </div>
       )}
+      {debate}
       {verdict && <VerdictStrip {...verdict} />}
       {strip && <DecisionStrip {...strip} me={me} />}
       {!channel || !view || view.status === "loading" ? (
@@ -271,6 +278,7 @@ export function Conversation({
                 </Fragment>
               );
             })}
+            {tail}
           </div>
         </div>
       )}
