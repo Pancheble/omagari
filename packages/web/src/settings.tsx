@@ -1,12 +1,5 @@
-import {
-  ANSWERED_DAYS,
-  api,
-  type Channel,
-  call,
-  EXECUTOR_NAMES,
-  type MemberView,
-} from "@omagari/contract";
-import { Bot, ChevronDown, MessagesSquare, X } from "lucide-react";
+import { ANSWERED_DAYS, api, call, EXECUTOR_NAMES, type MemberView } from "@omagari/contract";
+import { Bot, MessagesSquare, X } from "lucide-react";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { type Me, server } from "./api.ts";
 import { Mark } from "./members.tsx";
@@ -26,14 +19,12 @@ const CHECK_HELP = "https://github.com/Pancheble/omagari#검사-명령";
 export function Settings({
   me,
   mine,
-  channels,
   session,
   check,
   onClose,
 }: {
   me: Me;
   mine?: MemberView;
-  channels?: Channel[];
   session: string;
   /** 세션이 끝났으면 로그인으로 돌린다. */
   check: (error: unknown) => unknown;
@@ -125,20 +116,7 @@ export function Settings({
       />
     );
   } else {
-    body = (
-      <AlertsPage
-        settings={settings}
-        online={online}
-        forums={channels?.filter((channel) => channel.kind === "forum") ?? []}
-        workspace={workspace}
-        repo={me.repo}
-        save={(channel) =>
-          save({ alertChannel: channel }, () =>
-            call(server(session), api.setAlertChannel, { channel }),
-          )
-        }
-      />
-    );
+    body = <AlertsPage settings={settings} online={online} workspace={workspace} repo={me.repo} />;
   }
 
   return (
@@ -256,44 +234,18 @@ function AgentPage({
 function AlertsPage({
   settings,
   online,
-  forums,
   workspace,
   repo,
-  save,
 }: {
   settings: Reply;
   /** 실시간 멤버 목록으로 본 내 러너. 모르면 없다. */
   online?: boolean;
-  forums: Channel[];
   workspace: string;
   repo: string;
-  save: (channel: string) => Promise<void>;
 }) {
-  const name = useId();
+  // 포럼마다 거르기를 고치는 것은 화면 이슈(#194)에서 한다(ADR-0039).
   return (
     <>
-      <Group
-        title="부딪힘 알림"
-        note="바꾸면 새 알림부터 그 포럼에 올라가고, 지난 포스트는 그대로 있어요. 모든 멤버에게 같아요."
-      >
-        <Row name="알림을 올릴 포럼" nameId={name}>
-          <span className="settings-select">
-            <MessagesSquare size={14} aria-hidden />
-            <select
-              aria-labelledby={name}
-              value={settings.alertChannel}
-              onChange={(event) => void save(event.target.value)}
-            >
-              {forums.map((forum) => (
-                <option key={forum.id} value={forum.id}>
-                  {forum.name}
-                </option>
-              ))}
-            </select>
-            <ChevronDown size={14} aria-hidden />
-          </span>
-        </Row>
-      </Group>
       <MergeCheckGroup
         {...settings.mergeCheck}
         runner={online === false ? "offline" : settings.mergeCheck.runner}
