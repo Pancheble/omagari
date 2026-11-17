@@ -450,6 +450,8 @@ export function Workspace({
           .catch(check);
       } else if (event.kind === "draft") setIncoming(event.payload);
       else if (event.kind === "channel") add(event.payload);
+      else if (event.kind === "forumDeleted")
+        setChannels((list) => list?.filter((channel) => channel.id !== event.payload.id));
       else if (event.kind === "message") receive(event.payload);
       else if (event.kind === "members") setMembers(event.payload.members);
       else if (event.kind === "qa") receiveQa(event.payload);
@@ -762,7 +764,11 @@ export function Workspace({
             </button>
           </div>
         ) : forum && !big ? (
-          <Forum posts={posts} selected={openPost?.alert} unread={unread} />
+          <Forum
+            posts={posts?.filter((post) => post.forums.includes(current.id))}
+            selected={openPost?.alert}
+            unread={unread}
+          />
         ) : (
           conversation(`${postChannel?.name}에 메시지 보내기`)
         )}
@@ -872,7 +878,6 @@ export function Workspace({
         <Settings
           me={me}
           mine={members?.find((member) => member.login === me.login)}
-          channels={channels}
           session={session}
           check={check}
           onClose={() => setSettings(false)}

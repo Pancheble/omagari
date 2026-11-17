@@ -38,7 +38,7 @@ test("v0.1.0이 만든 DB로도 뜨고, 예전 메시지는 그대로 읽히며,
   );
 });
 
-test("라벨이 없던 판의 포스트에 종류 라벨과 확인됨이 붙고, 이미 열린 이슈는 참고가 되어도 닫히지 않는다", async (t) => {
+test("라벨이 없던 판의 포스트에 종류 라벨과 확인됨이 붙고, 이미 열린 이슈는 참고가 되어도 닫히지 않는다. 부딪힘 포럼은 논의 포럼이 된다", async (t) => {
   const world = await startWorld({
     followMs: 50,
     seed: await readFile(new URL("./contract32.sql", import.meta.url), "utf8"),
@@ -79,4 +79,16 @@ test("라벨이 없던 판의 포스트에 종류 라벨과 확인됨이 붙고,
     (await call(world.owner, api.posts)).posts.map((post) => post.issue?.open),
     [true, true],
   );
+  // 예전 "부딪힘" 포럼(f0)은 "논의"로 거르는 "논의" 포럼이 되고, "참고" 포럼이 생긴다(ADR-0039). 포스트는 중요도대로 보인다.
+  const { channels } = await call(world.owner, api.channels);
+  const reference = channels.find((c) => c.name === "참고");
+  assert.deepEqual(channels, [
+    { id: "f0", name: "논의", kind: "forum", filter: { importance: "discuss" } },
+    { id: reference?.id, name: "참고", kind: "forum", filter: { importance: "reference" } },
+  ]);
+  assert.deepEqual(
+    (await call(world.owner, api.posts)).posts.map((post) => post.forums),
+    [[reference?.id], ["f0"]],
+  );
+  assert.equal("alertChannel" in (await call(world.owner, api.settings)), false);
 });

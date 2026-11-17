@@ -91,7 +91,8 @@ test("포스트에 종류 라벨이 붙고, 논의 포스트 하나가 GitHub �
   assert.ok(["owner", "alice"].includes(issue.author));
   assert.equal(issue.title, "refund 계약 변경");
   assert.deepEqual(issue.labels, ["계약 변경"]);
-  assert.match(issue.body, new RegExp(`/#${post.message.channel}/${post.alert}$`));
+  // 이슈의 링크는 포스트가 보이는 첫 포럼("논의")의 그 포스트다.
+  assert.match(issue.body, new RegExp(`/#${post.forums[0]}/${post.alert}$`));
   assert.deepEqual(post.issue, {
     number: issue.number,
     url: `https://github.com/omagari-test/space/issues/${issue.number}`,
