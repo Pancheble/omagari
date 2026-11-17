@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomInt } from "node:crypto";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { basename } from "node:path/posix";
@@ -24,6 +24,7 @@ import {
   type ConflictPair,
   type ContractError,
   ContractFailure,
+  DEBATE_ROUNDS,
   DEFAULT_LABEL_COLORS,
   type Debate,
   type DebateSeat,
@@ -385,6 +386,8 @@ export async function startServer(options: {
   publicUrl?: string;
   /** 결정 PR의 이의 창에서 한 시간의 길이. 기본은 정말 한 시간이다. 테스트가 줄여 쓴다. 창이 닫혔는지는 `followMs`마다 본다. */
   hourMs?: number;
+  /** 토론의 라운드 수. 기본은 `DEBATE_ROUNDS`(가린 첫 라운드와 반박 두 라운드)이고 줄일 수 있다. */
+  debateRounds?: number;
 }) {
   const { repo, github } = options;
   const version = checkoutVersion();
@@ -683,14 +686,30 @@ export async function startServer(options: {
   ) STRICT`);
   // 남의 질문에 답하지 않게 스위치를 끈 멤버(ADR-0024). 기본은 켜짐이라 없으면 켜짐이다.
   db.exec("CREATE TABLE IF NOT EXISTS ask_off (login TEXT PRIMARY KEY) STRICT");
-  // 포스트의 토론(ADR-0040). 한 포스트에 열린 토론은 하나다. `round`는 지금 라운드다(지금은 첫 라운드뿐).
+  // 포스트의 토론(ADR-0040). 한 포스트에 토론은 하나다. `round`는 지금 라운드, `state`는 `Debate.state`다.
+  // `flip`이 1이면 안의 순서를 자리의 거꾸로 둔다(주인을 가린다). `winner`는 결론이 된 자리, `by`는 정한 길, `chooser`와 `decided`는 고른 멤버와 시각(ms)이다.
   db.exec(`CREATE TABLE IF NOT EXISTS debates (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     post TEXT NOT NULL UNIQUE,
     round INTEGER NOT NULL DEFAULT 1,
-    at INTEGER NOT NULL
+    at INTEGER NOT NULL,
+    state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open', 'choosing', 'concluded', 'ended')),
+    flip INTEGER NOT NULL DEFAULT 0,
+    winner INTEGER,
+    by TEXT,
+    chooser TEXT,
+    decided INTEGER
   ) STRICT`);
-  // 토론의 자리. `seat`은 알림의 `works` 자리(0, 1)다. `stance`는 낸 입장(JSON), `error`는 내지 못한 까닭(JSON)이다.
+  // #195의 표에는 끝내기가 없다.
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('debates') WHERE name = 'state'").get()) {
+    db.exec(`ALTER TABLE debates ADD COLUMN state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open', 'choosing', 'concluded', 'ended'));
+      ALTER TABLE debates ADD COLUMN flip INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE debates ADD COLUMN winner INTEGER;
+      ALTER TABLE debates ADD COLUMN by TEXT;
+      ALTER TABLE debates ADD COLUMN chooser TEXT;
+      ALTER TABLE debates ADD COLUMN decided INTEGER`);
+  }
+  // 토론의 자리. `seat`은 알림의 `works` 자리(0, 1)다. `stance`는 라운드마다 낸 입장의 JSON 배열(#195의 행은 입장 하나), `error`는 내지 못한 까닭(JSON)이다.
   db.exec(`CREATE TABLE IF NOT EXISTS seats (
     debate INTEGER NOT NULL,
     seat INTEGER NOT NULL,
@@ -1625,42 +1644,85 @@ export async function startServer(options: {
     stance: string | null;
     error: string | null;
   };
+  type DebateRow = {
+    id: number;
+    post: string;
+    round: number;
+    at: number;
+    state: Debate["state"];
+    flip: number;
+    winner: number | null;
+    by: "evidence" | "choice" | null;
+    chooser: string | null;
+    decided: number | null;
+  };
+  /** 토론의 라운드 수(문답 A13). 서버 설정으로 줄일 수 있다. */
+  const debateRounds = Math.max(1, options.debateRounds ?? DEBATE_ROUNDS);
   /** 러너에 보내고 입장을 기다리는 토론 참여 요청. 키는 보낸 `debate`의 id다. 연결이 끊기거나 서버가 다시 뜨면 잃고, 러너가 붙을 때 다시 보낸다. */
   const debatesSent = new Map<
     string,
     { socket: WSContext; executor: ExecutorId; debate: number; seat: number }
   >();
+  /** 자리가 라운드마다 낸 입장. */
+  const stancesOf = (seat: SeatRow): Stance[] => {
+    const stored = seat.stance === null ? [] : JSON.parse(seat.stance);
+    return Array.isArray(stored) ? stored : [stored];
+  };
+  const seatsOf = (debate: number) =>
+    db.prepare("SELECT * FROM seats WHERE debate = ? ORDER BY seat").all(debate) as SeatRow[];
+  /** 안이 되는 자리: 입장을 하나라도 낸 자리, 섞어 둔 순서(`flip`)대로. 첫 라운드의 입장이 공개된 뒤로 바뀌지 않는다. */
+  const optionSeats = (row: DebateRow, seats: SeatRow[]) =>
+    (row.flip ? [...seats].reverse() : seats).filter((seat) => stancesOf(seat).length > 0);
   /**
-   * 포스트의 토론. 첫 라운드는 가린다: 기다리는 자리가 하나라도 있으면 어느 입장도 싣지 않는다(ADR-0040).
+   * 포스트의 토론. 라운드의 입장은 그 라운드에 기다리는 자리가 없을 때 싣는다. 안의 주인은 결론이 난 뒤에만 싣는다(ADR-0040).
    */
   const debateOf = (post: string): Debate | null => {
     const row = db.prepare("SELECT * FROM debates WHERE post = ?").get(post) as
-      | { id: number; round: number; at: number }
+      | DebateRow
       | undefined;
     if (!row) return null;
-    const seats = db
-      .prepare("SELECT * FROM seats WHERE debate = ? ORDER BY seat")
-      .all(row.id) as SeatRow[];
-    const revealed = !seats.some((seat) => seat.state === "waiting");
+    const seats = seatsOf(row.id);
+    const shown =
+      row.state === "open" && seats.some((seat) => seat.state === "waiting")
+        ? row.round - 1
+        : row.round;
+    const concluded = row.state === "concluded";
+    const options = shown === 0 ? [] : optionSeats(row, seats);
     return {
       id: row.id,
-      state: "open",
+      state: row.state,
       round: row.round,
-      revealed,
+      rounds: debateRounds,
+      revealed: shown > 0,
       seats: seats.map((seat) => ({
         login: seat.login,
         name: nameOf(seat.login),
         branch: seat.branch,
         state: seat.state,
         ...(seat.error !== null && { error: JSON.parse(seat.error) }),
-        ...(revealed && seat.stance !== null && { stance: JSON.parse(seat.stance) }),
       })) as [DebateSeat, DebateSeat],
+      options: options.map((seat) => ({
+        stances: stancesOf(seat).slice(0, shown),
+        ...(concluded && {
+          owner: { login: seat.login, name: nameOf(seat.login), branch: seat.branch },
+        }),
+      })),
+      ...(concluded && {
+        conclusion: {
+          option: options.findIndex((seat) => seat.seat === row.winner),
+          by: row.by ?? "choice",
+          ...(row.chooser !== null && {
+            chooser: { login: row.chooser, name: nameOf(row.chooser) },
+          }),
+          at: new Date(row.decided ?? row.at).toISOString(),
+        },
+      }),
       at: new Date(row.at).toISOString(),
     };
   };
   /**
    * 포스트에 증거 라벨이 붙었으면 토론을 연다(ADR-0040). 중요도와 상관없다. 이미 열린 토론이 있으면 그대로 둔다.
-   * 자리는 알림의 두 작업이다. 자동 참여 스위치(묻기 스위치)를 끈 주인의 자리는 나오지 않는다.
+   * 자리는 알림의 두 작업이다. 자동 참여 스위치(묻기 스위치)를 끈 주인의 자리는 나오지 않는다. 안의 순서는 무작위로 섞는다.
    */
   const openDebate = (post: string) => {
     const row = db
@@ -1674,8 +1736,9 @@ export async function startServer(options: {
     if (db.prepare("SELECT 1 FROM debates WHERE post = ?").get(post)) return;
     const works: WorkRef[] = JSON.parse(row.works);
     const debate = Number(
-      db.prepare("INSERT INTO debates (post, at) VALUES (?, ?)").run(post, Date.now())
-        .lastInsertRowid,
+      db
+        .prepare("INSERT INTO debates (post, at, flip) VALUES (?, ?, ?)")
+        .run(post, Date.now(), randomInt(2)).lastInsertRowid,
     );
     const seat = db.prepare(
       "INSERT INTO seats (debate, seat, login, branch, state) VALUES (?, ?, ?, ?, ?)",
@@ -1685,27 +1748,68 @@ export async function startServer(options: {
       seat.run(debate, i, work.login, work.branch, off ? "off" : "waiting");
     }
     for (const work of works) dispatchDebates(work.login);
+    advance(debate); // 두 자리가 다 나오지 않으면 바로 끝난다
   };
-  /** 토론의 자리 하나를 끝낸다(입장을 냈거나 내지 못했다). 이미 끝났으면 그대로 둔다. */
+  /** 토론의 자리 하나를 이 라운드에서 끝낸다(입장을 냈거나 내지 못했다). 이미 끝났으면 그대로 둔다. */
   const settleSeat = (
     debate: number,
     seat: number,
     result: { stance: Stance } | { error: ContractError },
   ) => {
     if (stopped) return;
+    const row = db
+      .prepare("SELECT * FROM seats WHERE debate = ? AND seat = ? AND state = 'waiting'")
+      .get(debate, seat) as SeatRow | undefined;
+    if (!row) return;
     db.prepare(
-      "UPDATE seats SET state = ?, stance = ?, error = ? WHERE debate = ? AND seat = ? AND state = 'waiting'",
+      "UPDATE seats SET state = ?, stance = ?, error = ? WHERE debate = ? AND seat = ?",
     ).run(
       "stance" in result ? "submitted" : "failed",
-      "stance" in result ? JSON.stringify(result.stance) : null,
+      JSON.stringify("stance" in result ? [...stancesOf(row), result.stance] : stancesOf(row)),
       "error" in result ? JSON.stringify(result.error) : null,
       debate,
       seat,
     );
+    advance(debate);
   };
   /**
-   * 멤버(`login`)의 기다리는 자리에 토론 참여 요청을 그 멤버의 러너에 보낸다. 스위치가 꺼졌으면 보내지 않고 나오지 않는 자리로 둔다.
-   * 받을 러너가 없으면 남겨 두고 붙을 때 보낸다.
+   * 라운드에 기다리는 자리가 없으면 다음으로 간다(ADR-0040, 구현 7장). 두 자리가 다 냈고 라운드가 남았으면 반박 라운드를 연다.
+   * 아니면 끝낸다: 마지막 입장에 검증된 근거가 있는 안이 하나뿐이면 그 안이 결론이고, 아니면 사람이 고를 차례다. 낸 입장이 없으면 끝난다.
+   */
+  const advance = (debate: number) => {
+    const row = db.prepare("SELECT * FROM debates WHERE id = ?").get(debate) as DebateRow;
+    if (row.state !== "open") return;
+    const seats = seatsOf(debate);
+    if (seats.some((seat) => seat.state === "waiting")) return;
+    const going = seats.filter((seat) => seat.state === "submitted");
+    if (going.length === 2 && row.round < debateRounds) {
+      db.prepare("UPDATE debates SET round = round + 1 WHERE id = ?").run(debate);
+      db.prepare("UPDATE seats SET state = 'waiting' WHERE debate = ? AND state = 'submitted'").run(
+        debate,
+      );
+      for (const seat of going) dispatchDebates(seat.login);
+      return;
+    }
+    const options = optionSeats(row, seats);
+    const backed = options.filter((seat) =>
+      stancesOf(seat)
+        .at(-1)
+        ?.evidence.some((e) => e.mark === "verified"),
+    );
+    if (backed.length === 1) {
+      db.prepare(
+        "UPDATE debates SET state = 'concluded', winner = ?, by = 'evidence', decided = ? WHERE id = ?",
+      ).run(backed[0].seat, Date.now(), debate);
+    } else {
+      db.prepare("UPDATE debates SET state = ? WHERE id = ?").run(
+        options.length > 0 ? "choosing" : "ended",
+        debate,
+      );
+    }
+  };
+  /**
+   * 멤버(`login`)의 기다리는 자리에 토론 참여 요청을 그 멤버의 러너에 보낸다. 반박 라운드면 지난 라운드의 두 입장을 싣는다.
+   * 스위치가 꺼졌으면 보내지 않고 나오지 않는 자리로 둔다. 받을 러너가 없으면 남겨 두고 붙을 때 보낸다.
    */
   const dispatchDebates = (login: string) => {
     const rows = db
@@ -1715,6 +1819,7 @@ export async function startServer(options: {
       )
       .all(login) as (SeatRow & { post: string; round: number })[];
     const sent = new Set([...debatesSent.values()].map((d) => `${d.debate} ${d.seat}`));
+    const off = new Set<number>();
     for (const row of rows) {
       if (sent.has(`${row.debate} ${row.seat}`)) continue;
       if (db.prepare("SELECT 1 FROM ask_off WHERE login = ?").get(login)) {
@@ -1722,10 +1827,14 @@ export async function startServer(options: {
           row.debate,
           row.seat,
         );
+        off.add(row.debate);
         continue;
       }
       const answerer = answererOf(login, null);
       if (!answerer) continue;
+      const other = seatsOf(row.debate).find((seat) => seat.seat !== row.seat);
+      const mine = stancesOf(row)[row.round - 2];
+      const theirs = other && stancesOf(other)[row.round - 2];
       const frame = encode(serverToRunner, "debate", {
         debate: row.debate,
         round: row.round,
@@ -1733,6 +1842,8 @@ export async function startServer(options: {
         branch: row.branch,
         post: { id: row.post, name: channelName(row.post) },
         messages: recentOf(row.post),
+        ...(mine && { mine }),
+        ...(theirs && { theirs }),
       });
       debatesSent.set((JSON.parse(frame) as { id: string }).id, {
         ...answerer,
@@ -1741,6 +1852,7 @@ export async function startServer(options: {
       });
       answerer.socket.send(frame);
     }
+    for (const debate of off) advance(debate);
     shareMembers(); // 답하는 중
   };
   /** 멤버의 GitHub 프로필 이름. 모르면 `login`이다. */
@@ -2111,10 +2223,17 @@ export async function startServer(options: {
     visit(agent);
     const socket = runnerOf(agent, executor);
     const messages = recentOf(post);
+    // 토론의 결론이 났으면 그 안을 초안의 근거로 싣는다(ADR-0040)
+    const debate = debateOf(post);
+    const won = debate?.conclusion && debate.options[debate.conclusion.option];
+    const last = won?.stances.at(-1);
     const frame = encode(serverToRunner, "draft", {
       executor,
       post: { id: post, name: channelName(post) },
       messages,
+      ...(debate?.conclusion &&
+        won?.owner &&
+        last && { conclusion: { by: debate.conclusion.by, owner: won.owner, stance: last } }),
       model,
       effort,
     });
@@ -2658,6 +2777,26 @@ export async function startServer(options: {
       debate: debateOf(post.channel),
     })),
   }));
+
+  mount(app, api.chooseDebate, ({ post, option }, c) => {
+    const login = c.get("login") as string;
+    visit(login);
+    const row = db.prepare("SELECT * FROM debates WHERE post = ?").get(post) as
+      | DebateRow
+      | undefined;
+    const picked = row && optionSeats(row, seatsOf(row.id))[option];
+    if (!row || !picked)
+      throw new ContractFailure({ code: "not_found", message: `없는 토론이나 안이다: ${post}` });
+    // 먼저 고른 것만 결론이 된다. 고를 차례인지는 바꾸는 문장에서 본다.
+    const { changes } = db
+      .prepare(
+        "UPDATE debates SET state = 'concluded', winner = ?, by = 'choice', chooser = ?, decided = ? WHERE id = ? AND state = 'choosing'",
+      )
+      .run(picked.seat, login, Date.now(), row.id);
+    if (!changes)
+      throw new ContractFailure({ code: "conflict", message: "고를 차례인 토론이 아니다" });
+    return { debate: debateOf(post) as Debate };
+  });
 
   // 라벨(ADR-0039). 이름, 색, 설명은 부른 멤버의 토큰으로 GitHub 라벨을 바꾸고, 중요도는 Omagari에만 둔다.
   mount(app, api.labels, () => ({ labels: labelsView() }));

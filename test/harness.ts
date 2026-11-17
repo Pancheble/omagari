@@ -606,6 +606,8 @@ export async function startWorld(
     presenceDurations?: Partial<Record<PresenceDuration, number>>;
     /** 결정 PR의 이의 창에서 한 시간의 길이. 줄여서 창이 닫히는 것을 본다. */
     hourMs?: number;
+    /** 토론의 라운드 수. 주지 않으면 서버의 기본(세 라운드)이다. */
+    debateRounds?: number;
     /** 서버가 처음 뜨기 전에 DB에 넣을 SQL. 예전 판이 만든 DB로 띄울 때 쓴다. */
     seed?: string;
     /** owner 러너의 샌드박스. 주지 않으면 쓸 수 없는 것이 꽂힌다. */
@@ -639,6 +641,7 @@ export async function startWorld(
     inboxMs: options.inboxMs,
     presenceDurations: options.presenceDurations,
     hourMs: options.hourMs,
+    debateRounds: options.debateRounds,
   };
   let server = await startServer(serverOptions).catch(async (error) => {
     await cleanup();
