@@ -11,7 +11,7 @@ const link = (href: string, text: string) => (
 );
 
 /** 걸린 시간: "48초", "2분 5초". */
-const took = (ms: number) => {
+export const took = (ms: number) => {
   const s = Math.round(ms / 1000);
   return s < 60 ? `${s}초` : `${Math.floor(s / 60)}분${s % 60 ? ` ${s % 60}초` : ""}`;
 };

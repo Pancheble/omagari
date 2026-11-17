@@ -1759,7 +1759,7 @@ export async function startServer(options: {
   const shownOf = (row: DebateRow, seats: SeatRow[]) =>
     seats.some((seat) => seat.state === "waiting") ? row.round - 1 : row.round;
   /**
-   * 포스트의 토론. 라운드의 입장은 그 라운드에 기다리는 자리가 없을 때 싣는다. 안의 주인은 결론이 난 뒤에만 싣는다(ADR-0040).
+   * 포스트의 토론. 라운드의 입장은 그 라운드에 기다리는 자리가 없을 때 싣는다. 안의 주인도 함께 싣고, 화면이 결론 전까지 덮어 둔다(ADR-0040, #202).
    */
   const debateOf = (post: string): Debate | null => {
     const row = db.prepare("SELECT * FROM debates WHERE post = ?").get(post) as
@@ -1789,9 +1789,7 @@ export async function startServer(options: {
       })) as [DebateSeat, DebateSeat],
       options: options.map((seat) => ({
         stances: stancesOf(seat).slice(0, shown),
-        ...(concluded && {
-          owner: { login: seat.login, name: nameOf(seat.login), branch: seat.branch },
-        }),
+        owner: { login: seat.login, name: nameOf(seat.login), branch: seat.branch },
       })),
       ...(concluded && {
         conclusion: {
@@ -1879,6 +1877,7 @@ export async function startServer(options: {
       seat,
     );
     advance(debate);
+    shareDebates();
   };
   /**
    * 라운드에 기다리는 자리가 없으면 다음으로 간다(ADR-0040, 구현 7장). 두 자리가 다 냈고 라운드가 남았으면 반박 라운드를 연다.
@@ -2036,6 +2035,24 @@ export async function startServer(options: {
     const frame = encode(serverToWeb, "members", { members });
     if (changed) broadcast(frame);
     else if (to?.readyState === 1) to.send(frame); // OPEN
+    shareDebates(); // 러너가 붙거나 떨어지면 기다리는 자리의 `away`가 바뀐다
+  };
+
+  /** 웹에 마지막으로 보낸 포스트마다의 토론과 요청. 같은 것을 다시 보내지 않는다. */
+  const sentDebates = new Map<string, string>();
+  /** 토론이나 요청이 바뀐 포스트를 붙어 있는 웹 모두에 보낸다. */
+  // ponytail: 부를 때마다 토론 전부를 다시 계산한다. 토론이 수백 개가 되면 바뀐 포스트만 넘겨받는다.
+  const shareDebates = () => {
+    const posts = db
+      .prepare("SELECT post FROM debates UNION SELECT post FROM debate_requests")
+      .all() as { post: string }[];
+    for (const { post } of posts) {
+      const payload = { post, debate: debateOf(post), request: requestOf(post) };
+      const json = JSON.stringify(payload);
+      if (sentDebates.get(post) === json) continue;
+      sentDebates.set(post, json);
+      broadcast(encode(serverToWeb, "debate", payload));
+    }
   };
 
   const durations = { ...PRESENCE_DURATIONS, ...options.presenceDurations };
@@ -3054,6 +3071,7 @@ export async function startServer(options: {
     ).run(found.id, login, agenda.trim(), grounds.trim(), opened ? 1 : 0, Date.now());
     if (opened) openDebate(found.id, true);
     sharePost(found.id);
+    shareDebates();
     return { debate: debateOf(found.id), request: requestOf(found.id) as DebateRequest };
   });
 
@@ -3075,6 +3093,7 @@ export async function startServer(options: {
     if (!changes)
       throw new ContractFailure({ code: "conflict", message: "고를 차례인 토론이 아니다" });
     concluded(row.id);
+    shareDebates();
     return { debate: debateOf(post) as Debate };
   });
 
@@ -4253,6 +4272,7 @@ export async function startServer(options: {
       ).run(now - (options.debateMs ?? INBOX_MS));
       db.exec("COMMIT");
       shareInbox(); // 만료된 소식이 빠진다
+      shareDebates(); // 만료된 토론
 
       const branches = db
         .prepare(
