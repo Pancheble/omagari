@@ -173,13 +173,17 @@ const DECISION = `json_object('id', d.id, 'post', d.post, 'login', d.login, 'nam
   'deciders', (SELECT json_group_array(json_object('login', j.value, 'name', ${nameSql("j.value")},
     'agreed', j.value = d.login OR EXISTS (SELECT 1 FROM agreements g WHERE g.decision = d.id AND g.login = j.value)))
     FROM json_each(d.deciders) j),
+  'absent', json(d.absent),
   'objections', (SELECT json_group_array(json_object('login', o.login, 'name', ${nameSql("o.login")}, 'via', o.via, 'at', o.at))
     FROM (SELECT * FROM objections WHERE decision = d.id ORDER BY at, rowid) o),
   'at', d.at)`;
 const iso = (ms: number) => new Date(ms).toISOString();
 const decisionView = (json: string): Decision => {
-  const { closes, reopened, early, stuck, deciders, objections, at, ...decision } =
+  const { closes, reopened, early, stuck, deciders, absent, objections, at, ...decision } =
     JSON.parse(json);
+  const awaiting = (deciders as { login: string; name: string; agreed: number }[])
+    .filter((d) => absent.includes(d.login) && d.agreed !== 1)
+    .map(({ login, name }) => ({ login, name }));
   const open = decision.state === "proposed";
   const status: Decision["status"] = !open
     ? decision.state
@@ -194,6 +198,7 @@ const decisionView = (json: string): Decision => {
     deciders: deciders.map((d: { agreed: number }) => ({ ...d, agreed: d.agreed === 1 })),
     objections: objections.map((o: { at: number }) => ({ ...o, at: iso(o.at) })),
     early: early === 1,
+    ...(absent.length > 0 && { awaiting }),
     at: iso(at),
   };
 };
@@ -404,6 +409,8 @@ export async function startServer(options: {
   hourMs?: number;
   /** 토론의 라운드 수. 기본은 `DEBATE_ROUNDS`(가린 첫 라운드와 반박 두 라운드)이고 줄일 수 있다. */
   debateRounds?: number;
+  /** 토론이 끝나지 않으면 만료하기까지의 시간. 기본 14일(`INBOX_MS`). 테스트가 줄여 쓴다. 만료는 `followMs`마다 본다. */
+  debateMs?: number;
 }) {
   const { repo, github } = options;
   const version = checkoutVersion();
@@ -526,6 +533,9 @@ export async function startServer(options: {
     );
     db.exec("UPDATE decisions SET closes = at WHERE span = 'now'");
   }
+  // 대행이 낀 토론의 부재자(#198). 로그인의 JSON 배열이고, 모두 동의해야 머지한다.
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('decisions') WHERE name = 'absent'").get())
+    db.exec("ALTER TABLE decisions ADD COLUMN absent TEXT NOT NULL DEFAULT '[]'");
   // 결정자의 동의. 정리한 사람의 것은 두지 않는다(늘 동의한 것이다).
   db.exec(`CREATE TABLE IF NOT EXISTS agreements (
     decision INTEGER NOT NULL REFERENCES decisions (id),
@@ -739,7 +749,8 @@ export async function startServer(options: {
     winner INTEGER,
     by TEXT,
     chooser TEXT,
-    decided INTEGER
+    decided INTEGER,
+    expired INTEGER NOT NULL DEFAULT 0
   ) STRICT`);
   // 증거 라벨 없이 멤버나 에이전트가 낸 토론 요청(ADR-0040). 포스트마다 가장 나중 것 하나다. 안건이나 근거가 비면 열리지 않고 이것만 남는다.
   db.exec(`CREATE TABLE IF NOT EXISTS debate_requests (
@@ -759,6 +770,9 @@ export async function startServer(options: {
       ALTER TABLE debates ADD COLUMN chooser TEXT;
       ALTER TABLE debates ADD COLUMN decided INTEGER`);
   }
+  // #196의 표에는 만료가 없다. 만료는 `state`가 ended이고 `expired`가 1이다(CHECK를 바꾸지 않는다).
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('debates') WHERE name = 'expired'").get())
+    db.exec("ALTER TABLE debates ADD COLUMN expired INTEGER NOT NULL DEFAULT 0");
   // 토론의 자리. `seat`은 알림의 `works` 자리(0, 1)다. `stance`는 라운드마다 낸 입장의 JSON 배열(#195의 행은 입장 하나), `error`는 내지 못한 까닭(JSON)이다.
   db.exec(`CREATE TABLE IF NOT EXISTS seats (
     debate INTEGER NOT NULL,
@@ -768,8 +782,12 @@ export async function startServer(options: {
     state TEXT NOT NULL CHECK (state IN ('waiting', 'submitted', 'off', 'failed')),
     stance TEXT,
     error TEXT,
+    proxy TEXT,
     PRIMARY KEY (debate, seat)
   ) STRICT`);
+  // 대행(#198). `proxy`는 이 자리에 대행을 부른 멤버다.
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('seats') WHERE name = 'proxy'").get())
+    db.exec("ALTER TABLE seats ADD COLUMN proxy TEXT");
   // 날마다 들어온 멤버(ADR-0018). 날은 `TIME_ZONE`의 날짜다. 지표가 남기는 것은 이것뿐이고, 문답 수는 `qas`에서 센다.
   db.exec(`CREATE TABLE IF NOT EXISTS visits (
     day TEXT NOT NULL,
@@ -1678,6 +1696,7 @@ export async function startServer(options: {
     state: DebateSeat["state"];
     stance: string | null;
     error: string | null;
+    proxy: string | null;
   };
   type DebateRow = {
     id: number;
@@ -1690,13 +1709,14 @@ export async function startServer(options: {
     by: DebateConclusion["by"] | null;
     chooser: string | null;
     decided: number | null;
+    expired: number;
   };
   /** 토론의 라운드 수(문답 A13). 서버 설정으로 줄일 수 있다. */
   const debateRounds = Math.max(1, options.debateRounds ?? DEBATE_ROUNDS);
   /** 러너에 보내고 입장을 기다리는 토론 참여 요청. 키는 보낸 `debate`의 id다. 연결이 끊기거나 서버가 다시 뜨면 잃고, 러너가 붙을 때 다시 보낸다. */
   const debatesSent = new Map<
     string,
-    { socket: WSContext; executor: ExecutorId; debate: number; seat: number }
+    { socket: WSContext; executor: ExecutorId; debate: number; seat: number; proxy: string | null }
   >();
   /** 자리가 라운드마다 낸 입장. */
   const stancesOf = (seat: SeatRow): Stance[] => {
@@ -1717,15 +1737,13 @@ export async function startServer(options: {
       | undefined;
     if (!row) return null;
     const seats = seatsOf(row.id);
-    const shown =
-      row.state === "open" && seats.some((seat) => seat.state === "waiting")
-        ? row.round - 1
-        : row.round;
+    // 기다리는 자리는 라운드가 도는 중이거나 그대로 만료된 토론에만 있다. 끝나지 않은 라운드는 가린다.
+    const shown = seats.some((seat) => seat.state === "waiting") ? row.round - 1 : row.round;
     const concluded = row.state === "concluded";
     const options = shown === 0 ? [] : optionSeats(row, seats);
     return {
       id: row.id,
-      state: row.state,
+      state: row.expired ? "expired" : row.state,
       round: row.round,
       rounds: debateRounds,
       revealed: shown > 0,
@@ -1735,6 +1753,10 @@ export async function startServer(options: {
         branch: seat.branch,
         state: seat.state,
         ...(seat.error !== null && { error: JSON.parse(seat.error) }),
+        ...(seat.proxy !== null && { proxy: { login: seat.proxy, name: nameOf(seat.proxy) } }),
+        ...(row.state === "open" &&
+          seat.state === "waiting" &&
+          !answererOf(seat.proxy ?? seat.login, null) && { away: true as const }),
       })) as [DebateSeat, DebateSeat],
       options: options.map((seat) => ({
         stances: stancesOf(seat).slice(0, shown),
@@ -1808,7 +1830,9 @@ export async function startServer(options: {
   ) => {
     if (stopped) return;
     const row = db
-      .prepare("SELECT * FROM seats WHERE debate = ? AND seat = ? AND state = 'waiting'")
+      .prepare(
+        "SELECT s.* FROM seats s JOIN debates d ON d.id = s.debate WHERE s.debate = ? AND s.seat = ? AND s.state = 'waiting' AND d.state = 'open'",
+      )
       .get(debate, seat) as SeatRow | undefined;
     if (!row) return;
     db.prepare(
@@ -1838,7 +1862,16 @@ export async function startServer(options: {
       db.prepare("UPDATE seats SET state = 'waiting' WHERE debate = ? AND state = 'submitted'").run(
         debate,
       );
-      for (const seat of going) dispatchDebates(seat.login);
+      // 부재자의 러너가 붙어 있으면 진짜 에이전트가 이 라운드부터 대행의 자리를 이어받는다(문답 A18).
+      for (const seat of going)
+        if (seat.proxy !== null && answererOf(seat.login, null)) {
+          db.prepare("UPDATE seats SET proxy = NULL WHERE debate = ? AND seat = ?").run(
+            debate,
+            seat.seat,
+          );
+          seat.proxy = null;
+        }
+      for (const seat of going) dispatchDebates(seat.proxy ?? seat.login);
       return;
     }
     const options = optionSeats(row, seats);
@@ -1873,14 +1906,16 @@ export async function startServer(options: {
     const rows = db
       .prepare(
         `SELECT s.*, d.post, d.round FROM seats s JOIN debates d ON d.id = s.debate
-         WHERE s.login = ? AND s.state = 'waiting' ORDER BY s.debate, s.seat`,
+         WHERE COALESCE(s.proxy, s.login) = ? AND s.state = 'waiting' AND d.state = 'open'
+         ORDER BY s.debate, s.seat`,
       )
       .all(login) as (SeatRow & { post: string; round: number })[];
     const sent = new Set([...debatesSent.values()].map((d) => `${d.debate} ${d.seat}`));
     const off = new Set<number>();
     for (const row of rows) {
       if (sent.has(`${row.debate} ${row.seat}`)) continue;
-      if (db.prepare("SELECT 1 FROM ask_off WHERE login = ?").get(login)) {
+      // 대행은 부른 멤버가 일부러 부른 것이라 스위치를 보지 않는다(문답 A12).
+      if (row.proxy === null && db.prepare("SELECT 1 FROM ask_off WHERE login = ?").get(login)) {
         db.prepare("UPDATE seats SET state = 'off' WHERE debate = ? AND seat = ?").run(
           row.debate,
           row.seat,
@@ -1903,11 +1938,18 @@ export async function startServer(options: {
         ...(mine && { mine }),
         ...(theirs && { theirs }),
         against: { login: other?.login ?? "", branch: other?.branch ?? "" },
+        ...(row.proxy !== null && {
+          proxy: {
+            for: { login: row.login, name: nameOf(row.login) },
+            work: worksView().find((w) => w.login === row.login && w.branch === row.branch) ?? null,
+          },
+        }),
       });
       debatesSent.set((JSON.parse(frame) as { id: string }).id, {
         ...answerer,
         debate: row.debate,
         seat: row.seat,
+        proxy: row.proxy,
       });
       answerer.socket.send(frame);
     }
@@ -2583,6 +2625,7 @@ export async function startServer(options: {
     if (merging.has(id)) return;
     const decision = decisionOf(id);
     if (decision.state !== "proposed" || decision.closes === null) return;
+    if (decision.awaiting?.length) return; // 대행이 낀 결정은 부재자가 확인할 때까지 머지하지 않는다(ADR-0040)
     const all = decision.deciders.length > 0 && decision.deciders.every((d) => d.agreed);
     const closes = Date.parse(decision.closes);
     const now = Date.now();
@@ -2676,6 +2719,19 @@ export async function startServer(options: {
         .all(post) as { login: string }[]
     ).map((row) => row.login);
     if (!deciders.includes(login)) deciders.push(login);
+    // 대행이 낀 토론이면 부재자도 결정자이고, 확인할 때까지 머지하지 않는다(ADR-0040).
+    const absent = [
+      ...new Set(
+        (
+          db
+            .prepare("SELECT s.* FROM seats s JOIN debates d ON d.id = s.debate WHERE d.post = ?")
+            .all(post) as SeatRow[]
+        )
+          .filter((seat) => stancesOf(seat).some((stance) => stance.proxy))
+          .map((seat) => seat.login),
+      ),
+    ];
+    for (const who of absent) if (!deciders.includes(who)) deciders.push(who);
     const name = nameOf(login);
     let opened: { number: number; url: string };
     let path: string;
@@ -2730,8 +2786,8 @@ export async function startServer(options: {
     const id = Number(
       db
         .prepare(
-          `INSERT INTO decisions (post, login, title, path, pull, url, span, at, branch, deciders, closes)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO decisions (post, login, title, path, pull, url, span, at, branch, deciders, closes, absent)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           post,
@@ -2745,6 +2801,7 @@ export async function startServer(options: {
           branch,
           JSON.stringify(deciders),
           at + windowHours(window) * hourMs,
+          JSON.stringify(absent),
         ).lastInsertRowid,
     );
     announce(id, "opened");
@@ -2888,6 +2945,40 @@ export async function startServer(options: {
       request: requestOf(post.channel),
     })),
   }));
+
+  mount(app, api.proxyDebate, ({ post, seat }, c) => {
+    const login = c.get("login") as string;
+    visit(login);
+    const row = db.prepare("SELECT * FROM debates WHERE post = ?").get(post) as
+      | DebateRow
+      | undefined;
+    const target = row && seatsOf(row.id).find((s) => s.seat === seat);
+    if (!row || !target)
+      throw new ContractFailure({ code: "not_found", message: `없는 토론이나 자리다: ${post}` });
+    if (row.state !== "open" || !["waiting", "off"].includes(target.state))
+      throw new ContractFailure({
+        code: "conflict",
+        message: "이번 라운드에 기다리는 자리가 아니다",
+      });
+    if (target.login === login)
+      throw new ContractFailure({
+        code: "conflict",
+        message: "자기 자리에는 대행을 부르지 않는다",
+      });
+    if (!answererOf(login, null))
+      throw new ContractFailure({
+        code: "runner_offline",
+        message: `${login}의 러너가 붙어 있지 않아 대행을 띄울 수 없다`,
+      });
+    db.prepare(
+      "UPDATE seats SET proxy = ?, state = 'waiting', error = NULL WHERE debate = ? AND seat = ?",
+    ).run(login, row.id, seat);
+    // 주인이나 앞선 대행에게 이미 보낸 요청의 답은 받지 않는다.
+    for (const [id, sent] of debatesSent)
+      if (sent.debate === row.id && sent.seat === seat) debatesSent.delete(id);
+    dispatchDebates(login);
+    return { debate: debateOf(post) as Debate };
+  });
 
   mount(app, api.requestDebate, ({ post, agenda, grounds }, c) => {
     const login = c.get("login") as string;
@@ -3339,7 +3430,15 @@ export async function startServer(options: {
               debate.debate,
               debate.seat,
               message.kind === "stance"
-                ? { stance: message.payload }
+                ? {
+                    // 대행 표시는 서버가 붙인다. 러너가 보낸 것은 버린다.
+                    stance: {
+                      ...message.payload,
+                      proxy: debate.proxy
+                        ? { login: debate.proxy, name: nameOf(debate.proxy) }
+                        : undefined,
+                    },
+                  }
                 : message.kind === "error"
                   ? { error: message.payload }
                   : {
@@ -3977,6 +4076,10 @@ export async function startServer(options: {
       db.prepare("DELETE FROM inbox WHERE at <= ?").run(now - inboxMs);
       db.prepare("DELETE FROM feed WHERE at <= ?").run(now - inboxMs);
       db.prepare("DELETE FROM questions WHERE at <= ?").run(now - inboxMs); // 답이 없으면 만료
+      // 끝나지 않은 토론은 만료로 끝난다(ADR-0040). 보낸 요청의 답은 `settleSeat`이 받지 않는다.
+      db.prepare(
+        "UPDATE debates SET state = 'ended', expired = 1 WHERE state = 'open' AND at <= ?",
+      ).run(now - (options.debateMs ?? INBOX_MS));
       db.exec("COMMIT");
       shareInbox(); // 만료된 소식이 빠진다
 

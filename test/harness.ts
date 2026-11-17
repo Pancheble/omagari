@@ -608,6 +608,8 @@ export async function startWorld(
     hourMs?: number;
     /** 토론의 라운드 수. 주지 않으면 서버의 기본(세 라운드)이다. */
     debateRounds?: number;
+    /** 토론이 만료되기까지의 시간. 줄여서 만료를 본다. 만료는 `followMs`마다 본다. */
+    debateMs?: number;
     /** 서버가 처음 뜨기 전에 DB에 넣을 SQL. 예전 판이 만든 DB로 띄울 때 쓴다. */
     seed?: string;
     /** owner 러너의 샌드박스. 주지 않으면 쓸 수 없는 것이 꽂힌다. */
@@ -642,6 +644,7 @@ export async function startWorld(
     presenceDurations: options.presenceDurations,
     hourMs: options.hourMs,
     debateRounds: options.debateRounds,
+    debateMs: options.debateMs,
   };
   let server = await startServer(serverOptions).catch(async (error) => {
     await cleanup();
