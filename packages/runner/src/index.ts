@@ -890,13 +890,15 @@ export async function startRunner(options: {
         });
       } else if (message.kind === "debate") {
         // 토론은 자리마다 새 세션 하나로 낸다. 답은 요청이 온 연결로 보낸다. 그사이 끊겼으면 서버가 다시 붙을 때 다시 보낸다.
-        void debate(message.payload).then((payload) =>
+        const done = debate(message.payload).then((payload) =>
           current.send(
             "claim" in payload
               ? encode(runnerToServer, "stance", payload, message.id)
               : encode(runnerToServer, "error", payload, message.id),
           ),
         );
+        debating.add(done);
+        void done.finally(() => debating.delete(done));
       } else if (message.kind === "stopDraft") {
         stopDrafts.get(message.payload.id)?.abort();
       } else {
@@ -954,6 +956,8 @@ export async function startRunner(options: {
   const stopDrafts = new Map<string, AbortController>();
   /** 턴의 줄. 터미널에서 온 것도 서버에서 온 것도, 어느 채널·실행기의 것이든 온 순서대로 한 번에 하나씩 돈다. */
   let queue: Promise<unknown> = Promise.resolve();
+  /** 줄 밖에서 도는 토론(입장과 실험). 러너가 멈출 때 이것과 줄이 끝나야(실행 기록을 다 써야) 멈춤이 끝난다. */
+  const debating = new Set<Promise<unknown>>();
   const turnTimeoutMs = options.turnTimeoutMs ?? TURN_TIMEOUT_MS;
 
   /** 한 턴에 받은 것: 질문과, 채널 세션이면 그 채널과 최근 대화, 고른 모델과 effort. */
@@ -1030,7 +1034,8 @@ export async function startRunner(options: {
       // 본 코드는 실행기를 띄우기 전에 읽는다. 상한은 그 뒤부터 잰다(재기 시작한 뒤 race 전에 끊기면 거절을 받을 곳이 없다).
       const source = await readSource(cwd);
       timeout = AbortSignal.timeout(turnTimeoutMs);
-      const signal = stop ? AbortSignal.any([timeout, stop]) : timeout;
+      // 러너가 멈추면 도는 턴도 끊는다.
+      const signal = AbortSignal.any([timeout, stopping.signal, ...(stop ? [stop] : [])]);
       signal.throwIfAborted();
       // 실행기가 signal을 따르지 않아도 줄은 상한이나 멈춤에서 다음 턴으로 넘어간다.
       const cut = new Promise<never>((_, reject) => {
@@ -1063,6 +1068,10 @@ export async function startRunner(options: {
       const name = offered.models.find((m) => m.id === answered)?.name ?? answered;
       return { text: result.answer, source, model: name, effort };
     } catch (error) {
+      if (stopping.signal.aborted) {
+        record.error = "러너가 멈췄다";
+        throw new ContractFailure({ code: "executor_failed", message: record.error });
+      }
       if (stop?.aborted) {
         record.error = "주인이 멈췄다";
         throw new ContractFailure({ code: "executor_failed", message: record.error });
@@ -1166,8 +1175,9 @@ export async function startRunner(options: {
     const theirs = situation?.works.find(
       (w) => w.login === against.login && w.branch === against.branch,
     );
-    const skipped =
-      patch.length > MAX_PATCH_CHARS
+    const skipped = stopping.signal.aborted
+      ? "러너가 멈췄다"
+      : patch.length > MAX_PATCH_CHARS
         ? `패치가 ${MAX_PATCH_CHARS}자를 넘는다`
         : mergeCheck === "off"
           ? "이 러너의 합쳐 돌려 보기를 꺼 두었다(omagari runner --merge-check on으로 켠다)"
@@ -1217,7 +1227,11 @@ export async function startRunner(options: {
     const replied = queue
       // 줄에 서 있는 동안 멈췄으면 돌리지 않는다.
       .then(() =>
-        stop?.aborted ? Promise.reject(new Error("주인이 멈췄다")) : turn(executor, key, ask, stop),
+        stopping.signal.aborted
+          ? Promise.reject(new Error("러너가 멈췄다"))
+          : stop?.aborted
+            ? Promise.reject(new Error("주인이 멈췄다"))
+            : turn(executor, key, ask, stop),
       )
       .then(
         (payload) => ({ kind: "answer" as const, payload }),
@@ -1761,6 +1775,9 @@ export async function startRunner(options: {
       await Promise.all([localClosed, observing]);
       await merging;
       await running?.done;
+      // 도는 토론(실험 포함)과 턴의 줄이 실행 기록을 다 쓸 때까지 기다린다. 멈춘 뒤에는 새 턴과 실험을 시작하지 않는다.
+      await Promise.allSettled(debating);
+      await queue;
     },
   };
 }
