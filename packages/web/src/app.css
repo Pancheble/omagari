@@ -3045,6 +3045,7 @@ code.settings-value {
 .forum-tools {
   display: flex;
   flex: none;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin: 10px 0 12px;
@@ -3137,6 +3138,7 @@ code.settings-value {
 
 /* 포스트 목록: 목록 보기는 한 줄에 한 장, 카드 보기는 2열 격자. */
 .forum-list {
+  position: relative;
   display: grid;
   flex: 1;
   align-content: start;
@@ -3970,6 +3972,7 @@ a.issue-number:hover {
 
 /* 필터 줄(시안 53-D): 조건 칩. 저장된 필터와 다르면 테두리가 강조색이다. */
 .filter-row {
+  flex-wrap: wrap;
   align-items: center;
   overflow: visible;
 }
