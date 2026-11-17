@@ -1,12 +1,24 @@
-import { ANSWERED_DAYS, api, call, EXECUTOR_NAMES, type MemberView } from "@omagari/contract";
-import { Bot, MessagesSquare, X } from "lucide-react";
+import {
+  ANSWERED_DAYS,
+  api,
+  ContractFailure,
+  call,
+  EXECUTOR_NAMES,
+  IMPORTANCE_LABELS,
+  type Importance,
+  type Label,
+  type MemberView,
+} from "@omagari/contract";
+import { Bot, MessagesSquare, Plus, RefreshCw, Search, Tag, X } from "lucide-react";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { type Me, server } from "./api.ts";
+import { type PostItem, settled } from "./forum.tsx";
+import { ImportanceBadge, LabelDot, useLabels } from "./labels.tsx";
 import { Mark } from "./members.tsx";
 import { Avatar } from "./workspace.tsx";
 
 type Reply = Awaited<ReturnType<typeof call<typeof api.settings>>>;
-type Page = "agent" | "alerts";
+type Page = "agent" | "alerts" | "labels";
 
 /** 검사 명령을 정하는 법, 샌드박스 도구를 까는 법(README "검사 명령"). */
 const CHECK_HELP = "https://github.com/Pancheble/omagari#검사-명령";
@@ -18,12 +30,14 @@ const CHECK_HELP = "https://github.com/Pancheble/omagari#검사-명령";
  */
 export function Settings({
   me,
+  posts,
   mine,
   session,
   check,
   onClose,
 }: {
   me: Me;
+  posts?: PostItem[];
   mine?: MemberView;
   session: string;
   /** 세션이 끝났으면 로그인으로 돌린다. */
@@ -77,6 +91,7 @@ export function Settings({
   const items: [Page, string, ReactNode][] = [
     ["agent", "내 에이전트", <Bot key="agent" size={18} aria-hidden />],
     ["alerts", "부딪힘 알림", <MessagesSquare key="alerts" size={18} aria-hidden />],
+    ["labels", "라벨", <Tag key="labels" size={18} aria-hidden />],
   ];
   const item = ([id, name, icon]: (typeof items)[number]) => (
     <button
@@ -93,7 +108,10 @@ export function Settings({
   const pageName = items.find(([id]) => id === page)?.[1];
 
   let body: ReactNode;
-  if (failed) {
+  if (page === "labels") {
+    // 라벨은 설정 읽기와 따로 실시간으로 받는 목록을 쓴다.
+    body = <LabelsPage posts={posts} session={session} check={check} />;
+  } else if (failed) {
     body = (
       <div className="empty">
         <h2>설정을 읽지 못했어요</h2>
@@ -141,8 +159,9 @@ export function Settings({
         {item(items[0] as (typeof items)[number])}
         <h3>워크스페이스 · {workspace}</h3>
         {item(items[1] as (typeof items)[number])}
+        {item(items[2] as (typeof items)[number])}
       </nav>
-      <section className="settings-page">
+      <section className={page === "labels" ? "settings-page labels-page" : "settings-page"}>
         <h2 id={title}>{pageName}</h2>
         <button
           type="button"
@@ -243,7 +262,6 @@ function AlertsPage({
   workspace: string;
   repo: string;
 }) {
-  // 포럼마다 거르기를 고치는 것은 화면 이슈(#194)에서 한다(ADR-0039).
   return (
     <>
       <MergeCheckGroup
@@ -383,5 +401,283 @@ function SwitchRow({
         onClick={() => onChange(!on)}
       />
     </Row>
+  );
+}
+
+/** GitHub처럼 고르는 라벨 색: 채도가 있는 색 가운데 하나를 뽑는다. */
+const randomColor = () =>
+  Array.from(crypto.getRandomValues(new Uint8Array(3)), (n) =>
+    (64 + (n % 160)).toString(16).padStart(2, "0"),
+  ).join("");
+
+type Fields = { name: string; color: string; description: string; importance: Importance };
+const fieldsOf = (label: Label): Fields => ({ ...label });
+const EMPTY = (): Fields => ({
+  name: "",
+  color: randomColor(),
+  description: "",
+  importance: "reference",
+});
+
+/**
+ * 라벨(시안 51-D4): 왼쪽 라벨 목록(찾기 칸, `+`), 오른쪽에서 이름, 색, 설명, 중요도를 고친다.
+ * 이름, 색, 설명은 GitHub 라벨도 같이 고쳐지고 중요도는 모두에게 같다(ADR-0039). `+`는 새 라벨을 만든다.
+ */
+function LabelsPage({
+  posts,
+  session,
+  check,
+}: {
+  posts?: PostItem[];
+  session: string;
+  check: (error: unknown) => unknown;
+}) {
+  const labels = useLabels();
+  const [query, setQuery] = useState("");
+  /** 고른 라벨의 이름. 없으면 새 라벨이다. */
+  const [picked, setPicked] = useState<string | undefined>(labels[0]?.name);
+  const label = labels.find((other) => other.name === picked);
+  const [fields, setFields] = useState<Fields>(() => (label ? fieldsOf(label) : EMPTY()));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const ids = { name: useId(), color: useId(), description: useId() };
+
+  const pick = (next?: Label) => {
+    setPicked(next?.name);
+    setFields(next ? fieldsOf(next) : EMPTY());
+    setError(undefined);
+  };
+  const needle = query.trim().toLowerCase();
+  const shown = labels.filter((other) => other.name.toLowerCase().includes(needle));
+  const set = (next: Partial<Fields>) => {
+    setFields((now) => ({ ...now, ...next }));
+    setError(undefined);
+  };
+  const colorOk = /^[0-9a-fA-F]{6}$/.test(fields.color);
+  const dirty = label
+    ? JSON.stringify(fieldsOf(label)) !== JSON.stringify(fields)
+    : fields.name.trim() !== "";
+  /** 논의로 바꾸면 이슈가 열릴 열린 포스트 수. */
+  const opening =
+    label && label.importance === "reference" && fields.importance === "discuss"
+      ? (posts ?? []).filter(
+          (post) =>
+            !settled(post) && post.labels.includes(label.name) && post.importance === "reference",
+        ).length
+      : 0;
+
+  const save = async () => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      const color = fields.color.toLowerCase();
+      if (label) {
+        const next: Partial<Fields> = {};
+        if (fields.name.trim() !== label.name) next.name = fields.name.trim();
+        if (color !== label.color.toLowerCase()) next.color = color;
+        if (fields.description !== label.description) next.description = fields.description;
+        if (fields.importance !== label.importance) next.importance = fields.importance;
+        const { label: saved } = await call(server(session), api.editLabel, {
+          name: label.name,
+          next,
+        });
+        pick(saved);
+      } else {
+        let { label: saved } = await call(server(session), api.createLabel, {
+          name: fields.name.trim(),
+          color,
+          description: fields.description,
+        });
+        // 새 라벨은 참고로 생긴다. 논의로 골랐으면 이어서 바꾼다.
+        if (fields.importance === "discuss")
+          ({ label: saved } = await call(server(session), api.editLabel, {
+            name: saved.name,
+            next: { importance: "discuss" },
+          }));
+        pick(saved);
+      }
+    } catch (failure) {
+      check(failure);
+      const code = failure instanceof ContractFailure ? failure.code : undefined;
+      setError(
+        code === "conflict"
+          ? "같은 이름의 라벨이 이미 있어요."
+          : code === "github_failed"
+            ? "GitHub이 라벨을 받지 않았어요. 토큰의 권한을 확인해 주세요."
+            : "저장하지 못했어요. 잠시 뒤 다시 시도해 주세요.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="labels">
+      <div className="labels-list">
+        <div className="labels-tools">
+          <div className="labels-search">
+            <Search size={14} aria-hidden />
+            <input
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="라벨 찾기"
+              aria-label="라벨 찾기"
+              autoComplete="off"
+            />
+          </div>
+          <button
+            type="button"
+            className="header-button"
+            aria-label="새 라벨"
+            title="새 라벨"
+            aria-pressed={picked === undefined}
+            onClick={() => pick(undefined)}
+          >
+            <Plus size={18} aria-hidden />
+          </button>
+        </div>
+        <ul>
+          {shown.map((other) => (
+            <li key={other.name}>
+              <button
+                type="button"
+                className="settings-item"
+                aria-current={other.name === picked ? "true" : undefined}
+                onClick={() => pick(other)}
+              >
+                <LabelDot color={other.color} size={10} />
+                <span className="labels-name">{other.name}</span>
+                <ImportanceBadge importance={other.importance} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
+      <form
+        className="labels-edit"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void save();
+        }}
+      >
+        <div className="labels-preview">
+          <p>포스트에서 이렇게 보여요</p>
+          <strong>refund의 reason 필드</strong> <span className="issue-number">#44</span>
+          <span className="labels-preview-badges">
+            <span className="badge warning">직접 충돌</span>
+            <span className="label-badge">
+              <LabelDot color={colorOk ? fields.color : undefined} />
+              {fields.name.trim() || "새 라벨"}
+            </span>
+            {fields.importance === "discuss" && <ImportanceBadge importance="discuss" />}
+          </span>
+        </div>
+        <div className="labels-row">
+          <div className="field">
+            <label htmlFor={ids.name}>이름</label>
+            <input
+              id={ids.name}
+              className="text-input"
+              value={fields.name}
+              maxLength={50}
+              autoComplete="off"
+              onChange={(event) => set({ name: event.target.value })}
+            />
+          </div>
+          <div className="field">
+            <label htmlFor={ids.color}>색</label>
+            <div className="labels-color">
+              <LabelDot color={colorOk ? fields.color : undefined} size={20} />
+              <span className="labels-hex">
+                #
+                <input
+                  id={ids.color}
+                  className="text-input"
+                  value={fields.color}
+                  maxLength={6}
+                  autoComplete="off"
+                  spellCheck={false}
+                  aria-invalid={!colorOk}
+                  onChange={(event) => set({ color: event.target.value.replace(/^#/, "") })}
+                />
+              </span>
+              <button
+                type="button"
+                className="header-button"
+                aria-label="다른 색 뽑기"
+                title="다른 색 뽑기"
+                onClick={() => set({ color: randomColor() })}
+              >
+                <RefreshCw size={16} aria-hidden />
+              </button>
+            </div>
+          </div>
+        </div>
+        <div className="field">
+          <label htmlFor={ids.description}>설명</label>
+          <input
+            id={ids.description}
+            className="text-input"
+            value={fields.description}
+            maxLength={100}
+            autoComplete="off"
+            onChange={(event) => set({ description: event.target.value })}
+          />
+        </div>
+        <fieldset className="field labels-importance">
+          <legend>중요도</legend>
+          <div className="radio-cards">
+            {(
+              [
+                ["reference", "알림으로 쌓여요. 이슈를 열지 않아요."],
+                ["discuss", "사람이 보고 이야기해요. 붙으면 GitHub 이슈를 열어요."],
+              ] as const
+            ).map(([id, text]) => (
+              <label key={id} className="radio-card">
+                <input
+                  type="radio"
+                  name="importance"
+                  checked={fields.importance === id}
+                  onChange={() => set({ importance: id })}
+                />
+                <strong>{IMPORTANCE_LABELS[id]}</strong>
+                <small>{text}</small>
+              </label>
+            ))}
+          </div>
+          {opening > 0 && (
+            <p className="help">
+              논의로 바꾸면 이 라벨이 붙은 열린 포스트 {opening}개에 이슈가 열려요.
+            </p>
+          )}
+        </fieldset>
+        {error && (
+          <p className="help error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="labels-actions">
+          <p className="help">
+            이름, 색, 설명은 GitHub 라벨도 같이 고쳐져요. 중요도는 모든 멤버에게 같아요.
+          </p>
+          <button
+            type="button"
+            className="button outline"
+            disabled={!dirty}
+            onClick={() => pick(label)}
+          >
+            되돌리기
+          </button>
+          <button
+            type="submit"
+            className="button primary"
+            disabled={busy || !dirty || !colorOk || !fields.name.trim()}
+          >
+            {label ? "저장" : "만들기"}
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }

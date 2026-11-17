@@ -1818,8 +1818,9 @@ The structural breakpoints that matter for agents: 1440px (content lock), 1068px
 - Some component imagery is dynamic (rotating product hero) and its specific copy varies per surface — component specs name the structure, not the rotating content.
 - Atmospheric photography (environment page mountain vista) is a content asset, not a design token; the documented `{component.environment-quote-card}` describes the structural surface only.
 - 앱: 결정함과 결정 보기는 아직 부품이 없다(2단계 문답 Q9). "기록 보기"가 여는 답한 기록 화면도 아직 없다.
-- 앱: 포럼의 필터 시안(53-D, 52)은 묶음("중요도가 논의인 라벨 모두")에 라벨을 더할 수 있고 "상태"도 필터 줄에 있다. 지금 계약의 `ForumFilter`는 중요도 하나이거나 라벨 목록 하나이고 상태가 없다. 계약을 넓힐지, 화면에서 둘 중 하나만 고르게 하고 상태는 기기마다 기억할지는 #194에서 정한다. "+ 필터"로 더할 수 있는 조건도 상태와 라벨 말고는 정하지 않았다.
-- 앱: 포럼을 지우는 자리와 이름을 고치는 자리, "다른 포스트"가 0개일 때 줄을 숨길지, 새 라벨을 만들 때의 오른쪽 칸과 저장 실패(GitHub이 받지 않음, 같은 이름)의 모습은 그리지 않았다.
+- 앱: 포럼의 필터 시안(53-D, 52)은 묶음("중요도가 논의인 라벨 모두")에 라벨을 더할 수 있고 "상태"도 필터 줄에 있다. 계약의 `ForumFilter`는 중요도 하나이거나 라벨 목록 하나이고 상태가 없어, #194는 계약을 넓히지 않고 화면을 맞췄다: 묶음을 켜면 라벨은 따로 고르지 못하고(잠김), 상태 칩은 포럼의 필터가 아니라 보는 사람의 화면에만 있다(처음 "열림"). "+ 필터"는 더할 조건이 없어 두지 않았다. 묶음과 라벨을 함께 쓰고 싶어지면 `ForumFilter`를 넓힌다.
+- 앱: 포럼을 고치고 지우는 자리는 시안에 없어, #194는 포럼 머리 띠에 "포럼 고치기"(Lucide `settings-2`) 버튼을 두고 "포럼 만들기"와 같은 대화 상자(제목 "포럼 고치기", 왼쪽 아래 "포럼 지우기", 한 번 더 눌러야 지운다)를 연다. "다른 포스트"는 0개면 줄을 숨긴다. 새 라벨은 라벨 항목의 `+`가 오른쪽 칸을 비우고 "만들기"로 바꾼다. 저장 실패는 오른쪽 칸 아래 오류 글이다. 이 셋은 시안으로 다시 보지 않았다.
+- 앱: 채널 패널의 "내가 관련된 포스트"는 계약에 포스트에서 말한 사람이 없어, 내 작업이 걸린 알림과 마지막 글이나 이 화면에서 읽은 대화에 내 글이 있는 포스트로 본다. 안 연 포스트에 오래전에 쓴 글은 놓친다.
 - 앱: 라벨 색을 어두운 화면에서 바꾸는 계산식은 정하지 않았다. 1단계처럼 밝은 화면만 낸다. 4단계 시안(51~55)의 좁은 화면도 그리지 않았다.
 - 앱: 좁은 화면의 판정 띠는 따로 그리지 않았고, 결정 상태 띠처럼 줄을 바꾼다. 합쳐 돌려 보기의 설정 파일은 시안대로 `.omagari.json`(`check`, `setup`)이고, 러너에서 끄는 옵션은 `omagari runner --merge-check off`다(ADR-0034, #127).
 - 앱: 포럼 카드 보기의 부딪힌 줄 미리 보기는 나중에 한다(2026-11-13 @Pancheble이 2단계에서 뺌). 알림에는 줄 번호만 있고, 줄 내용을 실으려면 러너가 공유 수준(ADR-0007)대로 내용을 싣는 계약 변경이 필요하다. 카드 보기는 기본 보기도 아니다. 넣을 때의 명세: 카드 위쪽, 12px 고정폭, 줄 높이 1.55, 안쪽 14px 16px. 직접 충돌은 `{colors.warning-bg}` 바탕에 두 사람의 줄을 `{colors.warning}`, 정의 줄 변경은 `{colors.selected}` 바탕에 -/+ 두 줄.

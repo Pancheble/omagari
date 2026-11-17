@@ -532,6 +532,19 @@ async function mergeTree(
 }
 
 /**
+ * 서버에 올라온 관측(그 작업의 기준 커밋에 관측의 내용을 얹은 것)의 트리. 대행의 실험이 부재자의 작업을 "내 트리"로 쓸 때 쓴다(ADR-0040).
+ * 러너의 레포에서 임시 인덱스로만 한다. 기준 커밋이 이 기기에 없으면 까닭이다.
+ */
+export async function observedTree(folder: string, work: { base: string; files: ObservedFile[] }) {
+  const run = await mkdtemp(join(tmpdir(), "omagari-tree-"));
+  try {
+    return await mergeTree(folder, run, "", { base: work.base, theirs: work, alone: "theirs" });
+  } finally {
+    await rm(run, { recursive: true, force: true });
+  }
+}
+
+/**
  * 트리(`tree`)에 패치를 얹은 트리(ADR-0040의 실험). 러너의 레포에서 임시 인덱스로만 한다(`git apply --cached`). 내 폴더의 파일과 인덱스, 브랜치는 건드리지 않는다.
  * 얹어지지 않으면 까닭이다. 레포 밖을 가리키는 경로는 `git apply`가 거절한다.
  */
