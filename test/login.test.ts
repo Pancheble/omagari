@@ -58,9 +58,19 @@ test("남겨 둔 세션으로 나와 워크스페이스를 다시 읽고, 로그
   const browser = await world.login("alice");
   const laptop = await world.login("alice"); // 같은 사람이 다른 브라우저에서
 
-  assert.deepEqual(await call(browser, api.me), { login: "alice", name: "앨리스", repo: REPO });
+  assert.deepEqual(await call(browser, api.me), {
+    login: "alice",
+    name: "앨리스",
+    repo: REPO,
+    repos: [REPO],
+  });
   // 프로필 이름을 비워 둔 사람은 로그인이 이름이다.
-  assert.deepEqual(await call(world.owner, api.me), { login: "owner", name: "owner", repo: REPO });
+  assert.deepEqual(await call(world.owner, api.me), {
+    login: "owner",
+    name: "owner",
+    repo: REPO,
+    repos: [REPO],
+  });
 
   await call(browser, api.logout);
   await assert.rejects(call(browser, api.me), { code: "unauthorized" });

@@ -100,6 +100,14 @@ omagari --version
 OMAGARI_REPO=<owner/name> GITHUB_CLIENT_ID=<기기 인증을 켠 GitHub 앱> HOST=0.0.0.0 npm run server
 ```
 
+`OMAGARI_REPO`는 받을 GitHub 계정 목록이다(ADR-0043). 쉼표로 나눠 여럿 적고, 계정(`owner`)이나 레포(`owner/name`)로 적는다.
+
+- 워크스페이스에는 이 계정들의 레포만 들어간다. 레포는 그 레포의 GitHub Admin이 `POST /api/repos/add`(`{ "repo": "owner/name" }`)로 넣고 `POST /api/repos/remove`로 뺀다. 뺀 레포의 것은 지우지 않아 다시 넣으면 돌아온다. 화면은 아직 없다(#238).
+- `owner/name`으로 적은 레포는 그 계정을 받고, 서버가 켜질 때마다 넣는다. 아무도 로그인할 수 없는 새 서버의 첫 레포는 이렇게 넣는다. API로 뺀 레포를 다시 넣지 않으려면 여기서도 지운다.
+- 첫 `owner/name`은 레포가 하나이던 판의 레포다. 그 판의 DB로 켜면 있던 작업, 알림, 포스트, 라벨, 결정, 검사 명령이 이 레포의 것으로 옮겨지고, 들어와 있던 세션도 다시 로그인하지 않고 이 레포의 멤버다(10분 안에 GitHub 권한으로 다시 확인한다).
+- 멤버는 워크스페이스 레포 가운데 하나라도 push 권한이 있는 사람이다. 레포마다 push 권한이 있는 것만 보이고, 로그인할 때와 10분마다 다시 읽는다. 러너는 폴더의 GitHub 원격으로 그 레포에 이어진다. 레포마다 러너를 하나씩 켠다.
+- 레포마다인 API(작업, 멤버, 포스트, 라벨, 결정, 피드)는 `Omagari-Repo: owner/name` 머리말로 레포를 고른다. 없으면 부른 사람에게 보이는 첫 레포다. CLI는 폴더의 원격을 싣는다.
+
 `OMAGARI_DB`(기본 `omagari.db`)와 `PORT`(기본 3000)로 DB 파일과 포트를 바꾼다. 멤버가 웹을 여는 주소가 서버가 듣는 주소와 다르면 `OMAGARI_URL`에 준다. 결정 PR의 출처(포스트 링크)가 이 주소로 적힌다.
 
 서버가 `npm run build -w @omagari/web`로 빌드한 웹 화면(`packages/web/dist`)이 있으면 같은 주소에서 낸다. 없는 경로는 화면의 첫 파일로 보낸다. 개발할 때는 지금처럼 `npm run web`(Vite)를 쓴다. 건강 확인은 `GET /api/health`다.
@@ -115,7 +123,7 @@ fly secrets set GITHUB_CLIENT_ID=<기기 인증을 켠 GitHub 앱>
 fly deploy
 ```
 
-- 비밀값은 `fly secrets`로만 넣는다. 레포에는 두지 않는다. `OMAGARI_REPO`와 `OMAGARI_URL`은 비밀이 아니라 `fly.toml`의 `[env]`에 있다.
+- 비밀값은 `fly secrets`로만 넣는다. 레포에는 두지 않는다. `OMAGARI_REPO`(받을 계정 목록)와 `OMAGARI_URL`은 비밀이 아니라 `fly.toml`의 `[env]`에 있다.
 - DB는 볼륨(`/data/omagari.db`)에 있어 새 판으로 바꿔도 남는다. 백업은 볼륨의 날마다 스냅샷이다(`fly volumes snapshots list`로 본다. 기본 5일 보관).
 - 건강 확인(`/api/health`)을 통과한 판만 갈아 끼운다. 못 통과하면 옛 판이 남는다.
 - 자동 배포: `.github/workflows/deploy.yml`이 `dev`의 CI가 통과하면 `fly deploy`를 돈다. `dev`에서만 쓸 수 있는 GitHub Environment `dogfood`(Settings → Environments, 배포 브랜치를 `dev`로 제한)의 비밀값에 `FLY_API_TOKEN`(`fly tokens create deploy`)을 넣어야 켜지고, 없으면 배포 단계를 건너뛴다. CI가 돈 커밋이 지금 `dev`의 끝이 아니면(옛 실행을 다시 돌린 경우) 올리지 않는다.

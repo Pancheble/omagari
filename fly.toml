@@ -3,6 +3,7 @@ app = "omagari-dogfood"
 primary_region = "nrt" # 도쿄
 
 [env]
+# 받을 GitHub 계정 목록(ADR-0043). Pancheble/omagari는 레포가 하나이던 판의 레포라 켤 때마다 넣고, 그 판의 DB를 이 레포로 옮긴다.
 OMAGARI_REPO = "Pancheble/omagari"
 OMAGARI_URL = "https://omagari-dogfood.fly.dev"
 
