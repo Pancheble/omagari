@@ -53,8 +53,10 @@ delete process.env.CLAUDECODE;
 export const REPO = "omagari-test/space";
 /** 같은 계정의 두 번째 레포(ADR-0043). 가짜 GitHub에서 PR, 이슈, 라벨을 `REPO`와 함께 쓴다. */
 export const REPO2 = "omagari-test/other";
+/** 다른 계정의 레포(ADR-0043). 서버가 두 계정을 받으면 `REPO`와 다른 워크스페이스가 된다. */
+export const REPO3 = "other-team/code";
 /** 가짜 GitHub에 있는 레포들. */
-const REPOS = new Set([REPO, REPO2]);
+const REPOS = new Set([REPO, REPO2, REPO3]);
 
 /** 실행 파일 하나를 돌리고 종료 코드와 출력을 돌려준다. 0이 아닌 종료도 결과다. */
 function run(
@@ -786,16 +788,21 @@ export async function startWorld(
     works: async (as: { url: string; session: string }) => (await call(as, api.works)).works,
     /**
      * 웹이 하듯 `as`의 세션으로 실시간 연결을 열고 hello를 보낸다. 서버가 처음 보낸 것(welcome이나 거절)을 받으면 돌려준다.
-     * `after`를 주면 그 번호 뒤의 메시지를 이어 받는다. 받은 것은 모두 `received`에 쌓인다.
+     * `after`를 주면 그 번호 뒤의 메시지를 이어 받는다. `on`은 받을 워크스페이스나 레포다(주지 않으면 첫 워크스페이스).
+     * 받은 것은 모두 `received`에 쌓인다.
      */
-    async live(as: { session: string }, after?: number) {
+    async live(
+      as: { session: string },
+      after?: number,
+      on: { workspace?: string; repo?: string } = {},
+    ) {
       const url = new URL(LIVE_SOCKET, server.url);
       url.protocol = "ws:";
       const socket = new WebSocket(url);
       const received: Message<typeof serverToWeb>[] = [];
       const closed = Promise.withResolvers<number>();
       socket.addEventListener("open", () =>
-        socket.send(encode(webToServer, "hello", { session: as.session, after })),
+        socket.send(encode(webToServer, "hello", { session: as.session, after, ...on })),
       );
       socket.addEventListener("message", ({ data }) => {
         const decoded = decode(serverToWeb, data);
