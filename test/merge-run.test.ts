@@ -16,8 +16,11 @@ type Indirect = Exclude<Alert, { kind: "direct" }>;
 const CHECK2 =
   "if [ -e src/draft.ts ] && grep -q currency src/pay.ts; then echo 깨졌다; exit 1; fi";
 
-/** 잠잠해지기를 기다리는 시간. 테스트에서는 줄여 본다. */
-const QUIET_MS = 600;
+/**
+ * 잠잠해지기를 기다리는 시간. 테스트에서는 줄여 본다.
+ * 고친 뒤 새로 돌기 전까지 "지난 결과" 알림이 보이는 틈이 이 시간이라, 너무 짧으면 기계가 느릴 때 폴링이 그 틈을 놓친다(#241).
+ */
+const QUIET_MS = 1500;
 
 const PAY = `export function pay(amount: number) {
   return amount;
