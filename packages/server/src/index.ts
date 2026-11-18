@@ -77,6 +77,7 @@ import {
   serverToWeb,
   shows,
   type Visibility,
+  WORKSPACE_HEADER,
   type Work,
   type WorkRef,
   type WorkView,
@@ -150,6 +151,11 @@ const qaView = (row: QaRow): Qa => ({
   visibility: row.visibility,
   answer: row.answer === null ? { state: "pending" } : JSON.parse(row.answer),
 });
+
+/** 레포 `owner/name`의 워크스페이스: 계정 이름의 소문자(ADR-0043). */
+const ownerOf = (repo: string) => (repo.split("/")[0] ?? "").toLowerCase();
+/** `ownerOf`를 SQL로. `r`은 레포를 내는 SQL이다. */
+const ownerSql = (r: string) => `lower(substr(${r}, 1, instr(${r}, '/') - 1))`;
 
 /** 알림 줄이 서는 채널(ADR-0039). 포럼은 거른 보기라 알림 줄을 담지 않는다. 채널 목록에 없고 아무도 쓰지 못한다. */
 const ALERTS = "alerts";
@@ -229,7 +235,7 @@ const POST_LAST = `(SELECT json_object('login', x.login, 'name', COALESCE(pp.nam
 
 /** 포럼 전부의 id와 거르기(JSON 배열), 이름 순. */
 const FORUMS = `(SELECT json_group_array(json_object('id', f.id, 'filter', json(f.filter)) ORDER BY f.name)
-  FROM channels f WHERE f.filter IS NOT NULL)`;
+  FROM channels f WHERE f.filter IS NOT NULL AND f.workspace = c.workspace)`;
 /** 포스트(`c`)의 중요도: 라벨 가운데 하나라도 논의면 논의다(ADR-0039). 모르는 라벨은 참고다. */
 const POST_IMPORTANCE = `CASE WHEN EXISTS (SELECT 1 FROM json_each(c.labels) j
   JOIN labels l ON l.repo = c.repo AND l.name = j.value AND l.importance = 'discuss') THEN 'discuss' ELSE 'reference' END`;
@@ -241,7 +247,8 @@ const MESSAGES = `SELECT m.id, m.channel, m.login, m.text, m.note, m.at, m.githu
   c.id AS post, CASE WHEN c.id IS NULL THEN 0 ELSE ${POST_COUNT} END AS count, ${POST_LAST} AS last,
   CASE WHEN c.id IS NULL THEN NULL ELSE ${FORUMS} END AS forums,
   CASE WHEN d.id IS NULL THEN NULL ELSE ${DECISION} END AS decision,
-  COALESCE(a.repo, (SELECT ch.repo FROM channels ch WHERE ch.id = m.channel)) AS repo FROM messages m
+  COALESCE(a.repo, (SELECT ch.repo FROM channels ch WHERE ch.id = m.channel)) AS repo,
+  COALESCE(${ownerSql("a.repo")}, (SELECT ch.workspace FROM channels ch WHERE ch.id = m.channel)) AS workspace FROM messages m
   LEFT JOIN people p ON p.login = m.login
   LEFT JOIN qas q ON q.id = m.qa
   LEFT JOIN alerts a ON a.id = m.alert
@@ -280,6 +287,8 @@ type MessageRow = {
   forums: string | null;
   /** 레포의 것(알림 줄과 포스트의 글)이면 그 레포. 채팅 채널의 것이면 NULL이다. */
   repo: string | null;
+  /** 이 줄이 선 워크스페이스. 알림 줄의 자리(`ALERTS`)의 것도 그 알림의 레포가 정한다. */
+  workspace: string | null;
 } & Pick<QaRow, "executor" | "question" | "answer" | "visibility">;
 
 /**
@@ -835,16 +844,19 @@ export async function startServer(options: {
   if (!db.prepare("SELECT 1 FROM pragma_table_info('seats') WHERE name = 'proxy'").get())
     db.exec("ALTER TABLE seats ADD COLUMN proxy TEXT");
   // 날마다 들어온 멤버(ADR-0018). 날은 `TIME_ZONE`의 날짜다. 지표가 남기는 것은 이것뿐이고, 문답 수는 `qas`에서 센다.
+  // 지표는 워크스페이스마다다(ADR-0043). 한 사람이 두 워크스페이스에 들어오면 둘에서 하루에 한 번씩 센다.
   db.exec(`CREATE TABLE IF NOT EXISTS visits (
     day TEXT NOT NULL,
+    workspace TEXT NOT NULL,
     login TEXT NOT NULL,
-    PRIMARY KEY (day, login)
+    PRIMARY KEY (day, workspace, login)
   ) STRICT`);
   // 합쳐 돌려 보기의 판정 수(ADR-0018, ADR-0036). 지문마다 한 번만 센다. 이름은 남기지 않고 지문, 판정, 시각만 둔다.
   db.exec(`CREATE TABLE IF NOT EXISTS merge_runs (
     fingerprint TEXT PRIMARY KEY,
     verdict TEXT NOT NULL,
-    at INTEGER NOT NULL
+    at INTEGER NOT NULL,
+    workspace TEXT NOT NULL DEFAULT ''
   ) STRICT`);
   // 워크스페이스의 레포(ADR-0043). 이름은 GitHub처럼 대소문자를 가리지 않고, 다른 표에는 여기 적힌 꼴 그대로 둔다. `at`은 넣은 시각(ms)이다.
   db.exec(`CREATE TABLE IF NOT EXISTS repos (
@@ -933,6 +945,89 @@ export async function startServer(options: {
     );
   for (const repo of allRepos()) seedLabels(repo);
 
+  // 워크스페이스(ADR-0043): 레포의 계정(`ownerOf`)마다 하나다. 채팅 채널, 포럼, 날마다의 방문, 합쳐 돌려 보기의 판정 수는 워크스페이스마다 나뉜다.
+  // 워크스페이스는 그 계정의 레포가 처음 들어올 때 생긴다.
+  db.exec(
+    "CREATE TABLE IF NOT EXISTS workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, at INTEGER NOT NULL) STRICT",
+  );
+  const hasColumn = (table: string, column: string) =>
+    db.prepare(`SELECT 1 FROM pragma_table_info('${table}') WHERE name = '${column}'`).get();
+  if (!hasColumn("channels", "workspace")) {
+    // 채널의 이름은 워크스페이스마다 하나다. 표 전체에 하나이던 UNIQUE를 빼려고 표를 다시 만든다. messages가 가리키는 표라 외래 키를 잠시 끈다.
+    db.exec("PRAGMA foreign_keys = OFF");
+    db.exec("BEGIN");
+    db.exec("ALTER TABLE channels ADD COLUMN workspace TEXT");
+    const { sql } = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'channels'").get() as {
+      sql: string;
+    };
+    const next = sql
+      .replace(/^CREATE TABLE\s+"?channels"?/, "CREATE TABLE channels_next")
+      .replace("name TEXT NOT NULL UNIQUE COLLATE NOCASE", "name TEXT NOT NULL COLLATE NOCASE");
+    if (next === sql || next.includes("UNIQUE COLLATE NOCASE"))
+      throw new Error(`channels 표를 다시 만들지 못했다: ${sql}`);
+    db.exec(next);
+    db.exec("INSERT INTO channels_next SELECT * FROM channels");
+    db.exec("DROP TABLE channels");
+    db.exec("ALTER TABLE channels_next RENAME TO channels");
+    db.exec(`UPDATE channels SET workspace = ${ownerSql("repo")} WHERE repo IS NOT NULL`);
+    db.exec("CREATE UNIQUE INDEX channels_by_alert ON channels (alert)");
+    db.exec("COMMIT");
+    db.exec("PRAGMA foreign_keys = ON");
+  }
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS channels_by_name ON channels (workspace, name)");
+  /** 새 워크스페이스에 "논의"와 "참고" 포럼을 둔다. */
+  const seedForums = (workspace: string) => {
+    for (const importance of Importance.options)
+      db.prepare(
+        "INSERT INTO channels (id, name, kind, filter, workspace) VALUES (?, ?, 'forum', ?, ?)",
+      ).run(
+        randomBytes(8).toString("hex"),
+        IMPORTANCE_LABELS[importance],
+        JSON.stringify({ importance }),
+        workspace,
+      );
+  };
+  /**
+   * `repo`의 워크스페이스가 없으면 만든다. 워크스페이스가 하나이던 판의 DB에 있던 채팅 채널과 포럼(워크스페이스 없는 것)은
+   * 처음 생기는 워크스페이스가 이어받고, 이어받을 것이 없으면 기본 포럼을 둔다.
+   */
+  const ensureWorkspace = (repo: string) => {
+    const id = ownerOf(repo);
+    const made = db
+      .prepare("INSERT OR IGNORE INTO workspaces (id, name, at) VALUES (?, ?, ?)")
+      .run(id, repo.split("/")[0] as string, Date.now()).changes;
+    if (!made) return;
+    const adopted = db
+      .prepare(
+        "UPDATE channels SET workspace = ? WHERE workspace IS NULL AND repo IS NULL AND id != ?",
+      )
+      .run(id, ALERTS).changes;
+    if (!adopted) seedForums(id);
+  };
+  for (const repo of allRepos()) ensureWorkspace(repo);
+  /** 워크스페이스가 하나이던 판의 방문과 판정 수는 처음 생긴 워크스페이스의 것이다. */
+  const firstWorkspace =
+    (
+      db.prepare("SELECT id FROM workspaces ORDER BY at, rowid LIMIT 1").get() as
+        | { id: string }
+        | undefined
+    )?.id ?? "";
+  if (!hasColumn("visits", "workspace")) {
+    db.exec("BEGIN");
+    db.exec(`CREATE TABLE visits_next (day TEXT NOT NULL, workspace TEXT NOT NULL, login TEXT NOT NULL,
+      PRIMARY KEY (day, workspace, login)) STRICT`);
+    db.prepare(
+      "INSERT INTO visits_next (day, workspace, login) SELECT day, ?, login FROM visits",
+    ).run(firstWorkspace);
+    db.exec("DROP TABLE visits");
+    db.exec("ALTER TABLE visits_next RENAME TO visits");
+    db.exec("COMMIT");
+  }
+  if (!hasColumn("merge_runs", "workspace")) {
+    db.exec("ALTER TABLE merge_runs ADD COLUMN workspace TEXT NOT NULL DEFAULT ''");
+    db.prepare("UPDATE merge_runs SET workspace = ?").run(firstWorkspace);
+  }
+
   // 서버가 막 떴으니 러너에 보낸 문답의 답은 오지 않는다. 기다리는 채로 남지 않게 실패로 둔다.
   db.prepare("UPDATE qas SET answer = ?, settled = ? WHERE answer IS NULL").run(
     JSON.stringify({
@@ -1001,6 +1096,15 @@ export async function startServer(options: {
         | { repo: string }
         | undefined
     )?.repo;
+  /** 채널의 워크스페이스. 알림 줄의 자리(`ALERTS`)와 없는 채널은 없다. */
+  const channelWorkspace = (channel: string) =>
+    (
+      db.prepare("SELECT workspace FROM channels WHERE id = ?").get(channel) as
+        | { workspace: string | null }
+        | undefined
+    )?.workspace ?? undefined;
+  /** 멤버가 들어간 워크스페이스들(`id`), 넣은 순서. */
+  const workspacesOf = (login: string) => [...new Set(reposOf(login).map(ownerOf))];
   /** 멤버에게 보이는 포스트의 레포. 없거나 보이지 않으면 `not_found`다. */
   const seenPost = (login: string, post: string) => {
     const repo = postRepo(post);
@@ -1016,10 +1120,10 @@ export async function startServer(options: {
     )?.login;
 
   /** 멤버가 오늘 들어왔다고 적는다. 웹만 부르는 곳(실시간 연결, 채널에서 읽고 쓰기)에서만 부른다. 러너와 CLI는 세지 않는다. */
-  const visit = (login: string) =>
+  const visit = (login: string, workspace: string) =>
     db
-      .prepare("INSERT OR IGNORE INTO visits (day, login) VALUES (?, ?)")
-      .run(dayOf(Date.now()), login);
+      .prepare("INSERT OR IGNORE INTO visits (day, workspace, login) VALUES (?, ?, ?)")
+      .run(dayOf(Date.now()), workspace, login);
 
   /** 끝나지 않은 기기 인증. 서버가 꺼지면 잃는다. 다시 로그인하면 된다. */
   const logins = new Map<
@@ -1052,27 +1156,42 @@ export async function startServer(options: {
     }
   >();
   /** hello를 마친 웹의 실시간 연결과 그 세션의 해시, 멤버, 고른 레포. 세션이 끝나면 닫는다. */
-  const watchers = new Map<WSContext, { hash: string; login: string; repo: string }>();
-  /** 붙어 있는 웹 모두에 보낸다. 멤버가 아니게 된 세션의 연결은 이미 닫혔다. */
-  const broadcast = (frame: string) => {
-    for (const socket of watchers.keys()) if (socket.readyState === 1) socket.send(frame); // OPEN
-  };
-  /** 레포(`null`이면 워크스페이스)의 것을 그것이 보이는 웹에만 보낸다. */
-  const broadcastTo = (repo: string | null, frame: string) => {
+  const watchers = new Map<
+    WSContext,
+    { hash: string; login: string; repo: string; workspace: string }
+  >();
+  /** 워크스페이스의 것을 그 워크스페이스를 고른 웹 모두에 보낸다. 다른 워크스페이스를 고른 연결에는 같은 사람의 것도 가지 않는다. */
+  const broadcast = (workspace: string, frame: string) => {
     for (const [socket, watcher] of watchers)
-      if (socket.readyState === 1 && (repo === null || sees(watcher.login, repo)))
+      if (socket.readyState === 1 && watcher.workspace === workspace) socket.send(frame); // OPEN
+  };
+  /** 레포의 것을 그 레포가 보이는 웹에만, 그 레포의 워크스페이스를 고른 연결로만 보낸다. */
+  const broadcastTo = (repo: string, frame: string) => {
+    for (const [socket, watcher] of watchers)
+      if (
+        socket.readyState === 1 &&
+        watcher.workspace === ownerOf(repo) &&
+        sees(watcher.login, repo)
+      )
         socket.send(frame); // OPEN
   };
   /** 채널의 한 줄을 그것이 보이는 웹에 보내고 계약의 꼴로 돌려준다. */
   const shareRow = (row: MessageRow) => {
     const message = messageView(row);
-    broadcastTo(row.repo, encode(serverToWeb, "message", message));
+    const frame = encode(serverToWeb, "message", message);
+    if (row.repo !== null) broadcastTo(row.repo, frame);
+    else if (row.workspace !== null) broadcast(row.workspace, frame);
     return message;
   };
-  /** `login`의 웹 연결에만 보낸다. 비공개인 DM은 이것으로만 나간다. */
-  const sendTo = (login: string, frame: string) => {
+  /** `login`의 웹 연결에만 보낸다. 비공개인 DM은 이것으로만 나간다. `workspace`를 주면 그 워크스페이스를 고른 연결에만 간다. */
+  const sendTo = (login: string, frame: string, workspace?: string) => {
     for (const [socket, watcher] of watchers) {
-      if (watcher.login === login && socket.readyState === 1) socket.send(frame); // OPEN
+      if (
+        watcher.login === login &&
+        (workspace === undefined || watcher.workspace === workspace) &&
+        socket.readyState === 1
+      )
+        socket.send(frame); // OPEN
     }
   };
   /** 러너에 보내고 답을 기다리는 문답. 키는 보낸 `ask`의 id다. 서버가 꺼지면 잃고, 다시 뜰 때 실패로 둔다. */
@@ -1090,7 +1209,7 @@ export async function startServer(options: {
     const asked = db.prepare(`${QAS} WHERE id = ?`).get(id) as QaRow;
     const qa = qaView(asked);
     const row = db.prepare(`${MESSAGES} WHERE m.qa = ?`).get(id) as MessageRow | undefined;
-    sendTo(asked.login, encode(serverToWeb, "qa", qa));
+    sendTo(asked.login, encode(serverToWeb, "qa", qa), channelWorkspace(asked.channel));
     if (!row) return { qa };
     return { qa, message: shareRow(row) };
   };
@@ -1120,7 +1239,11 @@ export async function startServer(options: {
     if (!found || stopped) return;
     drafting.delete(id);
     const draft = { ...found.draft, state };
-    sendTo(found.login, encode(serverToWeb, "draft", draft));
+    sendTo(
+      found.login,
+      encode(serverToWeb, "draft", draft),
+      ownerOf(postRepo(found.draft.post) ?? ""),
+    );
     shareMembers();
     return draft;
   };
@@ -1297,7 +1420,13 @@ export async function startServer(options: {
       message: string | null;
       emoji: string | null;
     }[];
-    const open = new Set([...watchers.values()].map((watcher) => watcher.login));
+    // 접속 상태와 에이전트는 이 레포의 워크스페이스에서 본 것만이다. 다른 워크스페이스의 창과 러너는 이 목록에 드러나지 않는다.
+    const workspace = ownerOf(repo);
+    const open = new Set(
+      [...watchers.values()]
+        .filter((watcher) => watcher.workspace === workspace)
+        .map((watcher) => watcher.login),
+    );
     const now = Date.now();
     const presenceOf = (login: string, chosen: ChosenPresence | null, until: number | null) => {
       // 끝난 것은 타이머가 지우기 전이라도 온라인이다.
@@ -1310,7 +1439,10 @@ export async function startServer(options: {
     }[];
     const agent = (login: string, executor: ExecutorId) => {
       const live = [...runners].filter(
-        ([, runner]) => runner.login === login && runner.executors.includes(executor),
+        ([, runner]) =>
+          runner.login === login &&
+          ownerOf(runner.repo) === workspace &&
+          runner.executors.includes(executor),
       );
       const sockets = live.map(([socket]) => socket);
       const busy = [
@@ -1478,9 +1610,9 @@ export async function startServer(options: {
     // 그 라벨로 거르는 포럼도 새 이름을 따른다.
     for (const row of db
       .prepare(
-        "SELECT id, name, kind, filter FROM channels WHERE EXISTS (SELECT 1 FROM json_each(filter, '$.labels') j WHERE j.value = ?)",
+        "SELECT id, name, kind, filter FROM channels WHERE workspace = ? AND EXISTS (SELECT 1 FROM json_each(filter, '$.labels') j WHERE j.value = ?)",
       )
-      .all(from) as Parameters<typeof channelView>[0][]) {
+      .all(ownerOf(repo), from) as Parameters<typeof channelView>[0][]) {
       const filter = {
         labels: (JSON.parse(row.filter as string).labels as string[]).map((l) =>
           l === from ? to : l,
@@ -1488,6 +1620,7 @@ export async function startServer(options: {
       };
       db.prepare("UPDATE channels SET filter = ? WHERE id = ?").run(JSON.stringify(filter), row.id);
       broadcast(
+        ownerOf(repo),
         encode(serverToWeb, "channel", channelView({ ...row, filter: JSON.stringify(filter) })),
       );
     }
@@ -1674,13 +1807,9 @@ export async function startServer(options: {
         .run(ALERTS, lastInsertRowid, now).lastInsertRowid;
       // 알림 하나가 포스트 하나다(ADR-0027). 포스트의 이름은 사람이 지을 수 없는 이름(줄바꿈으로 시작)이다.
       const post = randomBytes(8).toString("hex");
-      db.prepare("INSERT INTO channels (id, name, alert, labels, repo) VALUES (?, ?, ?, ?, ?)").run(
-        post,
-        `\n${post}`,
-        message,
-        JSON.stringify([ALERT_LABELS[kind]]),
-        repo,
-      );
+      db.prepare(
+        "INSERT INTO channels (id, name, alert, labels, repo, workspace) VALUES (?, ?, ?, ?, ?, ?)",
+      ).run(post, `\n${post}`, message, JSON.stringify([ALERT_LABELS[kind]]), repo, ownerOf(repo));
       db.exec("COMMIT");
       shareAlert(Number(lastInsertRowid));
       deliver(repo, Number(lastInsertRowid), works, now);
@@ -1711,8 +1840,8 @@ export async function startServer(options: {
     // 판정 수(지표). 열린 알림이 없어도 돌린 것이라 센다. 돌려 보는 중과 같은 지문의 다시 올림은 세지 않는다.
     if (run.verdict !== "running")
       db.prepare(
-        "INSERT OR IGNORE INTO merge_runs (fingerprint, verdict, at) VALUES (?, ?, ?)",
-      ).run(run.fingerprint, run.verdict, Date.now());
+        "INSERT OR IGNORE INTO merge_runs (fingerprint, verdict, at, workspace) VALUES (?, ?, ?, ?)",
+      ).run(run.fingerprint, run.verdict, Date.now(), ownerOf(repo));
     const finished = run.verdict !== "running" && !run.stale;
     const closes = finished && run.verdict === "pass" && run.omitted.length === 0;
     type Row = { id: number; works: string; files: string; run: string | null; confirmed: number };
@@ -2463,7 +2592,9 @@ export async function startServer(options: {
    * 머리말이 없으면 보이는 첫 레포다. 없으면 `not_found`다.
    */
   const repoOf = (c: Context<Env>) => {
-    const mine = reposOf(c.get("login") as string);
+    const login = c.get("login") as string;
+    const wantedSpace = workspaceHeader(c, login);
+    const mine = reposOf(login).filter((repo) => !wantedSpace || ownerOf(repo) === wantedSpace);
     const wanted = (c.req.header(REPO_HEADER) ?? "")
       .split(",")
       .map((repo) => repo.trim().toLowerCase())
@@ -2478,6 +2609,35 @@ export async function startServer(options: {
         message: `보이는 레포가 없다${wanted.length > 0 ? `: ${wanted.join(", ")}` : ""}`,
       });
     return found;
+  };
+  /** `WORKSPACE_HEADER`에 실린 워크스페이스. 없으면 없다. 부른 사람의 워크스페이스가 아니면 `not_found`다. */
+  const workspaceHeader = (c: Context<Env>, login: string) => {
+    const wanted = c.req.header(WORKSPACE_HEADER)?.trim().toLowerCase();
+    if (wanted && !workspacesOf(login).includes(wanted))
+      throw new ContractFailure({
+        code: "not_found",
+        message: `들어가 있지 않은 워크스페이스다: ${wanted}`,
+      });
+    return wanted || undefined;
+  };
+  /**
+   * 워크스페이스마다인 API(채널, 포럼, 지표)와 방문을 부른 워크스페이스(ADR-0043): `WORKSPACE_HEADER`, 없으면 `REPO_HEADER`가 고른 레포의 워크스페이스,
+   * 그것도 없으면 들어간 첫 워크스페이스다. 레포마다인 API는 이 워크스페이스의 레포만 고른다(`repoOf`).
+   */
+  const workspaceOf = (c: Context<Env>) => {
+    const login = c.get("login") as string;
+    const wanted = workspaceHeader(c, login);
+    if (wanted) return wanted;
+    const mine = reposOf(login);
+    const named = (c.req.header(REPO_HEADER) ?? "")
+      .split(",")
+      .map((repo) => repo.trim().toLowerCase())
+      .filter(Boolean)
+      .flatMap((w) => mine.find((repo) => repo.toLowerCase() === w) ?? []);
+    const found = named[0] ?? mine[0];
+    if (!found)
+      throw new ContractFailure({ code: "not_found", message: "들어간 워크스페이스가 없다" });
+    return ownerOf(found);
   };
 
   mount(app, api.login, async (_, c) => {
@@ -2585,6 +2745,22 @@ export async function startServer(options: {
     return { login, name: person?.name ?? login, repo: repos[0] ?? "", repos };
   });
 
+  mount(app, api.workspaces, (_, c) => {
+    const repos = reposOf(c.get("login") as string);
+    const names = new Map(
+      (db.prepare("SELECT id, name FROM workspaces").all() as { id: string; name: string }[]).map(
+        ({ id, name }) => [id, name],
+      ),
+    );
+    return {
+      workspaces: [...new Set(repos.map(ownerOf))].map((id) => ({
+        id,
+        name: names.get(id) ?? id,
+        repos: repos.filter((repo) => ownerOf(repo) === id),
+      })),
+    };
+  });
+
   /** 넣고 빼는 레포. 그 레포의 GitHub Admin이 아니면 `forbidden`이다. */
   const mustAdmin = async (login: string, token: string, repo: string) => {
     const admin = await github.canAdmin(token, repo);
@@ -2611,6 +2787,7 @@ export async function startServer(options: {
     db.prepare("INSERT OR IGNORE INTO repos (name, at) VALUES (?, ?)").run(repo, Date.now());
     const name = (db.prepare("SELECT name FROM repos WHERE name = ?").get(repo) as { name: string })
       .name;
+    ensureWorkspace(name);
     seedLabels(name);
     // push 권한은 다음 확인을 기다리지 않고 지금 들어온 멤버마다 읽는다.
     await Promise.all(
@@ -2767,12 +2944,13 @@ export async function startServer(options: {
    * `agent`의 `executor`를 돌리는 러너의 연결. 같은 멤버의 러너가 여럿이면 마지막에 붙은 것이 답한다.
    * 레포의 것(포스트)이면 그 레포의 러너만 답한다(ADR-0043). 꺼져 있으면 쌓아 두지 않고 `runner_offline`이다.
    */
-  const runnerOf = (agent: string, executor: ExecutorId, repo?: string) => {
+  const runnerOf = (agent: string, executor: ExecutorId, repo?: string, workspace?: string) => {
     const found = [...runners].findLast(
       ([, runner]) =>
         runner.login === agent &&
         runner.executors.includes(executor) &&
-        (repo === undefined || runner.repo === repo),
+        (repo === undefined || runner.repo === repo) &&
+        (workspace === undefined || ownerOf(runner.repo) === workspace),
     );
     if (!found) {
       throw new ContractFailure({
@@ -2802,8 +2980,9 @@ export async function startServer(options: {
   mount(app, api.ask, ({ agent, executor, channel, message, visibility, model, effort }, c) => {
     mustOwn(agent, c.get("login") as string);
     mustWrite(channel, c);
-    visit(agent);
-    const socket = runnerOf(agent, executor, postRepo(channel));
+    visit(agent, channelWorkspace(channel) ?? workspaceOf(c));
+    // 포스트는 그 레포의 러너가, 채팅 채널은 그 워크스페이스에서 마지막에 붙은 러너가 답한다.
+    const socket = runnerOf(agent, executor, postRepo(channel), channelWorkspace(channel));
     // 채널 대화는 이 문답이 채널에 서기 전에 읽는다. `@호출`의 질문이 데이터로 한 번 더 들어가지 않는다.
     // ponytail: 첫 턴 뒤에 알림이 고쳐져도 그 채널 세션에는 다시 넘기지 않는다. 고친 알림이 필요해지면 러너가 알림만 따로 다시 넘긴다.
     const recent = recentOf(channel);
@@ -2842,7 +3021,7 @@ export async function startServer(options: {
   mount(app, api.draftDecision, ({ agent, executor, post, model, effort }, c) => {
     mustOwn(agent, c.get("login") as string);
     const repo = seenPost(agent, post);
-    visit(agent);
+    visit(agent, workspaceOf(c));
     const socket = runnerOf(agent, executor, repo);
     const messages = recentOf(post);
     // 토론의 결론이 났으면 그 안을 초안의 근거로 싣는다(ADR-0040)
@@ -2919,7 +3098,7 @@ export async function startServer(options: {
 
   mount(app, api.dms, ({ channel }, c) => {
     mustExist(channel, c);
-    visit(c.get("login") as string);
+    visit(c.get("login") as string, workspaceOf(c));
     const rows = db
       .prepare(`${QAS} WHERE login = ? AND channel = ? ORDER BY id DESC LIMIT ?`)
       .all(c.get("login") as string, channel, HISTORY_PAGE) as QaRow[];
@@ -2940,82 +3119,100 @@ export async function startServer(options: {
     ...(row.filter !== null && { filter: JSON.parse(row.filter) }),
   });
 
-  mount(app, api.channels, () => ({
+  mount(app, api.channels, (_, c) => ({
     channels: (
       db
         .prepare(
-          "SELECT id, name, kind, filter FROM channels WHERE alert IS NULL AND id != ? ORDER BY name",
+          "SELECT id, name, kind, filter FROM channels WHERE alert IS NULL AND id != ? AND workspace = ? ORDER BY name",
         )
-        .all(ALERTS) as Parameters<typeof channelView>[0][]
+        .all(ALERTS, workspaceOf(c)) as Parameters<typeof channelView>[0][]
     ).map(channelView),
   }));
 
-  /** 이름이 `id` 아닌 채널과 겹치면 `conflict`다. 이름은 대소문자를 가리지 않는다. */
-  const mustBeNew = (name: string, id = "") => {
-    if (db.prepare("SELECT 1 FROM channels WHERE name = ? AND id != ?").get(name, id)) {
+  /** 이름이 `id` 아닌 채널과 같은 워크스페이스에서 겹치면 `conflict`다. 이름은 대소문자를 가리지 않는다. */
+  const mustBeNew = (workspace: string, name: string, id = "") => {
+    if (
+      db
+        .prepare("SELECT 1 FROM channels WHERE workspace = ? AND name = ? AND id != ?")
+        .get(workspace, name, id)
+    ) {
       throw new ContractFailure({ code: "conflict", message: `#${name} 채널이 이미 있다` });
     }
   };
 
   mount(app, api.createChannel, ({ name }, c) => {
-    visit(c.get("login") as string);
-    mustBeNew(name);
+    visit(c.get("login") as string, workspaceOf(c));
+    const workspace = workspaceOf(c);
+    mustBeNew(workspace, name);
     const channel = { id: randomBytes(8).toString("hex"), name, kind: "chat" as const };
-    db.prepare("INSERT INTO channels (id, name) VALUES (?, ?)").run(channel.id, channel.name);
-    broadcast(encode(serverToWeb, "channel", channel));
+    db.prepare("INSERT INTO channels (id, name, workspace) VALUES (?, ?, ?)").run(
+      channel.id,
+      channel.name,
+      workspace,
+    );
+    broadcast(workspace, encode(serverToWeb, "channel", channel));
     return { channel };
   });
 
   /** 포럼이 바뀌면 포스트마다 보이는 포럼이 바뀌니 알림 줄을 웹 모두에 다시 보낸다. */
-  // ponytail: 포스트 전부를 다시 보낸다. 포스트가 많아 무거워지면 보이는 포럼이 바뀐 것만 보낸다.
-  const shareForums = () => {
+  // ponytail: 워크스페이스의 포스트 전부를 다시 보낸다. 포스트가 많아 무거워지면 보이는 포럼이 바뀐 것만 보낸다.
+  const shareForums = (workspace: string) => {
     for (const { alert } of db
-      .prepare("SELECT alert FROM messages WHERE alert IS NOT NULL ORDER BY id")
-      .all() as { alert: number }[])
+      .prepare(
+        `SELECT m.alert FROM messages m JOIN alerts a ON a.id = m.alert WHERE ${ownerSql("a.repo")} = ? ORDER BY m.id`,
+      )
+      .all(workspace) as { alert: number }[])
       shareAlert(alert);
   };
 
-  /** 포럼(`ALERTS`는 빼고)이 없으면 `not_found`다. */
-  const mustBeForum = (id: string) => {
-    if (!db.prepare("SELECT 1 FROM channels WHERE id = ? AND filter IS NOT NULL").get(id)) {
+  /** 이 워크스페이스의 포럼(`ALERTS`는 빼고)이 없으면 `not_found`다. */
+  const mustBeForum = (workspace: string, id: string) => {
+    if (
+      !db
+        .prepare("SELECT 1 FROM channels WHERE id = ? AND filter IS NOT NULL AND workspace = ?")
+        .get(id, workspace)
+    ) {
       throw new ContractFailure({ code: "not_found", message: `없는 포럼이다: ${id}` });
     }
   };
 
   /** 포럼을 새로 넣거나(`id`가 없으면) 고치고, 웹 모두에 알린다. */
-  const saveForum = (name: string, filter: ForumFilter, id?: string) => {
+  const saveForum = (workspace: string, name: string, filter: ForumFilter, id?: string) => {
     const channel = {
       id: id ?? randomBytes(8).toString("hex"),
       name,
       kind: "forum" as const,
       filter,
     };
-    mustBeNew(name, channel.id);
+    mustBeNew(workspace, name, channel.id);
     db.prepare(
-      "INSERT INTO channels (id, name, kind, filter) VALUES (?, ?, 'forum', ?) ON CONFLICT (id) DO UPDATE SET name = excluded.name, filter = excluded.filter",
-    ).run(channel.id, name, JSON.stringify(filter));
-    broadcast(encode(serverToWeb, "channel", channel));
-    shareForums();
+      "INSERT INTO channels (id, name, kind, filter, workspace) VALUES (?, ?, 'forum', ?, ?) ON CONFLICT (id) DO UPDATE SET name = excluded.name, filter = excluded.filter",
+    ).run(channel.id, name, JSON.stringify(filter), workspace);
+    broadcast(workspace, encode(serverToWeb, "channel", channel));
+    shareForums(workspace);
     return { channel };
   };
 
   mount(app, api.createForum, ({ name, filter }, c) => {
-    visit(c.get("login") as string);
-    return saveForum(name, filter);
+    const workspace = workspaceOf(c);
+    visit(c.get("login") as string, workspace);
+    return saveForum(workspace, name, filter);
   });
 
   mount(app, api.updateForum, ({ id, name, filter }, c) => {
-    visit(c.get("login") as string);
-    mustBeForum(id);
-    return saveForum(name, filter, id);
+    const workspace = workspaceOf(c);
+    visit(c.get("login") as string, workspace);
+    mustBeForum(workspace, id);
+    return saveForum(workspace, name, filter, id);
   });
 
   mount(app, api.deleteForum, ({ id }, c) => {
-    visit(c.get("login") as string);
-    mustBeForum(id);
+    const workspace = workspaceOf(c);
+    visit(c.get("login") as string, workspace);
+    mustBeForum(workspace, id);
     db.prepare("DELETE FROM channels WHERE id = ?").run(id);
-    broadcast(encode(serverToWeb, "forumDeleted", { id }));
-    shareForums();
+    broadcast(workspace, encode(serverToWeb, "forumDeleted", { id }));
+    shareForums(workspace);
     return {};
   });
 
@@ -3071,7 +3268,7 @@ export async function startServer(options: {
 
   mount(app, api.openPost, ({ alert }, c) => {
     const login = c.get("login") as string;
-    visit(login);
+    visit(login, workspaceOf(c));
     const repo = (
       db
         .prepare("SELECT a.repo FROM messages m JOIN alerts a ON a.id = m.alert WHERE m.id = ?")
@@ -3235,7 +3432,7 @@ export async function startServer(options: {
    */
   mount(app, api.proposeDecision, async ({ post, window, ...fields }, c) => {
     const login = c.get("login") as string;
-    visit(login);
+    visit(login, workspaceOf(c));
     const repo = seenPost(login, post);
     const token = callerToken(c);
     // 결정자: 그 포스트에서 말한 멤버(글과 공개된 문답)와, 정리해 결정 줄을 세우는 멤버.
@@ -3368,7 +3565,7 @@ export async function startServer(options: {
 
   mount(app, api.respondToDecision, async ({ id, response }, c) => {
     const login = c.get("login") as string;
-    visit(login);
+    visit(login, workspaceOf(c));
     const row = openDecision(id, login);
     if (response === "agree") {
       if (!(JSON.parse(row.deciders) as string[]).includes(login))
@@ -3413,7 +3610,7 @@ export async function startServer(options: {
 
   mount(app, api.reviseDecision, async ({ id, ...fields }, c) => {
     const login = c.get("login") as string;
-    visit(login);
+    visit(login, workspaceOf(c));
     const row = openDecision(id, login);
     organizerOnly(row, login, "고친다");
     const number = basename(row.path).slice(0, 4);
@@ -3446,7 +3643,7 @@ export async function startServer(options: {
 
   mount(app, api.discardDecision, async ({ id }, c) => {
     const login = c.get("login") as string;
-    visit(login);
+    visit(login, workspaceOf(c));
     const row = openDecision(id, login);
     organizerOnly(row, login, "버린다");
     const { pull } = db.prepare("SELECT pull FROM decisions WHERE id = ?").get(id) as {
@@ -3486,7 +3683,7 @@ export async function startServer(options: {
 
   mount(app, api.proxyDebate, ({ post, seat }, c) => {
     const login = c.get("login") as string;
-    visit(login);
+    visit(login, workspaceOf(c));
     const repo = seenPost(login, post);
     const row = db.prepare("SELECT * FROM debates WHERE post = ?").get(post) as
       | DebateRow
@@ -3528,7 +3725,7 @@ export async function startServer(options: {
 
   mount(app, api.requestDebate, ({ post, agenda, grounds }, c) => {
     const login = c.get("login") as string;
-    visit(login);
+    visit(login, workspaceOf(c));
     const found = db
       .prepare(
         "SELECT id, repo FROM channels WHERE alert IS NOT NULL AND (id = ?1 OR alert = CAST(?1 AS INTEGER))",
@@ -3550,7 +3747,7 @@ export async function startServer(options: {
 
   mount(app, api.chooseDebate, ({ post, option }, c) => {
     const login = c.get("login") as string;
-    visit(login);
+    visit(login, workspaceOf(c));
     seenPost(login, post);
     const row = db.prepare("SELECT * FROM debates WHERE post = ?").get(post) as
       | DebateRow
@@ -3650,7 +3847,7 @@ export async function startServer(options: {
   });
   mount(app, api.setPostLabels, ({ post, labels }, c) => {
     const login = c.get("login") as string;
-    visit(login);
+    visit(login, workspaceOf(c));
     const repo = seenPost(login, post);
     const found = db
       .prepare("SELECT alert FROM channels WHERE id = ? AND alert IS NOT NULL")
@@ -3672,10 +3869,20 @@ export async function startServer(options: {
 
   /** 부른 사람에게 보이는 채널의 종류. 없거나 보이지 않는 레포의 포스트면 `not_found`다. */
   const mustExist = (channel: string, c: Context<Env>) => {
-    const found = db.prepare("SELECT kind, repo FROM channels WHERE id = ?").get(channel) as
-      | { kind: ChannelKind; repo: string | null }
+    const login = c.get("login") as string;
+    const found = db
+      .prepare("SELECT kind, repo, workspace FROM channels WHERE id = ?")
+      .get(channel) as
+      | { kind: ChannelKind; repo: string | null; workspace: string | null }
       | undefined;
-    if (!found || (found.repo !== null && !sees(c.get("login") as string, found.repo))) {
+    // 채팅 채널과 포럼은 그 워크스페이스에 들어간 멤버만 본다. 포스트는 그 레포가 보이는 멤버만 본다.
+    if (
+      !found ||
+      (found.repo !== null && !sees(login, found.repo)) ||
+      (found.repo === null &&
+        found.workspace !== null &&
+        !workspacesOf(login).includes(found.workspace))
+    ) {
       throw new ContractFailure({ code: "not_found", message: `없는 채널이다: ${channel}` });
     }
     return found.kind;
@@ -3693,21 +3900,27 @@ export async function startServer(options: {
   mount(app, api.history, ({ channel, before }, c) => {
     const login = c.get("login") as string;
     mustExist(channel, c);
-    visit(login);
-    // 알림 줄의 자리(`ALERTS`)는 레포마다의 줄이 섞여 있다. 보이는 레포의 것만 준다.
+    visit(login, workspaceOf(c));
+    // 알림 줄의 자리(`ALERTS`)는 레포마다의 줄이 섞여 있다. 보이는 레포 가운데 부른 워크스페이스의 것만 준다.
     const rows = db
       .prepare(
         `${MESSAGES} WHERE m.channel = ? AND m.id < ?
-         AND (a.repo IS NULL OR a.repo IN (SELECT repo FROM access WHERE login = ?))
+         AND (a.repo IS NULL OR (a.repo IN (SELECT repo FROM access WHERE login = ?) AND ${ownerSql("a.repo")} = ?))
          ORDER BY m.id DESC LIMIT ?`,
       )
-      .all(channel, before ?? Number.MAX_SAFE_INTEGER, login, HISTORY_PAGE) as MessageRow[];
+      .all(
+        channel,
+        before ?? Number.MAX_SAFE_INTEGER,
+        login,
+        workspaceOf(c),
+        HISTORY_PAGE,
+      ) as MessageRow[];
     return { messages: rows.reverse().map(messageView) };
   });
 
   mount(app, api.send, ({ channel, text }, c) => {
     mustWrite(channel, c);
-    visit(c.get("login") as string);
+    visit(c.get("login") as string, workspaceOf(c));
     const { lastInsertRowid } = db
       .prepare("INSERT INTO messages (channel, login, text, at) VALUES (?, ?, ?, ?)")
       .run(channel, c.get("login") as string, text, Date.now());
@@ -3719,25 +3932,33 @@ export async function startServer(options: {
     return { message };
   });
 
-  mount(app, api.metrics, ({ days }) => {
+  mount(app, api.metrics, ({ days }, c) => {
+    // 지표는 부른 워크스페이스의 것만이다(ADR-0043).
+    const workspace = workspaceOf(c);
     const now = Date.now();
     const range = Array.from({ length: days }, (_, i) => dayOf(now - (days - 1 - i) * DAY_MS));
     const members = new Map(
       (
         db
-          .prepare("SELECT day, COUNT(*) AS n FROM visits WHERE day >= ? GROUP BY day")
-          .all(range[0] ?? "") as { day: string; n: number }[]
+          .prepare(
+            "SELECT day, COUNT(*) AS n FROM visits WHERE workspace = ? AND day >= ? GROUP BY day",
+          )
+          .all(workspace, range[0] ?? "") as { day: string; n: number }[]
       ).map(({ day, n }) => [day, n]),
     );
     // 문답은 물은 시각으로 센다. 답하지 못한 문답도 물은 것이라 센다. 내용은 읽지 않는다.
-    const asked = db.prepare("SELECT at FROM qas WHERE at > ?").all(now - (days + 1) * DAY_MS) as {
+    const asked = db
+      .prepare(
+        "SELECT at FROM qas WHERE at > ? AND channel IN (SELECT id FROM channels WHERE workspace = ?)",
+      )
+      .all(now - (days + 1) * DAY_MS, workspace) as {
       at: number;
     }[];
     const qas = Map.groupBy(asked, ({ at }) => dayOf(at));
     const ran = Map.groupBy(
       db
-        .prepare("SELECT verdict, at FROM merge_runs WHERE at > ?")
-        .all(now - (days + 1) * DAY_MS) as {
+        .prepare("SELECT verdict, at FROM merge_runs WHERE workspace = ? AND at > ?")
+        .all(workspace, now - (days + 1) * DAY_MS) as {
         verdict: RunVerdict;
         at: number;
       }[],
@@ -3748,9 +3969,10 @@ export async function startServer(options: {
     const debates = db
       .prepare(
         `SELECT at, state, by, decided, EXISTS (SELECT 1 FROM messages WHERE channel = post AND decision IS NOT NULL) AS decision
-         FROM debates WHERE at > ? OR decided > ?`,
+         FROM debates WHERE (at > ? OR decided > ?)
+         AND post IN (SELECT id FROM channels WHERE workspace = ?)`,
       )
-      .all(since, since) as {
+      .all(since, since, workspace) as {
       at: number;
       state: string;
       by: string | null;
@@ -3831,9 +4053,22 @@ export async function startServer(options: {
           );
         }
         const mine = reposOf(login);
+        const space = payload.workspace?.toLowerCase();
+        if (space !== undefined && !mine.some((r) => ownerOf(r) === space)) {
+          return refuse(
+            socket,
+            { code: "not_found", message: `들어가 있지 않은 워크스페이스다: ${payload.workspace}` },
+            id,
+          );
+        }
+        // 연결은 한 워크스페이스의 것만 받는다: 고른 레포의, 아니면 고른 워크스페이스의, 아니면 첫 워크스페이스의 것이다.
         const repo = payload.repo
-          ? mine.find((r) => r.toLowerCase() === payload.repo?.toLowerCase())
-          : (mine[0] ?? "");
+          ? mine.find(
+              (r) =>
+                r.toLowerCase() === payload.repo?.toLowerCase() &&
+                (space === undefined || ownerOf(r) === space),
+            )
+          : (mine.find((r) => space === undefined || ownerOf(r) === space) ?? "");
         if (repo === undefined) {
           return refuse(
             socket,
@@ -3841,7 +4076,14 @@ export async function startServer(options: {
             id,
           );
         }
-        const { seq } = db.prepare("SELECT COALESCE(MAX(id), 0) AS seq FROM messages").get() as {
+        const workspace = ownerOf(repo);
+        // 이 워크스페이스의 마지막 메시지 번호. 다른 워크스페이스의 번호는 새지 않는다.
+        const { seq } = db
+          .prepare(
+            `SELECT COALESCE(MAX(m.id), 0) AS seq FROM messages m LEFT JOIN alerts a ON a.id = m.alert
+             WHERE COALESCE(${ownerSql("a.repo")}, (SELECT ch.workspace FROM channels ch WHERE ch.id = m.channel)) = ?`,
+          )
+          .get(workspace) as {
           seq: number;
         };
         socket.send(encode(serverToWeb, "welcome", { seq }, id));
@@ -3857,12 +4099,12 @@ export async function startServer(options: {
             )
             .all(payload.after, payload.after, payload.after, payload.after) as MessageRow[];
           for (const row of missed)
-            if (row.repo === null || sees(login, row.repo))
+            if (row.workspace === workspace && (row.repo === null || sees(login, row.repo)))
               socket.send(encode(serverToWeb, "message", messageView(row)));
         }
-        watchers.set(socket, { hash: hash(payload.session), login, repo });
+        watchers.set(socket, { hash: hash(payload.session), login, repo, workspace });
         greet(socket);
-        visit(login);
+        visit(login, workspace);
         shareMembers(socket);
       },
       onClose(_, socket) {
