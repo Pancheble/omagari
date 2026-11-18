@@ -91,7 +91,7 @@ test("omagari install 하나로 Claude Code에 두 훅과 상태 한 줄 스킬�
   assert.ok(editCommand);
   assert.match(
     await runInstalled(world, editCommand, editInput(world.repo.folder, "pay.ts"), "PreToolUse"),
-    /^Omagari: 고치려는 파일 "pay\.ts"을 다른 멤버의 작업도 바꾸고 있다[\s\S]*<omagari-nearby>\n- alice · 브랜치 "main" · /,
+    /^Omagari: 고치려는 파일 "pay\.ts"을 다른 작업도 바꾸고 있다[\s\S]*<omagari-nearby>\n- alice · 브랜치 "main" · /,
   );
 
   // 스킬의 설명은 늘 에이전트의 맥락에 있고, 본문은 에이전트가 스킬을 쓸 때 읽는다.

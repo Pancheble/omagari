@@ -3026,9 +3026,16 @@ export async function startServer(options: {
     const row = db.prepare("SELECT * FROM debates WHERE post = ?").get(post) as
       | DebateRow
       | undefined;
-    const target = row && seatsOf(row.id).find((s) => s.seat === seat);
+    const seats = row ? seatsOf(row.id) : [];
+    const target = seats.find((s) => s.seat === seat);
     if (!row || !target)
       throw new ContractFailure({ code: "not_found", message: `없는 토론이나 자리다: ${post}` });
+    // 같은 사람의 두 작업이 낀 토론은 주인이 늘 있어 대행이 해당하지 않는다(ADR-0041).
+    if (seats.every((s) => s.login === target.login))
+      throw new ContractFailure({
+        code: "conflict",
+        message: "같은 사람의 두 작업이 낀 토론에는 대행을 부르지 않는다",
+      });
     if (row.state !== "open" || !["waiting", "off"].includes(target.state))
       throw new ContractFailure({
         code: "conflict",
