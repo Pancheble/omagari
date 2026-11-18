@@ -14,6 +14,8 @@ Omagari는 사람과 각자의 AI 에이전트가 함께 있는 웹 협업 공�
 
 멤버는 `main`을 받아 쓴다. `dev`는 작업이 모이는 곳이라 쓰지 않는다([ADR-0019](docs/adr/0019-stage1-version-is-git-tag-members-run-main.md)).
 
+Omagari로 Omagari를 만들며 써 보는 도그푸딩은 예외다. 도그푸딩 서버가 `dev`를 따르므로([ADR-0042](docs/adr/0042-dogfood-server-on-fly-follows-dev.md)), 그 서버를 쓰는 기기는 `--branch dev`로 설치 클론을 받는다. 서버가 새 계약이 되면 러너가 이 클론을 스스로 받는다(아래 업데이트).
+
 ```bash
 git clone --branch main https://github.com/Pancheble/omagari.git ~/omagari
 cd ~/omagari
@@ -73,7 +75,7 @@ git pull
 npm ci
 ```
 
-그리고 러너를 다시 켠다(`Ctrl-C`로 끄고 `omagari runner`). Node를 올렸거나 체크아웃을 옮겼으면 `omagari install`도 다시 돌린다. 훅 명령에 Node와 체크아웃의 경로가 들어 있다.
+그리고 러너를 다시 켠다(`Ctrl-C`로 끄고 `omagari runner`). 서버의 계약이 더 새로워 러너가 거절당하면 러너가 스스로 한다: 깔린 클론(러너 프로그램이 있는 체크아웃)에서 `git pull --ff-only`와 `npm ci`를 하고 같은 인자로 다시 켠다. 받은 것(앞뒤 커밋)은 `omagari runner log`에 남는다. 관측하는 레포 폴더는 건드리지 않는다. 깔린 클론에 고친 파일이 있거나 빨리 감기가 안 되면 아무것도 바꾸지 않고 할 일을 알린다. 서버가 더 낡았을 때도 받지 않는다. Node를 올렸거나 체크아웃을 옮겼으면 `omagari install`도 다시 돌린다. 훅 명령에 Node와 체크아웃의 경로가 들어 있다.
 
 릴리즈마다 무엇이 바뀌었는지는 [GitHub 릴리즈](https://github.com/Pancheble/omagari/releases)에 있다. 맨 위에 "러너도 업데이트해야 해요"가 있으면 서버와 러너 사이의 계약이 바뀐 릴리즈다.
 
@@ -87,7 +89,7 @@ omagari --version
 
 서버와 이 기기의 계약 버전이 다르면 서버가 러너를 받지 않고, 러너가 할 일을 알린다.
 
-- 서버가 더 새로우면: "서버는 v0.3.0, 이 기기는 v0.2.1이에요." 위의 업데이트를 하고 러너를 다시 켠다.
+- 서버가 더 새로우면: "서버는 v0.3.0, 이 기기는 v0.2.1이에요." 러너가 스스로 받고 다시 켠다. 받지 못하면 알려 주는 대로 위의 업데이트를 하고 러너를 다시 켠다.
 - 서버가 더 오래됐으면: 서버를 올려야 한다. 서버를 띄운 사람에게 알린다.
 
 ## 서버

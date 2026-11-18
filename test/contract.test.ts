@@ -39,6 +39,15 @@ function gitVersion() {
   }
 }
 
+/** 이 체크아웃의 브랜치를 Git에 직접 묻는다. 브랜치가 아니면(CI의 분리된 HEAD) 안내가 일반 문구다. */
+function gitBranch() {
+  const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+    cwd: import.meta.dirname,
+    encoding: "utf8",
+  }).trim();
+  return branch === "HEAD" ? "이 클론의 브랜치" : branch;
+}
+
 /** 러너인 척 서버에 붙는 날 연결. 계약을 거치지 않고 프레임을 그대로 보낸다. */
 async function rawRunner(t: TestContext, serverUrl: string) {
   const socket = new WebSocket(serverUrl.replace("http", "ws") + RUNNER_SOCKET);
@@ -269,7 +278,7 @@ test("러너는 계약 버전이 다른 서버를 알아보고 켜지지 않는�
 
 test("러너는 계약 버전이 달라 거절되면 무엇을 올려야 하는지 알린다", async (t) => {
   const advice = {
-    newer: "`main`을 받고(`git pull`, `npm ci`) 러너를 다시 켜세요",
+    newer: `\`${gitBranch()}\`를 받고(\`git pull\`, \`npm ci\`) 러너를 다시 켜세요`,
     older: "서버가 더 오래됐어요. 서버를 올려야 해요(서버를 띄운 사람에게 알리세요)",
   };
   for (const [contract, todo] of [
