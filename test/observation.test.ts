@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readdir, readFile, rm, stat, utimes } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, realpath, rm, stat, symlink, utimes } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -309,4 +310,46 @@ test("러너를 켤 때 로그인하기 전에 무엇이 서버로 나가는지 
     /나가지 않는 것: gitignore된 파일과 \.env, \.env\.\*\(\.env\.example은 나간다\)/,
   );
   assert.match(notice, /경로만 나가는 것: 바이너리, 512KiB를 넘는 파일, 합계 8MiB를 넘는 몫/);
+});
+
+test("Git이 지웠다고 보는 경로는 디스크를 다시 읽지 않는다: 추적을 끊고 gitignore한 파일도, 링크로 바뀐 폴더 너머의 파일도 지운 것으로만 올라간다", async (t) => {
+  const world = await startWorld();
+  t.after(world.stop);
+  const { git, folder } = world.repo;
+  const write = writer(folder);
+  world.github.grant("alice");
+  const alice = await world.login("alice");
+
+  // 기본 브랜치에 있던 두 파일
+  await write("config/local.json", "{}\n");
+  await write("docs/notes.md", "notes\n");
+  await git("add", ".");
+  await git("commit", "--message=base");
+  await git("update-ref", "refs/remotes/origin/main", "HEAD");
+  await git("switch", "--create", "feat");
+
+  // 추적을 끊고 gitignore한 뒤 로컬 판에 비밀을 둔다.
+  await git("rm", "--cached", "--quiet", "config/local.json");
+  await write(".gitignore", "config/local.json\n");
+  await write("config/local.json", "IGNORED-SECRET\n");
+  // 추적하던 폴더를 레포 밖을 가리키는 링크로 바꾼다.
+  const outside = await realpath(await mkdtemp(join(tmpdir(), "omagari-outside-")));
+  t.after(() => rm(outside, { recursive: true, force: true }));
+  await writer(outside)("notes.md", "OUTSIDE-REPO\n");
+  await rm(join(folder, "docs"), { recursive: true });
+  await symlink(outside, join(folder, "docs"));
+
+  const files = await eventually(async () => {
+    const [work] = await world.works(alice);
+    assert.ok(work?.files.some((f) => f.path === ".gitignore"));
+    return work.files;
+  });
+  assert.deepEqual(
+    files.filter((f) => f.path === "config/local.json" || f.path === "docs/notes.md"),
+    [
+      { path: "config/local.json", deleted: true },
+      { path: "docs/notes.md", deleted: true },
+    ],
+  );
+  assert.doesNotMatch(JSON.stringify(files), /IGNORED-SECRET|OUTSIDE-REPO/);
 });

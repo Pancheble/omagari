@@ -526,3 +526,24 @@ test("seccomp 도우미가 없다는 경고가 나오면 샌드박스를 쓸 수
     /socat/,
   );
 });
+
+test("관측이 늘 빼는 .env와 .env.*는 검사 트리에도 담지 않아, 검사 명령의 출력으로 나가지 못한다", async (t) => {
+  const fake = fakeSandbox();
+  const world = await startWorld({ sandbox: fake.sandbox });
+  t.after(world.stop);
+  const { repo } = world;
+  await merge(repo, {
+    ".omagari.json": config({
+      check: "test ! -e .env && test ! -e config/.env.local && test -e .env.example",
+    }),
+    ".env.example": "KEY=\n",
+  });
+  const write = writer(repo.folder);
+  await write(".env", "KEY=DUMMY-SECRET\n"); // 추적하지 않고 gitignore하지도 않은 것
+  await write("config/.env.local", "KEY=DUMMY-SECRET\n");
+
+  const checked = await world.cli("runner", "check");
+  assert.match(checked.stdout, /판정: 통과/);
+  // 내 폴더의 파일은 그대로다.
+  assert.equal(await readFile(join(repo.folder, ".env"), "utf8"), "KEY=DUMMY-SECRET\n");
+});

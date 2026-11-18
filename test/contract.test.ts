@@ -115,7 +115,8 @@ test("실제 서버와 실제 러너가 임시 Git 레포 위에서 붙어 메�
 test("서버는 계약에 없는 종류, 내용, 키를 받지 않는다", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
-  const { reply } = await rawRunner(t, world.server.url);
+  // hello를 마치지 않은 연결은 거절한 뒤 닫히므로 프레임마다 새로 붙는다.
+  const reply = async (sent: string) => (await rawRunner(t, world.server.url)).reply(sent);
   const refusedWith = (code: string, re?: string) => ({
     kind: "error",
     payload: { code },
@@ -352,4 +353,66 @@ test("CLI와 훅은 실행 파일의 입출력으로 조작한다", async (t) =>
   assert.deepEqual(await world.hook("이건 JSON이 아니다"), silent);
   // 에이전트가 입력을 닫지 않아도 스스로 끝난다.
   assert.deepEqual(await world.hook("", { keepStdinOpen: true }), silent);
+});
+
+/** `client` 주소인 척 로그인을 시작하는 날 요청. Fly 앞단처럼 Fly-Client-IP를 단다. */
+const startLogin = (url: string, client: string) =>
+  fetch(new URL(api.login.path, url), { method: "POST", headers: { "fly-client-ip": client } });
+
+test("Fly 위의 서버에서 한 주소가 끝나지 않은 로그인을 한꺼번에 쌓아도 다섯까지만 받고, 다른 사람의 로그인을 막지 못한다", async (t) => {
+  const world = await startWorld({ behindFly: true });
+  t.after(world.stop);
+  // GitHub이 느리게 답해 요청들이 서로 기다리는 사이에 겹친다.
+  const startDevice = world.github.github.startDevice;
+  world.github.github.startDevice = async () => {
+    await setTimeout(100);
+    return startDevice();
+  };
+  const statuses = await Promise.all(
+    Array.from({ length: 20 }, () =>
+      startLogin(world.server.url, "192.0.2.1").then((r) => r.status),
+    ),
+  );
+  assert.equal(statuses.filter((status) => status === 200).length, 5);
+  // 다른 사람은 로그인한다.
+  world.github.grant("alice");
+  await world.login("alice");
+});
+
+test("Fly 위가 아닌 서버는 Fly-Client-IP를 믿지 않아, 헤더를 바꿔 가며 보내도 연결의 주소 하나로 센다", async (t) => {
+  const world = await startWorld();
+  t.after(world.stop);
+  for (let i = 1; i <= 5; i++)
+    assert.equal((await startLogin(world.server.url, `192.0.2.${i}`)).status, 200);
+  assert.equal((await startLogin(world.server.url, "192.0.2.6")).status, 500);
+});
+
+test("hello를 마치지 않은 연결은 시간 안에 끊기고, 큰 프레임이나 계약과 다른 프레임을 보내면 바로 끊긴다", async (t) => {
+  const world = await startWorld({ helloMs: 200 });
+  t.after(world.stop);
+  const open = async (path: string) => {
+    const socket = new WebSocket(world.server.url.replace("http", "ws") + path);
+    t.after(() => socket.close());
+    await once(socket, "open");
+    const closed = once(socket, "close");
+    return { socket, closed };
+  };
+  // 아무것도 보내지 않는 연결
+  for (const path of [RUNNER_SOCKET, "/api/live"]) {
+    const { closed } = await open(path);
+    await closed;
+  }
+  // hello보다 큰 첫 프레임
+  const big = await open(RUNNER_SOCKET);
+  big.socket.send("x".repeat(65 * 1024));
+  const [bigClose] = (await big.closed) as [CloseEvent];
+  assert.equal(bigClose.code, 1009);
+  // 계약과 다른 첫 프레임
+  const junk = await open(RUNNER_SOCKET);
+  junk.socket.send(frame({ id: "x", kind: "nope" }));
+  const [junkClose] = (await junk.closed) as [CloseEvent];
+  assert.equal(junkClose.code, 1008);
+  // hello를 마친 러너는 시간이 지나도 붙어 있다.
+  await setTimeout(400);
+  assert.deepEqual(await world.agents(world.owner), { owner: "online" });
 });

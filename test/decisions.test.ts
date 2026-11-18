@@ -376,7 +376,9 @@ test("이의(포스트와 GitHub 변경 요청)가 걸리면 창이 닫혀도 �
     { code: "not_found" } satisfies Partial<ContractFailure>,
   );
 
-  // GitHub에서 carol이 변경을 요청한다. 주기마다 읽어 이의로 센다.
+  // GitHub에서 멤버 carol이 변경을 요청한다. 주기마다 읽어 이의로 센다.
+  fake.grant("carol");
+  await world.login("carol");
   fake.review(decision.pull.number, "carol", "CHANGES_REQUESTED");
   await eventually(async () =>
     assert.deepEqual(

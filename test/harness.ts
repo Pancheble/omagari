@@ -622,6 +622,10 @@ export async function startWorld(
     mergeCheck?: "on" | "off";
     /** 서버가 API와 같은 주소에서 낼 빌드한 웹 화면 폴더. */
     webDir?: string;
+    /** hello를 마치기까지의 시간. 줄여서 끊기는 것을 본다. */
+    helloMs?: number;
+    /** Fly 위에서 도는 서버인 척한다(Fly-Client-IP를 믿는다). */
+    behindFly?: boolean;
   } = {},
 ) {
   const repo = await tempRepo();
@@ -648,6 +652,8 @@ export async function startWorld(
     debateRounds: options.debateRounds,
     debateMs: options.debateMs,
     webDir: options.webDir,
+    helloMs: options.helloMs,
+    behindFly: options.behindFly,
   };
   let server = await startServer(serverOptions).catch(async (error) => {
     await cleanup();
