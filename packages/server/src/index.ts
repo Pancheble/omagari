@@ -1,9 +1,11 @@
 import { createHash, randomBytes, randomInt } from "node:crypto";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
+import { relative } from "node:path";
 import { basename } from "node:path/posix";
 import { DatabaseSync } from "node:sqlite";
 import { serve, upgradeWebSocket } from "@hono/node-server";
+import { serveStatic } from "@hono/node-server/serve-static";
 import {
   ALERT_FILES,
   ALERT_LABELS,
@@ -412,6 +414,8 @@ export async function startServer(options: {
   debateRounds?: number;
   /** 토론이 끝나지 않으면 만료하기까지의 시간. 기본 14일(`INBOX_MS`). 테스트가 줄여 쓴다. 만료는 `followMs`마다 본다. */
   debateMs?: number;
+  /** 빌드한 웹 화면(`vite build`의 dist) 폴더. 주면 API와 같은 주소에서 낸다. 개발할 때는 주지 않고 Vite를 쓴다. */
+  webDir?: string;
 }) {
   const { repo, github } = options;
   const version = checkoutVersion();
@@ -4353,6 +4357,15 @@ export async function startServer(options: {
       following = false;
     }
   }, options.followMs ?? FOLLOW_MS);
+
+  // 빌드한 웹 화면(ADR-0042). API가 아닌 경로에서 파일을 내고, 없는 경로는 화면의 첫 파일로 보낸다.
+  if (options.webDir) {
+    const root = relative(process.cwd(), options.webDir) || ".";
+    app.use("*", serveStatic({ root }));
+    app.get("*", (c, next) =>
+      c.req.path.startsWith("/api/") ? next() : serveStatic({ root, path: "index.html" })(c, next),
+    );
+  }
 
   const server = serve({
     fetch: app.fetch,
