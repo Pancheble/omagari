@@ -96,6 +96,16 @@ const RECHECK_MS = 10 * 60_000;
 const HEARTBEAT_MS = 30_000;
 /** 끝나지 않은 기기 인증을 들고 있는 수의 상한. 로그인 없이 부르는 경로라 GitHub에 무한히 묻지 않는다. */
 const MAX_PENDING_LOGINS = 100;
+/** 한 주소가 들고 있을 수 있는 끝나지 않은 기기 인증의 수. 한 주소가 상한을 다 채워 남의 로그인을 막지 못하게 한다. */
+const MAX_PENDING_PER_CLIENT = 5;
+/** 이만큼 묻지 않은 기기 인증은 버려진 것으로 보고 지운다. CLI와 웹은 몇 초마다 묻는다. */
+const ABANDONED_LOGIN_MS = 60_000;
+/** hello를 마치기까지의 시간. 넘으면 연결을 끊는다. */
+const HELLO_MS = 10_000;
+/** hello를 마치기 전에 받는 프레임 하나의 상한. hello는 작다. */
+const MAX_HELLO_BYTES = 64 * 1024;
+/** hello를 마치지 않은 연결 수의 상한. */
+const MAX_UNGREETED = 200;
 /** 작업마다의 초안 PR 제목과 머지 여부를 GitHub에서 다시 읽는 주기. 오래된 오프라인 멤버도 이 주기에 지운다. */
 const FOLLOW_MS = 60_000;
 /** 오프라인인 멤버의 관측과 상태 한 줄을 남겨 두는 시간. Room의 7일이다(1단계 질문 A10). */
@@ -414,6 +424,8 @@ export async function startServer(options: {
   debateRounds?: number;
   /** 토론이 끝나지 않으면 만료하기까지의 시간. 기본 14일(`INBOX_MS`). 테스트가 줄여 쓴다. 만료는 `followMs`마다 본다. */
   debateMs?: number;
+  /** hello를 마치기까지의 시간. 기본 10초. 테스트가 줄여 쓴다. */
+  helloMs?: number;
   /** 빌드한 웹 화면(`vite build`의 dist) 폴더. 주면 API와 같은 주소에서 낸다. 개발할 때는 주지 않고 Vite를 쓴다. */
   webDir?: string;
 }) {
@@ -873,8 +885,18 @@ export async function startServer(options: {
   /** 끝나지 않은 기기 인증. 서버가 꺼지면 잃는다. 다시 로그인하면 된다. */
   const logins = new Map<
     string,
-    { deviceCode: string; expiresAt: number; intervalMs: number; nextPollAt: number }
+    {
+      deviceCode: string;
+      expiresAt: number;
+      intervalMs: number;
+      nextPollAt: number;
+      /** 시작한 쪽의 주소와 마지막으로 물은 시각. 버려진 것을 지우고 주소마다 센다. */
+      client: string;
+      polledAt: number;
+    }
   >();
+  /** 지금 GitHub에 기기 인증을 여는 중인 수. 기다리는 사이에도 상한을 지키려고 미리 센다. */
+  let startingLogins = 0;
   /** hello를 마친 러너의 연결과 그 러너가 돌리는 실행기, 실행기마다의 고를 거리. */
   const runners = new Map<
     WSContext,
@@ -2133,22 +2155,34 @@ export async function startServer(options: {
 
   mount(app, api.health, () => ({ contract: CONTRACT_VERSION }));
 
-  mount(app, api.login, async () => {
+  mount(app, api.login, async (_, c) => {
     const now = Date.now();
-    for (const [device, pending] of logins) if (pending.expiresAt < now) logins.delete(device);
-    if (logins.size >= MAX_PENDING_LOGINS) {
+    for (const [device, pending] of logins)
+      if (pending.expiresAt < now || now - pending.polledAt > ABANDONED_LOGIN_MS)
+        logins.delete(device);
+    // Fly 앞단은 Fly-Client-IP를 덮어써 보낸다(배포에서 확인할 것). 없으면 연결의 주소다.
+    const client =
+      c.req.header("fly-client-ip") ??
+      (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming
+        ?.socket?.remoteAddress ??
+      "";
+    const mine = [...logins.values()].filter((pending) => pending.client === client).length;
+    if (logins.size + startingLogins >= MAX_PENDING_LOGINS || mine >= MAX_PENDING_PER_CLIENT) {
       throw new ContractFailure({
         code: "internal",
         message: "로그인이 밀려 있다. 잠시 뒤 다시 하라",
       });
     }
-    const started = await github.startDevice();
+    startingLogins++;
+    const started = await github.startDevice().finally(() => startingLogins--);
     const device = randomBytes(16).toString("hex");
     logins.set(device, {
       deviceCode: started.deviceCode,
       expiresAt: now + started.expiresInMs,
       intervalMs: started.intervalMs,
       nextPollAt: now + started.intervalMs,
+      client,
+      polledAt: now,
     });
     return {
       device,
@@ -2167,6 +2201,7 @@ export async function startServer(options: {
         message: "기기 인증이 끝났다. 로그인을 다시 하라",
       });
     }
+    pending.polledAt = Date.now();
     // 너무 자주 물으면 GitHub에 넘기지 않는다(GitHub의 slow_down을 부르지 않는다).
     if (Date.now() < pending.nextPollAt) return { pending: true as const };
     const polled = await github.pollDevice(pending.deviceCode);
@@ -3313,6 +3348,24 @@ export async function startServer(options: {
     };
   });
 
+  /** hello를 마쳤다. 시간 제한을 푼다. */
+  const greet = (socket: WSContext) => {
+    const raw = socket.raw as WebSocket | undefined;
+    if (!raw) return;
+    clearTimeout(ungreeted.get(raw));
+    ungreeted.delete(raw);
+  };
+  /** hello를 마치지 않은 연결이 hello보다 큰 프레임을 보냈으면 닫는다. */
+  const tooBigBeforeHello = (socket: WSContext, data: unknown) => {
+    const raw = socket.raw as WebSocket | undefined;
+    if (!raw || !ungreeted.has(raw)) return false;
+    const size =
+      typeof data === "string" ? Buffer.byteLength(data) : (data as ArrayBuffer).byteLength;
+    if (size <= MAX_HELLO_BYTES) return false;
+    socket.close(1009, "hello가 너무 크다");
+    return true;
+  };
+
   // 웹의 실시간 연결. hello 하나를 받으면 welcome과 끊긴 사이의 메시지, 지금의 멤버 목록을 보내고,
   // 그 뒤로는 메시지는 쌓이는 대로, 멤버 목록은 달라질 때마다 보낸다.
   // 이 처리기는 끝까지 동기라 welcome의 seq, 다시 보낸 것, 이어 보낼 것 사이에 빠지는 메시지가 없다.
@@ -3321,6 +3374,8 @@ export async function startServer(options: {
     LIVE_SOCKET,
     upgradeWebSocket(() => ({
       onMessage({ data }, socket) {
+        // hello를 마치지 않은 연결의 큰 프레임은 읽지 않는다.
+        if (tooBigBeforeHello(socket, data)) return;
         // 웹은 hello만 보낸다. 그 밖의 것은 고장 난 웹이라 닫는다.
         const decoded = decode(webToServer, data);
         if ("error" in decoded) return refuse(socket, decoded.error, decoded.re);
@@ -3351,6 +3406,7 @@ export async function startServer(options: {
           for (const row of missed) socket.send(encode(serverToWeb, "message", messageView(row)));
         }
         watchers.set(socket, { hash: hash(payload.session), login });
+        greet(socket);
         visit(login);
         shareMembers(socket);
       },
@@ -3365,7 +3421,11 @@ export async function startServer(options: {
     RUNNER_SOCKET,
     upgradeWebSocket(() => ({
       onMessage({ data }, socket) {
+        if (!runners.has(socket) && tooBigBeforeHello(socket, data)) return;
         const decoded = decode(runnerToServer, data);
+        // hello를 마치지 않은 연결이 계약과 다른 것을 보내면 닫는다.
+        if ("error" in decoded && !runners.has(socket) && decoded.error.code !== "version_mismatch")
+          return refuse(socket, decoded.error, decoded.re);
         if ("error" in decoded) {
           // 계약 버전이 다른 러너에는 그 러너도 읽는 꼴로 이 서버의 버전을 실어 거절한다. 러너가 할 일을 알린다.
           if (decoded.error.code === "version_mismatch") {
@@ -3396,6 +3456,7 @@ export async function startServer(options: {
             );
           }
           runners.set(socket, { login, hash: hash(session), executors, choices, mergeCheck });
+          greet(socket);
           db.prepare("DELETE FROM offline WHERE login = ?").run(login);
           db.prepare("UPDATE claims SET stale = NULL WHERE login = ?").run(login);
           // ponytail: 멤버 하나에 러너 하나로 본다. 기기 둘에서 실행기가 다른 러너를 켜면 나중에 붙은 쪽의 것만 남는다.
@@ -3645,9 +3706,20 @@ export async function startServer(options: {
   // 연결의 생사: 주기마다 ping을 보내고, 다음 주기까지 pong이 없으면 끊는다.
   // 잠든 기기처럼 close 없이 사라진 러너도 이렇게 오프라인이 된다. 러너(내장 WebSocket)는 pong을 알아서 보낸다.
   const alive = new WeakSet<WebSocket>();
+  /** hello를 마치지 않은 연결과 그 시간 제한. hello를 마치면 빠진다. */
+  const ungreeted = new Map<WebSocket, ReturnType<typeof setTimeout>>();
   sockets.on("connection", (socket) => {
     alive.add(socket);
     socket.on("pong", () => alive.add(socket));
+    if (ungreeted.size >= MAX_UNGREETED) return socket.terminate();
+    ungreeted.set(
+      socket,
+      setTimeout(() => socket.terminate(), options.helloMs ?? HELLO_MS),
+    );
+    socket.once("close", () => {
+      clearTimeout(ungreeted.get(socket));
+      ungreeted.delete(socket);
+    });
   });
   const heartbeat = setInterval(() => {
     for (const socket of sockets.clients) {
