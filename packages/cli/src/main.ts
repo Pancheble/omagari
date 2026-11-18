@@ -527,7 +527,10 @@ async function release(path: string | undefined) {
 
 /** 심볼을 쓰는 곳과 그 정의 줄을 바꾸는 다른 멤버의 작업을 보인다. 러너가 답한다. */
 async function impact(symbol: string) {
-  const reply = await callRunner(process.cwd(), "impact", { symbol }).catch((error) => {
+  const reply = await callRunner(process.cwd(), "impact", {
+    symbol,
+    branch: await currentBranch().catch(() => undefined),
+  }).catch((error) => {
     if (error instanceof ContractFailure) throw new Error(`러너가 답하지 못했다: ${error.message}`);
     throw error;
   });

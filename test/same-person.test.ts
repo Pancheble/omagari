@@ -222,3 +222,26 @@ test("한 사람의 두 작업 사이의 부딪힘에도 토론이 열려 양쪽
     });
   }
 });
+
+test("omagari impact가 내 다른 브랜치의 작업은 보이고 같은 브랜치의 내 작업은 보이지 않는다", async (t) => {
+  const world = await startWorld({ observeMs: 50 });
+  t.after(world.stop);
+  const refund = await twoBranches(world);
+
+  // payment가 refund 함수의 정의 줄을 바꾼다.
+  await writer(world.repo.folder)(
+    "src/money.ts",
+    MONEY.replace("refund(amount: number)", "refund(amount: number, reason: string)"),
+  );
+  const works = (stdout: string) =>
+    stdout.split("정의 줄을 바꾸고 있는 다른 멤버의 작업:\n")[1]?.split("바꾸겠다고")[0];
+  await eventually(async () => {
+    const mine = await world.cliIn(refund, "impact", "refund");
+    assert.equal(mine.code, 0, mine.stderr);
+    assert.match(works(mine.stdout) ?? "", /^ {2}owner · "payment" · "src\/money.ts":1 /);
+  });
+  // 같은 브랜치(payment)에서 묻으면 내 작업은 빠진다.
+  const own = await world.cliIn(world.repo.folder, "impact", "refund");
+  assert.equal(own.code, 0, own.stderr);
+  assert.equal(works(own.stdout), "  없음\n");
+});
