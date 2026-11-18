@@ -51,6 +51,10 @@ delete process.env.CLAUDECODE;
 
 /** 워크스페이스의 레포. `tempRepo`의 origin이 이 레포를 가리킨다. */
 export const REPO = "omagari-test/space";
+/** 같은 계정의 두 번째 레포(ADR-0043). 가짜 GitHub에서 PR, 이슈, 라벨을 `REPO`와 함께 쓴다. */
+export const REPO2 = "omagari-test/other";
+/** 가짜 GitHub에 있는 레포들. */
+const REPOS = new Set([REPO, REPO2]);
 
 /** 실행 파일 하나를 돌리고 종료 코드와 출력을 돌려준다. 0이 아닌 종료도 결과다. */
 function run(
@@ -182,7 +186,9 @@ export async function tempRepo(repo = REPO) {
  * 토큰을 무효로 하려면 `tokens`에서 지운다.
  */
 export function fakeGitHub() {
+  /** push 권한과 Admin. `레포 로그인`이다. */
   const pushers = new Set<string>();
+  const admins = new Set<string>();
   const pulls: (Pull & {
     branch: string;
     number?: number;
@@ -221,7 +227,7 @@ export function fakeGitHub() {
   /** 토큰이 이 레포에 쓸 수 있으면 그 주인. 아니면 GitHub처럼 던진다. */
   const owner = (token: string, repo: string) => {
     const login = tokens.get(token);
-    if (repo !== REPO || !login) throw new Error("HTTP 401 Bad credentials");
+    if (!REPOS.has(repo) || !login) throw new Error("HTTP 401 Bad credentials");
     return login;
   };
   const tree = (ref: string) => {
@@ -259,10 +265,13 @@ export function fakeGitHub() {
       return { login, name: names.get(login) ?? null };
     },
     async canPush(token, repo) {
-      return repo === REPO && pushers.has(tokens.get(token) ?? "");
+      return pushers.has(`${repo} ${tokens.get(token)}`);
+    },
+    async canAdmin(token, repo) {
+      return admins.has(`${repo} ${tokens.get(token)}`);
     },
     async pulls(token, repo, branch) {
-      if (repo !== REPO || !tokens.has(token)) return undefined;
+      if (!REPOS.has(repo) || !tokens.has(token)) return undefined;
       return pulls
         .filter((pull) => pull.branch === branch)
         .map(({ title, draft, open, mergedAt }) => ({ title, draft, open, mergedAt }));
@@ -299,7 +308,7 @@ export function fakeGitHub() {
       return { number, url: `https://github.com/${REPO}/pull/${number}` };
     },
     async pull(token, repo, number) {
-      if (repo !== REPO || !tokens.has(token)) return undefined;
+      if (!REPOS.has(repo) || !tokens.has(token)) return undefined;
       const found = pulls.find((pull) => pull.number === number);
       return (
         found && {
@@ -323,13 +332,13 @@ export function fakeGitHub() {
       found.open = false;
     },
     async changesRequested(token, repo, number) {
-      if (repo !== REPO || !tokens.has(token)) return undefined;
+      if (!REPOS.has(repo) || !tokens.has(token)) return undefined;
       return [...(reviews.get(number) ?? [])]
         .filter(([, state]) => state === "CHANGES_REQUESTED")
         .map(([login]) => login);
     },
     async merge(token, repo, number) {
-      if (repo !== REPO || !tokens.has(token)) return { reason: "HTTP 401 Bad credentials" };
+      if (!REPOS.has(repo) || !tokens.has(token)) return { reason: "HTTP 401 Bad credentials" };
       if (blocked) return { reason: blocked };
       const found = pulls.find((pull) => pull.number === number && pull.open);
       if (!found) return { reason: "HTTP 405 Pull Request is not mergeable" };
@@ -345,12 +354,12 @@ export function fakeGitHub() {
       return { number, url: `https://github.com/${REPO}/issues/${number}` };
     },
     async issue(token, repo, number) {
-      if (repo !== REPO || !tokens.has(token)) return undefined;
+      if (!REPOS.has(repo) || !tokens.has(token)) return undefined;
       const found = issues.find((issue) => issue.number === number);
       return found && { title: found.title, labels: [...found.labels], open: found.open };
     },
     async comments(token, repo, number) {
-      if (repo !== REPO || !tokens.has(token)) return undefined;
+      if (!REPOS.has(repo) || !tokens.has(token)) return undefined;
       return issues.find((issue) => issue.number === number)?.comments.map((c) => ({ ...c }));
     },
     async comment(token, repo, number, body) {
@@ -375,7 +384,7 @@ export function fakeGitHub() {
       found.labels = found.labels.filter((l) => l !== label);
     },
     async labels(token, repo) {
-      if (repo !== REPO || !tokens.has(token)) return undefined;
+      if (!REPOS.has(repo) || !tokens.has(token)) return undefined;
       return labels.map((label) => ({ ...label }));
     },
     async createLabel(token, repo, label) {
@@ -412,8 +421,10 @@ export function fakeGitHub() {
       if (!device) throw new Error(`모르는 코드다: ${userCode}`);
       device.login = login;
     },
-    grant: (login: string) => pushers.add(login),
-    revoke: (login: string) => pushers.delete(login),
+    grant: (login: string, repo = REPO) => pushers.add(`${repo} ${login}`),
+    revoke: (login: string, repo = REPO) => pushers.delete(`${repo} ${login}`),
+    /** `login`을 `repo`의 Admin으로 둔다. */
+    admin: (login: string, repo = REPO) => admins.add(`${repo} ${login}`),
     /** `branch`를 head로 하는 PR을 연다. 기본은 초안이다. */
     openPull(branch: string, title: string, draft = true) {
       const pull = { branch, title, draft, open: true };
@@ -628,6 +639,8 @@ export async function startWorld(
     helloMs?: number;
     /** Fly 위에서 도는 서버인 척한다(Fly-Client-IP를 믿는다). */
     behindFly?: boolean;
+    /** 서버가 받을 계정과 켤 때 넣을 레포(`OMAGARI_REPO`). 주지 않으면 `REPO` 하나다. */
+    accept?: string[];
   } = {},
 ) {
   const repo = await tempRepo();
@@ -641,7 +654,7 @@ export async function startWorld(
     db.close();
   }
   const serverOptions = {
-    repo: REPO,
+    accept: options.accept ?? [REPO],
     github: fake.github,
     database,
     recheckMs: options.recheckMs,
@@ -824,15 +837,24 @@ export async function startWorld(
     },
     /**
      * 멤버 `as`의 레포 폴더 하나와 그 폴더에서 켠 러너. 멤버마다 기기가 따로다. 관측은 짧게 돈다.
-     * `executors`를 주지 않으면 늘 실패하는 Claude Code 실행기가 꽂힌다. `extra`는 러너에 더 넘길 것(샌드박스, 잠잠한 시간)이다.
+     * `executors`를 주지 않으면 늘 실패하는 Claude Code 실행기가 꽂힌다. `extra`는 러너에 더 넘길 것(샌드박스, 잠잠한 시간)과 폴더의 원격 레포다.
      */
     async desk(
       as: { session: string },
       share?: ShareLevel,
       executors: Partial<Record<ExecutorId, Executor>> = { "claude-code": noExecutor },
-      extra: { sandbox?: Sandbox; quietMs?: number; mergeCheck?: "on" | "off" } = {},
+      {
+        repo: on,
+        ...extra
+      }: {
+        sandbox?: Sandbox;
+        quietMs?: number;
+        mergeCheck?: "on" | "off";
+        /** 폴더의 원격 레포. 주지 않으면 `REPO`다. */
+        repo?: string;
+      } = {},
     ) {
-      const repo = await tempRepo();
+      const repo = await tempRepo(on);
       const options = {
         serverUrl: server.url,
         folder: repo.folder,

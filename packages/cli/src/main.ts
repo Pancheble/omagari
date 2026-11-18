@@ -366,7 +366,12 @@ async function log() {
 async function member() {
   const session = (await readSessions())[server];
   if (!session) throw new Error("로그인하지 않았다. 레포 폴더에서 omagari runner를 먼저 켜라");
-  return { url: server, session };
+  // 레포마다인 것(작업, 상태 한 줄, 피드)은 이 폴더의 레포로 부른다(ADR-0043). 레포 폴더가 아니면 서버가 고른다.
+  const repos = await readRepo(process.cwd()).then(
+    (found) => found.repos,
+    () => undefined,
+  );
+  return { url: server, session, repos };
 }
 
 /** 멤버마다 에이전트와 작업을, 작업마다 상태 한 줄과 바뀐 파일을 보인다. */
