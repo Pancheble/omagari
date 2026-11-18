@@ -194,7 +194,10 @@ test("omagari status로 멤버, 작업, 상태 한 줄, 바뀐 파일을 본다.
   t.after(desk_.remove);
   await desk_.git("switch", "--create", "refund");
   await write(desk_.folder, "refund.ts");
-  await eventually(() => workOf(world, "refund", "alice"));
+  // 바뀐 파일이 관측에 올라온 뒤에 멈춘다. 그 전에 멈추면 "바뀐 것 없음"으로 남는다.
+  await eventually(async () =>
+    assert.equal((await workOf(world, "refund", "alice")).files.length, 1),
+  );
   await desk_.stop();
   await eventually(async () =>
     assert.notEqual((await workOf(world, "refund", "alice")).offlineSince, null),
