@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 46;
+export const CONTRACT_VERSION = 47;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -1596,6 +1596,24 @@ export type ReplyOf<R extends Route> = z.input<R["response"]>;
  */
 export const REPO_HEADER = "omagari-repo";
 
+/**
+ * 워크스페이스마다인 API(채널, 포럼, 지표)와 레포마다인 API를 어느 워크스페이스로 부를지 싣는 머리말(ADR-0043). 값은 `Workspace.id`다.
+ * 레포마다인 API는 고른 워크스페이스의 레포 가운데서 `REPO_HEADER`로 고른다. 없으면 `REPO_HEADER`가 고른 레포의 워크스페이스이고,
+ * 그것도 없으면 `api.workspaces`의 첫째다. 부른 사람의 워크스페이스가 아니면 `not_found`다.
+ */
+export const WORKSPACE_HEADER = "omagari-workspace";
+
+/** 워크스페이스: GitHub 계정(조직이나 개인) 하나와 짝지어지고 그 계정의 레포를 넣으면 생긴다(ADR-0043). */
+export const Workspace = z.strictObject({
+  /** 계정 이름의 소문자. `WORKSPACE_HEADER`와 `hello.workspace`에 쓴다. */
+  id: z.string(),
+  /** 계정 이름 그대로(`owner/name`의 owner). */
+  name: z.string(),
+  /** 이 멤버에게 보이는 이 워크스페이스의 레포들, 넣은 순서. */
+  repos: z.array(z.string()),
+});
+export type Workspace = z.output<typeof Workspace>;
+
 /** 웹이 쓰는 API. 이후의 이슈는 자기 경로를 여기에 더한다. */
 export const api = {
   health: {
@@ -1643,6 +1661,15 @@ export const api = {
       /** 이 멤버가 push 권한이 있어 보이는 워크스페이스의 레포들, 넣은 순서. 로그인할 때와 10분마다 다시 읽는다. */
       repos: z.array(z.string()),
     }),
+  },
+  /**
+   * 이 멤버가 들어간 워크스페이스들, 넣은 순서(첫째가 `WORKSPACE_HEADER` 없이 부를 때 쓰는 것이다). 로그인할 때와 10분마다 다시 읽는 push 권한을 따른다.
+   * 워크스페이스끼리는 어느 API 응답과 실시간 연결 메시지에도 섞이지 않는다.
+   */
+  workspaces: {
+    method: "GET",
+    path: "/api/workspaces",
+    response: z.strictObject({ workspaces: z.array(Workspace) }),
   },
   /**
    * 워크스페이스에 레포 `owner/name`을 넣는다(ADR-0043). 부른 사람이 그 레포의 GitHub Admin이어야 하고(`forbidden`),
@@ -2170,8 +2197,10 @@ export const webToServer = {
   hello: z.strictObject({
     session: z.string(),
     after: z.number().int().nonnegative().optional(),
-    /** 멤버 목록, 라벨처럼 레포마다인 것을 받을 레포. 주지 않으면 `api.me`의 `repo`다. */
+    /** 멤버 목록, 라벨처럼 레포마다인 것을 받을 레포. 주지 않으면 `workspace`의 첫 레포다. */
     repo: z.string().optional(),
+    /** 받을 워크스페이스(`Workspace.id`). 연결은 한 워크스페이스의 것만 받는다. `repo`도 `workspace`도 주지 않으면 `api.workspaces`의 첫째다. */
+    workspace: z.string().optional(),
   }),
 } satisfies Payloads;
 
@@ -2213,13 +2242,14 @@ export const serverToWeb = {
 
 /** API 하나를 부른다. 웹, CLI, 테스트가 같이 쓴다. 오류 답은 `ContractFailure`로 던진다. */
 export async function call<R extends Route>(
-  server: { url: string; session?: string; repos?: string[] },
+  server: { url: string; session?: string; repos?: string[]; workspace?: string },
   route: R,
   ...[body]: R["body"] extends z.ZodType ? [z.input<R["body"]>] : []
 ): Promise<z.output<R["response"]>> {
   const headers: Record<string, string> = {};
   if (server.session) headers.authorization = `Bearer ${server.session}`;
   if (server.repos?.length) headers[REPO_HEADER] = server.repos.join(",");
+  if (server.workspace) headers[WORKSPACE_HEADER] = server.workspace;
   if (route.body) headers["content-type"] = "application/json";
   const response = await fetch(new URL(route.path, server.url), {
     method: route.method,
