@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 보안 취약점 신고
+    url: https://github.com/Pancheble/omagari/security/advisories/new
+    about: 보안 문제는 공개 이슈로 올리지 말고 비공개로 신고해 주세요.
+  - name: 설계와 방향에 대한 질문
+    url: https://github.com/Pancheble/omagari/blob/dev/docs/omagari-v3.md
+    about: 무엇을 왜 만드는지 먼저 확인해 보세요.
