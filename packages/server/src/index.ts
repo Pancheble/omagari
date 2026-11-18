@@ -344,6 +344,7 @@ const postSummary = (row: MessageRow): Omit<Post, "alert"> => {
   const labels: string[] = JSON.parse(row.labels ?? "[]");
   return {
     channel: row.post as string,
+    repo: row.repo as string,
     count: row.count,
     last: last && {
       login: last.login,
@@ -364,7 +365,9 @@ const postSummary = (row: MessageRow): Omit<Post, "alert"> => {
     labels,
     importance: row.importance,
     forums: (JSON.parse(row.forums ?? "[]") as { id: string; filter: ForumFilter }[])
-      .filter((forum) => shows(forum.filter, { labels, importance: row.importance }))
+      .filter((forum) =>
+        shows(forum.filter, { labels, importance: row.importance, repo: row.repo as string }),
+      )
       .map((forum) => forum.id),
   };
 };
@@ -974,7 +977,11 @@ export async function startServer(options: {
     db.exec("COMMIT");
     db.exec("PRAGMA foreign_keys = ON");
   }
-  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS channels_by_name ON channels (workspace, name)");
+  // 채널의 이름은 워크스페이스 안에서 층마다 하나다: 워크스페이스 채널(포럼 포함)끼리, 레포 채널은 그 레포 안에서. 권한 없는 레포의 채널 이름과 겹쳐 그 이름이 드러나지 않게 한다.
+  db.exec("DROP INDEX IF EXISTS channels_by_name");
+  db.exec(
+    "CREATE UNIQUE INDEX IF NOT EXISTS channels_by_layer_name ON channels (workspace, COALESCE(repo, ''), name)",
+  );
   /** 새 워크스페이스에 "논의"와 "참고" 포럼을 둔다. */
   const seedForums = (workspace: string) => {
     for (const importance of Importance.options)
@@ -1005,6 +1012,18 @@ export async function startServer(options: {
     if (!adopted) seedForums(id);
   };
   for (const repo of allRepos()) ensureWorkspace(repo);
+  // 채팅 채널은 레포나 워크스페이스에 속한다(ADR-0043). 그 전부터 있던 채팅 채널은 그 워크스페이스의 첫 레포의 채널이 된다.
+  // 한 번만 한다: 그 뒤에 만든 워크스페이스 채널(레포 없음)을 다시 옮기지 않으려고 표시를 남긴다.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'channels by repo'").get()) {
+    for (const { id } of db.prepare("SELECT id FROM workspaces").all() as { id: string }[]) {
+      const first = allRepos().find((repo) => ownerOf(repo) === id);
+      if (first)
+        db.prepare(
+          "UPDATE channels SET repo = ? WHERE kind = 'chat' AND alert IS NULL AND repo IS NULL AND workspace = ?",
+        ).run(first, id);
+    }
+    db.prepare("INSERT INTO settings (key, value) VALUES ('channels by repo', '1')").run();
+  }
   /** 워크스페이스가 하나이던 판의 방문과 판정 수는 처음 생긴 워크스페이스의 것이다. */
   const firstWorkspace =
     (
@@ -1103,6 +1122,13 @@ export async function startServer(options: {
         | { workspace: string | null }
         | undefined
     )?.workspace ?? undefined;
+  /** 채널의 레포: 포스트와 레포 채널. 워크스페이스 채널과 없는 채널은 없다. */
+  const channelRepo = (channel: string) =>
+    (
+      db.prepare("SELECT repo FROM channels WHERE id = ?").get(channel) as
+        | { repo: string | null }
+        | undefined
+    )?.repo ?? undefined;
   /** 멤버가 들어간 워크스페이스들(`id`), 넣은 순서. */
   const workspacesOf = (login: string) => [...new Set(reposOf(login).map(ownerOf))];
   /** 멤버에게 보이는 포스트의 레포. 없거나 보이지 않으면 `not_found`다. */
@@ -1603,26 +1629,27 @@ export async function startServer(options: {
     return changed;
   };
   /** 레포의 라벨 이름이 바뀌었다. 포스트와 이슈 라벨에서 이름을 바꾸고 웹에 알린다. */
-  // ponytail: 포럼은 워크스페이스의 것이라 한 레포에서 바꾼 이름을 따른다. 포럼이 레포로도 거르게 되면(#237) 그 레포의 포럼만 바꾼다.
   const renameLabel = (repo: string, from: string, to: string) => {
     for (const post of editPostLabels(repo, (labels) => labels.map((l) => (l === from ? to : l))))
       sharePost(post);
-    // 그 라벨로 거르는 포럼도 새 이름을 따른다.
+    // 그 라벨로 거르는 포럼도 새 이름을 따른다. 그 레포만 거르는 포럼은 이름을 바꾸고,
+    // 다른 레포도 거르는 포럼은 다른 레포의 옛 이름 포스트를 잃지 않게 새 이름을 더한다.
     for (const row of db
       .prepare(
         "SELECT id, name, kind, filter FROM channels WHERE workspace = ? AND EXISTS (SELECT 1 FROM json_each(filter, '$.labels') j WHERE j.value = ?)",
       )
       .all(ownerOf(repo), from) as Parameters<typeof channelView>[0][]) {
-      const filter = {
-        labels: (JSON.parse(row.filter as string).labels as string[]).map((l) =>
-          l === from ? to : l,
-        ),
-      };
+      const old = JSON.parse(row.filter as string) as { labels: string[]; repos?: string[] };
+      if (old.repos?.length && !old.repos.includes(repo)) continue;
+      const only = (
+        old.repos?.length ? old.repos : allRepos().filter((r) => ownerOf(r) === ownerOf(repo))
+      ).every((r) => r === repo);
+      const labels = only
+        ? old.labels.map((l) => (l === from ? to : l))
+        : [...old.labels, ...(old.labels.includes(to) ? [] : [to])];
+      const filter = { ...old, labels: [...new Set(labels)] };
       db.prepare("UPDATE channels SET filter = ? WHERE id = ?").run(JSON.stringify(filter), row.id);
-      broadcast(
-        ownerOf(repo),
-        encode(serverToWeb, "channel", channelView({ ...row, filter: JSON.stringify(filter) })),
-      );
+      broadcastChannel(ownerOf(repo), { ...row, filter: JSON.stringify(filter) });
     }
   };
 
@@ -2981,8 +3008,8 @@ export async function startServer(options: {
     mustOwn(agent, c.get("login") as string);
     mustWrite(channel, c);
     visit(agent, channelWorkspace(channel) ?? workspaceOf(c));
-    // 포스트는 그 레포의 러너가, 채팅 채널은 그 워크스페이스에서 마지막에 붙은 러너가 답한다.
-    const socket = runnerOf(agent, executor, postRepo(channel), channelWorkspace(channel));
+    // 포스트와 레포 채널은 그 레포의 러너가, 워크스페이스 채널은 그 워크스페이스에서 마지막에 붙은 러너가 답한다(ADR-0043).
+    const socket = runnerOf(agent, executor, channelRepo(channel), channelWorkspace(channel));
     // 채널 대화는 이 문답이 채널에 서기 전에 읽는다. `@호출`의 질문이 데이터로 한 번 더 들어가지 않는다.
     // ponytail: 첫 턴 뒤에 알림이 고쳐져도 그 채널 세션에는 다시 넘기지 않는다. 고친 알림이 필요해지면 러너가 알림만 따로 다시 넘긴다.
     const recent = recentOf(channel);
@@ -3112,45 +3139,98 @@ export async function startServer(options: {
     name: string;
     kind: ChannelKind;
     filter: string | null;
+    repo?: string | null;
   }): Channel => ({
     id: row.id,
     name: row.name,
     kind: row.kind,
+    ...(row.repo && { repo: row.repo }),
     ...(row.filter !== null && { filter: JSON.parse(row.filter) }),
   });
+
+  /**
+   * `login`에게 보이는 채널. 포럼의 레포 조건에서 `login`에게 보이지 않는 레포는 빼고, 조건이 있는데 하나도 안 보이면 없다.
+   * 비공개 레포의 이름이 권한 없는 멤버에게 새지 않게 한다(DESIGN.md 93-C).
+   */
+  const channelFor = (login: string, row: Parameters<typeof channelView>[0]) => {
+    const view = channelView(row);
+    const repos = view.filter?.repos;
+    if (!view.filter || !repos?.length) return view;
+    const seen = repos.filter((repo) => sees(login, repo));
+    return seen.length
+      ? ({ ...view, filter: { ...view.filter, repos: seen } } as Channel)
+      : undefined;
+  };
+  /** 워크스페이스의 웹마다 그 사람에게 보이는 채널을 보낸다. 이제 안 보이는 사람에게는 이미 받았을 수 있어 지우라고 보낸다. */
+  const broadcastChannel = (workspace: string, row: Parameters<typeof channelView>[0]) => {
+    for (const [socket, watcher] of watchers) {
+      if (socket.readyState !== 1 || watcher.workspace !== workspace) continue;
+      const view = channelFor(watcher.login, row);
+      socket.send(
+        view
+          ? encode(serverToWeb, "channel", view)
+          : encode(serverToWeb, "forumDeleted", { id: row.id }),
+      );
+    }
+  };
 
   mount(app, api.channels, (_, c) => ({
     channels: (
       db
         .prepare(
-          "SELECT id, name, kind, filter FROM channels WHERE alert IS NULL AND id != ? AND workspace = ? ORDER BY name",
+          "SELECT id, name, kind, filter, repo FROM channels WHERE alert IS NULL AND id != ? AND workspace = ? ORDER BY name",
         )
         .all(ALERTS, workspaceOf(c)) as Parameters<typeof channelView>[0][]
-    ).map(channelView),
+    )
+      // 레포 채널은 그 레포가 보이는 멤버만 보고, 포럼의 레포 조건도 보이는 레포만 보인다.
+      .flatMap((row) => {
+        const login = c.get("login") as string;
+        return row.repo && !sees(login, row.repo) ? [] : (channelFor(login, row) ?? []);
+      }),
   }));
 
-  /** 이름이 `id` 아닌 채널과 같은 워크스페이스에서 겹치면 `conflict`다. 이름은 대소문자를 가리지 않는다. */
-  const mustBeNew = (workspace: string, name: string, id = "") => {
+  /** 이름이 `id` 아닌 채널과 같은 층(워크스페이스, 또는 `repo`)에서 겹치면 `conflict`다. 이름은 대소문자를 가리지 않는다. */
+  const mustBeNew = (workspace: string, name: string, id = "", repo = "") => {
     if (
       db
-        .prepare("SELECT 1 FROM channels WHERE workspace = ? AND name = ? AND id != ?")
-        .get(workspace, name, id)
+        .prepare(
+          "SELECT 1 FROM channels WHERE workspace = ? AND COALESCE(repo, '') = ? AND name = ? AND id != ?",
+        )
+        .get(workspace, repo, name, id)
     ) {
       throw new ContractFailure({ code: "conflict", message: `#${name} 채널이 이미 있다` });
     }
   };
 
-  mount(app, api.createChannel, ({ name }, c) => {
-    visit(c.get("login") as string, workspaceOf(c));
+  mount(app, api.createChannel, ({ name, repo }, c) => {
+    const login = c.get("login") as string;
+    visit(login, workspaceOf(c));
     const workspace = workspaceOf(c);
-    mustBeNew(workspace, name);
-    const channel = { id: randomBytes(8).toString("hex"), name, kind: "chat" as const };
-    db.prepare("INSERT INTO channels (id, name, workspace) VALUES (?, ?, ?)").run(
+    // 레포 채널은 이 워크스페이스의 보이는 레포에만 만든다(대소문자는 들어간 레포의 이름으로 맞춘다).
+    const found =
+      repo === undefined
+        ? undefined
+        : reposOf(login).find(
+            (r) => r.toLowerCase() === repo.toLowerCase() && ownerOf(r) === workspace,
+          );
+    if (repo !== undefined && !found)
+      throw new ContractFailure({ code: "not_found", message: `보이는 레포가 아니다: ${repo}` });
+    mustBeNew(workspace, name, "", found);
+    const channel = {
+      id: randomBytes(8).toString("hex"),
+      name,
+      kind: "chat" as const,
+      ...(found && { repo: found }),
+    };
+    db.prepare("INSERT INTO channels (id, name, workspace, repo) VALUES (?, ?, ?, ?)").run(
       channel.id,
       channel.name,
       workspace,
+      found ?? null,
     );
-    broadcast(workspace, encode(serverToWeb, "channel", channel));
+    const frame = encode(serverToWeb, "channel", channel);
+    if (found) broadcastTo(found, frame);
+    else broadcast(workspace, frame);
     return { channel };
   });
 
@@ -3165,51 +3245,73 @@ export async function startServer(options: {
       shareAlert(alert);
   };
 
-  /** 이 워크스페이스의 포럼(`ALERTS`는 빼고)이 없으면 `not_found`다. */
-  const mustBeForum = (workspace: string, id: string) => {
-    if (
-      !db
-        .prepare("SELECT 1 FROM channels WHERE id = ? AND filter IS NOT NULL AND workspace = ?")
-        .get(id, workspace)
-    ) {
+  /** 이 워크스페이스의 포럼(`ALERTS`는 빼고)이 없거나 `login`에게 보이지 않으면 `not_found`다. 있으면 그 포럼의 거르기를 돌려준다. */
+  const mustBeForum = (login: string, workspace: string, id: string) => {
+    const row = db
+      .prepare(
+        "SELECT id, name, kind, filter FROM channels WHERE id = ? AND filter IS NOT NULL AND workspace = ?",
+      )
+      .get(id, workspace) as Parameters<typeof channelView>[0] | undefined;
+    if (!row || !channelFor(login, row)) {
       throw new ContractFailure({ code: "not_found", message: `없는 포럼이다: ${id}` });
     }
+    return JSON.parse(row.filter as string) as ForumFilter;
   };
 
-  /** 포럼을 새로 넣거나(`id`가 없으면) 고치고, 웹 모두에 알린다. */
-  const saveForum = (workspace: string, name: string, filter: ForumFilter, id?: string) => {
-    const channel = {
-      id: id ?? randomBytes(8).toString("hex"),
-      name,
-      kind: "forum" as const,
-      filter,
-    };
-    mustBeNew(workspace, name, channel.id);
+  /** 포럼을 새로 넣거나(`id`가 없으면) 고치고, 웹마다 그 사람에게 보이는 꼴로 알린다. `old`는 고치는 포럼의 지금 거르기다. */
+  const saveForum = (
+    login: string,
+    workspace: string,
+    name: string,
+    input: ForumFilter,
+    id?: string,
+    old?: ForumFilter,
+  ) => {
+    mustBeNew(workspace, name, id);
+    // 레포 조건은 부른 사람에게 보이는 이 워크스페이스의 레포여야 한다(들어간 레포의 이름으로 맞춘다). 안 보이는 레포는 없는 레포와 같게 거절한다.
+    const mine = reposOf(login).filter((r) => ownerOf(r) === workspace);
+    const repos = (input.repos ?? []).map((repo) => {
+      const found = mine.find((r) => r.toLowerCase() === repo.toLowerCase());
+      if (!found)
+        throw new ContractFailure({
+          code: "invalid_request",
+          message: `이 워크스페이스의 레포가 아니다: ${repo}`,
+        });
+      return found;
+    });
+    // 부른 사람에게 보이지 않던 레포 조건은 고쳐도 지워지지 않고 남는다. 조건을 비우면(모든 레포) 다 지운다.
+    if (repos.length) repos.push(...(old?.repos ?? []).filter((r) => !sees(login, r)));
+    const { repos: _, ...rest } = input;
+    const filter = (repos.length ? { ...rest, repos } : rest) as ForumFilter;
+    const row = { id: id ?? randomBytes(8).toString("hex"), name, kind: "forum" as const };
     db.prepare(
       "INSERT INTO channels (id, name, kind, filter, workspace) VALUES (?, ?, 'forum', ?, ?) ON CONFLICT (id) DO UPDATE SET name = excluded.name, filter = excluded.filter",
-    ).run(channel.id, name, JSON.stringify(filter), workspace);
-    broadcast(workspace, encode(serverToWeb, "channel", channel));
+    ).run(row.id, name, JSON.stringify(filter), workspace);
+    const stored = { ...row, filter: JSON.stringify(filter) };
+    broadcastChannel(workspace, stored);
     shareForums(workspace);
-    return { channel };
+    return { channel: channelFor(login, stored) as Channel };
   };
 
   mount(app, api.createForum, ({ name, filter }, c) => {
+    const login = c.get("login") as string;
     const workspace = workspaceOf(c);
-    visit(c.get("login") as string, workspace);
-    return saveForum(workspace, name, filter);
+    visit(login, workspace);
+    return saveForum(login, workspace, name, filter);
   });
 
   mount(app, api.updateForum, ({ id, name, filter }, c) => {
+    const login = c.get("login") as string;
     const workspace = workspaceOf(c);
-    visit(c.get("login") as string, workspace);
-    mustBeForum(workspace, id);
-    return saveForum(workspace, name, filter, id);
+    visit(login, workspace);
+    const old = mustBeForum(login, workspace, id);
+    return saveForum(login, workspace, name, filter, id, old);
   });
 
   mount(app, api.deleteForum, ({ id }, c) => {
     const workspace = workspaceOf(c);
     visit(c.get("login") as string, workspace);
-    mustBeForum(workspace, id);
+    mustBeForum(c.get("login") as string, workspace, id);
     db.prepare("DELETE FROM channels WHERE id = ?").run(id);
     broadcast(workspace, encode(serverToWeb, "forumDeleted", { id }));
     shareForums(workspace);
@@ -4385,7 +4487,13 @@ export async function startServer(options: {
             if (message.kind === "error")
               console.warn("러너가 서버의 메시지를 거절했다:", message.payload);
           } else if (message.kind === "answer") {
-            settle(re, { state: "answered", ...message.payload });
+            // 어느 레포의 러너가 본 코드인지 붙인다. 워크스페이스 채널의 답은 이것으로 레포를 안다.
+            const repo = runners.get(socket)?.repo;
+            settle(re, {
+              state: "answered",
+              ...message.payload,
+              source: { ...message.payload.source, ...(repo && { repo }) },
+            });
           } else if (message.kind === "error") {
             settle(re, { state: "failed", error: message.payload });
           }
