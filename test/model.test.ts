@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { api, call } from "@omagari/contract";
 import { claudeCode, codex } from "@omagari/runner";
-import { eventually, fakeClaude, fakeCodex, startWorld } from "./harness.ts";
+import { eventually, fakeClaude, fakeCodex, REPO, startWorld } from "./harness.ts";
 
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 /** 모델과 effort 플래그만 */
@@ -45,7 +45,12 @@ test("Claude Code: 러너가 붙을 때 고를 거리를 알리고, 고른 모�
   assert.deepEqual(await ask("처음"), {
     state: "answered",
     text: "Claude: 처음",
-    source: { branch: "main", commit: await world.repo.git("rev-parse", "HEAD"), dirty: false },
+    source: {
+      branch: "main",
+      commit: await world.repo.git("rev-parse", "HEAD"),
+      dirty: false,
+      repo: REPO,
+    },
     model: "Fable 5.2",
   });
   // 이어 가는 채널 세션에서도 모델을 바꿔 넘긴다.

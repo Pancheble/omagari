@@ -812,7 +812,12 @@ export function Workspace({
   /** 포럼 대화 상자의 미리 보기: 열린 포스트와 제목. */
   const previews = (posts ?? [])
     .filter((item) => !settled(item))
-    .map((item) => ({ labels: item.labels, importance: item.importance, title: postTitle(item) }));
+    .map((item) => ({
+      labels: item.labels,
+      importance: item.importance,
+      repo: item.repo,
+      title: postTitle(item),
+    }));
 
   return (
     <LabelsContext value={labels}>

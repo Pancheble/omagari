@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { api, call } from "@omagari/contract";
-import { eventually, fakeExecutor, gatedExecutor, said, startWorld, writer } from "./harness.ts";
+import {
+  eventually,
+  fakeExecutor,
+  gatedExecutor,
+  REPO,
+  said,
+  startWorld,
+  writer,
+} from "./harness.ts";
 
 /** 실행기가 받은 글에서 데이터로 감싼 채널 대화의 메시지들(보낸 사람, 글)과, 감싼 것 뒤의 질문. */
 function unwrap(message: string) {
@@ -177,7 +185,12 @@ test("답에 러너가 본 브랜치와 커밋이 붙고, 커밋하지 않은 �
   assert.deepEqual(await ask("깨끗한 main"), {
     state: "answered",
     text: "봤다",
-    source: { branch: "main", commit: await world.repo.git("rev-parse", "HEAD"), dirty: false },
+    source: {
+      branch: "main",
+      commit: await world.repo.git("rev-parse", "HEAD"),
+      dirty: false,
+      repo: REPO,
+    },
   });
 
   await world.repo.git("switch", "--create", "feat/refund");
@@ -192,6 +205,11 @@ test("답에 러너가 본 브랜치와 커밋이 붙고, 커밋하지 않은 �
   assert.deepEqual(await ask("떨어진 HEAD"), {
     state: "answered",
     text: "봤다",
-    source: { branch: null, commit: await world.repo.git("rev-parse", "HEAD"), dirty: false },
+    source: {
+      branch: null,
+      commit: await world.repo.git("rev-parse", "HEAD"),
+      dirty: false,
+      repo: REPO,
+    },
   });
 });

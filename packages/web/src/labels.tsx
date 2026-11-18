@@ -440,7 +440,7 @@ export function ForumDialog({
   dialog: RefObject<HTMLDialogElement | null>;
   forum?: Channel;
   /** 미리 보기에 쓰는 포스트들과 그 제목 */
-  posts: { labels: string[]; importance: Importance; title: string }[];
+  posts: { labels: string[]; importance: Importance; repo: string; title: string }[];
   /** 만들 때 고른 종류. `onKind`가 있으면 종류 고르기가 선다. */
   kind?: CreateKind;
   onKind?: (kind: CreateKind) => void;

@@ -745,6 +745,7 @@ function Source({ answer }: { answer: Extract<Qa["answer"], { state: "answered" 
   return (
     <>
       <span className="source-ref" title={answer.source.commit}>
+        {answer.source.repo && `${answer.source.repo} · `}
         {answer.source.branch ?? "브랜치 아님"} · {answer.source.commit.slice(0, 7)}
       </span>
       {answer.source.dirty && <span className="badge warning">작업 중 변경 포함</span>}
