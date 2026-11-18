@@ -620,6 +620,8 @@ export async function startWorld(
     quietMs?: number;
     /** owner 러너의 합쳐 돌려 보기. 기본은 켜짐이다. */
     mergeCheck?: "on" | "off";
+    /** 서버가 API와 같은 주소에서 낼 빌드한 웹 화면 폴더. */
+    webDir?: string;
   } = {},
 ) {
   const repo = await tempRepo();
@@ -645,6 +647,7 @@ export async function startWorld(
     hourMs: options.hourMs,
     debateRounds: options.debateRounds,
     debateMs: options.debateMs,
+    webDir: options.webDir,
   };
   let server = await startServer(serverOptions).catch(async (error) => {
     await cleanup();

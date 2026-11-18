@@ -92,10 +92,29 @@ omagari --version
 
 ## 서버
 
-서버도 `main`으로 띄우고, 업데이트도 멤버와 같다(`git pull`, `npm ci`, 다시 띄우기). 켜질 때 `Omagari 서버 v0.1.0 (contract 9): ...`처럼 버전을 로그에 남긴다.
+서버도 `main`으로 띄우고(도그푸딩 서버는 `dev`를 따라 Fly.io에 저절로 올라간다. 아래 "Fly.io에 올리기"), 업데이트도 멤버와 같다(`git pull`, `npm ci`, 다시 띄우기). 켜질 때 `Omagari 서버 v0.1.0 (contract 9): ...`처럼 버전을 로그에 남긴다.
 
 ```bash
 OMAGARI_REPO=<owner/name> GITHUB_CLIENT_ID=<기기 인증을 켠 GitHub 앱> HOST=0.0.0.0 npm run server
 ```
 
 `OMAGARI_DB`(기본 `omagari.db`)와 `PORT`(기본 3000)로 DB 파일과 포트를 바꾼다. 멤버가 웹을 여는 주소가 서버가 듣는 주소와 다르면 `OMAGARI_URL`에 준다. 결정 PR의 출처(포스트 링크)가 이 주소로 적힌다.
+
+서버가 `npm run build -w @omagari/web`로 빌드한 웹 화면(`packages/web/dist`)이 있으면 같은 주소에서 낸다. 없는 경로는 화면의 첫 파일로 보낸다. 개발할 때는 지금처럼 `npm run web`(Vite)를 쓴다. 건강 확인은 `GET /api/health`다.
+
+### Fly.io에 올리기
+
+도그푸딩 서버는 Fly.io(도쿄 `nrt`)의 작은 기계 하나다(ADR-0042). 설정은 `fly.toml`, 이미지는 `Dockerfile`에 있다. 처음 한 번 사람이 한다.
+
+```bash
+fly apps create omagari-dogfood            # fly.toml의 app 이름과 맞춘다(이미 쓰인 이름이면 둘 다 바꾼다)
+fly volumes create omagari_data --region nrt --size 1
+fly secrets set GITHUB_CLIENT_ID=<기기 인증을 켠 GitHub 앱>
+fly deploy
+```
+
+- 비밀값은 `fly secrets`로만 넣는다. 레포에는 두지 않는다. `OMAGARI_REPO`와 `OMAGARI_URL`은 비밀이 아니라 `fly.toml`의 `[env]`에 있다.
+- DB는 볼륨(`/data/omagari.db`)에 있어 새 판으로 바꿔도 남는다. 백업은 볼륨의 날마다 스냅샷이다(`fly volumes snapshots list`로 본다. 기본 5일 보관).
+- 건강 확인(`/api/health`)을 통과한 판만 갈아 끼운다. 못 통과하면 옛 판이 남는다.
+- 자동 배포: `.github/workflows/deploy.yml`이 `dev`의 CI가 통과하면 `fly deploy`를 돈다. 레포의 Actions 비밀값에 `FLY_API_TOKEN`(`fly tokens create deploy`)을 넣어야 켜지고, 없으면 배포 단계를 건너뛴다.
+- 이 기기에서 이미지를 확인하려면: `docker build -t omagari .` 뒤 `docker run -p 8080:8080 -v omagari-data:/data -e OMAGARI_REPO=<owner/name> -e GITHUB_CLIENT_ID=<앱> omagari`.
