@@ -63,7 +63,7 @@ import {
   workTree,
 } from "./check.ts";
 import { covers, overlap, resolve, see } from "./claims.ts";
-import { conflicts, newMemo, symbolConflicts } from "./conflicts.ts";
+import { conflicts, newMemo, sameWork, symbolConflicts } from "./conflicts.ts";
 import {
   claudeRecentSession,
   contextless,
@@ -1370,7 +1370,7 @@ export async function startRunner(options: {
       const tree = (branch && folders.get(branch)) || folder;
       const seen = await Promise.all(
         claims
-          .filter((c) => c.login !== me && covers(c, path))
+          .filter((c) => !sameWork(c, me, branch) && covers(c, path))
           .map((c) => see(folder, tree, works, c)),
       );
       const claimed = branch !== undefined && claimedBy(branch, path);
@@ -1378,7 +1378,7 @@ export async function startRunner(options: {
         runnerToCli,
         "nearby",
         {
-          works: await nearby(folder, works, login, path),
+          works: await nearby(folder, works, { login, branch }, path),
           claims: seen,
           claimed,
           disconnectedAt,
@@ -1414,7 +1414,7 @@ export async function startRunner(options: {
     const me = login;
     const others = await Promise.all(
       (situation?.claims ?? [])
-        .filter((c) => c.login !== me)
+        .filter((c) => !sameWork(c, me ?? "", branch))
         .map((c) => see(folder, tree, situation?.works ?? [], c)),
     );
     const overlaps = others.filter((c) => overlap(place, c));
