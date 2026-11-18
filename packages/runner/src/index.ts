@@ -1372,9 +1372,9 @@ export async function startRunner(options: {
         return encode(runnerToCli, "inbox", { login, items, disconnectedAt }, message.id);
       }
       if (message.kind === "impact") {
-        const { symbol } = message.payload;
+        const { symbol, branch } = message.payload;
         const changing = works.flatMap((work) =>
-          work.login === login
+          sameWork(work, login ?? "", branch)
             ? []
             : work.files.flatMap((file) =>
                 ("definitions" in file ? (file.definitions ?? []) : [])
@@ -1390,7 +1390,7 @@ export async function startRunner(options: {
         );
         const found = (await uses(folder, [symbol])).get(symbol) ?? [];
         const plans = claims.filter(
-          (c) => c.login !== login && c.plan && named(c.plan.symbol, symbol),
+          (c) => !sameWork(c, login ?? "", branch) && c.plan && named(c.plan.symbol, symbol),
         );
         const payload = { uses: found, works: changing, plans, disconnectedAt };
         return encode(runnerToCli, "impact", payload, message.id);

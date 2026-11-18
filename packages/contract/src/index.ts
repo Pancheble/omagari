@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 43;
+export const CONTRACT_VERSION = 44;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -1460,7 +1460,11 @@ export const cliToRunner = {
    * 심볼 하나(`omagari impact <심볼>`)를 누가 쓰고 누가 고치는지 묻는다. 메서드는 `클래스.메서드`나 메서드 이름으로 묻는다.
    * 쓰는 곳은 러너의 사본에서 찾고, 고치는 작업은 받아 둔 상황에서 찾는다.
    */
-  impact: z.strictObject({ symbol: z.string().min(1) }),
+  impact: z.strictObject({
+    symbol: z.string().min(1),
+    /** 묻는 작업의 브랜치. 같은 로그인의 같은 브랜치만 빼고, 내 다른 브랜치의 작업은 본다(ADR-0041). */
+    branch: z.string().optional(),
+  }),
   /**
    * 작업(`branch`)의 편지함을 묻는다. 훅과 모든 `omagari` 명령이 부른다. 받아 둔 것으로 바로 답하고, 넘긴 것으로 치지 않는다.
    * 에이전트에게 넘긴 뒤에 `delivered`로 알린다.
