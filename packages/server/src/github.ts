@@ -21,6 +21,8 @@ export type GitHub = {
   user(token: string): Promise<{ login: string; name: string | null }>;
   /** 토큰 주인이 `owner/name`에 push할 수 있나. GitHub이 답하지 못하면 `undefined`다. */
   canPush(token: string, repo: string): Promise<boolean | undefined>;
+  /** 토큰 주인이 `owner/name`의 Admin인가(워크스페이스에 레포를 넣고 뺀다, ADR-0043). GitHub이 답하지 못하면 `undefined`다. */
+  canAdmin(token: string, repo: string): Promise<boolean | undefined>;
   /** `owner/name`에서 `branch`를 head로 하는 PR들(닫힌 것 포함). GitHub이 답하지 못하면 `undefined`다. */
   pulls(token: string, repo: string, branch: string): Promise<Pull[] | undefined>;
   /** 레포의 기본 브랜치 이름과 그 끝 커밋. */
@@ -165,6 +167,15 @@ export function realGitHub(clientId: string): GitHub {
     if (!response.ok) throw new Error(`HTTP ${response.status} ${json?.message ?? ""}`.trim());
     return json;
   };
+  /** 레포에서 토큰 주인의 권한 하나(GitHub이 돌려주는 것에 팀으로 받은 몫이 들어 있다, ADR-0043). */
+  const permission = async (token: string, repo: string, kind: "push" | "admin") => {
+    const response = await get(`/repos/${repo}`, token).catch(() => undefined);
+    // 401은 토큰이 끝났고, 404는 비공개 레포를 볼 수 없다. 403은 요청 한도일 수 있어 모른다고 한다.
+    if (response?.status === 401 || response?.status === 404) return false;
+    if (!response?.ok) return undefined;
+    const found = (await response.json()).permissions?.[kind];
+    return typeof found === "boolean" ? found : undefined;
+  };
 
   return {
     async startDevice() {
@@ -197,14 +208,8 @@ export function realGitHub(clientId: string): GitHub {
       const { login, name } = await response.json();
       return { login, name: name || null };
     },
-    async canPush(token, repo) {
-      const response = await get(`/repos/${repo}`, token).catch(() => undefined);
-      // 401은 토큰이 끝났고, 404는 비공개 레포를 볼 수 없다. 403은 요청 한도일 수 있어 모른다고 한다.
-      if (response?.status === 401 || response?.status === 404) return false;
-      if (!response?.ok) return undefined;
-      const push = (await response.json()).permissions?.push;
-      return typeof push === "boolean" ? push : undefined;
-    },
+    canPush: (token, repo) => permission(token, repo, "push"),
+    canAdmin: (token, repo) => permission(token, repo, "admin"),
     async pulls(token, repo, branch) {
       const head = encodeURIComponent(`${repo.split("/")[0]}:${branch}`);
       const response = await get(

@@ -65,6 +65,7 @@ import {
   type PresenceDuration,
   type Qa,
   type Question,
+  REPO_HEADER,
   type ReplyOf,
   RUNNER_SOCKET,
   RunVerdict,
@@ -82,10 +83,11 @@ import {
   webToServer,
 } from "@omagari/contract";
 import { checkoutVersion } from "@omagari/contract/version";
+import type { Context } from "hono";
 import type { WSContext } from "hono/ws";
 import { type WebSocket, WebSocketServer } from "ws";
 import type { GitHub, RepoLabel } from "./github.ts";
-import { createApp, mount } from "./http.ts";
+import { createApp, type Env, mount } from "./http.ts";
 import { labelsFor } from "./labeler.ts";
 
 export { type GitHub, type Pull, type RepoLabel, realGitHub } from "./github.ts";
@@ -230,7 +232,7 @@ const FORUMS = `(SELECT json_group_array(json_object('id', f.id, 'filter', json(
   FROM channels f WHERE f.filter IS NOT NULL)`;
 /** 포스트(`c`)의 중요도: 라벨 가운데 하나라도 논의면 논의다(ADR-0039). 모르는 라벨은 참고다. */
 const POST_IMPORTANCE = `CASE WHEN EXISTS (SELECT 1 FROM json_each(c.labels) j
-  JOIN labels l ON l.name = j.value AND l.importance = 'discuss') THEN 'discuss' ELSE 'reference' END`;
+  JOIN labels l ON l.repo = c.repo AND l.name = j.value AND l.importance = 'discuss') THEN 'discuss' ELSE 'reference' END`;
 
 const MESSAGES = `SELECT m.id, m.channel, m.login, m.text, m.note, m.at, m.github, p.name,
   c.issue, c.issue_url, c.issue_title, c.issue_labels, c.issue_open, c.labels, ${POST_IMPORTANCE} AS importance,
@@ -238,7 +240,8 @@ const MESSAGES = `SELECT m.id, m.channel, m.login, m.text, m.note, m.at, m.githu
   m.alert, a.kind, a.works, a.files, a.resolved, a.run, a.confirmed,
   c.id AS post, CASE WHEN c.id IS NULL THEN 0 ELSE ${POST_COUNT} END AS count, ${POST_LAST} AS last,
   CASE WHEN c.id IS NULL THEN NULL ELSE ${FORUMS} END AS forums,
-  CASE WHEN d.id IS NULL THEN NULL ELSE ${DECISION} END AS decision FROM messages m
+  CASE WHEN d.id IS NULL THEN NULL ELSE ${DECISION} END AS decision,
+  COALESCE(a.repo, (SELECT ch.repo FROM channels ch WHERE ch.id = m.channel)) AS repo FROM messages m
   LEFT JOIN people p ON p.login = m.login
   LEFT JOIN qas q ON q.id = m.qa
   LEFT JOIN alerts a ON a.id = m.alert
@@ -275,6 +278,8 @@ type MessageRow = {
   decision: string | null;
   last: string | null;
   forums: string | null;
+  /** 레포의 것(알림 줄과 포스트의 글)이면 그 레포. 채팅 채널의 것이면 NULL이다. */
+  repo: string | null;
 } & Pick<QaRow, "executor" | "question" | "answer" | "visibility">;
 
 /**
@@ -401,8 +406,11 @@ const messageView = (row: MessageRow): ChannelMessage => {
 };
 
 export async function startServer(options: {
-  /** 워크스페이스의 레포 `owner/name`. 서버 하나에 워크스페이스 하나, 레포 하나다(ADR-0012). */
-  repo: string;
+  /**
+   * 받을 GitHub 계정 목록(ADR-0043). 이 계정의 레포만 워크스페이스에 넣는다. `owner/name`으로 적은 것은 그 계정을 받고
+   * 그 레포를 켤 때마다 넣는다. 첫 `owner/name`은 레포가 하나이던 판의 레포라, 이미 있는 DB의 것을 그 레포로 옮긴다.
+   */
+  accept: string[];
   github: GitHub;
   /** SQLite 파일. 주지 않으면 메모리에 두고 서버가 꺼지면 잃는다. */
   database?: string;
@@ -432,7 +440,13 @@ export async function startServer(options: {
   /** 빌드한 웹 화면(`vite build`의 dist) 폴더. 주면 API와 같은 주소에서 낸다. 개발할 때는 주지 않고 Vite를 쓴다. */
   webDir?: string;
 }) {
-  const { repo, github } = options;
+  const { github } = options;
+  /** 받을 계정들(소문자). */
+  const accounts = new Set(options.accept.map((entry) => entry.split("/")[0]?.toLowerCase()));
+  /** 서버 설정이 정한 레포들. */
+  const seeds = options.accept.filter((entry) => entry.includes("/"));
+  /** 레포가 하나이던 판의 레포. 이미 있는 DB의 레포 없는 것은 이 레포의 것이다. */
+  const legacy = seeds[0];
   const version = checkoutVersion();
   const hostname = options.hostname ?? "127.0.0.1";
   const db = new DatabaseSync(options.database ?? ":memory:");
@@ -647,16 +661,13 @@ export async function startServer(options: {
     description TEXT NOT NULL DEFAULT '',
     importance TEXT NOT NULL DEFAULT 'reference' CHECK (importance IN ('reference', 'discuss'))
   ) STRICT`);
-  /** 기본 라벨이 목록에 없으면 넣는다. GitHub에 없으면 다음 주기에 만든다. */
-  const seedLabels = () => {
+  /** 레포의 기본 라벨이 목록에 없으면 넣는다. GitHub에 없으면 다음 주기에 만든다. */
+  const seedLabels = (repo: string) => {
     for (const [name, color] of Object.entries(DEFAULT_LABEL_COLORS))
-      db.prepare("INSERT OR IGNORE INTO labels (name, color, importance) VALUES (?, ?, ?)").run(
-        name,
-        color,
-        DISCUSS_LABELS.includes(name) ? "discuss" : "reference",
-      );
+      db.prepare(
+        "INSERT OR IGNORE INTO labels (repo, name, color, importance) VALUES (?, ?, ?, ?)",
+      ).run(repo, name, color, DISCUSS_LABELS.includes(name) ? "discuss" : "reference");
   };
-  seedLabels();
   // 포럼의 거르기(ADR-0039, 계약의 ForumFilter JSON). 포럼에만 있고, 채팅과 포스트와 알림 줄의 자리(`ALERTS`)는 NULL이다.
   // 이 열이 없던 DB: 알림 줄을 모두 `ALERTS`로 옮기고, 있던 포럼은 논의로 거르며 "부딪힘"은 "논의"가 된다(이름이 겹치면 그대로 둔다).
   // 처음 띄운 서버에도 "논의"와 "참고" 포럼이 생긴다. 그 뒤로 지운 포럼은 다시 만들지 않는다.
@@ -835,6 +846,93 @@ export async function startServer(options: {
     verdict TEXT NOT NULL,
     at INTEGER NOT NULL
   ) STRICT`);
+  // 워크스페이스의 레포(ADR-0043). 이름은 GitHub처럼 대소문자를 가리지 않고, 다른 표에는 여기 적힌 꼴 그대로 둔다. `at`은 넣은 시각(ms)이다.
+  db.exec(`CREATE TABLE IF NOT EXISTS repos (
+    name TEXT PRIMARY KEY COLLATE NOCASE,
+    at INTEGER NOT NULL
+  ) STRICT`);
+  // 멤버마다 push 권한이 있는 레포(ADR-0043). 로그인할 때와 `recheckMs`마다 다시 읽는다. 하나라도 있으면 멤버다.
+  const hadAccess = db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'access'").get();
+  db.exec(`CREATE TABLE IF NOT EXISTS access (
+    login TEXT NOT NULL,
+    repo TEXT NOT NULL,
+    PRIMARY KEY (login, repo)
+  ) STRICT`);
+  // 레포마다인 표(ADR-0043). 레포가 하나이던 판의 DB는 `repo` 열이 없다. 그 줄은 옛 레포(`legacy`)의 것으로 옮긴다.
+  // 열쇠가 바뀌는 표는 다시 만들고, 다른 표가 가리키는 표(alerts)와 열쇠가 그대로인 표는 열만 더한다.
+  const hasRepo = (table: string) =>
+    db.prepare(`SELECT 1 FROM pragma_table_info('${table}') WHERE name = 'repo'`).get();
+  const rebuilt: Record<string, string> = {
+    works: `(repo TEXT NOT NULL, login TEXT NOT NULL, branch TEXT NOT NULL, base TEXT NOT NULL,
+      share TEXT NOT NULL, files TEXT NOT NULL, PRIMARY KEY (repo, login, branch)) STRICT`,
+    lines: `(repo TEXT NOT NULL, login TEXT NOT NULL, branch TEXT NOT NULL, text TEXT NOT NULL,
+      at INTEGER NOT NULL, PRIMARY KEY (repo, login, branch)) STRICT`,
+    work_agents: `(repo TEXT NOT NULL, login TEXT NOT NULL, branch TEXT NOT NULL, executor TEXT NOT NULL,
+      PRIMARY KEY (repo, login, branch)) STRICT`,
+    offline: `(repo TEXT NOT NULL, login TEXT NOT NULL, since INTEGER NOT NULL, PRIMARY KEY (repo, login)) STRICT`,
+    labels: `(repo TEXT NOT NULL, name TEXT NOT NULL COLLATE NOCASE, github INTEGER, color TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      importance TEXT NOT NULL DEFAULT 'reference' CHECK (importance IN ('reference', 'discuss')),
+      UNIQUE (repo, name), UNIQUE (repo, github)) STRICT`,
+  };
+  const moved = [
+    ...Object.keys(rebuilt),
+    "claims",
+    "feed",
+    "inbox",
+    "alerts",
+    "questions",
+    "channels",
+  ].filter((table) => !hasRepo(table));
+  if (moved.length > 0) {
+    if (legacy === undefined && db.prepare("SELECT 1 FROM works UNION SELECT 1 FROM alerts").get())
+      console.warn(
+        "레포가 하나이던 판의 DB인데 OMAGARI_REPO에 owner/name이 없어 있던 것이 어느 레포에도 보이지 않는다",
+      );
+    db.exec("BEGIN");
+    for (const table of moved) {
+      const columns = (
+        db.prepare(`SELECT name FROM pragma_table_info('${table}')`).all() as { name: string }[]
+      )
+        .map((column) => column.name)
+        .join(", ");
+      if (rebuilt[table]) {
+        db.exec(`CREATE TABLE ${table}_next ${rebuilt[table]}`);
+        db.prepare(
+          `INSERT INTO ${table}_next (repo, ${columns}) SELECT ?, ${columns} FROM ${table}`,
+        ).run(legacy ?? "");
+        db.exec(`DROP TABLE ${table}; ALTER TABLE ${table}_next RENAME TO ${table}`);
+      } else if (table === "channels") {
+        // 레포의 것은 포스트뿐이다. 채팅 채널과 포럼은 워크스페이스의 것이라 NULL이다(채널의 두 층은 #237).
+        db.exec("ALTER TABLE channels ADD COLUMN repo TEXT");
+        db.prepare("UPDATE channels SET repo = ? WHERE alert IS NOT NULL").run(legacy ?? "");
+      } else {
+        db.exec(`ALTER TABLE ${table} ADD COLUMN repo TEXT NOT NULL DEFAULT ''`);
+        db.prepare(`UPDATE ${table} SET repo = ?`).run(legacy ?? "");
+      }
+    }
+    // 풀리지 않은 알림은 레포의 쌍마다 하나다.
+    db.exec("DROP INDEX IF EXISTS alerts_open");
+    db.exec("CREATE UNIQUE INDEX alerts_open ON alerts (repo, pair) WHERE resolved IS NULL");
+    // 검사 명령은 레포마다다.
+    if (legacy !== undefined)
+      db.prepare("UPDATE settings SET key = ? WHERE key = 'check'").run(`check ${legacy}`);
+    db.exec("COMMIT");
+  }
+  for (const repo of seeds)
+    db.prepare("INSERT OR IGNORE INTO repos (name, at) VALUES (?, ?)").run(repo, Date.now());
+  // 레포가 하나이던 판의 세션은 그 레포에 push 권한이 있는 것으로 들어왔다. 다시 확인할 때까지 그대로 본다.
+  if (!hadAccess && legacy !== undefined)
+    db.prepare("INSERT OR IGNORE INTO access (login, repo) SELECT login, ? FROM sessions").run(
+      (db.prepare("SELECT name FROM repos WHERE name = ?").get(legacy) as { name: string }).name,
+    );
+  /** 워크스페이스의 레포들, 넣은 순서. */
+  const allRepos = () =>
+    (db.prepare("SELECT name FROM repos ORDER BY at, rowid").all() as { name: string }[]).map(
+      (row) => row.name,
+    );
+  for (const repo of allRepos()) seedLabels(repo);
+
   // 서버가 막 떴으니 러너에 보낸 문답의 답은 오지 않는다. 기다리는 채로 남지 않게 실패로 둔다.
   db.prepare("UPDATE qas SET answer = ?, settled = ? WHERE answer IS NULL").run(
     JSON.stringify({
@@ -845,40 +943,71 @@ export async function startServer(options: {
   );
   // 서버가 막 떴으니 아무 러너도 붙어 있지 않다. 이미 떨어져 있던 멤버는 떨어진 시각을 그대로 둔다.
   db.prepare(
-    `INSERT OR IGNORE INTO offline (login, since)
-     SELECT login, ? FROM works UNION SELECT login, ? FROM lines`,
+    `INSERT OR IGNORE INTO offline (repo, login, since)
+     SELECT repo, login, ? FROM works UNION SELECT repo, login, ? FROM lines`,
   ).run(Date.now(), Date.now());
 
   /**
    * 멤버의 작업을 러너가 지금 보는 것으로 바꾼다.
    * 관측된 변경이 있다가 0이 된 작업은 에이전트가 쓴 줄을 지운다. 처음부터 0이던 작업의 줄은 남긴다(ADR-0010).
    */
-  // ponytail: 멤버 하나에 러너 하나로 본다. 한 멤버가 기기 둘에서 러너를 켜면 나중에 보낸 쪽이 덮는다. 그때는 러너마다 나눈다.
-  const replaceWorks = (login: string, works: Work[]) => {
+  // ponytail: 레포마다 멤버 하나에 러너 하나로 본다. 한 멤버가 기기 둘에서 같은 레포의 러너를 켜면 나중에 보낸 쪽이 덮는다. 그때는 러너마다 나눈다.
+  const replaceWorks = (repo: string, login: string, works: Work[]) => {
     db.exec("BEGIN");
     const changed = new Set(
       (
         db
-          .prepare("SELECT branch FROM works WHERE login = ? AND json_array_length(files) > 0")
-          .all(login) as { branch: string }[]
+          .prepare(
+            "SELECT branch FROM works WHERE repo = ? AND login = ? AND json_array_length(files) > 0",
+          )
+          .all(repo, login) as { branch: string }[]
       ).map((row) => row.branch),
     );
-    db.prepare("DELETE FROM works WHERE login = ?").run(login);
+    db.prepare("DELETE FROM works WHERE repo = ? AND login = ?").run(repo, login);
     const insert = db.prepare(
-      "INSERT OR REPLACE INTO works (login, branch, base, share, files) VALUES (?, ?, ?, ?, ?)",
+      "INSERT OR REPLACE INTO works (repo, login, branch, base, share, files) VALUES (?, ?, ?, ?, ?, ?)",
     );
-    const clear = db.prepare("DELETE FROM lines WHERE login = ? AND branch = ?");
+    const clear = db.prepare("DELETE FROM lines WHERE repo = ? AND login = ? AND branch = ?");
     for (const work of works) {
-      insert.run(login, work.branch, work.base, work.share, JSON.stringify(work.files));
+      insert.run(repo, login, work.branch, work.base, work.share, JSON.stringify(work.files));
       // intent의 빈 files는 바뀐 것이 0이 된 것이 아니라 보내지 않은 것이다. 수준을 낮춰도 쓴 줄은 남는다.
       if (work.share !== "intent" && work.files.length === 0 && changed.has(work.branch)) {
-        clear.run(login, work.branch);
+        clear.run(repo, login, work.branch);
       }
     }
     db.exec("COMMIT");
   };
-  /** 브랜치마다 열린 초안 PR의 제목. GitHub에서 `followMs`마다 다시 읽는다. 서버가 꺼지면 잃고 다음 주기에 다시 읽는다. */
+  /** 레포와 브랜치마다 열린 초안 PR의 제목. 열쇠는 `[repo, branch]`의 JSON이다. GitHub에서 `followMs`마다 다시 읽는다. 서버가 꺼지면 잃고 다음 주기에 다시 읽는다. */
   let drafts = new Map<string, string>();
+  /** 레포의 멤버(세션이 있고 그 레포에 push 권한이 있다)를 내는 SQL. 레포를 하나 받는다. */
+  const MEMBERS =
+    "(SELECT login FROM access WHERE repo = ? AND login IN (SELECT login FROM sessions))";
+  /** 멤버에게 보이는 레포들(push 권한이 있는 것), 넣은 순서. */
+  const reposOf = (login: string) =>
+    (
+      db
+        .prepare(
+          "SELECT r.name FROM repos r JOIN access a ON a.repo = r.name WHERE a.login = ? ORDER BY r.at, r.rowid",
+        )
+        .all(login) as { name: string }[]
+    ).map((row) => row.name);
+  const sees = (login: string, repo: string | null | undefined) =>
+    repo != null &&
+    !!db.prepare("SELECT 1 FROM access WHERE login = ? AND repo = ?").get(login, repo);
+  /** 포스트(채널 id)의 레포. 포스트가 아니면 없다. */
+  const postRepo = (post: string) =>
+    (
+      db.prepare("SELECT repo FROM channels WHERE id = ? AND alert IS NOT NULL").get(post) as
+        | { repo: string }
+        | undefined
+    )?.repo;
+  /** 멤버에게 보이는 포스트의 레포. 없거나 보이지 않으면 `not_found`다. */
+  const seenPost = (login: string, post: string) => {
+    const repo = postRepo(post);
+    if (!sees(login, repo))
+      throw new ContractFailure({ code: "not_found", message: `없는 포스트다: ${post}` });
+    return repo as string;
+  };
   const sessionLogin = (session: string) =>
     (
       db.prepare("SELECT login FROM sessions WHERE hash = ?").get(hash(session)) as
@@ -915,16 +1044,30 @@ export async function startServer(options: {
     {
       login: string;
       hash: string;
+      /** 이 러너가 이어진 레포(ADR-0043). */
+      repo: string;
       executors: ExecutorId[];
       choices: Partial<Record<ExecutorId, Choices>>;
       mergeCheck: MergeCheckState;
     }
   >();
-  /** hello를 마친 웹의 실시간 연결과 그 세션의 해시, 멤버. 세션이 끝나면 닫는다. */
-  const watchers = new Map<WSContext, { hash: string; login: string }>();
+  /** hello를 마친 웹의 실시간 연결과 그 세션의 해시, 멤버, 고른 레포. 세션이 끝나면 닫는다. */
+  const watchers = new Map<WSContext, { hash: string; login: string; repo: string }>();
   /** 붙어 있는 웹 모두에 보낸다. 멤버가 아니게 된 세션의 연결은 이미 닫혔다. */
   const broadcast = (frame: string) => {
     for (const socket of watchers.keys()) if (socket.readyState === 1) socket.send(frame); // OPEN
+  };
+  /** 레포(`null`이면 워크스페이스)의 것을 그것이 보이는 웹에만 보낸다. */
+  const broadcastTo = (repo: string | null, frame: string) => {
+    for (const [socket, watcher] of watchers)
+      if (socket.readyState === 1 && (repo === null || sees(watcher.login, repo)))
+        socket.send(frame); // OPEN
+  };
+  /** 채널의 한 줄을 그것이 보이는 웹에 보내고 계약의 꼴로 돌려준다. */
+  const shareRow = (row: MessageRow) => {
+    const message = messageView(row);
+    broadcastTo(row.repo, encode(serverToWeb, "message", message));
+    return message;
   };
   /** `login`의 웹 연결에만 보낸다. 비공개인 DM은 이것으로만 나간다. */
   const sendTo = (login: string, frame: string) => {
@@ -949,9 +1092,7 @@ export async function startServer(options: {
     const row = db.prepare(`${MESSAGES} WHERE m.qa = ?`).get(id) as MessageRow | undefined;
     sendTo(asked.login, encode(serverToWeb, "qa", qa));
     if (!row) return { qa };
-    const message = messageView(row);
-    broadcast(encode(serverToWeb, "message", message));
-    return { qa, message };
+    return { qa, message: shareRow(row) };
   };
   /** 기다리던 문답에 답이나 실패를 적고, 보이는 사람에게 보내고, 답하는 중을 거둔다. */
   const settle = (id: string, answer: Exclude<Qa["answer"], { state: "pending" }>) => {
@@ -984,17 +1125,17 @@ export async function startServer(options: {
     return draft;
   };
 
-  /** 멤버들이 보는 작업 전부. 웹과 러너가 같은 것을 본다. */
-  const worksView = (): WorkView[] => {
-    // 워크스페이스에서 빠진 사람(세션이 없는 사람)의 작업은 보이지 않는다.
+  /** 레포의 멤버들이 보는 그 레포의 작업 전부. 웹과 러너가 같은 것을 본다. */
+  const worksView = (repo: string): WorkView[] => {
+    // 레포에서 빠진 사람(세션이나 push 권한이 없는 사람)의 작업은 보이지 않는다.
     const rows = db
       .prepare(
         `SELECT w.login, w.branch, w.base, w.share, w.files, l.text, l.at, o.since FROM works w
-         LEFT JOIN lines l ON l.login = w.login AND l.branch = w.branch
-         LEFT JOIN offline o ON o.login = w.login
-         WHERE w.login IN (SELECT login FROM sessions) ORDER BY w.login, w.branch`,
+         LEFT JOIN lines l ON l.repo = w.repo AND l.login = w.login AND l.branch = w.branch
+         LEFT JOIN offline o ON o.repo = w.repo AND o.login = w.login
+         WHERE w.repo = ? AND w.login IN ${MEMBERS} ORDER BY w.login, w.branch`,
       )
-      .all() as {
+      .all(repo, repo) as {
       login: string;
       branch: string;
       base: string;
@@ -1006,7 +1147,7 @@ export async function startServer(options: {
     }[];
     return rows.map(({ login, branch, base, share, text, at, since, ...row }) => {
       const files: ObservedFile[] = JSON.parse(row.files);
-      const draft = drafts.get(branch);
+      const draft = drafts.get(JSON.stringify([repo, branch]));
       const changes = filesLine(files);
       // 고르는 순서: 에이전트가 쓴 줄 → 초안 PR 제목 → 고치는 파일 → 없음. 오프라인은 offlineSince로 따로 간다.
       const line: StatusLine | null =
@@ -1026,10 +1167,13 @@ export async function startServer(options: {
    * 멤버 목록(과 그것으로 거르는 `omagari status`)에 보일 작업(ADR-0006). 바뀐 것이 없어 상태 한 줄(에이전트가 쓴 줄, 초안 PR, 바뀐 파일)도
    * 선점도 없는 작업은 숨긴다. `api.works`와 러너의 situation, 부딪힘 계산은 걸러지지 않은 worksView를 그대로 쓴다.
    */
-  const shownWorks = (works: WorkView[]): WorkView[] => {
+  const shownWorks = (repo: string, works: WorkView[]): WorkView[] => {
     const claimed = new Set(
       (
-        db.prepare("SELECT login, branch FROM claims").all() as { login: string; branch: string }[]
+        db.prepare("SELECT login, branch FROM claims WHERE repo = ?").all(repo) as {
+          login: string;
+          branch: string;
+        }[]
       ).map((c) => JSON.stringify([c.login, c.branch])),
     );
     return works.filter(
@@ -1049,6 +1193,7 @@ export async function startServer(options: {
     at: number;
     stale: number | null;
     plan: string | null;
+    repo: string;
   };
   const claimView = (row: ClaimRow): Claim => ({
     id: row.id,
@@ -1062,12 +1207,12 @@ export async function startServer(options: {
     stale: row.stale !== null,
     ...(row.plan !== null && { plan: JSON.parse(row.plan) }),
   });
-  /** 선점 전부. 작업처럼 워크스페이스에서 빠진 사람의 것은 보이지 않는다. */
-  const claimsView = (): Claim[] =>
+  /** 레포의 선점 전부. 작업처럼 레포에서 빠진 사람의 것은 보이지 않는다. */
+  const claimsView = (repo: string): Claim[] =>
     (
       db
-        .prepare("SELECT * FROM claims WHERE login IN (SELECT login FROM sessions) ORDER BY id")
-        .all() as ClaimRow[]
+        .prepare(`SELECT * FROM claims WHERE repo = ? AND login IN ${MEMBERS} ORDER BY id`)
+        .all(repo, repo) as ClaimRow[]
     ).map(claimView);
 
   /** 선점을 푼다. 피드에 남기고 푼 것을 돌려준다. 상황은 부른 쪽이 보낸다. */
@@ -1076,7 +1221,8 @@ export async function startServer(options: {
     const now = Date.now();
     for (const row of rows) {
       db.prepare("DELETE FROM claims WHERE id = ?").run(row.id);
-      db.prepare("INSERT INTO feed (kind, claim, at) VALUES ('released', ?, ?)").run(
+      db.prepare("INSERT INTO feed (repo, kind, claim, at) VALUES (?, 'released', ?, ?)").run(
+        row.repo,
         JSON.stringify(claimView(row)),
         now,
       );
@@ -1091,12 +1237,16 @@ export async function startServer(options: {
    * 그 계획의 열린 선언된 계약 변경 알림을 받은 다른 작업의 편지함에 넣는다. 머지되어 풀린 것은 부르지 않는다.
    */
   // ponytail: 이루었는지는 서버가 받은 관측의 정의 줄로만 본다. intent 작업은 정의 줄을 올리지 않아 늘 취소로 본다.
-  const cancelPlans = (claims: Claim[]) => {
-    const works = worksView();
+  const cancelPlans = (repo: string, claims: Claim[]) => {
+    const works = worksView(repo);
     const open = db
-      .prepare("SELECT works, files FROM alerts WHERE kind = 'declared' AND resolved IS NULL")
-      .all() as { works: string; files: string }[];
-    const put = db.prepare("INSERT INTO inbox (login, branch, news, at) VALUES (?, ?, ?, ?)");
+      .prepare(
+        "SELECT works, files FROM alerts WHERE repo = ? AND kind = 'declared' AND resolved IS NULL",
+      )
+      .all(repo) as { works: string; files: string }[];
+    const put = db.prepare(
+      "INSERT INTO inbox (repo, login, branch, news, at) VALUES (?, ?, ?, ?, ?)",
+    );
     const now = Date.now();
     for (const claim of claims) {
       const { plan } = claim;
@@ -1117,7 +1267,7 @@ export async function startServer(options: {
         const symbols = JSON.parse(row.files) as AlertSymbol[];
         if (!symbols.some((s) => s.name === plan.symbol && usingSide(s) !== side)) continue;
         const to = pair[1 - side] as WorkRef;
-        put.run(to.login, to.branch, JSON.stringify({ kind: "cancelled", claim }), now);
+        put.run(repo, to.login, to.branch, JSON.stringify({ kind: "cancelled", claim }), now);
       }
     }
     shareInbox();
@@ -1128,17 +1278,17 @@ export async function startServer(options: {
    * 접속 상태는 웹 창(실시간 연결)이 하나라도 붙어 있으면 고른 것, 없거나 "오프라인으로 보이기"면 offline이다.
    * 오프라인으로 보이는 사람과 정말 나간 사람은 같은 모양이다. 상태 메시지는 둘 다 그대로 보인다.
    */
-  const membersView = (works: WorkView[]): MemberView[] => {
+  const membersView = (repo: string, works: WorkView[]): MemberView[] => {
     const people = db
       .prepare(
         `SELECT s.login, COALESCE(p.name, s.login) AS name, o.since, f.presence, f.until, f.message, f.emoji
-         FROM (SELECT DISTINCT login FROM sessions) s
+         FROM ${MEMBERS} s
          LEFT JOIN people p ON p.login = s.login
-         LEFT JOIN offline o ON o.login = s.login
+         LEFT JOIN offline o ON o.repo = ? AND o.login = s.login
          LEFT JOIN profiles f ON f.login = s.login
          ORDER BY name, s.login`,
       )
-      .all() as {
+      .all(repo, repo) as {
       login: string;
       name: string;
       since: number | null;
@@ -1174,18 +1324,18 @@ export async function startServer(options: {
       const state = busy ? "answering" : sockets.length > 0 ? "online" : "offline";
       return { executor, state, choices } as const;
     };
-    const byLogin = Map.groupBy(shownWorks(works), (work) => work.login);
+    const byLogin = Map.groupBy(shownWorks(repo, works), (work) => work.login);
     const workAgents = new Map(
       (
-        db.prepare("SELECT login, branch, executor FROM work_agents").all() as {
+        db.prepare("SELECT login, branch, executor FROM work_agents WHERE repo = ?").all(repo) as {
           login: string;
           branch: string;
           executor: ExecutorId;
         }[]
       ).map((row) => [JSON.stringify([row.login, row.branch]), row.executor]),
     );
-    const conflicted = conflictedWorks();
-    const broken = brokenWorks();
+    const conflicted = conflictedWorks(repo);
+    const broken = brokenWorks(repo);
     return people.map(({ login, name, since, ...profile }) => {
       const agents = known
         .filter((agent) => agent.login === login)
@@ -1210,11 +1360,13 @@ export async function startServer(options: {
   };
 
   /** 풀리지 않은 알림 가운데 줄이 부딪히는 것이 확인된 것의 작업들. 열쇠는 `[login, branch]`의 JSON이다. */
-  const conflictedWorks = () => {
+  const conflictedWorks = (repo: string) => {
     const found = new Set<string>();
     const open = db
-      .prepare("SELECT works, files FROM alerts WHERE resolved IS NULL AND kind = 'direct'")
-      .all() as {
+      .prepare(
+        "SELECT works, files FROM alerts WHERE repo = ? AND resolved IS NULL AND kind = 'direct'",
+      )
+      .all(repo) as {
       works: string;
       files: string;
     }[];
@@ -1227,10 +1379,12 @@ export async function startServer(options: {
   };
 
   /** 풀리지 않은 간접 충돌 가운데 합쳐 돌려 보니 깨져 확인된 것의 작업들("합치면 깨짐"). 열쇠는 `[login, branch]`의 JSON이다. */
-  const brokenWorks = () =>
+  const brokenWorks = (repo: string) =>
     new Set(
       (
-        db.prepare("SELECT works FROM alerts WHERE resolved IS NULL AND confirmed = 1").all() as {
+        db
+          .prepare("SELECT works FROM alerts WHERE repo = ? AND resolved IS NULL AND confirmed = 1")
+          .all(repo) as {
           works: string;
         }[]
       ).flatMap((row) =>
@@ -1245,13 +1399,7 @@ export async function startServer(options: {
 
   /** 알림 하나의 채널 줄을 붙어 있는 웹 모두에 보낸다. */
   const shareAlert = (alert: number) =>
-    broadcast(
-      encode(
-        serverToWeb,
-        "message",
-        messageView(db.prepare(`${MESSAGES} WHERE m.alert = ?`).get(alert) as MessageRow),
-      ),
-    );
+    shareRow(db.prepare(`${MESSAGES} WHERE m.alert = ?`).get(alert) as MessageRow);
 
   /** 포스트(채널 id)의 알림 줄을 붙어 있는 웹 모두에 다시 보낸다. 라벨이나 중요도가 바뀌었을 때 부른다. */
   const sharePost = (post: string) =>
@@ -1264,27 +1412,42 @@ export async function startServer(options: {
           .get(post) as { alert: number }
       ).alert,
     );
-  /** 라벨 전부, 이름 순서. */
-  const labelsView = () =>
+  /** 레포의 라벨 전부, 이름 순서. */
+  const labelsView = (repo: string) =>
     db
-      .prepare("SELECT name, color, description, importance FROM labels ORDER BY name")
-      .all() as Label[];
-  const shareLabels = () => broadcast(encode(serverToWeb, "labels", labelsView()));
-  /** 라벨 하나(이름은 대소문자를 가리지 않는다). */
-  const labelRow = (name: string) =>
+      .prepare(
+        "SELECT name, color, description, importance FROM labels WHERE repo = ? ORDER BY name",
+      )
+      .all(repo) as Label[];
+  /** 레포의 라벨을 그 레포를 고른 웹에 보낸다. */
+  const shareLabels = (repo: string) => {
+    const frame = encode(serverToWeb, "labels", labelsView(repo));
+    for (const [socket, watcher] of watchers)
+      if (watcher.repo === repo && socket.readyState === 1) socket.send(frame); // OPEN
+  };
+  /** 레포의 라벨 하나(이름은 대소문자를 가리지 않는다). */
+  const labelRow = (repo: string, name: string) =>
     db
-      .prepare("SELECT rowid AS id, name, github, color, description FROM labels WHERE name = ?")
-      .get(name) as
+      .prepare(
+        "SELECT rowid AS id, name, github, color, description FROM labels WHERE repo = ? AND name = ?",
+      )
+      .get(repo, name) as
       | { id: number; name: string; github: number | null; color: string; description: string }
       | undefined;
   /**
    * 포스트마다 라벨을 고친다. `edit`이 포스트의 라벨과, 이슈가 있으면 마지막으로 읽은 이슈 라벨(`issue_labels`)에 똑같이 적용되고,
    * 이슈가 있는 포스트에서만 고칠지는 `withIssue`로 가린다(주지 않으면 모두). 바뀐 포스트의 id를 돌려준다.
    */
-  const editPostLabels = (edit: (labels: string[]) => string[], withIssue?: boolean) => {
+  const editPostLabels = (
+    repo: string,
+    edit: (labels: string[]) => string[],
+    withIssue?: boolean,
+  ) => {
     const rows = db
-      .prepare("SELECT id, labels, issue_labels, issue FROM channels WHERE alert IS NOT NULL")
-      .all() as {
+      .prepare(
+        "SELECT id, labels, issue_labels, issue FROM channels WHERE alert IS NOT NULL AND repo = ?",
+      )
+      .all(repo) as {
       id: string;
       labels: string | null;
       issue_labels: string | null;
@@ -1307,9 +1470,10 @@ export async function startServer(options: {
     }
     return changed;
   };
-  /** 라벨 이름이 바뀌었다. 포스트와 이슈 라벨에서 이름을 바꾸고 웹에 알린다. */
-  const renameLabel = (from: string, to: string) => {
-    for (const post of editPostLabels((labels) => labels.map((l) => (l === from ? to : l))))
+  /** 레포의 라벨 이름이 바뀌었다. 포스트와 이슈 라벨에서 이름을 바꾸고 웹에 알린다. */
+  // ponytail: 포럼은 워크스페이스의 것이라 한 레포에서 바꾼 이름을 따른다. 포럼이 레포로도 거르게 되면(#237) 그 레포의 포럼만 바꾼다.
+  const renameLabel = (repo: string, from: string, to: string) => {
+    for (const post of editPostLabels(repo, (labels) => labels.map((l) => (l === from ? to : l))))
       sharePost(post);
     // 그 라벨로 거르는 포럼도 새 이름을 따른다.
     for (const row of db
@@ -1357,7 +1521,7 @@ export async function startServer(options: {
    * 그 러너가 붙어 있는데 올리지 않았으면 풀린 것이고, 그 러너가 꺼져 있으면 알 수 없으니 지난 것을 그대로 둔다.
    * 직접 충돌과 중복 구현은 두 쪽 러너 모두, 간접 충돌은 쓰는 쪽 러너만 계산한다. 한 파일을 양쪽 러너가 올렸으면 줄이 확인된 쪽을 쓴다.
    */
-  const reconcile = () => {
+  const reconcile = (repo: string) => {
     const name = (login: string) =>
       (
         db.prepare("SELECT name FROM people WHERE login = ?").get(login) as
@@ -1372,15 +1536,17 @@ export async function startServer(options: {
     const reporting = new Set<string>();
     // 쌍의 두 끝은 서버가 아는 작업(관측이나 선점)이어야 한다. 모르는 작업을 이름 댄 쌍은 버린다.
     const knownWork = db.prepare(
-      "SELECT 1 FROM (SELECT login, branch FROM works UNION SELECT login, branch FROM claims) WHERE login = ? AND branch = ?",
+      `SELECT 1 FROM (SELECT repo, login, branch FROM works UNION SELECT repo, login, branch FROM claims)
+       WHERE repo = ? AND login = ? AND branch = ?`,
     );
     for (const [socket, pairs] of reports) {
-      const login = runners.get(socket)?.login;
-      if (!login) continue;
+      const runner = runners.get(socket);
+      if (runner?.repo !== repo) continue;
+      const { login } = runner;
       reporting.add(login);
       for (const pair of pairs) {
-        if (!knownWork.get(login, pair.branch)) continue;
-        if (!knownWork.get(pair.theirs.login, pair.theirs.branch)) continue;
+        if (!knownWork.get(repo, login, pair.branch)) continue;
+        if (!knownWork.get(repo, pair.theirs.login, pair.theirs.branch)) continue;
         const mine = { login, branch: pair.branch };
         const flip =
           JSON.stringify([mine.login, mine.branch]) >
@@ -1421,13 +1587,23 @@ export async function startServer(options: {
       }
     }
     const open = db
-      .prepare("SELECT id, pair, kind, works, files FROM alerts WHERE resolved IS NULL")
-      .all() as { id: number; pair: string; kind: Alert["kind"]; works: string; files: string }[];
+      .prepare(
+        "SELECT id, pair, kind, works, files FROM alerts WHERE repo = ? AND resolved IS NULL",
+      )
+      .all(repo) as {
+      id: number;
+      pair: string;
+      kind: Alert["kind"];
+      works: string;
+      files: string;
+    }[];
     let changed = false;
     const now = Date.now();
     // 통과로 닫힌 쌍(ADR-0035)은 다시 돌린 판정이 나올 때까지 세우지 않는다. 쓰는 쪽 러너가 붙어 있는데 그 쌍을 올리지 않으면 부딪힘이 풀린 것이라 놓아준다.
     const held = new Set<string>();
-    for (const row of db.prepare("SELECT id, pair, run FROM alerts WHERE held = 1").all() as {
+    for (const row of db
+      .prepare("SELECT id, pair, run FROM alerts WHERE repo = ? AND held = 1")
+      .all(repo) as {
       id: number;
       pair: string;
       run: string;
@@ -1457,7 +1633,7 @@ export async function startServer(options: {
           known.id,
         );
         shareAlert(known.id);
-        deliver(known.id, works, now);
+        deliver(repo, known.id, works, now);
         changed = true;
         continue;
       }
@@ -1484,27 +1660,30 @@ export async function startServer(options: {
           known.id,
         );
         shareAlert(known.id);
-        deliver(known.id, works, now);
+        deliver(repo, known.id, works, now);
         continue;
       }
       db.exec("BEGIN");
       const { lastInsertRowid } = db
-        .prepare("INSERT INTO alerts (pair, kind, works, files, updated) VALUES (?, ?, ?, ?, ?)")
-        .run(key, kind, JSON.stringify(works), json, now);
+        .prepare(
+          "INSERT INTO alerts (repo, pair, kind, works, files, updated) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .run(repo, key, kind, JSON.stringify(works), json, now);
       const message = db
         .prepare("INSERT INTO messages (channel, login, text, alert, at) VALUES (?, '', '', ?, ?)")
         .run(ALERTS, lastInsertRowid, now).lastInsertRowid;
       // 알림 하나가 포스트 하나다(ADR-0027). 포스트의 이름은 사람이 지을 수 없는 이름(줄바꿈으로 시작)이다.
       const post = randomBytes(8).toString("hex");
-      db.prepare("INSERT INTO channels (id, name, alert, labels) VALUES (?, ?, ?, ?)").run(
+      db.prepare("INSERT INTO channels (id, name, alert, labels, repo) VALUES (?, ?, ?, ?, ?)").run(
         post,
         `\n${post}`,
         message,
         JSON.stringify([ALERT_LABELS[kind]]),
+        repo,
       );
       db.exec("COMMIT");
       shareAlert(Number(lastInsertRowid));
-      deliver(Number(lastInsertRowid), works, now);
+      deliver(repo, Number(lastInsertRowid), works, now);
       void attachTeamLabels(post).finally(() => syncSoon(post)); // 팀 라벨을 단 뒤 포스트의 이슈를 연다(ADR-0032)
       openDebate(post); // 계약 변경이면 토론이 열린다(ADR-0040)
     }
@@ -1521,6 +1700,7 @@ export async function startServer(options: {
    * - 열린 알림도 붙든 쌍도 없으면 버린다. 확인됨은 다음 판정이 날 때까지 남는다(돌려 보는 중이나 지난 결과로는 바뀌지 않는다).
    */
   const attachRun = (
+    repo: string,
     login: string,
     { branch, theirs, run }: Extract<Message<typeof runnerToServer>, { kind: "merged" }>["payload"],
   ) => {
@@ -1544,16 +1724,16 @@ export async function startServer(options: {
     const openRow = () =>
       db
         .prepare(
-          "SELECT id, works, files, run, confirmed FROM alerts WHERE pair = ? AND resolved IS NULL",
+          "SELECT id, works, files, run, confirmed FROM alerts WHERE repo = ? AND pair = ? AND resolved IS NULL",
         )
-        .get(key) as Row | undefined;
+        .get(repo, key) as Row | undefined;
     let row = openRow();
     if (row && !computes(row)) return;
     const now = Date.now();
     if (!row) {
-      const held = db.prepare("SELECT id, run FROM alerts WHERE pair = ? AND held = 1").get(key) as
-        | { id: number; run: string }
-        | undefined;
+      const held = db
+        .prepare("SELECT id, run FROM alerts WHERE repo = ? AND pair = ? AND held = 1")
+        .get(repo, key) as { id: number; run: string } | undefined;
       if (
         !held ||
         !finished ||
@@ -1568,11 +1748,11 @@ export async function startServer(options: {
           held.id,
         );
         shareAlert(held.id);
-        shareRuns(login);
+        shareRuns(repo, login);
         return;
       }
       db.prepare("UPDATE alerts SET held = 0 WHERE id = ?").run(held.id);
-      reconcile(); // 그 쌍을 아직 올리고 있으면 새 알림이 선다
+      reconcile(repo); // 그 쌍을 아직 올리고 있으면 새 알림이 선다
       row = openRow();
       if (!row || !computes(row)) return;
     }
@@ -1582,7 +1762,7 @@ export async function startServer(options: {
     const confirmed = finished
       ? Number(run.verdict === "broken" && run.omitted.length === 0)
       : row.confirmed;
-    if (closes) db.prepare("UPDATE alerts SET held = 0 WHERE pair = ?").run(key);
+    if (closes) db.prepare("UPDATE alerts SET held = 0 WHERE repo = ? AND pair = ?").run(repo, key);
     db.prepare(
       "UPDATE alerts SET run = ?, confirmed = ?, resolved = ?, held = ?, updated = ? WHERE id = ?",
     ).run(
@@ -1613,37 +1793,45 @@ export async function startServer(options: {
     }
     shareAlert(row.id);
     if (!finished) return;
-    deliver(row.id, JSON.parse(row.works), now);
+    deliver(repo, row.id, JSON.parse(row.works), now);
     shareInbox();
-    shareRuns(login);
+    shareRuns(repo, login);
     if (closes || confirmed !== row.confirmed) shareMembers(); // 멤버 목록의 "합치면 깨짐"
   };
 
-  /** 이 멤버의 러너들에 서버에 붙은 그 멤버의 판정들을 보낸다(`runs`). 같은 지문은 다시 돌리지 않게 한다. `to`를 주면 그 연결에만. */
-  const shareRuns = (login: string, to?: WSContext) => {
+  /** 이 멤버의 그 레포 러너들에 서버에 붙은 그 멤버의 판정들을 보낸다(`runs`). 같은 지문은 다시 돌리지 않게 한다. `to`를 주면 그 연결에만. */
+  const shareRuns = (repo: string, login: string, to?: WSContext) => {
     const runs = (
       db
-        .prepare("SELECT run FROM alerts WHERE run IS NOT NULL AND (resolved IS NULL OR held = 1)")
-        .all() as { run: string }[]
+        .prepare(
+          "SELECT run FROM alerts WHERE repo = ? AND run IS NOT NULL AND (resolved IS NULL OR held = 1)",
+        )
+        .all(repo) as { run: string }[]
     ).flatMap((row) => {
       const { login: by, at: _, ...run } = JSON.parse(row.run) as AlertRun;
       return by === login && run.verdict !== "running" && !run.stale ? [run] : [];
     });
     const frame = encode(serverToRunner, "runs", { runs });
     for (const [socket, runner] of runners)
-      if (runner.login === login && (!to || socket === to) && socket.readyState === 1)
+      if (
+        runner.repo === repo &&
+        runner.login === login &&
+        (!to || socket === to) &&
+        socket.readyState === 1
+      )
         socket.send(frame);
   };
 
   /** 알림이 생기거나 바뀌거나 풀렸다. 두 작업의 편지함에 넣는다. 아직 넘겨주지 않은 같은 알림의 소식은 새 것으로 바꾼다. */
-  const deliver = (alert: number, works: WorkRef[], now: number) => {
+  const deliver = (repo: string, alert: number, works: WorkRef[], now: number) => {
     for (const { login, branch } of works) {
       db.prepare("DELETE FROM inbox WHERE login = ? AND branch = ? AND alert = ?").run(
         login,
         branch,
         alert,
       );
-      db.prepare("INSERT INTO inbox (login, branch, alert, at) VALUES (?, ?, ?, ?)").run(
+      db.prepare("INSERT INTO inbox (repo, login, branch, alert, at) VALUES (?, ?, ?, ?, ?)").run(
+        repo,
         login,
         branch,
         alert,
@@ -1653,15 +1841,15 @@ export async function startServer(options: {
   };
 
   const inboxMs = options.inboxMs ?? INBOX_MS;
-  /** 멤버의 편지함 전부: 만료되지 않은 것을 들어온 순서로. */
-  const inboxOf = (login: string): InboxItem[] =>
+  /** 멤버의 그 레포 편지함 전부: 만료되지 않은 것을 들어온 순서로. */
+  const inboxOf = (repo: string, login: string): InboxItem[] =>
     (
       db
         .prepare(
           `SELECT i.id, i.branch, i.at, i.news, a.kind, a.works, a.files, a.resolved, a.run, a.confirmed FROM inbox i
-           LEFT JOIN alerts a ON a.id = i.alert WHERE i.login = ? AND i.at > ? ORDER BY i.id`,
+           LEFT JOIN alerts a ON a.id = i.alert WHERE i.repo = ? AND i.login = ? AND i.at > ? ORDER BY i.id`,
         )
-        .all(login, Date.now() - inboxMs) as {
+        .all(repo, login, Date.now() - inboxMs) as {
         id: number;
         branch: string;
         at: number;
@@ -1686,9 +1874,11 @@ export async function startServer(options: {
     only?: number[],
   ) => {
     const now = Date.now();
+    const repo = debateRepo(debate);
     for (const seat of seatsOf(debate)) {
       if (only && !only.includes(seat.seat)) continue;
-      db.prepare("INSERT INTO inbox (login, branch, news, at) VALUES (?, ?, ?, ?)").run(
+      db.prepare("INSERT INTO inbox (repo, login, branch, news, at) VALUES (?, ?, ?, ?, ?)").run(
+        repo,
         seat.login,
         seat.branch,
         JSON.stringify(news),
@@ -1701,9 +1891,9 @@ export async function startServer(options: {
   const sentInbox = new Map<WSContext, string>();
   /** 편지함이 달라진 러너에 그 멤버의 편지함을 보낸다. `to`(막 붙은 러너)에는 같아도 보낸다. */
   const shareInbox = (to?: WSContext) => {
-    for (const [socket, { login }] of runners) {
+    for (const [socket, { login, repo }] of runners) {
       if (socket.readyState !== 1) continue; // OPEN
-      const items = inboxOf(login);
+      const items = inboxOf(repo, login);
       const json = JSON.stringify(items);
       if (socket !== to && sentInbox.get(socket) === json) continue;
       sentInbox.set(socket, json);
@@ -1719,6 +1909,7 @@ export async function startServer(options: {
     executor: ExecutorId | null;
     text: string;
     at: number;
+    repo: string;
   };
   const questionView = (row: QuestionRow): Question => ({
     id: row.id,
@@ -1745,7 +1936,8 @@ export async function startServer(options: {
       question.executor,
       id,
     );
-    db.prepare("INSERT INTO inbox (login, branch, news, at) VALUES (?, ?, ?, ?)").run(
+    db.prepare("INSERT INTO inbox (repo, login, branch, news, at) VALUES (?, ?, ?, ?, ?)").run(
+      row.repo,
       row.login,
       row.branch,
       JSON.stringify({ kind: "answer", question, answer }),
@@ -1754,13 +1946,14 @@ export async function startServer(options: {
     shareInbox();
   };
   /**
-   * 멤버의 이 연결이 그 실행기(고르지 않았으면 첫째 실행기)로 답할 수 있으면 그 실행기.
+   * 멤버의 그 레포 러너 가운데 마지막에 붙은 것이 그 실행기(고르지 않았으면 첫째 실행기)로 답할 수 있으면 그 연결과 실행기.
    * 실행기를 하나도 알리지 않은 러너는 답할 수 없는 것으로 친다(자리를 비운 것과 같다).
    */
-  const answererOf = (target: string, executor: ExecutorId | null) => {
+  const answererOf = (target: string, executor: ExecutorId | null, repo: string) => {
     const found = [...runners].findLast(
       ([, runner]) =>
         runner.login === target &&
+        runner.repo === repo &&
         runner.executors.length > 0 &&
         (executor === null || runner.executors.includes(executor)),
     );
@@ -1786,7 +1979,7 @@ export async function startServer(options: {
         });
         continue;
       }
-      const answerer = answererOf(target, row.executor);
+      const answerer = answererOf(target, row.executor, row.repo);
       if (!answerer) continue;
       const frame = encode(serverToRunner, "question", {
         id: row.id,
@@ -1836,6 +2029,13 @@ export async function startServer(options: {
   };
   const seatsOf = (debate: number) =>
     db.prepare("SELECT * FROM seats WHERE debate = ? ORDER BY seat").all(debate) as SeatRow[];
+  /** 토론의 레포: 그 포스트의 레포다. */
+  const debateRepo = (debate: number) =>
+    (
+      db
+        .prepare("SELECT c.repo FROM debates d JOIN channels c ON c.id = d.post WHERE d.id = ?")
+        .get(debate) as { repo: string }
+    ).repo;
   /** 안이 되는 자리: 입장을 하나라도 낸 자리, 섞어 둔 순서(`flip`)대로. 첫 라운드의 입장이 공개된 뒤로 바뀌지 않는다. */
   const optionSeats = (row: DebateRow, seats: SeatRow[]) =>
     (row.flip ? [...seats].reverse() : seats).filter((seat) => stancesOf(seat).length > 0);
@@ -1869,7 +2069,9 @@ export async function startServer(options: {
         ...(seat.proxy !== null && { proxy: { login: seat.proxy, name: nameOf(seat.proxy) } }),
         ...(row.state === "open" &&
           seat.state === "waiting" &&
-          !answererOf(seat.proxy ?? seat.login, null) && { away: true as const }),
+          !answererOf(seat.proxy ?? seat.login, null, postRepo(post) ?? "") && {
+            away: true as const,
+          }),
       })) as [DebateSeat, DebateSeat],
       options: options.map((seat) => ({
         stances: stancesOf(seat).slice(0, shown),
@@ -1981,7 +2183,7 @@ export async function startServer(options: {
       );
       // 부재자의 러너가 붙어 있으면 진짜 에이전트가 이 라운드부터 대행의 자리를 이어받는다(문답 A18).
       for (const seat of going)
-        if (seat.proxy !== null && answererOf(seat.login, null)) {
+        if (seat.proxy !== null && answererOf(seat.login, null, debateRepo(debate))) {
           db.prepare("UPDATE seats SET proxy = NULL WHERE debate = ? AND seat = ?").run(
             debate,
             seat.seat,
@@ -2045,11 +2247,12 @@ export async function startServer(options: {
   const dispatchDebates = (login: string) => {
     const rows = db
       .prepare(
-        `SELECT s.*, d.post, d.round FROM seats s JOIN debates d ON d.id = s.debate
+        `SELECT s.*, d.post, d.round, c.repo FROM seats s JOIN debates d ON d.id = s.debate
+         JOIN channels c ON c.id = d.post
          WHERE COALESCE(s.proxy, s.login) = ? AND s.state = 'waiting' AND d.state = 'open'
          ORDER BY s.debate, s.seat`,
       )
-      .all(login) as (SeatRow & { post: string; round: number })[];
+      .all(login) as (SeatRow & { post: string; round: number; repo: string })[];
     const sent = new Set([...debatesSent.values()].map((d) => `${d.debate} ${d.seat}`));
     const off = new Set<number>();
     for (const row of rows) {
@@ -2063,7 +2266,7 @@ export async function startServer(options: {
         off.add(row.debate);
         continue;
       }
-      const answerer = answererOf(login, null);
+      const answerer = answererOf(login, null, row.repo);
       if (!answerer) continue;
       const other = seatsOf(row.debate).find((seat) => seat.seat !== row.seat);
       const mine = stancesOf(row)[row.round - 2];
@@ -2089,7 +2292,9 @@ export async function startServer(options: {
         ...(row.proxy !== null && {
           proxy: {
             for: { login: row.login, name: nameOf(row.login) },
-            work: worksView().find((w) => w.login === row.login && w.branch === row.branch) ?? null,
+            work:
+              worksView(row.repo).find((w) => w.login === row.login && w.branch === row.branch) ??
+              null,
           },
         }),
       });
@@ -2112,21 +2317,29 @@ export async function startServer(options: {
         | undefined
     )?.name ?? login;
 
-  /** 웹에 마지막으로 보낸 멤버 목록. 같은 것을 다시 보내지 않는다. */
-  let sentMembers: string | undefined;
+  /** 레포마다 웹에 마지막으로 보낸 멤버 목록. 같은 것을 다시 보내지 않는다. */
+  const sentMembers = new Map<string, string>();
   /**
-   * 멤버 목록이 달라졌으면 붙어 있는 웹 모두에게 보낸다. 그대로면 `to`(막 붙은 웹)에게만 보낸다.
+   * 레포마다 멤버 목록이 달라졌으면 그 레포를 고른 웹 모두에게 보낸다. 그대로면 `to`(막 붙은 웹)에게만 보낸다.
    * 상황이 바뀌는 곳은 `shareSituation`이 부르고, 에이전트만 바뀌는 곳(문답의 시작과 끝)은 따로 부른다.
+   * `works`는 레포마다 이미 읽은 작업이다.
    */
-  // ponytail: 달라질 때마다 목록 전부를 보낸다. 멤버와 작업이 많아지면 사람마다의 차이만 보낸다.
-  const shareMembers = (to?: WSContext, works = worksView()) => {
-    const members = membersView(works);
-    const json = JSON.stringify(members);
-    const changed = json !== sentMembers;
-    sentMembers = json;
-    const frame = encode(serverToWeb, "members", { members });
-    if (changed) broadcast(frame);
-    else if (to?.readyState === 1) to.send(frame); // OPEN
+  // ponytail: 달라질 때마다 레포마다 목록 전부를 보낸다. 멤버와 작업이 많아지면 사람마다의 차이만 보낸다.
+  const shareMembers = (to?: WSContext, works = new Map<string, WorkView[]>()) => {
+    for (const repo of allRepos()) {
+      const members = membersView(repo, works.get(repo) ?? worksView(repo));
+      const json = JSON.stringify(members);
+      const changed = json !== sentMembers.get(repo);
+      sentMembers.set(repo, json);
+      const frame = encode(serverToWeb, "members", { members });
+      for (const [socket, watcher] of watchers)
+        if (
+          watcher.repo === repo &&
+          socket.readyState === 1 && // OPEN
+          (changed || socket === to)
+        )
+          socket.send(frame);
+    }
     shareDebates(); // 러너가 붙거나 떨어지면 기다리는 자리의 `away`가 바뀐다
   };
 
@@ -2143,7 +2356,7 @@ export async function startServer(options: {
       const json = JSON.stringify(payload);
       if (sentDebates.get(post) === json) continue;
       sentDebates.set(post, json);
-      broadcast(encode(serverToWeb, "debate", payload));
+      broadcastTo(postRepo(post) ?? "", encode(serverToWeb, "debate", payload));
     }
   };
 
@@ -2174,8 +2387,8 @@ export async function startServer(options: {
     expireAt(login, until);
   }
 
-  /** 러너에 마지막으로 보낸 상황. 같은 것을 다시 보내지 않는다. */
-  let sent: string | undefined;
+  /** 레포마다 러너에 마지막으로 보낸 상황. 같은 것을 다시 보내지 않는다. */
+  const sent = new Map<string, string>();
   /**
    * 상황(작업 전부)이 달라졌으면 붙어 있는 러너 모두에게 보낸다. 그대로면 `to`(막 붙은 러너)에게만 보낸다.
    * 상황을 바꾸는 곳(관측, 상태 한 줄, 오프라인, 멤버 자격, GitHub 따라가기)마다 부른다.
@@ -2183,17 +2396,22 @@ export async function startServer(options: {
    */
   // ponytail: 달라질 때마다 작업 전부(내용 포함)를 러너마다 보낸다. 멤버와 큰 작업이 많아지면 작업마다의 차이만 보낸다.
   const shareSituation = (to?: WSContext) => {
-    const works = worksView();
-    const claims = claimsView();
-    shareMembers(undefined, works); // 멤버 목록은 상황에서 나온다
-    const json = JSON.stringify([works, claims]);
-    const targets = (json !== sent ? [...runners.keys()] : to ? [to] : []).filter(
-      (socket) => socket.readyState === 1, // OPEN
-    );
-    sent = json;
-    if (targets.length === 0) return;
-    const frame = encode(serverToRunner, "situation", { works, claims });
-    for (const socket of targets) socket.send(frame);
+    const all = new Map(allRepos().map((repo) => [repo, worksView(repo)]));
+    shareMembers(undefined, all); // 멤버 목록은 상황에서 나온다
+    for (const [repo, works] of all) {
+      const claims = claimsView(repo);
+      const json = JSON.stringify([works, claims]);
+      const changed = json !== sent.get(repo);
+      sent.set(repo, json);
+      const frame = encode(serverToRunner, "situation", { works, claims });
+      for (const [socket, runner] of runners)
+        if (
+          runner.repo === repo &&
+          socket.readyState === 1 && // OPEN
+          (changed || socket === to)
+        )
+          socket.send(frame);
+    }
   };
 
   /** `error`를 보내고 1008로 닫는다. 러너와 웹의 `error`는 같은 형식이다. */
@@ -2220,6 +2438,47 @@ export async function startServer(options: {
   });
 
   mount(app, api.health, () => ({ contract: CONTRACT_VERSION }));
+
+  /**
+   * 멤버가 워크스페이스의 레포마다 push 권한이 있는지 `token`으로 읽어 적는다(ADR-0043). GitHub이 답하지 못한 레포는 지난 것을 둔다.
+   * `push`는 권한이 있는 레포, `unknown`은 답하지 못한 레포다.
+   */
+  const readAccess = async (login: string, token: string) => {
+    const push: string[] = [];
+    const unknown: string[] = [];
+    for (const repo of allRepos()) {
+      const can = await github.canPush(token, repo);
+      if (stopped) break;
+      if (can === undefined) unknown.push(repo);
+      else if (can) {
+        push.push(repo);
+        db.prepare("INSERT OR IGNORE INTO access (login, repo) VALUES (?, ?)").run(login, repo);
+      } else db.prepare("DELETE FROM access WHERE login = ? AND repo = ?").run(login, repo);
+    }
+    return { push, unknown };
+  };
+
+  /**
+   * 레포마다인 API를 부른 레포(ADR-0043): `REPO_HEADER`에 실린 것 가운데 부른 사람에게 보이는 첫 레포,
+   * 머리말이 없으면 보이는 첫 레포다. 없으면 `not_found`다.
+   */
+  const repoOf = (c: Context<Env>) => {
+    const mine = reposOf(c.get("login") as string);
+    const wanted = (c.req.header(REPO_HEADER) ?? "")
+      .split(",")
+      .map((repo) => repo.trim().toLowerCase())
+      .filter(Boolean);
+    const found =
+      wanted.length === 0
+        ? mine[0]
+        : wanted.map((w) => mine.find((repo) => repo.toLowerCase() === w)).find(Boolean);
+    if (!found)
+      throw new ContractFailure({
+        code: "not_found",
+        message: `보이는 레포가 없다${wanted.length > 0 ? `: ${wanted.join(", ")}` : ""}`,
+      });
+    return found;
+  };
 
   mount(app, api.login, async (_, c) => {
     const now = Date.now();
@@ -2290,17 +2549,17 @@ export async function startServer(options: {
       throw new ContractFailure({ code: "unauthorized", message: polled.error });
 
     const { login, name } = await github.user(polled.token);
-    const push = await github.canPush(polled.token, repo);
-    if (push === undefined) {
+    const access = await readAccess(login, polled.token);
+    if (access.unknown.length > 0 && access.push.length === 0) {
       throw new ContractFailure({
         code: "internal",
-        message: `GitHub에서 ${repo}의 push 권한을 확인하지 못했다. 잠시 뒤 다시 하라`,
+        message: `GitHub에서 ${access.unknown.join(", ")}의 push 권한을 확인하지 못했다. 잠시 뒤 다시 하라`,
       });
     }
-    if (!push) {
+    if (access.push.length === 0) {
       throw new ContractFailure({
         code: "forbidden",
-        message: `${login}는 ${repo}에 push 권한이 없어 이 워크스페이스에 들어올 수 없다`,
+        message: `${login}는 ${allRepos().join(", ") || "워크스페이스의 어느 레포"}에 push 권한이 없어 이 워크스페이스에 들어올 수 없다`,
       });
     }
     const session = randomBytes(32).toString("hex");
@@ -2322,7 +2581,68 @@ export async function startServer(options: {
     const person = db.prepare("SELECT name FROM people WHERE login = ?").get(login) as
       | { name: string }
       | undefined;
-    return { login, name: person?.name ?? login, repo };
+    const repos = reposOf(login);
+    return { login, name: person?.name ?? login, repo: repos[0] ?? "", repos };
+  });
+
+  /** 넣고 빼는 레포. 그 레포의 GitHub Admin이 아니면 `forbidden`이다. */
+  const mustAdmin = async (login: string, token: string, repo: string) => {
+    const admin = await github.canAdmin(token, repo);
+    if (admin === undefined)
+      throw new ContractFailure({
+        code: "github_failed",
+        message: `GitHub에서 ${repo}의 Admin인지 확인하지 못했다. 잠시 뒤 다시 하라`,
+      });
+    if (!admin)
+      throw new ContractFailure({
+        code: "forbidden",
+        message: `${login}는 ${repo}의 Admin이 아니라 레포를 넣거나 뺄 수 없다`,
+      });
+  };
+
+  mount(app, api.addRepo, async ({ repo }, c) => {
+    const login = c.get("login") as string;
+    if (!accounts.has(repo.split("/")[0]?.toLowerCase() ?? ""))
+      throw new ContractFailure({
+        code: "forbidden",
+        message: `${repo.split("/")[0]}는 이 서버가 받는 GitHub 계정이 아니다`,
+      });
+    await mustAdmin(login, callerToken(c), repo);
+    db.prepare("INSERT OR IGNORE INTO repos (name, at) VALUES (?, ?)").run(repo, Date.now());
+    const name = (db.prepare("SELECT name FROM repos WHERE name = ?").get(repo) as { name: string })
+      .name;
+    seedLabels(name);
+    // push 권한은 다음 확인을 기다리지 않고 지금 들어온 멤버마다 읽는다.
+    await Promise.all(
+      (
+        db
+          .prepare("SELECT login, MAX(github_token) AS token FROM sessions GROUP BY login")
+          .all() as {
+          login: string;
+          token: string;
+        }[]
+      ).map(({ login, token }) => readAccess(login, token)),
+    );
+    shareSituation();
+    syncSoon();
+    return { repos: reposOf(login) };
+  });
+
+  mount(app, api.removeRepo, async ({ repo }, c) => {
+    const login = c.get("login") as string;
+    const found = db.prepare("SELECT name FROM repos WHERE name = ?").get(repo) as
+      | { name: string }
+      | undefined;
+    if (!found) throw new ContractFailure({ code: "not_found", message: `없는 레포다: ${repo}` });
+    await mustAdmin(login, callerToken(c), found.name);
+    // 그 레포의 것은 지우지 않는다. 다시 넣으면 돌아온다.
+    db.prepare("DELETE FROM repos WHERE name = ?").run(found.name);
+    db.prepare("DELETE FROM access WHERE repo = ?").run(found.name);
+    for (const [socket, runner] of runners)
+      if (runner.repo === found.name)
+        refuse(socket, { code: "forbidden", message: `${found.name}가 워크스페이스에서 빠졌다` });
+    shareSituation();
+    return { repos: reposOf(login) };
   });
 
   mount(app, api.logout, (_, c) => {
@@ -2334,25 +2654,28 @@ export async function startServer(options: {
   });
 
   /** 작업의 에이전트를 바꾼다(ADR-0015). 마지막에 보낸 실행기가 이긴다. */
-  const setWorkAgent = (login: string, branch: string, executor: ExecutorId) =>
+  const setWorkAgent = (repo: string, login: string, branch: string, executor: ExecutorId) =>
     db
-      .prepare("INSERT OR REPLACE INTO work_agents (login, branch, executor) VALUES (?, ?, ?)")
-      .run(login, branch, executor);
+      .prepare(
+        "INSERT OR REPLACE INTO work_agents (repo, login, branch, executor) VALUES (?, ?, ?, ?)",
+      )
+      .run(repo, login, branch, executor);
 
-  mount(app, api.members, () => ({ members: membersView(worksView()) }));
+  mount(app, api.members, (_, c) => {
+    const repo = repoOf(c);
+    return { members: membersView(repo, worksView(repo)) };
+  });
 
-  mount(app, api.works, () => ({ works: worksView() }));
+  mount(app, api.works, (_, c) => ({ works: worksView(repoOf(c)) }));
 
   mount(app, api.setStatus, ({ branch, executor, text }, c) => {
     const at = Date.now();
     const login = c.get("login") as string;
-    db.prepare("INSERT OR REPLACE INTO lines (login, branch, text, at) VALUES (?, ?, ?, ?)").run(
-      login,
-      branch,
-      text,
-      at,
-    );
-    if (executor) setWorkAgent(login, branch, executor);
+    const repo = repoOf(c);
+    db.prepare(
+      "INSERT OR REPLACE INTO lines (repo, login, branch, text, at) VALUES (?, ?, ?, ?, ?)",
+    ).run(repo, login, branch, text, at);
+    if (executor) setWorkAgent(repo, login, branch, executor);
     shareSituation();
     return { text, at: new Date(at).toISOString() };
   });
@@ -2388,6 +2711,7 @@ export async function startServer(options: {
 
   mount(app, api.settings, (_, c) => {
     const login = c.get("login") as string;
+    const repo = repoOf(c);
     // 답한 것만 센다. 남겨 두고 아직 답하지 않았거나 답하지 못한 질문은 세지 않는다.
     const answered = db
       .prepare(
@@ -2414,13 +2738,13 @@ export async function startServer(options: {
           : null,
       },
       mergeCheck: {
-        // ponytail: 멤버 하나에 러너 하나로 본다(hello와 같다). 마지막에 붙은 러너의 것이다.
+        // ponytail: 레포마다 멤버 하나에 러너 하나로 본다(hello와 같다). 마지막에 붙은 러너의 것이다.
         runner:
-          [...runners.values()].findLast((r) => r.login === login)?.mergeCheck ??
+          [...runners.values()].findLast((r) => r.login === login && r.repo === repo)?.mergeCheck ??
           ("offline" as const),
         check: JSON.parse(
           (
-            db.prepare("SELECT value FROM settings WHERE key = 'check'").get() as
+            db.prepare("SELECT value FROM settings WHERE key = ?").get(`check ${repo}`) as
               | { value: string }
               | undefined
           )?.value ?? "null",
@@ -2441,16 +2765,19 @@ export async function startServer(options: {
 
   /**
    * `agent`의 `executor`를 돌리는 러너의 연결. 같은 멤버의 러너가 여럿이면 마지막에 붙은 것이 답한다.
-   * 꺼져 있으면 쌓아 두지 않고 `runner_offline`이다.
+   * 레포의 것(포스트)이면 그 레포의 러너만 답한다(ADR-0043). 꺼져 있으면 쌓아 두지 않고 `runner_offline`이다.
    */
-  const runnerOf = (agent: string, executor: ExecutorId) => {
+  const runnerOf = (agent: string, executor: ExecutorId, repo?: string) => {
     const found = [...runners].findLast(
-      ([, runner]) => runner.login === agent && runner.executors.includes(executor),
+      ([, runner]) =>
+        runner.login === agent &&
+        runner.executors.includes(executor) &&
+        (repo === undefined || runner.repo === repo),
     );
     if (!found) {
       throw new ContractFailure({
         code: "runner_offline",
-        message: `${agent}의 ${EXECUTOR_NAMES[executor]} 러너가 꺼져 있다. 요청은 쌓아 두지 않는다`,
+        message: `${agent}의 ${repo ? `${repo} ` : ""}${EXECUTOR_NAMES[executor]} 러너가 꺼져 있다. 요청은 쌓아 두지 않는다`,
       });
     }
     return found[0];
@@ -2474,9 +2801,9 @@ export async function startServer(options: {
 
   mount(app, api.ask, ({ agent, executor, channel, message, visibility, model, effort }, c) => {
     mustOwn(agent, c.get("login") as string);
-    mustWrite(channel);
+    mustWrite(channel, c);
     visit(agent);
-    const socket = runnerOf(agent, executor);
+    const socket = runnerOf(agent, executor, postRepo(channel));
     // 채널 대화는 이 문답이 채널에 서기 전에 읽는다. `@호출`의 질문이 데이터로 한 번 더 들어가지 않는다.
     // ponytail: 첫 턴 뒤에 알림이 고쳐져도 그 채널 세션에는 다시 넘기지 않는다. 고친 알림이 필요해지면 러너가 알림만 따로 다시 넘긴다.
     const recent = recentOf(channel);
@@ -2514,10 +2841,9 @@ export async function startServer(options: {
 
   mount(app, api.draftDecision, ({ agent, executor, post, model, effort }, c) => {
     mustOwn(agent, c.get("login") as string);
-    if (!postAlert(post))
-      throw new ContractFailure({ code: "not_found", message: `없는 포스트다: ${post}` });
+    const repo = seenPost(agent, post);
     visit(agent);
-    const socket = runnerOf(agent, executor);
+    const socket = runnerOf(agent, executor, repo);
     const messages = recentOf(post);
     // 토론의 결론이 났으면 그 안을 초안의 근거로 싣는다(ADR-0040)
     const debate = debateOf(post);
@@ -2592,7 +2918,7 @@ export async function startServer(options: {
   });
 
   mount(app, api.dms, ({ channel }, c) => {
-    mustExist(channel);
+    mustExist(channel, c);
     visit(c.get("login") as string);
     const rows = db
       .prepare(`${QAS} WHERE login = ? AND channel = ? ORDER BY id DESC LIMIT ?`)
@@ -2695,12 +3021,13 @@ export async function startServer(options: {
 
   mount(app, api.feed, (_, c) => {
     const login = c.get("login");
+    const repo = repoOf(c);
     const since = Date.now() - inboxMs;
     const rows = db
       .prepare(
-        "SELECT kind, works, files, resolved, run, confirmed, updated FROM alerts WHERE updated > ?",
+        "SELECT kind, works, files, resolved, run, confirmed, updated FROM alerts WHERE repo = ? AND updated > ?",
       )
-      .all(since) as {
+      .all(repo, since) as {
       kind: string;
       works: string;
       files: string;
@@ -2713,7 +3040,7 @@ export async function startServer(options: {
       .map((row) => ({ ms: row.updated, alert: alertView(row) }))
       .filter(({ alert }) => !alert.works.some((work) => work.login === login));
     const claims = (
-      db.prepare("SELECT kind, claim, at FROM feed WHERE at > ?").all(since) as {
+      db.prepare("SELECT kind, claim, at FROM feed WHERE repo = ? AND at > ?").all(repo, since) as {
         kind: "claim" | "released";
         claim: string;
         at: number;
@@ -2728,12 +3055,12 @@ export async function startServer(options: {
       .map(({ ms, ...news }) => ({ at: new Date(ms).toISOString(), ...news }));
     return { news } as ReplyOf<typeof api.feed>;
   });
-  /** 알림 줄(`WHERE` 뒤에 붙인다)로 포스트와 그 알림 메시지를 읽는다. */
-  const postsWhere = (where: string, ...args: number[]) =>
+  /** 레포의 알림 줄(`WHERE` 뒤에 붙인다)로 포스트와 그 알림 메시지를 읽는다. */
+  const postsWhere = (repo: string, where: string, ...args: number[]) =>
     (
       db
-        .prepare(`${MESSAGES} WHERE m.alert IS NOT NULL${where} ORDER BY m.id`)
-        .all(...args) as MessageRow[]
+        .prepare(`${MESSAGES} WHERE m.alert IS NOT NULL AND a.repo = ?${where} ORDER BY m.id`)
+        .all(repo, ...args) as MessageRow[]
     ).map((row) => {
       const message = messageView(row);
       return {
@@ -2743,13 +3070,26 @@ export async function startServer(options: {
     });
 
   mount(app, api.openPost, ({ alert }, c) => {
-    visit(c.get("login") as string);
-    const [found] = postsWhere(" AND m.id = ?", alert);
+    const login = c.get("login") as string;
+    visit(login);
+    const repo = (
+      db
+        .prepare("SELECT a.repo FROM messages m JOIN alerts a ON a.id = m.alert WHERE m.id = ?")
+        .get(alert) as { repo: string } | undefined
+    )?.repo;
+    const [found] = sees(login, repo) ? postsWhere(repo as string, " AND m.id = ?", alert) : [];
     if (!found)
       throw new ContractFailure({ code: "not_found", message: `없는 알림이다: ${alert}` });
     return found;
   });
 
+  /** 결정의 레포: 그 포스트의 레포다. 없는 결정이면 없다. */
+  const decisionRepo = (id: number | bigint) =>
+    (
+      db
+        .prepare("SELECT c.repo FROM decisions d JOIN channels c ON c.id = d.post WHERE d.id = ?")
+        .get(id) as { repo: string } | undefined
+    )?.repo;
   /** 결정 하나를 읽는다. */
   const decisionOf = (id: number | bigint) =>
     decisionView(
@@ -2776,13 +3116,7 @@ export async function startServer(options: {
         "INSERT INTO messages (channel, login, text, note, decision, at) VALUES (?, ?, ?, ?, ?, ?)",
       )
       .run(post, by ?? "", event, reason ?? null, decision, Date.now());
-    broadcast(
-      encode(
-        serverToWeb,
-        "message",
-        messageView(db.prepare(`${MESSAGES} WHERE m.id = ?`).get(lastInsertRowid) as MessageRow),
-      ),
-    );
+    shareRow(db.prepare(`${MESSAGES} WHERE m.id = ?`).get(lastInsertRowid) as MessageRow);
   };
 
   /** 열린 결정 PR이 머지되거나 닫혔다. 이미 알았으면 아무것도 하지 않는다. */
@@ -2833,7 +3167,7 @@ export async function startServer(options: {
         .get(decision.login) as { github_token: string } | undefined;
       const merged = session
         ? await github
-            .merge(session.github_token, repo, decision.pull.number)
+            .merge(session.github_token, decisionRepo(id) as string, decision.pull.number)
             .catch((error: Error) => ({ reason: error.message }))
         : { reason: `${decision.login}가 로그인해 있지 않다` };
       if (stopped) return;
@@ -2902,19 +3236,18 @@ export async function startServer(options: {
   mount(app, api.proposeDecision, async ({ post, window, ...fields }, c) => {
     const login = c.get("login") as string;
     visit(login);
-    if (!postAlert(post))
-      throw new ContractFailure({ code: "not_found", message: `없는 포스트다: ${post}` });
+    const repo = seenPost(login, post);
     const token = callerToken(c);
     // 결정자: 그 포스트에서 말한 멤버(글과 공개된 문답)와, 정리해 결정 줄을 세우는 멤버.
     const deciders = (
       db
         .prepare(
-          // GitHub에서 들여온 댓글의 쓴 사람은 지금 멤버(세션이 있다)일 때만 결정자다.
+          // GitHub에서 들여온 댓글의 쓴 사람은 그 레포의 지금 멤버일 때만 결정자다.
           `SELECT login FROM messages WHERE channel = ? AND login != '' AND decision IS NULL
-           AND (github = 0 OR login IN (SELECT login FROM sessions))
+           AND (github = 0 OR login IN ${MEMBERS})
            GROUP BY login ORDER BY MIN(id)`,
         )
-        .all(post) as { login: string }[]
+        .all(post, repo) as { login: string }[]
     ).map((row) => row.login);
     if (!deciders.includes(login)) deciders.push(login);
     // 대행이 낀 토론이면 부재자도 결정자이고, 확인할 때까지 머지하지 않는다(ADR-0040).
@@ -2939,7 +3272,11 @@ export async function startServer(options: {
       const numbers = [
         ...(await github.list(token, repo, base.sha, DECISIONS)),
         ...(
-          db.prepare("SELECT path FROM decisions WHERE state = 'proposed'").all() as {
+          db
+            .prepare(
+              "SELECT path FROM decisions WHERE state = 'proposed' AND post IN (SELECT id FROM channels WHERE repo = ?)",
+            )
+            .all(repo) as {
             path: string;
           }[]
         ).map((row) => basename(row.path)),
@@ -3007,8 +3344,10 @@ export async function startServer(options: {
     return { decision: decisionOf(id) };
   });
 
-  /** 열린 결정 하나의 날 줄. 없으면 `not_found`, 머지되거나 닫혔으면 `conflict`다. */
-  const openDecision = (id: number) => {
+  /** `login`에게 보이는 열린 결정 하나의 날 줄. 없으면 `not_found`, 머지되거나 닫혔으면 `conflict`다. */
+  const openDecision = (id: number, login: string) => {
+    if (!sees(login, decisionRepo(id)))
+      throw new ContractFailure({ code: "not_found", message: `없는 결정이다: ${id}` });
     const row = db
       .prepare("SELECT login, post, path, branch, deciders, state FROM decisions WHERE id = ?")
       .get(id) as
@@ -3030,7 +3369,7 @@ export async function startServer(options: {
   mount(app, api.respondToDecision, async ({ id, response }, c) => {
     const login = c.get("login") as string;
     visit(login);
-    const row = openDecision(id);
+    const row = openDecision(id, login);
     if (response === "agree") {
       if (!(JSON.parse(row.deciders) as string[]).includes(login))
         throw new ContractFailure({
@@ -3075,12 +3414,12 @@ export async function startServer(options: {
   mount(app, api.reviseDecision, async ({ id, ...fields }, c) => {
     const login = c.get("login") as string;
     visit(login);
-    const row = openDecision(id);
+    const row = openDecision(id, login);
     organizerOnly(row, login, "고친다");
     const number = basename(row.path).slice(0, 4);
     try {
       if (!row.branch) throw new Error("결정 PR의 브랜치를 모른다");
-      await github.addCommit(callerToken(c), repo, {
+      await github.addCommit(callerToken(c), decisionRepo(id) as string, {
         branch: row.branch,
         message: `docs(decisions): ${fields.title}`,
         files: [
@@ -3108,13 +3447,13 @@ export async function startServer(options: {
   mount(app, api.discardDecision, async ({ id }, c) => {
     const login = c.get("login") as string;
     visit(login);
-    const row = openDecision(id);
+    const row = openDecision(id, login);
     organizerOnly(row, login, "버린다");
     const { pull } = db.prepare("SELECT pull FROM decisions WHERE id = ?").get(id) as {
       pull: number;
     };
     try {
-      await github.closePull(callerToken(c), repo, pull);
+      await github.closePull(callerToken(c), decisionRepo(id) as string, pull);
     } catch (error) {
       throw new ContractFailure({
         code: "github_failed",
@@ -3125,18 +3464,19 @@ export async function startServer(options: {
     return { decision: decisionOf(id) };
   });
 
-  mount(app, api.decisions, () => ({
+  mount(app, api.decisions, (_, c) => ({
     decisions: (
       db
         .prepare(
-          `SELECT ${DECISION} AS decision FROM decisions d LEFT JOIN people dp ON dp.login = d.login ORDER BY d.id`,
+          `SELECT ${DECISION} AS decision FROM decisions d LEFT JOIN people dp ON dp.login = d.login
+           WHERE d.post IN (SELECT id FROM channels WHERE repo = ?) ORDER BY d.id`,
         )
-        .all() as { decision: string }[]
+        .all(repoOf(c)) as { decision: string }[]
     ).map((row) => decisionView(row.decision)),
   }));
 
-  mount(app, api.posts, () => ({
-    posts: postsWhere("").map(({ post, message }) => ({
+  mount(app, api.posts, (_, c) => ({
+    posts: postsWhere(repoOf(c), "").map(({ post, message }) => ({
       ...post,
       message,
       debate: debateOf(post.channel),
@@ -3147,6 +3487,7 @@ export async function startServer(options: {
   mount(app, api.proxyDebate, ({ post, seat }, c) => {
     const login = c.get("login") as string;
     visit(login);
+    const repo = seenPost(login, post);
     const row = db.prepare("SELECT * FROM debates WHERE post = ?").get(post) as
       | DebateRow
       | undefined;
@@ -3170,7 +3511,7 @@ export async function startServer(options: {
         code: "conflict",
         message: "자기 자리에는 대행을 부르지 않는다",
       });
-    if (!answererOf(login, null))
+    if (!answererOf(login, null, repo))
       throw new ContractFailure({
         code: "runner_offline",
         message: `${login}의 러너가 붙어 있지 않아 대행을 띄울 수 없다`,
@@ -3190,10 +3531,11 @@ export async function startServer(options: {
     visit(login);
     const found = db
       .prepare(
-        "SELECT id FROM channels WHERE alert IS NOT NULL AND (id = ?1 OR alert = CAST(?1 AS INTEGER))",
+        "SELECT id, repo FROM channels WHERE alert IS NOT NULL AND (id = ?1 OR alert = CAST(?1 AS INTEGER))",
       )
-      .get(post) as { id: string } | undefined;
-    if (!found) throw new ContractFailure({ code: "not_found", message: `없는 포스트다: ${post}` });
+      .get(post) as { id: string; repo: string } | undefined;
+    if (!found || !sees(login, found.repo))
+      throw new ContractFailure({ code: "not_found", message: `없는 포스트다: ${post}` });
     if (db.prepare("SELECT 1 FROM debates WHERE post = ?").get(found.id))
       throw new ContractFailure({ code: "conflict", message: "이미 열린 토론이 있다" });
     const opened = agenda.trim() !== "" && grounds.trim() !== "";
@@ -3209,6 +3551,7 @@ export async function startServer(options: {
   mount(app, api.chooseDebate, ({ post, option }, c) => {
     const login = c.get("login") as string;
     visit(login);
+    seenPost(login, post);
     const row = db.prepare("SELECT * FROM debates WHERE post = ?").get(post) as
       | DebateRow
       | undefined;
@@ -3229,7 +3572,7 @@ export async function startServer(options: {
   });
 
   // 라벨(ADR-0039). 이름, 색, 설명은 부른 멤버의 토큰으로 GitHub 라벨을 바꾸고, 중요도는 Omagari에만 둔다.
-  mount(app, api.labels, () => ({ labels: labelsView() }));
+  mount(app, api.labels, (_, c) => ({ labels: labelsView(repoOf(c)) }));
   /** GitHub이 받지 않은 것을 `github_failed`로. */
   const onGitHub = async <T>(login: string, what: string, ask: (token: string) => Promise<T>) => {
     const token = tokenOf(login);
@@ -3245,22 +3588,28 @@ export async function startServer(options: {
   };
   mount(app, api.createLabel, async ({ name, color, description }, c) => {
     const login = c.get("login") as string;
-    if (labelRow(name))
+    const repo = repoOf(c);
+    if (labelRow(repo, name))
       throw new ContractFailure({ code: "conflict", message: `라벨이 이미 있다: ${name}` });
     const made = await onGitHub(login, "라벨을 만들지 못했다", (token) =>
       github.createLabel(token, repo, { name, color, description }),
     );
     db.prepare(
-      "INSERT INTO labels (name, github, color, description) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
-    ).run(made.name, made.id, made.color, made.description);
-    shareLabels();
-    return { label: labelsView().find((label) => label.name === made.name) as Label };
+      "INSERT INTO labels (repo, name, github, color, description) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+    ).run(repo, made.name, made.id, made.color, made.description);
+    shareLabels(repo);
+    return { label: labelsView(repo).find((label) => label.name === made.name) as Label };
   });
   mount(app, api.editLabel, async ({ name, next }, c) => {
     const login = c.get("login") as string;
-    const row = labelRow(name);
+    const repo = repoOf(c);
+    const row = labelRow(repo, name);
     if (!row) throw new ContractFailure({ code: "not_found", message: `없는 라벨이다: ${name}` });
-    if (next.name !== undefined && labelRow(next.name) && labelRow(next.name)?.id !== row.id)
+    if (
+      next.name !== undefined &&
+      labelRow(repo, next.name) &&
+      labelRow(repo, next.name)?.id !== row.id
+    )
       throw new ContractFailure({ code: "conflict", message: `라벨이 이미 있다: ${next.name}` });
     if (next.name !== undefined || next.color !== undefined || next.description !== undefined) {
       const wanted = {
@@ -3277,35 +3626,37 @@ export async function startServer(options: {
       db.prepare(
         "UPDATE labels SET name = ?, github = ?, color = ?, description = ? WHERE rowid = ?",
       ).run(made.name, made.id, made.color, made.description, row.id);
-      if (made.name !== row.name) renameLabel(row.name, made.name);
+      if (made.name !== row.name) renameLabel(repo, row.name, made.name);
     }
-    const label = labelRow(next.name ?? name) as { name: string };
+    const label = labelRow(repo, next.name ?? name) as { name: string };
     if (next.importance !== undefined) {
-      db.prepare("UPDATE labels SET importance = ? WHERE name = ?").run(
+      db.prepare("UPDATE labels SET importance = ? WHERE repo = ? AND name = ?").run(
         next.importance,
+        repo,
         label.name,
       );
       // 그 라벨을 단 포스트의 중요도가 바뀐다. 논의가 되면 이슈를 연다.
       for (const { id } of db
         .prepare(
-          "SELECT c.id FROM channels c WHERE c.alert IS NOT NULL AND EXISTS (SELECT 1 FROM json_each(c.labels) j WHERE j.value = ?)",
+          "SELECT c.id FROM channels c WHERE c.alert IS NOT NULL AND c.repo = ? AND EXISTS (SELECT 1 FROM json_each(c.labels) j WHERE j.value = ?)",
         )
-        .all(label.name) as { id: string }[]) {
+        .all(repo, label.name) as { id: string }[]) {
         sharePost(id);
         syncSoon(id);
       }
     }
-    shareLabels();
-    return { label: labelsView().find((l) => l.name === label.name) as Label };
+    shareLabels(repo);
+    return { label: labelsView(repo).find((l) => l.name === label.name) as Label };
   });
   mount(app, api.setPostLabels, ({ post, labels }, c) => {
-    visit(c.get("login") as string);
+    const login = c.get("login") as string;
+    visit(login);
+    const repo = seenPost(login, post);
     const found = db
       .prepare("SELECT alert FROM channels WHERE id = ? AND alert IS NOT NULL")
-      .get(post) as { alert: number } | undefined;
-    if (!found) throw new ContractFailure({ code: "not_found", message: `없는 포스트다: ${post}` });
+      .get(post) as { alert: number };
     const names = labels.map((name) => {
-      const row = labelRow(name);
+      const row = labelRow(repo, name);
       if (!row) throw new ContractFailure({ code: "not_found", message: `없는 라벨이다: ${name}` });
       return row.name;
     });
@@ -3316,21 +3667,22 @@ export async function startServer(options: {
     sharePost(post);
     syncSoon(post); // 이슈 라벨을 맞추거나, 논의가 되었으면 이슈를 연다
     openDebate(post); // 증거 라벨을 붙였으면 토론이 열린다(ADR-0040)
-    return { post: postsWhere(" AND m.id = ?", found.alert)[0].post };
+    return { post: postsWhere(repo, " AND m.id = ?", found.alert)[0].post };
   });
 
-  const mustExist = (channel: string) => {
-    const found = db.prepare("SELECT kind FROM channels WHERE id = ?").get(channel) as
-      | { kind: ChannelKind }
+  /** 부른 사람에게 보이는 채널의 종류. 없거나 보이지 않는 레포의 포스트면 `not_found`다. */
+  const mustExist = (channel: string, c: Context<Env>) => {
+    const found = db.prepare("SELECT kind, repo FROM channels WHERE id = ?").get(channel) as
+      | { kind: ChannelKind; repo: string | null }
       | undefined;
-    if (!found) {
+    if (!found || (found.repo !== null && !sees(c.get("login") as string, found.repo))) {
       throw new ContractFailure({ code: "not_found", message: `없는 채널이다: ${channel}` });
     }
     return found.kind;
   };
   /** 글, DM, `@호출`은 포럼에 쓰지 못하고 포스트 안에서만 쓴다(ADR-0027). */
-  const mustWrite = (channel: string) => {
-    if (mustExist(channel) === "forum") {
+  const mustWrite = (channel: string, c: Context<Env>) => {
+    if (mustExist(channel, c) === "forum") {
       throw new ContractFailure({
         code: "invalid_request",
         message: "포럼에는 쓸 수 없다. 포스트 안에서 쓴다",
@@ -3339,24 +3691,29 @@ export async function startServer(options: {
   };
 
   mount(app, api.history, ({ channel, before }, c) => {
-    mustExist(channel);
-    visit(c.get("login") as string);
+    const login = c.get("login") as string;
+    mustExist(channel, c);
+    visit(login);
+    // 알림 줄의 자리(`ALERTS`)는 레포마다의 줄이 섞여 있다. 보이는 레포의 것만 준다.
     const rows = db
-      .prepare(`${MESSAGES} WHERE m.channel = ? AND m.id < ? ORDER BY m.id DESC LIMIT ?`)
-      .all(channel, before ?? Number.MAX_SAFE_INTEGER, HISTORY_PAGE) as MessageRow[];
+      .prepare(
+        `${MESSAGES} WHERE m.channel = ? AND m.id < ?
+         AND (a.repo IS NULL OR a.repo IN (SELECT repo FROM access WHERE login = ?))
+         ORDER BY m.id DESC LIMIT ?`,
+      )
+      .all(channel, before ?? Number.MAX_SAFE_INTEGER, login, HISTORY_PAGE) as MessageRow[];
     return { messages: rows.reverse().map(messageView) };
   });
 
   mount(app, api.send, ({ channel, text }, c) => {
-    mustWrite(channel);
+    mustWrite(channel, c);
     visit(c.get("login") as string);
     const { lastInsertRowid } = db
       .prepare("INSERT INTO messages (channel, login, text, at) VALUES (?, ?, ?, ?)")
       .run(channel, c.get("login") as string, text, Date.now());
-    const message = messageView(
+    const message = shareRow(
       db.prepare(`${MESSAGES} WHERE m.id = ?`).get(lastInsertRowid) as MessageRow,
     );
-    broadcast(encode(serverToWeb, "message", message));
     posted(channel);
     syncSoon(channel);
     return { message };
@@ -3473,6 +3830,17 @@ export async function startServer(options: {
             id,
           );
         }
+        const mine = reposOf(login);
+        const repo = payload.repo
+          ? mine.find((r) => r.toLowerCase() === payload.repo?.toLowerCase())
+          : (mine[0] ?? "");
+        if (repo === undefined) {
+          return refuse(
+            socket,
+            { code: "not_found", message: `보이는 레포가 아니다: ${payload.repo}` },
+            id,
+          );
+        }
         const { seq } = db.prepare("SELECT COALESCE(MAX(id), 0) AS seq FROM messages").get() as {
           seq: number;
         };
@@ -3488,9 +3856,11 @@ export async function startServer(options: {
                ORDER BY m.id`,
             )
             .all(payload.after, payload.after, payload.after, payload.after) as MessageRow[];
-          for (const row of missed) socket.send(encode(serverToWeb, "message", messageView(row)));
+          for (const row of missed)
+            if (row.repo === null || sees(login, row.repo))
+              socket.send(encode(serverToWeb, "message", messageView(row)));
         }
-        watchers.set(socket, { hash: hash(payload.session), login });
+        watchers.set(socket, { hash: hash(payload.session), login, repo });
         greet(socket);
         visit(login);
         shareMembers(socket);
@@ -3532,20 +3902,32 @@ export async function startServer(options: {
               message.id,
             );
           }
-          if (!repos.some((r) => r.toLowerCase() === repo.toLowerCase())) {
+          // 원격 가운데 워크스페이스에 있는 레포(ADR-0043). 한 레포는 워크스페이스 하나에만 있다.
+          const workspace = allRepos();
+          const inWorkspace = repos.flatMap(
+            (r) => workspace.find((w) => w.toLowerCase() === r.toLowerCase()) ?? [],
+          );
+          const repo = inWorkspace.find((r) => sees(login, r));
+          if (!repo) {
             return refuse(
               socket,
               {
                 code: "forbidden",
-                message: `이 폴더는 ${repo}의 폴더가 아니다(GitHub 원격: ${repos.join(", ")})`,
+                message:
+                  inWorkspace.length === 0
+                    ? `이 폴더는 ${workspace.join(", ")}의 폴더가 아니다(GitHub 원격: ${repos.join(", ")}). 워크스페이스에 넣으려면 그 레포의 Admin이 넣는다`
+                    : `${login}는 ${inWorkspace.join(", ")}에 push 권한이 없다`,
               },
               message.id,
             );
           }
-          runners.set(socket, { login, hash: hash(session), executors, choices, mergeCheck });
+          runners.set(socket, { login, hash: hash(session), repo, executors, choices, mergeCheck });
           greet(socket);
-          db.prepare("DELETE FROM offline WHERE login = ?").run(login);
-          db.prepare("UPDATE claims SET stale = NULL WHERE login = ?").run(login);
+          db.prepare("DELETE FROM offline WHERE repo = ? AND login = ?").run(repo, login);
+          db.prepare("UPDATE claims SET stale = NULL WHERE repo = ? AND login = ?").run(
+            repo,
+            login,
+          );
           // ponytail: 멤버 하나에 러너 하나로 본다. 기기 둘에서 실행기가 다른 러너를 켜면 나중에 붙은 쪽의 것만 남는다.
           db.prepare("DELETE FROM agents WHERE login = ?").run(login);
           const known = db.prepare("INSERT OR IGNORE INTO agents (login, executor) VALUES (?, ?)");
@@ -3553,7 +3935,7 @@ export async function startServer(options: {
           socket.send(encode(serverToRunner, "welcome", { login, repo }, message.id));
           shareSituation(socket);
           shareInbox(socket);
-          shareRuns(login, socket);
+          shareRuns(repo, login, socket);
           dispatchQuestions(login); // 오프라인 사이에 남겨 둔 질문
           dispatchDebates(login); // 오프라인 사이에 열린 토론
           return;
@@ -3563,45 +3945,47 @@ export async function startServer(options: {
           // hello를 마치지 않은 연결의 메시지는 받지 않는다.
           refuse(socket, { code: "unauthorized", message: "hello를 먼저 보내라" }, message.id);
         } else if (message.kind === "checkCommand") {
-          db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('check', ?)").run(
+          db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run(
+            `check ${runner.repo}`,
             JSON.stringify(message.payload),
           );
         } else if (message.kind === "observation") {
-          replaceWorks(runner.login, message.payload.works);
+          replaceWorks(runner.repo, runner.login, message.payload.works);
           shareSituation();
         } else if (message.kind === "conflicts") {
           reports.set(socket, message.payload.pairs);
-          reconcile();
+          reconcile(runner.repo);
         } else if (message.kind === "merged") {
-          attachRun(runner.login, message.payload);
+          attachRun(runner.repo, runner.login, message.payload);
         } else if (message.kind === "delivered") {
           const drop = db.prepare("DELETE FROM inbox WHERE id = ? AND login = ?");
           for (const id of message.payload.ids) drop.run(id, runner.login);
           shareInbox();
         } else if (message.kind === "working") {
-          setWorkAgent(runner.login, message.payload.branch, message.payload.executor);
+          setWorkAgent(runner.repo, runner.login, message.payload.branch, message.payload.executor);
           shareMembers();
         } else if (message.kind === "claim") {
           const { branch, path, unit, symbol, lines, overlaps, plan } = message.payload;
-          const login = runner.login;
+          const { login, repo } = runner;
           const now = Date.now();
           const linesJson = lines ? JSON.stringify(lines) : null;
           db.exec("BEGIN");
           // 같은 작업의 같은 곳은 하나다. 다시 걸면 새로 건 것으로 바꾼다.
           db.prepare(
-            `DELETE FROM claims WHERE login = ? AND branch = ? AND path = ? AND unit = ?
+            `DELETE FROM claims WHERE repo = ? AND login = ? AND branch = ? AND path = ? AND unit = ?
              AND symbol IS ? AND lines IS ?`,
-          ).run(login, branch, path, unit, symbol ?? null, linesJson);
+          ).run(repo, login, branch, path, unit, symbol ?? null, linesJson);
           // 같은 작업의 같은 심볼에 걸린 옛 계획은 새 계획이 대체한다. 그 계획의 알림은 쓰는 쪽 러너가 다시 계산해 고쳐진다.
           if (plan)
             db.prepare(
-              "UPDATE claims SET plan = NULL WHERE login = ? AND branch = ? AND plan ->> '$.symbol' = ?",
-            ).run(login, branch, plan.symbol);
+              "UPDATE claims SET plan = NULL WHERE repo = ? AND login = ? AND branch = ? AND plan ->> '$.symbol' = ?",
+            ).run(repo, login, branch, plan.symbol);
           const { lastInsertRowid } = db
             .prepare(
-              "INSERT INTO claims (login, branch, path, unit, symbol, lines, at, plan) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+              "INSERT INTO claims (repo, login, branch, path, unit, symbol, lines, at, plan) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .run(
+              repo,
               login,
               branch,
               path,
@@ -3614,20 +3998,30 @@ export async function startServer(options: {
           const claim = claimView(
             db.prepare("SELECT * FROM claims WHERE id = ?").get(lastInsertRowid) as ClaimRow,
           );
-          db.prepare("INSERT INTO feed (kind, claim, at) VALUES ('claim', ?, ?)").run(
+          db.prepare("INSERT INTO feed (repo, kind, claim, at) VALUES (?, 'claim', ?, ?)").run(
+            repo,
             JSON.stringify(claim),
             now,
           );
           // 겹침은 양쪽 작업의 편지함에 넣는다. 각자 자기 선점이 `mine`이다.
-          const put = db.prepare("INSERT INTO inbox (login, branch, news, at) VALUES (?, ?, ?, ?)");
+          const put = db.prepare(
+            "INSERT INTO inbox (repo, login, branch, news, at) VALUES (?, ?, ?, ?, ?)",
+          );
           for (const id of new Set(overlaps)) {
             const row = db
-              .prepare("SELECT * FROM claims WHERE id = ? AND login != ?")
-              .get(id, login) as ClaimRow | undefined;
+              .prepare("SELECT * FROM claims WHERE id = ? AND repo = ? AND login != ?")
+              .get(id, repo, login) as ClaimRow | undefined;
             if (!row) continue;
             const theirs = claimView(row);
-            put.run(login, branch, JSON.stringify({ kind: "overlap", mine: claim, theirs }), now);
             put.run(
+              repo,
+              login,
+              branch,
+              JSON.stringify({ kind: "overlap", mine: claim, theirs }),
+              now,
+            );
+            put.run(
+              repo,
               theirs.login,
               theirs.branch,
               JSON.stringify({ kind: "overlap", mine: theirs, theirs: claim }),
@@ -3647,8 +4041,14 @@ export async function startServer(options: {
             socket.send(encode(serverToRunner, "error", { code, message: text }, message.id));
           if (to === runner.login)
             return fail("invalid_request", "자기 에이전트에게는 묻지 않는다");
-          if (!db.prepare("SELECT 1 FROM sessions WHERE login = ?").get(to))
-            return fail("not_found", `워크스페이스의 멤버가 아니다: ${to}`);
+          // 묻기는 레포 안의 것이다. 받는 쪽도 그 레포의 러너가 답한다.
+          if (!db.prepare(`SELECT 1 FROM ${MEMBERS} WHERE login = ?`).get(runner.repo, to))
+            return fail(
+              "not_found",
+              reposOf(to).length === 0
+                ? `워크스페이스의 멤버가 아니다: ${to}`
+                : `${runner.repo}의 멤버가 아니다: ${to}`,
+            );
           if (
             executor &&
             !db.prepare("SELECT 1 FROM agents WHERE login = ? AND executor = ?").get(to, executor)
@@ -3659,9 +4059,9 @@ export async function startServer(options: {
             return reply({ state: "refused" });
           const { lastInsertRowid } = db
             .prepare(
-              "INSERT INTO questions (login, branch, target, executor, text, at) VALUES (?, ?, ?, ?, ?, ?)",
+              "INSERT INTO questions (repo, login, branch, target, executor, text, at) VALUES (?, ?, ?, ?, ?, ?, ?)",
             )
-            .run(runner.login, branch, to, executor ?? null, text, Date.now());
+            .run(runner.repo, runner.login, branch, to, executor ?? null, text, Date.now());
           const id = Number(lastInsertRowid);
           dispatchQuestions(to);
           const sending = [...questionsSent.values()].find((q) => q.id === id);
@@ -3672,8 +4072,8 @@ export async function startServer(options: {
           });
         } else if (message.kind === "release") {
           const { branch, path, symbol, lines } = message.payload;
-          const where = ["login = ?", "branch = ?"];
-          const params: string[] = [runner.login, branch];
+          const where = ["repo = ?", "login = ?", "branch = ?"];
+          const params: string[] = [runner.repo, runner.login, branch];
           for (const [column, value] of [
             ["path", path],
             ["symbol", symbol],
@@ -3686,7 +4086,7 @@ export async function startServer(options: {
           const claims = releaseClaims(where.join(" AND "), ...params);
           socket.send(encode(serverToRunner, "released", { claims }, message.id));
           if (claims.length > 0) {
-            cancelPlans(claims);
+            cancelPlans(runner.repo, claims);
             shareSituation();
           }
         } else {
@@ -3753,10 +4153,15 @@ export async function startServer(options: {
         const runner = runners.get(socket);
         runners.delete(socket);
         sentInbox.delete(socket);
-        if (reports.delete(socket) && !stopped) reconcile();
-        // 그 멤버의 러너가 다 떨어졌으면 오프라인이다. 마지막 관측과 상태 한 줄은 이 시각 기준으로 남는다.
-        if (runner && !stopped && ![...runners.values()].some((r) => r.login === runner.login)) {
-          db.prepare("INSERT OR REPLACE INTO offline (login, since) VALUES (?, ?)").run(
+        if (runner && reports.delete(socket) && !stopped) reconcile(runner.repo);
+        // 그 멤버의 그 레포 러너가 다 떨어졌으면 그 레포에서 오프라인이다. 마지막 관측과 상태 한 줄은 이 시각 기준으로 남는다.
+        if (
+          runner &&
+          !stopped &&
+          ![...runners.values()].some((r) => r.login === runner.login && r.repo === runner.repo)
+        ) {
+          db.prepare("INSERT OR REPLACE INTO offline (repo, login, since) VALUES (?, ?, ?)").run(
+            runner.repo,
             runner.login,
             Date.now(),
           );
@@ -3818,7 +4223,8 @@ export async function startServer(options: {
     }
   }, options.heartbeatMs ?? HEARTBEAT_MS);
 
-  // push 권한을 잃은 세션을 지우고 그 러너를 내보낸다. GitHub이 답하지 못하면 다음 주기에 다시 본다.
+  // 레포마다 push 권한을 다시 읽는다(ADR-0043). 권한을 잃은 레포의 러너와 웹은 내보내고, 어느 레포에도 권한이 없는 세션은 지운다.
+  // GitHub이 답하지 못한 레포는 지난 것을 두고 다음 주기에 다시 본다.
   let stopped = false;
   let checking = false;
   const recheck = setInterval(async () => {
@@ -3831,12 +4237,27 @@ export async function startServer(options: {
         github_token: string;
       }[];
       for (const row of rows) {
-        if ((await github.canPush(row.github_token, repo)) !== false || stopped) continue;
+        const access = await readAccess(row.login, row.github_token);
+        if (stopped) return;
+        if (access.push.length > 0 || access.unknown.length > 0) continue;
         endSession(row.hash, {
           code: "forbidden",
-          message: `${row.login}는 이제 ${repo}에 push 권한이 없어 워크스페이스에서 빠졌다`,
+          message: `${row.login}는 이제 ${allRepos().join(", ")}에 push 권한이 없어 워크스페이스에서 빠졌다`,
         });
       }
+      for (const [socket, runner] of runners)
+        if (!sees(runner.login, runner.repo))
+          refuse(socket, {
+            code: "forbidden",
+            message: `${runner.login}는 이제 ${runner.repo}에 push 권한이 없다`,
+          });
+      for (const [socket, watcher] of watchers)
+        if (watcher.repo && !sees(watcher.login, watcher.repo))
+          refuse(socket, {
+            code: "forbidden",
+            message: `${watcher.login}는 이제 ${watcher.repo}에 push 권한이 없다`,
+          });
+      shareSituation(); // 권한을 잃은 레포의 작업은 보이지 않는다
     } catch (error) {
       console.error("push 권한을 다시 확인하지 못했다:", error);
     } finally {
@@ -3844,6 +4265,15 @@ export async function startServer(options: {
     }
   }, options.recheckMs ?? RECHECK_MS);
 
+  /** 레포의 멤버들의 GitHub 토큰, 나중에 들어온 세션의 것부터. */
+  const repoTokens = (repo: string) =>
+    (
+      db
+        .prepare(
+          "SELECT github_token FROM sessions WHERE login IN (SELECT login FROM access WHERE repo = ?) ORDER BY rowid DESC",
+        )
+        .all(repo) as { github_token: string }[]
+    ).map((session) => session.github_token);
   /** 멤버의 GitHub 토큰(마지막에 들어온 세션의 것). 세션이 없으면 없다. */
   const tokenOf = (login: string) =>
     (
@@ -3972,12 +4402,14 @@ export async function startServer(options: {
   const syncIssues = async (only?: Set<string>) => {
     const rows = db
       .prepare(
-        `SELECT c.id, c.issue, c.issue_open, c.issue_closed, c.verdict, c.labels, ${POST_IMPORTANCE} AS importance,
+        `SELECT c.id, c.repo, c.issue, c.issue_open, c.issue_closed, c.verdict, c.labels, ${POST_IMPORTANCE} AS importance,
          m.id AS message, m.alert
-         FROM channels c JOIN messages m ON m.id = c.alert ORDER BY m.id`,
+         FROM channels c JOIN messages m ON m.id = c.alert
+         WHERE c.repo IN (SELECT name FROM repos) ORDER BY m.id`,
       )
       .all() as {
       id: string;
+      repo: string;
       issue: number | null;
       issue_open: number | null;
       issue_closed: number | null;
@@ -3994,18 +4426,12 @@ export async function startServer(options: {
       );
       if (view.kind !== "alert") continue;
       const { alert } = view;
+      const { repo } = row;
       const logins = alert.works.map((work) => work.login);
-      // 알림의 두 사람의 토큰부터, 그다음 다른 멤버들의 것. GitHub이 받지 않으면(토큰 무효) 다음 것으로 한다.
-      const tokens = [
-        ...new Set([
-          ...logins.map(tokenOf),
-          ...(
-            db.prepare("SELECT github_token FROM sessions ORDER BY rowid DESC").all() as {
-              github_token: string;
-            }[]
-          ).map((session) => session.github_token),
-        ]),
-      ].filter((token): token is string => token !== undefined);
+      // 알림의 두 사람의 토큰부터, 그다음 그 레포의 다른 멤버들의 것. GitHub이 받지 않으면(토큰 무효) 다음 것으로 한다.
+      const tokens = [...new Set([...logins.map(tokenOf), ...repoTokens(repo)])].filter(
+        (token): token is string => token !== undefined,
+      );
       /** 토큰을 차례로 넣어 GitHub이 처음 답한 것. 모두 받지 않으면 없다. 마지막 까닭을 남긴다. */
       const answered = async <T>(
         ask: (token: string) => Promise<T | undefined>,
@@ -4021,7 +4447,7 @@ export async function startServer(options: {
         }
         return undefined;
       };
-      if (tokens.length === 0) return;
+      if (tokens.length === 0) continue;
       const resolved = alert.resolved !== null;
       let number = row.issue;
       if (number === null) {
@@ -4213,15 +4639,7 @@ export async function startServer(options: {
             "INSERT INTO messages (channel, login, text, at, comment, github) VALUES (?, ?, ?, ?, ?, 1)",
           )
           .run(row.id, comment.login, comment.body, Date.now(), comment.id);
-        broadcast(
-          encode(
-            serverToWeb,
-            "message",
-            messageView(
-              db.prepare(`${MESSAGES} WHERE m.id = ?`).get(lastInsertRowid) as MessageRow,
-            ),
-          ),
-        );
+        shareRow(db.prepare(`${MESSAGES} WHERE m.id = ?`).get(lastInsertRowid) as MessageRow);
         changed = true;
       }
 
@@ -4246,11 +4664,13 @@ export async function startServer(options: {
    * GitHub에서 지운 라벨은 목록과 이슈 없는 포스트에서 빠진다. 기본 라벨(종류 넷과 확인됨)은 지워져도 남기고, 레포에 없으면 만든다.
    */
   const syncLabels = async () => {
-    const tokens = (
-      db.prepare("SELECT github_token FROM sessions ORDER BY rowid DESC").all() as {
-        github_token: string;
-      }[]
-    ).map((session) => session.github_token);
+    for (const repo of allRepos()) {
+      await syncRepoLabels(repo);
+      if (stopped) return;
+    }
+  };
+  const syncRepoLabels = async (repo: string) => {
+    const tokens = repoTokens(repo);
     let theirs: RepoLabel[] | undefined;
     let token: string | undefined;
     for (token of tokens) {
@@ -4259,14 +4679,14 @@ export async function startServer(options: {
       if (theirs) break;
     }
     if (!theirs || !token) return;
-    seedLabels(); // 기본 라벨의 이름을 GitHub에서 바꿨으면 다시 만든다
+    seedLabels(repo); // 기본 라벨의 이름을 GitHub에서 바꿨으면 다시 만든다
     let changed = false;
     const seen = new Set<number>();
     for (const label of theirs) {
       const row =
-        (db.prepare("SELECT rowid AS id FROM labels WHERE github = ?").get(label.id) as
-          | { id: number }
-          | undefined) ?? labelRow(label.name);
+        (db
+          .prepare("SELECT rowid AS id FROM labels WHERE repo = ? AND github = ?")
+          .get(repo, label.id) as { id: number } | undefined) ?? labelRow(repo, label.name);
       const known =
         row &&
         (db
@@ -4281,12 +4701,9 @@ export async function startServer(options: {
           description: string;
         });
       if (!known) {
-        db.prepare("INSERT INTO labels (name, github, color, description) VALUES (?, ?, ?, ?)").run(
-          label.name,
-          label.id,
-          label.color,
-          label.description,
-        );
+        db.prepare(
+          "INSERT INTO labels (repo, name, github, color, description) VALUES (?, ?, ?, ?, ?)",
+        ).run(repo, label.name, label.id, label.color, label.description);
         changed = true;
       } else if (
         known.name !== label.name ||
@@ -4295,22 +4712,21 @@ export async function startServer(options: {
         known.description !== label.description
       ) {
         // 같은 id나 이름의 다른 줄이 있으면(지웠다 다시 만듦) 비켜 둔다.
-        db.prepare("UPDATE labels SET github = NULL WHERE github = ? AND rowid != ?").run(
-          label.id,
-          known.id,
-        );
+        db.prepare(
+          "UPDATE labels SET github = NULL WHERE repo = ? AND github = ? AND rowid != ?",
+        ).run(repo, label.id, known.id);
         db.prepare(
           "UPDATE labels SET name = ?, github = ?, color = ?, description = ? WHERE rowid = ?",
         ).run(label.name, label.id, label.color, label.description, known.id);
-        if (known.name !== label.name) renameLabel(known.name, label.name);
+        if (known.name !== label.name) renameLabel(repo, known.name, label.name);
         changed = true;
       }
       seen.add(label.id);
     }
     const defaults = Object.keys(DEFAULT_LABEL_COLORS);
     for (const row of db
-      .prepare("SELECT rowid AS id, name, github, color, description FROM labels")
-      .all() as {
+      .prepare("SELECT rowid AS id, name, github, color, description FROM labels WHERE repo = ?")
+      .all(repo) as {
       id: number;
       name: string;
       github: number | null;
@@ -4321,7 +4737,11 @@ export async function startServer(options: {
       if (!defaults.includes(row.name)) {
         // GitHub에서 지웠다. 이슈가 있는 포스트는 이슈를 따라간다.
         db.prepare("DELETE FROM labels WHERE rowid = ?").run(row.id);
-        for (const post of editPostLabels((labels) => labels.filter((l) => l !== row.name), false))
+        for (const post of editPostLabels(
+          repo,
+          (labels) => labels.filter((l) => l !== row.name),
+          false,
+        ))
           sharePost(post);
         changed = true;
         continue;
@@ -4343,7 +4763,7 @@ export async function startServer(options: {
       );
       changed = true;
     }
-    if (changed) shareLabels();
+    if (changed) shareLabels(repo);
   };
   /**
    * 이슈 맞추기를 돌린다. `post`를 주면 그 포스트만, 주지 않으면(주기마다) 모두다. 도는 중이면 끝난 뒤 모아 둔 것을 한 번 더 돈다.
@@ -4376,8 +4796,10 @@ export async function startServer(options: {
    * 레포에 있는 라벨(목록에 있는 것)만 단다. 파일이 없거나 읽지 못하면 종류 라벨만 남는다.
    * ponytail: 기본 브랜치의 커밋이 바뀔 때만 파일을 다시 읽는다(알림이 설 때마다 GitHub 요청 하나). 지금은 한 판만 기억한다.
    */
-  let labeler: { sha: string; source: string | null } | undefined;
+  const labelers = new Map<string, { sha: string; source: string | null }>();
   const attachTeamLabels = async (post: string) => {
+    const repo = postRepo(post);
+    if (!repo) return;
     try {
       const row = db
         .prepare(
@@ -4392,20 +4814,21 @@ export async function startServer(options: {
           ),
         ),
       ];
-      for (const { github_token: token } of db
-        .prepare("SELECT github_token FROM sessions ORDER BY rowid DESC")
-        .all() as { github_token: string }[]) {
+      for (const token of repoTokens(repo)) {
         const base = await github.defaultBranch(token, repo).catch(() => undefined);
         if (!base) continue;
-        if (labeler?.sha !== base.sha)
-          labeler = {
+        if (labelers.get(repo)?.sha !== base.sha)
+          labelers.set(repo, {
             sha: base.sha,
             source: await github.read(token, repo, base.sha, ".github/labeler.yml"),
-          };
+          });
         break;
       }
+      const labeler = labelers.get(repo);
       if (stopped || !labeler?.source) return;
-      const wanted = labelsFor(labeler.source, files).flatMap((name) => labelRow(name)?.name ?? []);
+      const wanted = labelsFor(labeler.source, files).flatMap(
+        (name) => labelRow(repo, name)?.name ?? [],
+      );
       const current = db.prepare("SELECT labels FROM channels WHERE id = ?").get(post) as
         | { labels: string | null }
         | undefined;
@@ -4432,17 +4855,16 @@ export async function startServer(options: {
     following = true;
     syncSoon(); // 포스트의 이슈를 맞춘다(ADR-0032). 따로 돈다.
     try {
-      const forgotten = "SELECT login FROM offline WHERE since < ?";
+      const forgotten = "SELECT repo, login FROM offline WHERE since < ?";
       const cutoff = Date.now() - (options.forgetMs ?? FORGET_MS);
       const now = Date.now();
       db.exec("BEGIN");
-      db.prepare(`DELETE FROM works WHERE login IN (${forgotten})`).run(cutoff);
-      db.prepare(`DELETE FROM lines WHERE login IN (${forgotten})`).run(cutoff);
+      db.prepare(`DELETE FROM works WHERE (repo, login) IN (${forgotten})`).run(cutoff);
+      db.prepare(`DELETE FROM lines WHERE (repo, login) IN (${forgotten})`).run(cutoff);
       // 선점은 지우지 않고 "오래됨"으로 둔다. 오래됨이 된 지 `forgetMs`가 더 지나면 지운다(Room의 오래됨 표시와 7일 만료).
-      db.prepare(`UPDATE claims SET stale = ? WHERE stale IS NULL AND login IN (${forgotten})`).run(
-        now,
-        cutoff,
-      );
+      db.prepare(
+        `UPDATE claims SET stale = ? WHERE stale IS NULL AND (repo, login) IN (${forgotten})`,
+      ).run(now, cutoff);
       db.prepare("DELETE FROM offline WHERE since < ?").run(cutoff);
       db.prepare("DELETE FROM claims WHERE stale < ?").run(now - (options.forgetMs ?? FORGET_MS));
       db.prepare("DELETE FROM inbox WHERE at <= ?").run(now - inboxMs);
@@ -4458,30 +4880,37 @@ export async function startServer(options: {
 
       const branches = db
         .prepare(
-          `SELECT w.branch, MAX(s.github_token) AS token
-           FROM (SELECT login, branch FROM works UNION SELECT login, branch FROM claims) w
-           JOIN sessions s ON s.login = w.login GROUP BY w.branch`,
+          `SELECT w.repo, w.branch, MAX(s.github_token) AS token
+           FROM (SELECT repo, login, branch FROM works UNION SELECT repo, login, branch FROM claims) w
+           JOIN sessions s ON s.login = w.login
+           JOIN access a ON a.login = w.login AND a.repo = w.repo
+           WHERE w.repo IN (SELECT name FROM repos) GROUP BY w.repo, w.branch`,
         )
-        .all() as { branch: string; token: string }[];
+        .all() as { repo: string; branch: string; token: string }[];
       const next = new Map<string, string>();
-      for (const { branch, token } of branches) {
+      for (const { repo, branch, token } of branches) {
+        const key = JSON.stringify([repo, branch]);
         const pulls = await github.pulls(token, repo, branch);
         if (stopped) return;
         if (!pulls) {
           // GitHub이 답하지 못하면 지난번 것을 둔다.
-          const known = drafts.get(branch);
-          if (known !== undefined) next.set(branch, known);
+          const known = drafts.get(key);
+          if (known !== undefined) next.set(key, known);
           continue;
         }
         const draft = pulls.find((pull) => pull.open && pull.draft);
-        if (draft) next.set(branch, draft.title);
+        if (draft) next.set(key, draft.title);
         const merged = Math.max(
           ...pulls.map((pull) => Date.parse(pull.mergedAt ?? "")).filter(Number.isFinite),
         );
         if (merged > 0) {
-          db.prepare("DELETE FROM lines WHERE branch = ? AND at < ?").run(branch, merged);
+          db.prepare("DELETE FROM lines WHERE repo = ? AND branch = ? AND at < ?").run(
+            repo,
+            branch,
+            merged,
+          );
           // 머지된 브랜치의 선점은 저절로 풀린다. 머지 뒤에 같은 브랜치에 새로 건 것은 남는다.
-          releaseClaims("branch = ? AND at < ?", branch, merged);
+          releaseClaims("repo = ? AND branch = ? AND at < ?", repo, branch, merged);
         }
       }
       drafts = next;
@@ -4490,14 +4919,15 @@ export async function startServer(options: {
       // 열린 결정 PR이 머지되거나 닫혔는지 읽는다. 정리한 멤버의 토큰으로, 그 멤버의 세션이 없으면 다른 멤버의 것으로 읽는다.
       const open = db
         .prepare(
-          `SELECT d.id, d.pull, COALESCE(
+          `SELECT d.id, d.pull, c.repo, COALESCE(
              (SELECT github_token FROM sessions WHERE login = d.login),
-             (SELECT github_token FROM sessions)) AS token
-           FROM decisions d WHERE d.state = 'proposed'`,
+             (SELECT github_token FROM sessions WHERE login IN (SELECT login FROM access WHERE repo = c.repo))) AS token
+           FROM decisions d JOIN channels c ON c.id = d.post
+           WHERE d.state = 'proposed' AND c.repo IN (SELECT name FROM repos)`,
         )
-        .all() as { id: number; pull: number; token: string | null }[];
+        .all() as { id: number; pull: number; repo: string; token: string | null }[];
       // 열린 것은 GitHub의 변경 요청 리뷰를 이의로 맞추고(ADR-0025), 창이 닫혔으면 머지한다.
-      for (const { id, pull: number, token } of open) {
+      for (const { id, pull: number, repo, token } of open) {
         if (!token) continue;
         const pull = await github.pull(token, repo, number);
         if (stopped) return;
@@ -4513,9 +4943,9 @@ export async function startServer(options: {
               .prepare("SELECT login FROM objections WHERE decision = ? AND via = 'github'")
               .all(id) as { login: string }[]
           ).map((row) => row.login);
-          // GitHub의 변경 요청 리뷰는 지금 멤버(세션이 있다)가 단 것만 이의다.
+          // GitHub의 변경 요청 리뷰는 그 레포의 지금 멤버가 단 것만 이의다.
           const member = (l: string) =>
-            !!db.prepare("SELECT 1 FROM sessions WHERE login = ?").get(l);
+            !!db.prepare(`SELECT 1 FROM ${MEMBERS} WHERE login = ?`).get(repo, l);
           for (const login of requested.filter((l) => member(l) && !known.includes(l))) {
             db.prepare(
               "INSERT INTO objections (decision, login, via, at) VALUES (?, ?, 'github', ?)",

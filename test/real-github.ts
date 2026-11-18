@@ -103,6 +103,11 @@ await attempt("canPush", async () => {
   expect(push === true, `push 권한이 있다고 답하지 않았다: ${push}`);
   return { detail: "true" };
 });
+await attempt("canAdmin", async () => {
+  const admin = await github.canAdmin(token, repo);
+  expect(typeof admin === "boolean", `Admin인지 답하지 않았다: ${admin}`);
+  return { detail: String(admin) };
+});
 const base = await attempt("defaultBranch", async () => {
   const b = await github.defaultBranch(token, repo);
   expect(b.name && /^[0-9a-f]{40}$/.test(b.sha), `이름이나 sha가 이상하다: ${JSON.stringify(b)}`);

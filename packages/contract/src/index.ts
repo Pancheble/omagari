@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 45;
+export const CONTRACT_VERSION = 46;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -1112,7 +1112,8 @@ export const MAX_OVERLAPS = 100;
 
 export const runnerToServer = {
   /**
-   * 붙자마자 보낸다. `repos`는 러너 폴더의 GitHub 원격이 가리키는 레포(`owner/name`)들이다.
+   * 붙자마자 보낸다. `repos`는 러너 폴더의 GitHub 원격이 가리키는 레포(`owner/name`)들이다. 서버는 그 가운데 워크스페이스에 있고
+   * 이 멤버가 push 권한이 있는 첫 레포에 러너를 잇는다(ADR-0043). 그런 레포가 없으면 `forbidden`으로 거절한다.
    * `executors`는 이 기기에서 러너가 돌릴 수 있는 실행기다. 실행기마다 에이전트가 하나씩 생긴다(ADR-0015).
    * `choices`는 실행기마다 고를 거리다. 실행기에 묻지 못한 것은 빠진다(ADR-0020).
    * `mergeCheck`는 이 러너의 합쳐 돌려 보기다. 켜고 끄는 것은 러너에서만 하므로(ADR-0034) 붙을 때 한 번 알린다.
@@ -1126,7 +1127,7 @@ export const runnerToServer = {
   }),
   /**
    * 기본 브랜치에서 읽은 설정 파일(검사 명령). 붙을 때마다 한 번, 그 뒤로는 읽은 것이 달라질 때마다 보낸다.
-   * 레포에 하나라 서버는 어느 멤버의 러너가 보냈든 마지막 것을 둔다.
+   * 레포에 하나라 서버는 그 레포의 어느 멤버의 러너가 보냈든 마지막 것을 둔다.
    */
   checkCommand: CheckReading,
   /**
@@ -1588,6 +1589,13 @@ export type Route = {
 export type BodyOf<R extends Route> = R["body"] extends z.ZodType ? z.output<R["body"]> : undefined;
 export type ReplyOf<R extends Route> = z.input<R["response"]>;
 
+/**
+ * 레포마다인 API(작업, 멤버, 포스트, 라벨, 결정, 피드)를 어느 레포로 부를지 싣는 머리말(ADR-0043). 값은 `owner/name`이고,
+ * 여럿이면 쉼표로 잇는다(CLI는 폴더의 GitHub 원격을 다 싣는다). 그 가운데 부른 사람에게 보이는 첫 레포로 부른다.
+ * 없으면 `api.me`의 `repo`로 부른다. 보이는 레포가 없으면 `not_found`다.
+ */
+export const REPO_HEADER = "omagari-repo";
+
 /** 웹이 쓰는 API. 이후의 이슈는 자기 경로를 여기에 더한다. */
 export const api = {
   health: {
@@ -1630,9 +1638,28 @@ export const api = {
       login: z.string(),
       /** GitHub 프로필의 이름. 비워 두었으면 `login`과 같다. 로그인할 때 읽는다. */
       name: z.string(),
-      /** 워크스페이스의 레포 `owner/name`. 워크스페이스 하나에 레포 하나다(ADR-0012). */
+      /** `REPO_HEADER` 없이 부르면 쓰는 레포 `owner/name`: `repos`의 첫째다(ADR-0043). */
       repo: z.string(),
+      /** 이 멤버가 push 권한이 있어 보이는 워크스페이스의 레포들, 넣은 순서. 로그인할 때와 10분마다 다시 읽는다. */
+      repos: z.array(z.string()),
     }),
+  },
+  /**
+   * 워크스페이스에 레포 `owner/name`을 넣는다(ADR-0043). 부른 사람이 그 레포의 GitHub Admin이어야 하고(`forbidden`),
+   * 레포의 계정이 서버 설정의 받을 계정 목록에 있어야 한다(`forbidden`). 답은 부른 사람에게 보이는 레포들이다.
+   */
+  addRepo: {
+    method: "POST",
+    path: "/api/repos/add",
+    body: z.strictObject({ repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/) }),
+    response: z.strictObject({ repos: z.array(z.string()) }),
+  },
+  /** 워크스페이스에서 레포를 뺀다. 넣을 때처럼 그 레포의 GitHub Admin만 한다. 그 레포의 것은 지우지 않고 다시 넣으면 돌아온다. */
+  removeRepo: {
+    method: "POST",
+    path: "/api/repos/remove",
+    body: z.strictObject({ repo: z.string() }),
+    response: z.strictObject({ repos: z.array(z.string()) }),
   },
   /** 이 세션을 끝낸다. 같은 멤버의 다른 세션(다른 브라우저, CLI와 러너)은 그대로다. */
   logout: {
@@ -2140,7 +2167,12 @@ export const webToServer = {
    * `after`는 지난 연결에서 마지막으로 받은 메시지 번호(또는 그 연결의 welcome `seq`)다.
    * 주면 그 뒤에 쌓인 메시지를 끊긴 사이의 것까지 다시 받는다. 처음 붙을 때는 주지 않는다.
    */
-  hello: z.strictObject({ session: z.string(), after: z.number().int().nonnegative().optional() }),
+  hello: z.strictObject({
+    session: z.string(),
+    after: z.number().int().nonnegative().optional(),
+    /** 멤버 목록, 라벨처럼 레포마다인 것을 받을 레포. 주지 않으면 `api.me`의 `repo`다. */
+    repo: z.string().optional(),
+  }),
 } satisfies Payloads;
 
 /** 서버가 웹의 실시간 연결에 보내는 것. 세션이 없거나 끝나면 `error`를 보낸 뒤 1008로 닫는다. */
@@ -2181,12 +2213,13 @@ export const serverToWeb = {
 
 /** API 하나를 부른다. 웹, CLI, 테스트가 같이 쓴다. 오류 답은 `ContractFailure`로 던진다. */
 export async function call<R extends Route>(
-  server: { url: string; session?: string },
+  server: { url: string; session?: string; repos?: string[] },
   route: R,
   ...[body]: R["body"] extends z.ZodType ? [z.input<R["body"]>] : []
 ): Promise<z.output<R["response"]>> {
   const headers: Record<string, string> = {};
   if (server.session) headers.authorization = `Bearer ${server.session}`;
+  if (server.repos?.length) headers[REPO_HEADER] = server.repos.join(",");
   if (route.body) headers["content-type"] = "application/json";
   const response = await fetch(new URL(route.path, server.url), {
     method: route.method,
