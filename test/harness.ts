@@ -272,6 +272,20 @@ export function fakeGitHub() {
     async canAdmin(token, repo) {
       return admins.has(`${repo} ${tokens.get(token)}`);
     },
+    async adminRepos(token, owner) {
+      const login = tokens.get(token);
+      return [...admins]
+        .map((key) => key.split(" ") as [string, string])
+        .filter(
+          ([repo, who]) =>
+            who === login && repo.split("/")[0]?.toLowerCase() === owner.toLowerCase(),
+        )
+        .map(([name]) => ({
+          name,
+          private: true,
+          pushers: [...pushers].filter((key) => key.startsWith(`${name} `)).length,
+        }));
+    },
     async pulls(token, repo, branch) {
       if (!REPOS.has(repo) || !tokens.has(token)) return undefined;
       return pulls

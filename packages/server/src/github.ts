@@ -23,6 +23,14 @@ export type GitHub = {
   canPush(token: string, repo: string): Promise<boolean | undefined>;
   /** 토큰 주인이 `owner/name`의 Admin인가(워크스페이스에 레포를 넣고 뺀다, ADR-0043). GitHub이 답하지 못하면 `undefined`다. */
   canAdmin(token: string, repo: string): Promise<boolean | undefined>;
+  /**
+   * 계정 `owner`의 레포 가운데 토큰 주인이 Admin인 것과 공개 여부, push 권한이 있는 사람 수(레포 넣기 목록, ADR-0043).
+   * GitHub이 답하지 못하면 `undefined`다.
+   */
+  adminRepos(
+    token: string,
+    owner: string,
+  ): Promise<{ name: string; private: boolean; pushers: number }[] | undefined>;
   /** `owner/name`에서 `branch`를 head로 하는 PR들(닫힌 것 포함). GitHub이 답하지 못하면 `undefined`다. */
   pulls(token: string, repo: string, branch: string): Promise<Pull[] | undefined>;
   /** 레포의 기본 브랜치 이름과 그 끝 커밋. */
@@ -210,6 +218,40 @@ export function realGitHub(clientId: string): GitHub {
     },
     canPush: (token, repo) => permission(token, repo, "push"),
     canAdmin: (token, repo) => permission(token, repo, "admin"),
+    // 내 레포: GET /user/repos(https://docs.github.com/en/rest/repos/repos#list-repositories-for-the-authenticated-user)의 `permissions.admin`.
+    // push 권한이 있는 사람: GET /repos/{owner}/{repo}/collaborators?permission=push(팀으로 받은 사람도 든다).
+    // ponytail: 둘 다 첫 100개만 읽는다. 계정의 레포나 한 레포의 사람이 100을 넘으면 Link 머리말로 다음 쪽을 읽는다.
+    async adminRepos(token, owner) {
+      const response = await get("/user/repos?per_page=100&sort=full_name", token).catch(
+        () => undefined,
+      );
+      if (!response?.ok) return undefined;
+      const mine = (
+        (await response.json()) as {
+          full_name: string;
+          private: boolean;
+          owner: { login: string };
+          permissions?: { admin?: boolean };
+        }[]
+      ).filter(
+        (repo) => repo.owner.login.toLowerCase() === owner.toLowerCase() && repo.permissions?.admin,
+      );
+      const counted = await Promise.all(
+        mine.map(async (repo) => {
+          const people = await get(
+            `/repos/${repo.full_name}/collaborators?permission=push&per_page=100`,
+            token,
+          ).catch(() => undefined);
+          if (!people?.ok) return undefined;
+          return {
+            name: repo.full_name,
+            private: repo.private,
+            pushers: ((await people.json()) as unknown[]).length,
+          };
+        }),
+      );
+      return counted.every((repo) => repo !== undefined) ? counted : undefined;
+    },
     async pulls(token, repo, branch) {
       const head = encodeURIComponent(`${repo.split("/")[0]}:${branch}`);
       const response = await get(

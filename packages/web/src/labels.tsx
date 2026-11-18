@@ -8,7 +8,7 @@ import {
   MAX_CHANNEL_NAME_CHARS,
   shows,
 } from "@omagari/contract";
-import { Check, ChevronDown, Hash, MessagesSquare, Search, Tag } from "lucide-react";
+import { Check, ChevronDown, Hash, Info, MessagesSquare, Search, Tag } from "lucide-react";
 import {
   createContext,
   type FormEvent,
@@ -18,6 +18,7 @@ import {
   useId,
   useState,
 } from "react";
+import { repoName } from "./api.ts";
 import { useMenu } from "./dm.tsx";
 
 /** 레포의 라벨 전부(ADR-0039). 앱 틀이 읽고 실시간으로 갈아 끼운다. 배지가 색을 찾으려고 읽는다. */
@@ -175,12 +176,31 @@ const labelState = (draft: Draft, label: Label) =>
     ? { on: draft.importance === label.importance, locked: true }
     : { on: draft?.labels.includes(label.name) ?? false, locked: false };
 
-/** 둘이 같은 필터인가. 라벨 순서는 따지지 않는다. */
+/** 레포 조건을 바꾼다. 비면 모든 레포다(나중에 넣는 레포도 따라온다). 라벨을 고쳐도 레포 조건은 남는다. */
+export const withRepos = (draft: ForumFilter, repos: string[]): ForumFilter => {
+  const { repos: _, ...rest } = draft;
+  return (repos.length ? { ...rest, repos } : rest) as ForumFilter;
+};
+
+/** 둘이 같은 필터인가. 라벨과 레포 순서는 따지지 않는다. */
 export const sameFilter = (a: Draft | undefined, b: Draft | undefined) => {
   const key = (f: Draft | undefined) =>
-    !f ? "" : "importance" in f ? f.importance : f.labels.toSorted().join("\n");
+    !f
+      ? ""
+      : `${"importance" in f ? f.importance : f.labels.toSorted().join("\n")}|${(f.repos ?? []).toSorted().join(",")}`;
   return key(a) === key(b);
 };
+
+/** 레포 칩의 값: "모두"나 레포 이름들. */
+const reposWord = (repos: string[]) => (repos.length ? repos.map(repoName).join(", ") : "모두");
+
+/** 레포 조건이 패널 어디에 보일지(ADR-0043): 레포 하나면 그 레포 밑, 아니면 워크스페이스 전체 밑이다. */
+const placeNote = (repos: string[]) =>
+  repos.length === 1
+    ? `레포가 하나라 ${repoName(repos[0] as string)} 밑에 보여요.`
+    : repos.length === 0
+      ? "모든 레포라 워크스페이스 전체 밑에 보여요."
+      : `레포가 ${["", "", "둘", "셋", "넷"][repos.length] ?? `${repos.length}개`}라 워크스페이스 전체 밑에 보여요.`;
 
 /** 필터 칩에 쓰는 값: 색 점 셋까지와 "논의인 라벨 모두"나 라벨 이름. */
 function FilterValue({ draft }: { draft: Draft }) {
@@ -228,9 +248,12 @@ export function FilterRow({
   onStates,
   filter,
   draft,
+  repos,
   onDraft,
   onSave,
 }: {
+  /** 워크스페이스에서 내게 보이는 레포들. 레포 칩이 고른다. */
+  repos: string[];
   states: Set<"open" | "resolved">;
   counts: Record<"open" | "resolved", number>;
   onStates: (states: Set<"open" | "resolved">) => void;
@@ -242,6 +265,10 @@ export function FilterRow({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
   const dirty = filter !== undefined && !sameFilter(draft, filter);
+  /** 고치는 중인 레포 조건. 라벨을 다 꺼 필터가 비었으면 포럼의 것이다. */
+  const picked = (draft ?? filter)?.repos ?? [];
+  const reposChanged = reposWord(picked.toSorted()) !== reposWord((filter?.repos ?? []).toSorted());
+  const pickRepos = (next: string[]) => draft && onDraft(withRepos(draft, next));
   const stateWords = (["open", "resolved"] as const)
     .filter((id) => states.has(id))
     .map((id) => STATE_WORDS[id]);
@@ -283,8 +310,21 @@ export function FilterRow({
         ))}
       </Chip>
       {filter && (
-        <Chip name="라벨" value={<FilterValue draft={draft} />} changed={dirty} wide>
-          <FilterPicker draft={draft} onDraft={onDraft} />
+        <Chip name="레포" value={<span>{reposWord(picked)}</span>} changed={reposChanged}>
+          <RepoOptions repos={repos} picked={picked} onPick={pickRepos} />
+        </Chip>
+      )}
+      {filter && (
+        <Chip
+          name="라벨"
+          value={<FilterValue draft={draft} />}
+          changed={dirty && !reposChanged}
+          wide
+        >
+          <FilterPicker
+            draft={draft}
+            onDraft={(next) => onDraft(next && withRepos(next, picked))}
+          />
         </Chip>
       )}
       {dirty && (
@@ -310,6 +350,52 @@ export function FilterRow({
 }
 
 const STATE_WORDS = { open: "열림", resolved: "풀림" } as const;
+
+/** 레포 칩의 창: "모든 레포"와 레포마다 한 줄. "모든 레포"를 켜면 레포는 꺼진다. */
+function RepoOptions({
+  repos,
+  picked,
+  onPick,
+}: {
+  repos: string[];
+  picked: string[];
+  onPick: (repos: string[]) => void;
+}) {
+  return (
+    <>
+      <button
+        type="button"
+        role="menuitemcheckbox"
+        aria-checked={picked.length === 0}
+        className="menu-item pop-row"
+        tabIndex={-1}
+        onClick={() => onPick([])}
+      >
+        <Box on={picked.length === 0} />
+        <span className="pop-name">모든 레포</span>
+      </button>
+      {repos.map((repo) => (
+        <button
+          key={repo}
+          type="button"
+          role="menuitemcheckbox"
+          aria-checked={picked.includes(repo)}
+          className="menu-item pop-row"
+          tabIndex={-1}
+          onClick={() =>
+            onPick(
+              picked.includes(repo) ? picked.filter((other) => other !== repo) : [...picked, repo],
+            )
+          }
+        >
+          <Box on={picked.includes(repo)} />
+          <span className="pop-name">{repoName(repo)}</span>
+        </button>
+      ))}
+      <p className="pop-note">{placeNote(picked)}</p>
+    </>
+  );
+}
 
 /** 필터 칩: 이름(보조 글씨), 값, 꺾쇠. 누르면 바로 아래에 창이 열린다. */
 function Chip({
@@ -431,6 +517,7 @@ export function ForumDialog({
   dialog,
   forum,
   posts,
+  repos,
   kind = "forum",
   onKind,
   onCreateChat,
@@ -441,6 +528,8 @@ export function ForumDialog({
   forum?: Channel;
   /** 미리 보기에 쓰는 포스트들과 그 제목 */
   posts: { labels: string[]; importance: Importance; repo: string; title: string }[];
+  /** 워크스페이스에서 내게 보이는 레포들. 레포 칩이 고른다(시안 92-A). */
+  repos: string[];
   /** 만들 때 고른 종류. `onKind`가 있으면 종류 고르기가 선다. */
   kind?: CreateKind;
   onKind?: (kind: CreateKind) => void;
@@ -451,6 +540,9 @@ export function ForumDialog({
   const labels = useLabels();
   const [name, setName] = useState(forum?.name ?? "");
   const [draft, setDraft] = useState<Draft>(forum?.filter ?? null);
+  /** 레포 조건. 비면 "모든 레포"다. 처음에는 모든 레포다. */
+  const [picked, setPicked] = useState<string[]>(forum?.filter?.repos ?? []);
+  const full = draft && withRepos(draft, picked);
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -458,7 +550,7 @@ export function ForumDialog({
   const input = useId();
   const help = useId();
   const chat = kind === "chat";
-  const matched = draft ? posts.filter((post) => shows(draft, post)) : [];
+  const matched = full ? posts.filter((post) => shows(full, post)) : [];
 
   const run = async (act: () => Promise<void>) => {
     setBusy(true);
@@ -478,7 +570,7 @@ export function ForumDialog({
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (chat) void run(() => onCreateChat?.(name.trim()) ?? Promise.resolve());
-    else if (draft) void run(() => onSave(name, draft));
+    else if (full) void run(() => onSave(name, full));
   };
   const bundled = draft !== null && "importance" in draft;
 
@@ -491,6 +583,7 @@ export function ForumDialog({
       onClose={() => {
         setName(forum?.name ?? "");
         setDraft(forum?.filter ?? null);
+        setPicked(forum?.filter?.repos ?? []);
         setError(undefined);
         setDeleting(false);
       }}
@@ -545,6 +638,44 @@ export function ForumDialog({
             </p>
           )}
         </div>
+        {!chat && (
+          <fieldset className="field forum-dialog-repos">
+            <legend>레포</legend>
+            <div className="dialog-chips">
+              <button
+                type="button"
+                className="tag-chip"
+                aria-pressed={picked.length === 0}
+                onClick={() => setPicked([])}
+              >
+                {picked.length === 0 && <Check size={14} aria-hidden />}
+                모든 레포
+              </button>
+              {repos.map((repo) => {
+                const on = picked.includes(repo);
+                return (
+                  <button
+                    key={repo}
+                    type="button"
+                    className="tag-chip"
+                    aria-pressed={on}
+                    title={repo}
+                    onClick={() =>
+                      setPicked(on ? picked.filter((other) => other !== repo) : [...picked, repo])
+                    }
+                  >
+                    {on && <Check size={14} aria-hidden />}
+                    {repoName(repo)}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="place-note">
+              <Info size={14} aria-hidden />
+              {placeNote(picked)}
+            </p>
+          </fieldset>
+        )}
         {!chat && (
           <>
             <fieldset className="field forum-dialog-filter">
