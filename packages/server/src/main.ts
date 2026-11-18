@@ -24,6 +24,8 @@ const server = await startServer({
   webDir: existsSync(WEB_DIST) ? WEB_DIST : undefined,
   // 사람이 웹을 여는 주소. 결정 파일의 출처(포스트 링크)에 쓴다. 주지 않으면 서버가 듣는 주소다.
   publicUrl: process.env.OMAGARI_URL,
+  // Fly는 머신에 FLY_APP_NAME을 넣는다. 그때만 앞단의 Fly-Client-IP를 믿는다.
+  behindFly: Boolean(process.env.FLY_APP_NAME),
   // 토론의 라운드 수. 주지 않으면 세 라운드다.
   debateRounds: process.env.OMAGARI_DEBATE_ROUNDS
     ? Number(process.env.OMAGARI_DEBATE_ROUNDS)

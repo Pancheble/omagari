@@ -355,20 +355,36 @@ test("CLI와 훅은 실행 파일의 입출력으로 조작한다", async (t) =>
   assert.deepEqual(await world.hook("", { keepStdinOpen: true }), silent);
 });
 
-test("한 주소가 끝나지 않은 로그인을 쌓아도 다른 사람의 로그인을 막지 못한다", async (t) => {
-  const world = await startWorld();
+/** `client` 주소인 척 로그인을 시작하는 날 요청. Fly 앞단처럼 Fly-Client-IP를 단다. */
+const startLogin = (url: string, client: string) =>
+  fetch(new URL(api.login.path, url), { method: "POST", headers: { "fly-client-ip": client } });
+
+test("Fly 위의 서버에서 한 주소가 끝나지 않은 로그인을 한꺼번에 쌓아도 다섯까지만 받고, 다른 사람의 로그인을 막지 못한다", async (t) => {
+  const world = await startWorld({ behindFly: true });
   t.after(world.stop);
-  const start = (client: string) =>
-    fetch(new URL(api.login.path, world.server.url), {
-      method: "POST",
-      headers: { "fly-client-ip": client },
-    });
-  for (let i = 0; i < 5; i++) assert.equal((await start("192.0.2.1")).status, 200);
-  // 같은 주소는 더 열지 못한다.
-  assert.equal((await start("192.0.2.1")).status, 500);
+  // GitHub이 느리게 답해 요청들이 서로 기다리는 사이에 겹친다.
+  const startDevice = world.github.github.startDevice;
+  world.github.github.startDevice = async () => {
+    await setTimeout(100);
+    return startDevice();
+  };
+  const statuses = await Promise.all(
+    Array.from({ length: 20 }, () =>
+      startLogin(world.server.url, "192.0.2.1").then((r) => r.status),
+    ),
+  );
+  assert.equal(statuses.filter((status) => status === 200).length, 5);
   // 다른 사람은 로그인한다.
   world.github.grant("alice");
   await world.login("alice");
+});
+
+test("Fly 위가 아닌 서버는 Fly-Client-IP를 믿지 않아, 헤더를 바꿔 가며 보내도 연결의 주소 하나로 센다", async (t) => {
+  const world = await startWorld();
+  t.after(world.stop);
+  for (let i = 1; i <= 5; i++)
+    assert.equal((await startLogin(world.server.url, `192.0.2.${i}`)).status, 200);
+  assert.equal((await startLogin(world.server.url, "192.0.2.6")).status, 500);
 });
 
 test("hello를 마치지 않은 연결은 시간 안에 끊기고, 큰 프레임이나 계약과 다른 프레임을 보내면 바로 끊긴다", async (t) => {

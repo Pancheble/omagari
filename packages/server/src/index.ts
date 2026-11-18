@@ -424,6 +424,8 @@ export async function startServer(options: {
   debateRounds?: number;
   /** 토론이 끝나지 않으면 만료하기까지의 시간. 기본 14일(`INBOX_MS`). 테스트가 줄여 쓴다. 만료는 `followMs`마다 본다. */
   debateMs?: number;
+  /** Fly 위에서 돈다(`FLY_APP_NAME`이 있다). 그때만 앞단이 넣는 Fly-Client-IP를 클라이언트 주소로 믿는다. */
+  behindFly?: boolean;
   /** hello를 마치기까지의 시간. 기본 10초. 테스트가 줄여 쓴다. */
   helloMs?: number;
   /** 빌드한 웹 화면(`vite build`의 dist) 폴더. 주면 API와 같은 주소에서 낸다. 개발할 때는 주지 않고 Vite를 쓴다. */
@@ -897,6 +899,8 @@ export async function startServer(options: {
   >();
   /** 지금 GitHub에 기기 인증을 여는 중인 수. 기다리는 사이에도 상한을 지키려고 미리 센다. */
   let startingLogins = 0;
+  /** 주소마다 지금 GitHub에 기기 인증을 여는 중인 수. 한 주소가 한꺼번에 보내도 주소마다의 상한을 지킨다. */
+  const startingFrom = new Map<string, number>();
   /** hello를 마친 러너의 연결과 그 러너가 돌리는 실행기, 실행기마다의 고를 거리. */
   const runners = new Map<
     WSContext,
@@ -2160,21 +2164,30 @@ export async function startServer(options: {
     for (const [device, pending] of logins)
       if (pending.expiresAt < now || now - pending.polledAt > ABANDONED_LOGIN_MS)
         logins.delete(device);
-    // Fly 앞단은 Fly-Client-IP를 덮어써 보낸다(배포에서 확인할 것). 없으면 연결의 주소다.
-    const client =
-      c.req.header("fly-client-ip") ??
+    // Fly 앞단은 Fly-Client-IP를 덮어써 보낸다(배포에서 확인할 것). Fly 위에서 돌 때만 믿고, 아니면 연결의 주소다.
+    // Fly가 아닌 곳에서 믿으면 요청마다 헤더를 바꿔 주소마다의 상한을 넘을 수 있다.
+    const socketAddress =
       (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming
-        ?.socket?.remoteAddress ??
-      "";
-    const mine = [...logins.values()].filter((pending) => pending.client === client).length;
+        ?.socket?.remoteAddress ?? "";
+    const client = (options.behindFly && c.req.header("fly-client-ip")) || socketAddress;
+    const mine =
+      [...logins.values()].filter((pending) => pending.client === client).length +
+      (startingFrom.get(client) ?? 0);
     if (logins.size + startingLogins >= MAX_PENDING_LOGINS || mine >= MAX_PENDING_PER_CLIENT) {
       throw new ContractFailure({
         code: "internal",
         message: "로그인이 밀려 있다. 잠시 뒤 다시 하라",
       });
     }
+    // GitHub을 기다리기 전에 전체와 주소마다의 자리를 잡는다. 기다리는 사이에 온 요청도 그 자리를 센다.
     startingLogins++;
-    const started = await github.startDevice().finally(() => startingLogins--);
+    startingFrom.set(client, (startingFrom.get(client) ?? 0) + 1);
+    const started = await github.startDevice().finally(() => {
+      startingLogins--;
+      const left = (startingFrom.get(client) ?? 1) - 1;
+      if (left > 0) startingFrom.set(client, left);
+      else startingFrom.delete(client);
+    });
     const device = randomBytes(16).toString("hex");
     logins.set(device, {
       deviceCode: started.deviceCode,
