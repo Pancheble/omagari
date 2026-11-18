@@ -379,10 +379,10 @@ async function status() {
     call(as, api.feed),
   ]);
   console.log(DATA_NOTE);
-  for (const { login, agents, works: shownBranches } of members) {
+  for (const { login, agents, works: seen } of members) {
     // 보이는 작업은 멤버 목록이 정한다(ADR-0006). api.works는 걸러지지 않은 것이다.
     const own = works.filter(
-      (work) => work.login === login && shownBranches.some((shown) => shown.branch === work.branch),
+      (work) => work.login === login && seen.some((shown) => shown.branch === work.branch),
     );
     const since = own[0]?.offlineSince;
     // 에이전트는 실행기마다 하나다(ADR-0015). 러너를 켠 적이 없으면 없다.
@@ -403,7 +403,11 @@ async function status() {
             : line.source === "pull"
               ? `${quote(line.text)} (초안 PR)`
               : quote(line.text);
-      console.log(`  ${quote(branch)}: ${shown}`);
+      // 작업의 에이전트: 그 브랜치에서 마지막으로 훅이나 status set을 보낸 실행기. 모르면 적지 않는다(ADR-0015).
+      const executor = seen.find((work) => work.branch === branch)?.executor;
+      console.log(
+        `  ${quote(branch)}${executor ? ` (${EXECUTOR_NAMES[executor]})` : ""}: ${shown}`,
+      );
       for (const file of files) {
         const note = "deleted" in file ? " (지움)" : "omitted" in file ? " (경로만)" : "";
         console.log(`    ${quote(file.path)}${note}`);
@@ -423,14 +427,19 @@ async function status() {
   }
 }
 
-/** 이 폴더에 체크아웃된 브랜치의 작업에 상태 한 줄을 쓴다. */
+/**
+ * 이 폴더에 체크아웃된 브랜치의 작업에 상태 한 줄을 쓴다. Claude Code 안에서 돌면 그 작업의 에이전트도 알린다(ADR-0015).
+ * Claude Code는 자기가 띄운 셸에 `CLAUDECODE=1`을 넣는다(Claude Code 문서 "Environment variables").
+ * Codex는 셸에 넣는 변수를 문서로 알리지 않아 보내지 않는다. Codex 작업은 훅으로만 정한다.
+ */
 async function setStatus(text: string) {
   const branch = await promisify(execFile)("git", ["symbolic-ref", "--quiet", "--short", "HEAD"])
     .then(({ stdout }) => stdout.trim())
     .catch(() => {
       throw new Error("브랜치에 있지 않다. 작업의 브랜치를 체크아웃한 폴더에서 써라");
     });
-  const written = await call(await member(), api.setStatus, { branch, text });
+  const executor = process.env.CLAUDECODE === "1" ? ("claude-code" as const) : undefined;
+  const written = await call(await member(), api.setStatus, { branch, text, executor });
   console.log(`${branch}의 상태 한 줄을 썼다: ${written.text}`);
 }
 

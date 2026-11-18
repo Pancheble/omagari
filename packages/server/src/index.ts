@@ -470,6 +470,13 @@ export async function startServer(options: {
     executor TEXT NOT NULL,
     PRIMARY KEY (login, executor)
   ) STRICT`);
+  // 작업마다 그 작업의 에이전트: 그 브랜치에서 마지막으로 훅이나 status set을 보낸 실행기(ADR-0015). 관측만 있는 작업은 없다.
+  db.exec(`CREATE TABLE IF NOT EXISTS work_agents (
+    login TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    executor TEXT NOT NULL,
+    PRIMARY KEY (login, branch)
+  ) STRICT`);
   // 러너가 떨어진 멤버와 떨어진 시각(ms). 러너가 붙으면 지운다.
   db.exec(`CREATE TABLE IF NOT EXISTS offline (
     login TEXT PRIMARY KEY,
@@ -1016,8 +1023,8 @@ export async function startServer(options: {
   };
 
   /**
-   * 멤버 목록과 `api.works`에 보일 작업(ADR-0006). 바뀐 것이 없어 상태 한 줄(에이전트가 쓴 줄, 초안 PR, 바뀐 파일)도
-   * 선점도 없는 작업은 숨긴다. 러너의 situation과 부딪힘 계산은 걸러지지 않은 worksView를 그대로 쓴다.
+   * 멤버 목록(과 그것으로 거르는 `omagari status`)에 보일 작업(ADR-0006). 바뀐 것이 없어 상태 한 줄(에이전트가 쓴 줄, 초안 PR, 바뀐 파일)도
+   * 선점도 없는 작업은 숨긴다. `api.works`와 러너의 situation, 부딪힘 계산은 걸러지지 않은 worksView를 그대로 쓴다.
    */
   const shownWorks = (works: WorkView[]): WorkView[] => {
     const claimed = new Set(
@@ -1168,15 +1175,21 @@ export async function startServer(options: {
       return { executor, state, choices } as const;
     };
     const byLogin = Map.groupBy(shownWorks(works), (work) => work.login);
+    const workAgents = new Map(
+      (
+        db.prepare("SELECT login, branch, executor FROM work_agents").all() as {
+          login: string;
+          branch: string;
+          executor: ExecutorId;
+        }[]
+      ).map((row) => [JSON.stringify([row.login, row.branch]), row.executor]),
+    );
     const conflicted = conflictedWorks();
     const broken = brokenWorks();
     return people.map(({ login, name, since, ...profile }) => {
       const agents = known
         .filter((agent) => agent.login === login)
         .map(({ executor }) => agent(login, executor));
-      // ponytail: 실행기가 하나뿐이면 작업은 그 에이전트의 것이다. 둘 이상(#16)이면 그 브랜치에서 마지막으로
-      // 훅이나 status set을 보낸 실행기로 정한다(ADR-0015). 그 길이 생기기 전까지 둘 이상이면 모른다(null).
-      const executor = agents.length === 1 ? (agents[0]?.executor ?? null) : null;
       return {
         login,
         name,
@@ -1187,7 +1200,7 @@ export async function startServer(options: {
         offlineSince: since === null ? null : new Date(since).toISOString(),
         works: (byLogin.get(login) ?? []).map(({ branch, line }) => ({
           branch,
-          executor,
+          executor: workAgents.get(JSON.stringify([login, branch])) ?? null,
           line,
           conflict: conflicted.has(JSON.stringify([login, branch])),
           broken: broken.has(JSON.stringify([login, branch])),
@@ -2320,18 +2333,26 @@ export async function startServer(options: {
     return {};
   });
 
+  /** 작업의 에이전트를 바꾼다(ADR-0015). 마지막에 보낸 실행기가 이긴다. */
+  const setWorkAgent = (login: string, branch: string, executor: ExecutorId) =>
+    db
+      .prepare("INSERT OR REPLACE INTO work_agents (login, branch, executor) VALUES (?, ?, ?)")
+      .run(login, branch, executor);
+
   mount(app, api.members, () => ({ members: membersView(worksView()) }));
 
   mount(app, api.works, () => ({ works: worksView() }));
 
-  mount(app, api.setStatus, ({ branch, text }, c) => {
+  mount(app, api.setStatus, ({ branch, executor, text }, c) => {
     const at = Date.now();
+    const login = c.get("login") as string;
     db.prepare("INSERT OR REPLACE INTO lines (login, branch, text, at) VALUES (?, ?, ?, ?)").run(
-      c.get("login") as string,
+      login,
       branch,
       text,
       at,
     );
+    if (executor) setWorkAgent(login, branch, executor);
     shareSituation();
     return { text, at: new Date(at).toISOString() };
   });
@@ -3557,6 +3578,9 @@ export async function startServer(options: {
           const drop = db.prepare("DELETE FROM inbox WHERE id = ? AND login = ?");
           for (const id of message.payload.ids) drop.run(id, runner.login);
           shareInbox();
+        } else if (message.kind === "working") {
+          setWorkAgent(runner.login, message.payload.branch, message.payload.executor);
+          shareMembers();
         } else if (message.kind === "claim") {
           const { branch, path, unit, symbol, lines, overlaps, plan } = message.payload;
           const login = runner.login;
