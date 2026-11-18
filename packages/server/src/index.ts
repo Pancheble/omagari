@@ -1015,6 +1015,22 @@ export async function startServer(options: {
     });
   };
 
+  /**
+   * 멤버 목록과 `api.works`에 보일 작업(ADR-0006). 바뀐 것이 없어 상태 한 줄(에이전트가 쓴 줄, 초안 PR, 바뀐 파일)도
+   * 선점도 없는 작업은 숨긴다. 러너의 situation과 부딪힘 계산은 걸러지지 않은 worksView를 그대로 쓴다.
+   */
+  const shownWorks = (works: WorkView[]): WorkView[] => {
+    const claimed = new Set(
+      (
+        db.prepare("SELECT login, branch FROM claims").all() as { login: string; branch: string }[]
+      ).map((c) => JSON.stringify([c.login, c.branch])),
+    );
+    return works.filter(
+      (w) =>
+        w.line !== null || w.files.length > 0 || claimed.has(JSON.stringify([w.login, w.branch])),
+    );
+  };
+
   type ClaimRow = {
     id: number;
     login: string;
@@ -1151,7 +1167,7 @@ export async function startServer(options: {
       const state = busy ? "answering" : sockets.length > 0 ? "online" : "offline";
       return { executor, state, choices } as const;
     };
-    const byLogin = Map.groupBy(works, (work) => work.login);
+    const byLogin = Map.groupBy(shownWorks(works), (work) => work.login);
     const conflicted = conflictedWorks();
     const broken = brokenWorks();
     return people.map(({ login, name, since, ...profile }) => {

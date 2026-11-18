@@ -125,12 +125,14 @@ test("웹은 실시간 연결에서 멤버 목록을 바로 받고, 작업과 �
     ]),
   );
 
+  // 바꾼 것도 상태 한 줄도 선점도 없는 작업은 브랜치가 무엇이든 보이지 않는다(ADR-0006).
   await world.repo.git("switch", "--create", "payment");
-  await eventually(() =>
-    assert.deepEqual(owner()?.works, [
-      { branch: "payment", executor: "claude-code", line: null, conflict: false, broken: false },
-    ]),
+  await eventually(async () =>
+    assert.ok((await world.works(world.owner)).some((w) => w.branch === "payment")),
   );
+  assert.deepEqual(owner()?.works, []);
+  await world.signInCli(world.owner);
+  assert.match((await world.cli("status")).stdout, /owner · .*\n {2}작업 없음/);
   await writer(world.repo.folder)("payment.ts", "pay\n");
   await eventually(() => assert.equal(owner()?.works[0]?.line?.text, "payment.ts 수정 중"));
   await call(world.owner, api.setStatus, { branch: "payment", text: "결제 붙이는 중" });
