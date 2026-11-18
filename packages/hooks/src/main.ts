@@ -146,7 +146,7 @@ async function sessionStart(executor: ExecutorId) {
   }
   const branch = await currentBranch();
   const [mail, team] = await Promise.all([
-    mailbox(branch, false),
+    mailbox(branch, executor, false),
     Promise.race([
       situation(executor, branch).catch((error) => notConfirmed("팀의 지금 상황", reasonOf(error))),
       sleep(SITUATION_MS).then(() =>
@@ -169,13 +169,13 @@ function currentBranch() {
 
 /**
  * 이 작업(`branch`)의 편지함에 밀린 소식을 넣을 글과, 넘긴 뒤에 러너에 알릴 것. 밀린 것이 없거나 러너에 닿지 않으면 없다.
- * 러너에 닿지 않는 것은 다른 글이 이미 말하므로 따로 넣지 않는다. 서브에이전트에게는 보여 주되 넘긴 것으로 알리지 않는다.
+ * 러너에 닿지 않는 것은 다른 글이 이미 말하므로 따로 넣지 않는다. 실행기를 실어 이 작업의 에이전트도 알린다(ADR-0015). 서브에이전트에게는 보여 주되 넘긴 것으로 알리지 않는다.
  * 그래야 메인 대화의 다음 훅에서 다시 들어간다(Room의 편집 전 훅과 같다).
  */
-async function mailbox(branch: string | undefined, subagent: boolean) {
+async function mailbox(branch: string | undefined, executor: ExecutorId, subagent: boolean) {
   if (!branch) return;
   const reply = await Promise.race([
-    callRunner(cwd, "inbox", { branch }),
+    callRunner(cwd, "inbox", { branch, executor }),
     sleep(SITUATION_MS).then(() => undefined),
   ]).catch(() => undefined);
   if (reply?.kind !== "inbox") return;
@@ -291,7 +291,7 @@ async function preToolUse(event: HookEvent, executor: ExecutorId) {
   if (!(await omagariPaths())) return;
   const subagent = typeof event.agent_id === "string" && event.agent_id !== "";
   const [mail, edit] = await Promise.all([
-    currentBranch().then((branch) => mailbox(branch, subagent)),
+    currentBranch().then((branch) => mailbox(branch, executor, subagent)),
     shell ? undefined : preEdit(event, executor).catch(() => undefined),
   ]);
   return {

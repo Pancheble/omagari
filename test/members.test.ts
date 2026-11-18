@@ -23,7 +23,11 @@ test("멤버 목록에 사람마다 이름과 실행기마다의 에이전트, �
   await writer(desk.folder)("payment.ts", "pay\n");
   await desk.git("worktree", "add", "-b", "refund", tree("refund"));
   await writer(tree("refund"))("refund.ts", "refund\n");
-  const { at } = await call(alice, api.setStatus, { branch: "payment", text: "결제 붙이는 중" });
+  const { at } = await call(alice, api.setStatus, {
+    branch: "payment",
+    text: "결제 붙이는 중",
+    executor: "claude-code",
+  });
 
   const members = async () => (await call(world.owner, api.members)).members;
   const aliceOf = async () => (await members()).find((member) => member.login === "alice");
@@ -73,7 +77,7 @@ test("멤버 목록에 사람마다 이름과 실행기마다의 에이전트, �
       },
       {
         branch: "refund",
-        executor: "claude-code",
+        executor: null, // 관측만 있고 훅도 status set도 보낸 적이 없다(ADR-0015)
         line: { source: "files", text: "refund.ts 수정 중" },
         conflict: false,
         broken: false,
@@ -128,7 +132,7 @@ test("웹은 실시간 연결에서 멤버 목록을 바로 받고, 작업과 �
   await world.repo.git("switch", "--create", "payment");
   await eventually(() =>
     assert.deepEqual(owner()?.works, [
-      { branch: "payment", executor: "claude-code", line: null, conflict: false, broken: false },
+      { branch: "payment", executor: null, line: null, conflict: false, broken: false },
     ]),
   );
   await writer(world.repo.folder)("payment.ts", "pay\n");

@@ -774,6 +774,8 @@ export async function startRunner(options: {
   let inbox: InboxItem[] | undefined;
   /** 넘겨줬지만 서버가 아직 지우지 않은 소식. 받은 편지함에서 빼고, 다시 붙으면 서버에 다시 알린다. */
   const delivered = new Set<number>();
+  /** 작업(브랜치)마다 서버에 마지막으로 알린 에이전트(`working`). 같은 것을 훅마다 다시 보내지 않는다. */
+  const working = new Map<string, ExecutorId>();
   /** 서버가 받아들인 레포의 원격. 기준 커밋과 검사 명령은 그 원격의 기본 브랜치에서 찾는다. 처음 붙기 전에는 없다. */
   let remote: { name: string; repo: string } | undefined;
   /** 서버에 보내고 답(`re`)을 기다리는 요청(선점과 풀기). 끊기면 시간 상한에서 실패한다. */
@@ -1353,7 +1355,14 @@ export async function startRunner(options: {
     }
     if (message.kind !== "ask") {
       // 문답의 줄에 서지 않고 받아 둔 것으로 바로 답한다. 서버는 부르지 않는다.
-      // 두 요청에 실린 실행기(ADR-0015)는 아직 쓰지 않는다. 작업이 어느 에이전트의 것인지 서버에 알리는 것은 다음 계약 변경에서 더한다.
+      // 편지함을 묻는 훅의 실행기는 그 작업의 에이전트로 서버에 알린다(ADR-0015). situation과 nearby의 실행기는 쓰지 않는다.
+      if (message.kind === "inbox" && message.payload.executor && live) {
+        const { branch, executor } = message.payload;
+        if (working.get(branch) !== executor) {
+          live.send(encode(runnerToServer, "working", { branch, executor }));
+          working.set(branch, executor);
+        }
+      }
       if (!situation || !login) {
         return encode(
           runnerToCli,

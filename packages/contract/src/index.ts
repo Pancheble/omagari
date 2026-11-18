@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 44;
+export const CONTRACT_VERSION = 45;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -251,7 +251,7 @@ export const MemberView = z.strictObject({
   works: z.array(
     z.strictObject({
       branch: z.string(),
-      /** 이 작업의 에이전트. 모르면 null이고, 작업은 에이전트 없이 사람 아래에 둔다(ADR-0015). */
+      /** 이 작업의 에이전트: 그 브랜치에서 마지막으로 훅이나 `status set`을 보낸 실행기. 관측만 있으면 null이다(ADR-0015). */
       executor: ExecutorId.nullable(),
       line: StatusLine.nullable(),
       /** 이 작업에 직접 충돌(줄이 부딪히는 것이 확인된 알림)이 걸려 있다. 풀리면 false로 돌아온다. */
@@ -1159,6 +1159,11 @@ export const runnerToServer = {
    */
   delivered: z.strictObject({ ids: z.array(z.number()) }),
   /**
+   * 이 멤버의 작업(`branch`)에서 `executor`의 훅이 불렸다. 작업의 에이전트는 마지막으로 보낸 실행기다(ADR-0015).
+   * 러너는 훅이 실어 온 실행기가 그 작업에 지난번 보낸 것과 다를 때만 보낸다. 서버는 다시 띄워도 남긴다.
+   */
+  working: z.strictObject({ branch: z.string().min(1), executor: ExecutorId }),
+  /**
    * 선점을 건다(ADR-0008). 서버는 늘 받고 `claimed`(`re`)로 건 선점을 돌려준다. 같은 작업에 같은 곳(경로, 심볼, 줄)의 선점이 있으면 바꾼다.
    * `overlaps`는 러너가 내 사본의 줄로 옮겨 보고 겹친다고 찾은 남의 선점(`Claim.id`)이다. 서버는 양쪽 작업의 편지함에 겹침을 넣는다.
    * `unit`과 `lines`는 러너가 정한다(심볼은 정의를 찾은 줄 범위, 새 파일은 파일 전체).
@@ -1469,7 +1474,11 @@ export const cliToRunner = {
    * 작업(`branch`)의 편지함을 묻는다. 훅과 모든 `omagari` 명령이 부른다. 받아 둔 것으로 바로 답하고, 넘긴 것으로 치지 않는다.
    * 에이전트에게 넘긴 뒤에 `delivered`로 알린다.
    */
-  inbox: z.strictObject({ branch: z.string().min(1) }),
+  inbox: z.strictObject({
+    branch: z.string().min(1),
+    /** 부른 훅의 실행기. 주면 러너가 그 작업의 에이전트로 서버에 알린다(`working`). CLI는 싣지 않는다. */
+    executor: ExecutorId.optional(),
+  }),
   /** 편지함의 소식(`id`들)을 에이전트에게 넘겼다. 러너는 다시 내주지 않고 서버에 알린다. 서브에이전트에게 보여 준 것은 보내지 않는다. */
   delivered: z.strictObject({ ids: z.array(z.number()) }),
   /**
@@ -1649,12 +1658,14 @@ export const api = {
   /**
    * 내 작업(`branch`)의 상태 한 줄을 쓴다. 같은 작업에 다시 쓰면 나중에 쓴 것이 남는다.
    * 그 브랜치가 머지되거나, 관측된 변경이 있다가 0이 되면 지워진다(ADR-0010).
+   * `executor`는 CLI가 돌고 있는 실행기다. 주면 그 작업의 에이전트가 그 실행기로 바뀐다(ADR-0015).
    */
   setStatus: {
     method: "POST",
     path: "/api/status",
     body: z.strictObject({
       branch: z.string().min(1),
+      executor: ExecutorId.optional(),
       text: z
         .string()
         .transform((text) => text.replace(/\s+/g, " ").trim())
