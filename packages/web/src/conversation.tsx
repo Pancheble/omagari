@@ -231,7 +231,7 @@ export function Conversation({
       ) : view.messages.length === 0 ? (
         <div className="empty">
           <h2># {channel.name}에 아직 메시지가 없어요</h2>
-          <p>첫 메시지를 보내 대화를 시작해 보세요.</p>
+          <p>첫 메시지를 보내거나, 내 에이전트에게 먼저 물어보세요.</p>
         </div>
       ) : (
         // 목록을 거꾸로 쌓는 칸(column-reverse)에 넣어, 처음부터 맨 아래가 보이고 위에 오래된 것을 붙여도 보던 자리가 그대로다.
@@ -284,7 +284,7 @@ export function Conversation({
       )}
       {channel && (
         <CallComposer
-          label={label ?? `#${channel.name}에 메시지 보내기`}
+          label={label ?? `# ${channel.name}에 메시지 보내기`}
           agents={agentsOf(me) ?? []}
           owner={members?.find((member) => member.login === me)?.name ?? me}
           value={text}

@@ -530,7 +530,6 @@ function LabelsPage({
             type="button"
             className="header-button"
             aria-label="새 라벨"
-            title="새 라벨"
             aria-pressed={picked === undefined}
             onClick={() => pick(undefined)}
           >
@@ -606,7 +605,6 @@ function LabelsPage({
                 type="button"
                 className="header-button"
                 aria-label="다른 색 뽑기"
-                title="다른 색 뽑기"
                 onClick={() => set({ color: randomColor() })}
               >
                 <RefreshCw size={16} aria-hidden />

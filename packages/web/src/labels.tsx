@@ -114,7 +114,6 @@ export function PostLabels({
         type="button"
         className="header-button"
         aria-label="라벨"
-        title="라벨"
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menu : undefined}
