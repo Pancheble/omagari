@@ -1,4 +1,4 @@
-// 근처 작업: 고치려는 파일을 바꾸고 있는 다른 멤버의 작업과, 그 사람이 그 파일에서 바꾼 줄 범위(구현 4장, 1단계 질문 A7).
+// 근처 작업: 고치려는 파일을 바꾸고 있는 다른 작업(내 다른 브랜치 포함, ADR-0041)과, 그 사람이 그 파일에서 바꾼 줄 범위(구현 4장, 1단계 질문 A7).
 // 서버에서 받아 둔 상황만 읽는다. 줄 범위는 그 사람의 기준 커밋에 있던 판과 올라온 내용을 이 기기의 Git으로 비교해 낸다.
 import { execFile } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -9,16 +9,17 @@ import type { LineRange, NearbyWork, WorkView } from "@omagari/contract";
 
 const execFileAsync = promisify(execFile);
 
-/** `works` 가운데 `login`이 아닌 멤버가 `path`를 바꾼 작업마다 바꾼 곳을 읽는다. */
+/** `works` 가운데 같은 작업(`login`의 `branch`)이 아닌 것이 `path`를 바꾼 작업마다 바꾼 곳을 읽는다. */
 export async function nearby(
   folder: string,
   works: WorkView[],
-  login: string,
+  me: { login: string; branch?: string },
   path: string,
 ): Promise<NearbyWork[]> {
   const found: NearbyWork[] = [];
   for (const work of works) {
-    const file = work.login === login ? undefined : work.files.find((f) => f.path === path);
+    const same = work.login === me.login && work.branch === me.branch;
+    const file = same ? undefined : work.files.find((f) => f.path === path);
     if (!file) continue;
     const change: NearbyWork["change"] =
       "deleted" in file

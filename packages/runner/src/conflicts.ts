@@ -34,7 +34,8 @@ const digest = (...parts: (string | Uint8Array)[]) => {
 };
 
 /**
- * `mine`(이 러너의 작업과 그 폴더)과 `works` 가운데 `login`이 아닌 멤버의 작업이 함께 바꾼 파일마다 부딪히는지 본다.
+ * `mine`(이 러너의 작업과 그 폴더)과 `works` 가운데 다른 작업이 함께 바꾼 파일마다 부딪히는지 본다. 같은 작업(`login`의 같은 브랜치)만 건너뛴다.
+ * 내 다른 브랜치의 작업도 남의 작업처럼 본다(ADR-0041).
  * 줄이 부딪히거나 상대 내용을 읽을 수 없는 파일이 있는 쌍만 돌려준다. intent인 내 작업은 계산하지 않는다(서버로 경로가 나가지 않는다).
  */
 export async function conflicts(
@@ -53,7 +54,7 @@ export async function conflicts(
       if (work.share === "intent") continue;
       const paths = new Set(work.files.map((file) => file.path));
       for (const theirs of works) {
-        if (theirs.login === login) continue;
+        if (sameWork(theirs, login, work.branch)) continue;
         const shared = theirs.files.filter((file) => paths.has(file.path));
         if (shared.length === 0) continue;
         const ancestor = await ancestorOf(repo, work.base, theirs.base, memo.ancestors);
@@ -90,6 +91,13 @@ export async function conflicts(
   }
   return { pairs, memo: next };
 }
+
+/** 같은 작업: 같은 사람의 같은 브랜치(ADR-0041). 같은 사람이어도 브랜치가 다르면 다른 작업이다. */
+export const sameWork = (
+  other: { login: string; branch: string },
+  login: string,
+  branch?: string,
+) => other.login === login && other.branch === branch;
 
 /** 두 기준 커밋의 갈림점. 상대의 기준 커밋이 이 기기에 없으면 빈 글이다(다음 주기에 다시 본다). */
 async function ancestorOf(repo: string, mine: string, theirs: string, known: Map<string, string>) {
@@ -179,11 +187,11 @@ function defined(work: Work | WorkView, changes: Definition["change"][]) {
 }
 
 /**
- * 정의 줄 위의 추정 부딪힘(ADR-0023, ADR-0026). `mine`(이 러너의 작업과 그 폴더)과 `works` 가운데 `login`이 아닌 멤버의 작업마다 본다.
+ * 정의 줄 위의 추정 부딪힘(ADR-0023, ADR-0026). `mine`(이 러너의 작업과 그 폴더)과 `works` 가운데 같은 작업이 아닌 것마다 본다(ADR-0041).
  * - 간접 충돌(추정): 상대가 정의 줄을 바꾸거나 없앤 심볼을 내 작업의 사본에서 이름으로 찾는다. 쓰는 곳이 있으면 싣는다.
  *   반대 방향(내가 바꾼 것을 상대가 쓰는 것)은 상대 러너가 자기 사본으로 계산한다.
  * - 중복 구현: 두 작업에 같은 이름의 새 정의가 생겼다. 내 정의 줄은 내용을 올리는 수준(full)에서만 있어, 그때만 계산한다(ADR-0026).
- * - 선언된 계약 변경: 다른 멤버의 선점에 붙은 계획(`claims`)의 심볼을 내 작업의 사본에서 이름으로 찾는다. 코드가 아직 바뀌지 않았어도 싣는다.
+ * - 선언된 계약 변경: 다른 작업의 선점에 붙은 계획(`claims`)의 심볼을 내 작업의 사본에서 이름으로 찾는다. 코드가 아직 바뀌지 않았어도 싣는다.
  * intent인 내 작업은 계산하지 않는다(서버로 경로가 나가지 않는다). 심볼이 하나라도 있는 쌍과 종류만 돌려준다.
  */
 export async function symbolConflicts(
@@ -193,15 +201,15 @@ export async function symbolConflicts(
   claims: Claim[] = [],
 ): Promise<SymbolPair[]> {
   const pairs: SymbolPair[] = [];
-  const others = works.filter((theirs) => theirs.login !== login);
   for (const { work, folder } of mine) {
     if (work.share === "intent") continue;
+    const others = works.filter((theirs) => !sameWork(theirs, login, work.branch));
     const added = defined(work, ["added"]);
     const changing = others.map((theirs) => ({
       theirs,
       defs: defined(theirs, ["changed", "removed"]),
     }));
-    const planned = claims.filter((c) => c.login !== login && c.plan);
+    const planned = claims.filter((c) => !sameWork(c, login, work.branch) && c.plan);
     // 내 사본은 한 번만 읽는다: 상대들이 바꾼 이름과 계획한 이름을 모두 모아 찾는다.
     const used = await uses(folder, [
       ...new Set([

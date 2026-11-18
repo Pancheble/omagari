@@ -263,7 +263,7 @@ test("omagari install이 Codex에도 두 훅과 상태 한 줄 스킬을 깔고 
     edit ?? "",
     codexInput.applyPatch(folder, patch("*** Update File: pay.ts", "@@", "-pay", "+pay()")),
   );
-  assert.match(nearby, /^Omagari: 고치려는 파일 "pay\.ts"을 다른 멤버의 작업도 바꾸고 있다/);
+  assert.match(nearby, /^Omagari: 고치려는 파일 "pay\.ts"을 다른 작업도 바꾸고 있다/);
   const claudeEdit = claude.PreToolUse.at(-1).hooks[0].command;
   assert.equal(await runInstalled(world, claudeEdit, claudeInput.edit(folder, "pay.ts")), nearby);
 

@@ -47,7 +47,7 @@ const VERDICT_ICONS = { pass: CircleCheck, broken: CircleX, not_run: CircleMinus
 
 /**
  * 토론 띠(app-debate-strip, DESIGN.md "토론", 시안 57-A). 판정 띠와 같은 모양이고 그 아래 선다.
- * 기다리는 자리의 러너가 꺼져 있으면 "대행 부르기"가 늘 있다. 사람이 고르지 않고 정해졌으면 "결정 정리하기"가 띠에 있다.
+ * 기다리는 자리의 러너가 꺼져 있으면 "대행 부르기"가 늘 있다. 같은 사람의 두 작업이 낀 토론에는 없다(ADR-0041). 사람이 고르지 않고 정해졌으면 "결정 정리하기"가 띠에 있다.
  */
 // ponytail: 계약에 실험이 도는 중이라는 상태가 없어 "실험을 돌리는 중"은 그리지 못한다. 러너가 알리면 띠에 더한다.
 export function DebateStrip({
@@ -59,7 +59,11 @@ export function DebateStrip({
   onProxy: (seat: number) => void;
   onDecide: () => void;
 }) {
-  const away = debate.state === "open" ? debate.seats.findIndex((seat) => seat.away) : -1;
+  const [first, second] = debate.seats;
+  const away =
+    debate.state === "open" && first.login !== second.login
+      ? debate.seats.findIndex((seat) => seat.away)
+      : -1;
   const awaySeat = debate.seats[away];
   const count = `입장 ${submitted(debate)}/2`;
   const conclusion = debate.conclusion;
