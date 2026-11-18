@@ -839,7 +839,7 @@ export function Workspace({
               type="button"
               className="fold-button"
               aria-label={folded ? "채널 패널 펼쳐 두기" : "채널 패널 닫기"}
-              title={`${folded ? "채널 패널 펼쳐 두기" : "채널 패널 닫기"} ${FOLD_KEY}`}
+              data-tip={`${folded ? "채널 패널 펼쳐 두기" : "채널 패널 닫기"} ${FOLD_KEY}`}
               aria-keyshortcuts={MAC ? "Meta+\\" : "Control+\\"}
               aria-expanded={!folded}
               aria-controls={sideId}
@@ -869,7 +869,7 @@ export function Workspace({
                 type="button"
                 className="header-button"
                 aria-label="채널 패널 열기"
-                title={`채널 패널 열기 ${FOLD_KEY}`}
+                data-tip={`채널 패널 열기 ${FOLD_KEY}`}
                 aria-keyshortcuts={MAC ? "Meta+\\" : "Control+\\"}
                 aria-expanded={false}
                 aria-controls={sideId}
@@ -906,7 +906,6 @@ export function Workspace({
                   type="button"
                   className="header-button"
                   aria-label="포럼 고치기"
-                  title="포럼 고치기"
                   onClick={() => forumEditor.current?.showModal()}
                 >
                   <Settings2 size={18} aria-hidden />
@@ -917,7 +916,6 @@ export function Workspace({
                   className="header-button"
                   href={`#${current.id}/${openPost.alert}`}
                   aria-label="옆 칸으로"
-                  title="옆 칸으로"
                 >
                   <Minimize2 size={18} aria-hidden />
                 </a>
@@ -992,7 +990,6 @@ export function Workspace({
                     className="header-button"
                     href={`#${current?.id}/${openPost.alert}/big`}
                     aria-label="크게 보기"
-                    title="크게 보기"
                   >
                     <Maximize2 size={18} aria-hidden />
                   </a>
