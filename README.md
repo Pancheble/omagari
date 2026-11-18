@@ -118,5 +118,5 @@ fly deploy
 - 비밀값은 `fly secrets`로만 넣는다. 레포에는 두지 않는다. `OMAGARI_REPO`와 `OMAGARI_URL`은 비밀이 아니라 `fly.toml`의 `[env]`에 있다.
 - DB는 볼륨(`/data/omagari.db`)에 있어 새 판으로 바꿔도 남는다. 백업은 볼륨의 날마다 스냅샷이다(`fly volumes snapshots list`로 본다. 기본 5일 보관).
 - 건강 확인(`/api/health`)을 통과한 판만 갈아 끼운다. 못 통과하면 옛 판이 남는다.
-- 자동 배포: `.github/workflows/deploy.yml`이 `dev`의 CI가 통과하면 `fly deploy`를 돈다. 레포의 Actions 비밀값에 `FLY_API_TOKEN`(`fly tokens create deploy`)을 넣어야 켜지고, 없으면 배포 단계를 건너뛴다.
+- 자동 배포: `.github/workflows/deploy.yml`이 `dev`의 CI가 통과하면 `fly deploy`를 돈다. `dev`에서만 쓸 수 있는 GitHub Environment `dogfood`(Settings → Environments, 배포 브랜치를 `dev`로 제한)의 비밀값에 `FLY_API_TOKEN`(`fly tokens create deploy`)을 넣어야 켜지고, 없으면 배포 단계를 건너뛴다. CI가 돈 커밋이 지금 `dev`의 끝이 아니면(옛 실행을 다시 돌린 경우) 올리지 않는다.
 - 이 기기에서 이미지를 확인하려면: `docker build -t omagari .` 뒤 `docker run -p 8080:8080 -v omagari-data:/data -e OMAGARI_REPO=<owner/name> -e GITHUB_CLIENT_ID=<앱> omagari`.
