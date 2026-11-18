@@ -51,13 +51,13 @@ export function Tooltip() {
     const leave = (event: PointerEvent) => {
       if (target && !target.contains(event.relatedTarget as Node | null)) hide();
     };
-    const escape = (event: KeyboardEvent) => event.key === "Escape" && hide();
+    const onEscape = (event: KeyboardEvent) => event.key === "Escape" && hide();
     document.addEventListener("pointerover", enter);
     document.addEventListener("pointerout", leave);
     document.addEventListener("focusin", enter);
     document.addEventListener("focusout", hide);
     document.addEventListener("pointerdown", hide);
-    document.addEventListener("keydown", escape);
+    document.addEventListener("keydown", onEscape);
     addEventListener("scroll", hide, true);
     return () => {
       hide();
@@ -66,7 +66,7 @@ export function Tooltip() {
       document.removeEventListener("focusin", enter);
       document.removeEventListener("focusout", hide);
       document.removeEventListener("pointerdown", hide);
-      document.removeEventListener("keydown", escape);
+      document.removeEventListener("keydown", onEscape);
       removeEventListener("scroll", hide, true);
     };
   }, []);
