@@ -1724,11 +1724,16 @@ export async function startServer(options: {
     );
     shareInbox();
   };
-  /** 멤버의 이 연결이 그 실행기(고르지 않았으면 첫째 실행기)로 답할 수 있으면 그 실행기. */
+  /**
+   * 멤버의 이 연결이 그 실행기(고르지 않았으면 첫째 실행기)로 답할 수 있으면 그 실행기.
+   * 실행기를 하나도 알리지 않은 러너는 답할 수 없는 것으로 친다(자리를 비운 것과 같다).
+   */
   const answererOf = (target: string, executor: ExecutorId | null) => {
     const found = [...runners].findLast(
       ([, runner]) =>
-        runner.login === target && (executor === null || runner.executors.includes(executor)),
+        runner.login === target &&
+        runner.executors.length > 0 &&
+        (executor === null || runner.executors.includes(executor)),
     );
     if (!found) return undefined;
     const [socket, runner] = found;
