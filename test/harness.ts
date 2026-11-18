@@ -620,6 +620,8 @@ export async function startWorld(
     quietMs?: number;
     /** owner 러너의 합쳐 돌려 보기. 기본은 켜짐이다. */
     mergeCheck?: "on" | "off";
+    /** 서버가 API와 같은 주소에서 낼 빌드한 웹 화면 폴더. */
+    webDir?: string;
   } = {},
 ) {
   const repo = await tempRepo();
@@ -645,6 +647,7 @@ export async function startWorld(
     hourMs: options.hourMs,
     debateRounds: options.debateRounds,
     debateMs: options.debateMs,
+    webDir: options.webDir,
   };
   let server = await startServer(serverOptions).catch(async (error) => {
     await cleanup();
@@ -844,6 +847,15 @@ export async function startWorld(
           await repo.remove();
         },
       };
+    },
+    /**
+     * owner 레포에 `branch`를 새로 딴 연결된 워크트리를 하나 더 만들고 그 폴더를 돌려준다. owner의 러너 하나가 함께 관측한다.
+     * 한 사람이 브랜치마다 세션을 따로 돌리는 모습이다(ADR-0041). 서버의 임시 폴더 안에 두어 함께 지워진다.
+     */
+    async worktree(branch: string) {
+      const folder = join(await realpath(data), "trees", branch);
+      await repo.git("worktree", "add", "-b", branch, folder);
+      return folder;
     },
     /** `omagari <args>`를 레포 폴더에서 돌린다. */
     cli: (...args: string[]) =>

@@ -1,0 +1,32 @@
+name: Deploy
+# dev의 CI가 통과하면 도그푸딩 서버를 Fly.io에 올린다(ADR-0042).
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [dev]
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  deploy:
+    # CI가 push로 돌아 통과했을 때만. PR의 CI는 배포하지 않는다.
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+    steps:
+      - name: 비밀값이 없으면 건너뛴다
+        if: env.FLY_API_TOKEN == ''
+        run: echo "FLY_API_TOKEN이 없어 배포를 건너뛴다"
+      - uses: actions/checkout@v7
+        if: env.FLY_API_TOKEN != ''
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+        if: env.FLY_API_TOKEN != ''
+      - run: flyctl deploy --remote-only
+        if: env.FLY_API_TOKEN != ''
