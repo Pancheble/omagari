@@ -135,7 +135,7 @@ test("부딪힘은 두 작업의 편지함에만 들어가 세션 시작 훅, �
     assert.deepEqual(inbox(reply.stdout), [ALICE_SEES]);
     return reply.stdout;
   });
-  assert.match(aliceStatus, /^alice · /); // 명령의 응답이 먼저, 편지함은 끝에
+  assert.match(aliceStatus, /^따옴표 안의 글.*\nalice · /); // 명령의 응답이 먼저, 편지함은 끝에
   assert.deepEqual(inbox((await world.cliIn(alice.desk.folder, "status")).stdout), []);
   assert.deepEqual(inbox(await hook(world, { cwd: alice.desk.folder })), []);
   assert.equal(await hook(world, { cwd: alice.desk.folder, tool: "Bash" }), "");

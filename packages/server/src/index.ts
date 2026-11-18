@@ -1340,11 +1340,17 @@ export async function startServer(options: {
       { kind: Alert["kind"]; works: [WorkRef, WorkRef]; items: Map<string, Item> }
     >();
     const reporting = new Set<string>();
+    // 쌍의 두 끝은 서버가 아는 작업(관측이나 선점)이어야 한다. 모르는 작업을 이름 댄 쌍은 버린다.
+    const knownWork = db.prepare(
+      "SELECT 1 FROM (SELECT login, branch FROM works UNION SELECT login, branch FROM claims) WHERE login = ? AND branch = ?",
+    );
     for (const [socket, pairs] of reports) {
       const login = runners.get(socket)?.login;
       if (!login) continue;
       reporting.add(login);
       for (const pair of pairs) {
+        if (!knownWork.get(login, pair.branch)) continue;
+        if (!knownWork.get(pair.theirs.login, pair.theirs.branch)) continue;
         const mine = { login, branch: pair.branch };
         const flip =
           JSON.stringify([mine.login, mine.branch]) >
@@ -1499,18 +1505,31 @@ export async function startServer(options: {
       ).run(run.fingerprint, run.verdict, Date.now());
     const finished = run.verdict !== "running" && !run.stale;
     const closes = finished && run.verdict === "pass" && run.omitted.length === 0;
-    type Row = { id: number; works: string; run: string | null; confirmed: number };
+    type Row = { id: number; works: string; files: string; run: string | null; confirmed: number };
+    // 판정은 그 쌍을 계산하는 쪽(쓰는 쪽) 러너의 것만 받는다. 다른 쪽이 보낸 것은 버린다.
+    const computes = (row: Row) =>
+      (JSON.parse(row.files) as AlertSymbol[]).some((symbol) =>
+        computedBy("indirect", symbol, JSON.parse(row.works)).includes(login),
+      );
     const openRow = () =>
       db
-        .prepare("SELECT id, works, run, confirmed FROM alerts WHERE pair = ? AND resolved IS NULL")
+        .prepare(
+          "SELECT id, works, files, run, confirmed FROM alerts WHERE pair = ? AND resolved IS NULL",
+        )
         .get(key) as Row | undefined;
     let row = openRow();
+    if (row && !computes(row)) return;
     const now = Date.now();
     if (!row) {
       const held = db.prepare("SELECT id, run FROM alerts WHERE pair = ? AND held = 1").get(key) as
         | { id: number; run: string }
         | undefined;
-      if (!held || !finished || (JSON.parse(held.run) as AlertRun).fingerprint === run.fingerprint)
+      if (
+        !held ||
+        !finished ||
+        (JSON.parse(held.run) as AlertRun).fingerprint === run.fingerprint ||
+        (JSON.parse(held.run) as AlertRun).login !== login
+      )
         return;
       if (closes) {
         // 다시 돌려도 통과다. 닫힌 알림의 판정만 새것으로 둔다.
@@ -1525,7 +1544,7 @@ export async function startServer(options: {
       db.prepare("UPDATE alerts SET held = 0 WHERE id = ?").run(held.id);
       reconcile(); // 그 쌍을 아직 올리고 있으면 새 알림이 선다
       row = openRow();
-      if (!row) return;
+      if (!row || !computes(row)) return;
     }
     const next = { ...run, login };
     const { at: _, ...known } = row.run ? (JSON.parse(row.run) as AlertRun) : {};
@@ -3444,6 +3463,8 @@ export async function startServer(options: {
     RUNNER_SOCKET,
     upgradeWebSocket(() => ({
       onMessage({ data }, socket) {
+        // 닫는 중인 연결(세션이 끝나 거절한 것 포함)의 메시지는 받지 않는다.
+        if (socket.readyState !== 1) return;
         if (!runners.has(socket) && tooBigBeforeHello(socket, data)) return;
         const decoded = decode(runnerToServer, data);
         // hello를 마치지 않은 연결이 계약과 다른 것을 보내면 닫는다.
@@ -3553,7 +3574,7 @@ export async function startServer(options: {
           );
           // 겹침은 양쪽 작업의 편지함에 넣는다. 각자 자기 선점이 `mine`이다.
           const put = db.prepare("INSERT INTO inbox (login, branch, news, at) VALUES (?, ?, ?, ?)");
-          for (const id of overlaps) {
+          for (const id of new Set(overlaps)) {
             const row = db
               .prepare("SELECT * FROM claims WHERE id = ? AND login != ?")
               .get(id, login) as ClaimRow | undefined;
@@ -3786,25 +3807,31 @@ export async function startServer(options: {
     )?.github_token;
 
   /** 포스트의 이슈 제목: 부딪힌 파일(또는 심볼)과 종류. 사람은 넣지 않는다(DESIGN.md "부딪힘 포럼"). */
+  /** 러너가 보낸 이름(경로, 심볼, 브랜치)을 이슈의 한 줄 코드로 쓸 수 있게: 줄바꿈과 백틱을 접고 길이를 자른다. */
+  const inline = (text: string) =>
+    text
+      .replace(/[\s`]+/g, " ")
+      .trim()
+      .slice(0, 200);
   const issueTitle = (alert: Alert) => {
     const first =
       alert.kind === "direct"
         ? alert.files[0] && basename(alert.files[0].path)
         : alert.symbols[0]?.name;
-    return `${first ?? alert.works[0].branch} ${ALERT_LABELS[alert.kind]}`;
+    return `${inline(first ?? alert.works[0].branch)} ${ALERT_LABELS[alert.kind]}`;
   };
   /** 포스트의 이슈 본문: 알림의 두 작업과 곳, 그리고 포스트 링크. */
   const issueBody = (alert: Alert, link: string) => {
     const places =
       alert.kind === "direct"
-        ? alert.files.map((file) => `\`${file.path}\``)
-        : alert.symbols.map((symbol) => `\`${symbol.name}\``);
+        ? alert.files.map((file) => `\`${inline(file.path)}\``)
+        : alert.symbols.map((symbol) => `\`${inline(symbol.name)}\``);
     const [a, b] = alert.works;
     return [
       "Omagari가 올린 포스트예요. 포스트의 글은 이 이슈의 댓글로, 이 이슈의 댓글은 포스트의 글로 맞춰져요.",
       "",
       `- 종류: ${ALERT_LABELS[alert.kind]}`,
-      `- 작업: ${a.name} (\`${a.branch}\`) ↔ ${b.name} (\`${b.branch}\`)`,
+      `- 작업: ${inline(a.name)} (\`${inline(a.branch)}\`) ↔ ${inline(b.name)} (\`${inline(b.branch)}\`)`,
       `- 곳: ${places.join(", ")}${alert.more > 0 ? ` 외 ${alert.more}곳` : ""}`,
       "",
       `포스트: ${link}`,
@@ -3846,10 +3873,12 @@ export async function startServer(options: {
         : []),
     ].join("\n");
   };
-  /** 토론의 결론 댓글: 이긴 쪽과 어느 길로 났는지. */
+  /**
+   * 토론의 결론 댓글: 이긴 쪽과 어느 길로 났는지. 아무 멤버의 토큰으로도 달리므로 서버가 지은 글만 싣는다.
+   * 이긴 주장은 그 입장을 쓴 사람의 계정으로 단 입장 댓글에 이미 있다.
+   */
   const conclusionBody = (debate: DebateRow, seats: SeatRow[]) => {
     const winner = seats.find((seat) => seat.seat === debate.winner);
-    const last = winner && stancesOf(winner).at(-1);
     const how =
       debate.by === "experiment"
         ? "실험을 통과한 쪽이 하나여서"
@@ -3858,8 +3887,9 @@ export async function startServer(options: {
           : `${debate.chooser ? nameOf(debate.chooser) : "멤버"}가 골라서`;
     return [
       `⚖️ 토론이 끝났어요. ${how} 이 안이 결론이 됐어요.`,
-      ...(winner ? ["", `이긴 쪽: ${nameOf(winner.login)}의 브랜치 \`${winner.branch}\``] : []),
-      ...(last ? ["", last.claim] : []),
+      ...(winner
+        ? ["", `이긴 쪽: ${inline(nameOf(winner.login))}의 브랜치 \`${inline(winner.branch)}\``]
+        : []),
     ].join("\n");
   };
 
