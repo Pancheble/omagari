@@ -32,6 +32,7 @@
 - 조각은 `packages/` 아래에 하나씩 있다: `contract`, `server`, `runner`, `cli`, `hooks`, `web`. 러너와 서버 사이의 메시지와 웹이 쓰는 API는 `packages/contract`에만 정의하고, 나머지 조각은 그것을 가져다 쓴다.
 - 동작 테스트는 `test/harness.ts`의 틀로 쓴다. 실제 서버와 실제 러너를 임시 Git 레포 위에 띄우고, 서버 API와 CLI·훅 실행 파일의 입출력으로만 조작하고 확인한다. 가짜는 GitHub, 에이전트 실행기, 합쳐 돌려 보기의 샌드박스 세 곳에만 둔다. 샌드박스는 CI에서 돌지 않을 수 있어 가짜로 두고, 실제 샌드박스는 손 점검으로 본다(2026-11-14 @Pancheble 결정, ADR-0033).
   - 계약을 어기는 상대(뚫린 서버, 러너인 척하는 연결)를 흉내 낼 때만 `test/contract.test.ts`처럼 날 WebSocket을 쓴다.
+  - 러너가 스스로 받기(`test/self-update.test.ts`)의 `npm ci`도 가짜로 둔다. 진짜는 내려받기가 필요해서다. 진짜 `npm ci`는 손 점검으로 본다(2026-11-18 @Pancheble 허용, #230).
 - 올리기 전에 셋을 돌린다: `npm run format`(포맷과 린트 고치기), `npm run typecheck`, `npm test`. CI도 같은 것을 돌린다.
 
 ## 작업 방식

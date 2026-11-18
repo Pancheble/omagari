@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -37,9 +37,11 @@ import {
   readCheck,
   readRepo,
   runnerPaths,
+  ServerContractMismatch,
   startRunner,
 } from "@omagari/runner";
 import { install } from "./install.ts";
+import { restart, UPDATED, type UpdateRecord, updateClone } from "./update.ts";
 
 /** 토론이 끝난 길과 지표에 쓰는 이름. */
 const DEBATE_PATHS = [
@@ -223,6 +225,25 @@ async function remembered<T extends string>(
   return found;
 }
 
+/**
+ * 서버의 계약이 더 새로워 거절당했으면 깔린 클론을 받고 다시 켠다(돌아오지 않는다). 아니면 오류를 그대로 던진다.
+ * 받은 직후 다시 켠 러너가 붙기도 전에 또 거절당하면 거듭 받지 않는다.
+ */
+async function selfUpdate(error: Error, log: string): Promise<never> {
+  if (!(error instanceof ServerContractMismatch) || !error.newer || process.env[UPDATED])
+    throw error;
+  console.log(`${error.message}\n서버의 계약이 더 새로워 이 클론을 받는다`);
+  const updated = await updateClone();
+  if ("todo" in updated) throw new Error(`${error.message}\n자동으로 받지 못했다. ${updated.todo}`);
+  const record: UpdateRecord = { at: new Date().toISOString(), kind: "update", ...updated.record };
+  await mkdir(dirname(log), { recursive: true });
+  await appendFile(log, `${JSON.stringify(record)}\n`);
+  console.log(
+    `${record.branch}를 ${record.from.slice(0, 7)}에서 ${record.to.slice(0, 7)}로 받았다. 러너를 다시 켠다`,
+  );
+  process.exit(await restart());
+}
+
 /** 이 폴더에서 러너를 켜고, 끄거나 서버가 거절할 때까지 돈다. */
 async function runner(chosen: string | undefined, chosenMergeCheck: string | undefined) {
   const folder = process.cwd();
@@ -238,12 +259,17 @@ async function runner(chosen: string | undefined, chosenMergeCheck: string | und
   const saved = (await readSessions())[server];
   const start = async (session: string) =>
     startRunner({ serverUrl: server, folder, session, share, mergeCheck });
-  const running = await start(saved ?? (await login())).catch(async (error) => {
-    // 남겨 둔 세션이 끝났으면 한 번 다시 로그인한다.
-    if (!saved || !(error instanceof ContractFailure) || error.code !== "unauthorized") throw error;
-    await saveSession(undefined);
-    return start(await login());
-  });
+  const running = await start(saved ?? (await login()))
+    .catch(async (error) => {
+      // 남겨 둔 세션이 끝났으면 한 번 다시 로그인한다.
+      if (!saved || !(error instanceof ContractFailure) || error.code !== "unauthorized")
+        throw error;
+      await saveSession(undefined);
+      return start(await login());
+    })
+    .catch((error) => selfUpdate(error, paths.log));
+  // 잘 붙었다. 이 러너가 앞으로 받는 것은 받은 직후의 거절과 다르다.
+  delete process.env[UPDATED];
   console.log(`러너가 켜졌다: ${running.login}의 에이전트, ${running.repo} ↔ ${running.folder}`);
   // Codex는 깔려 있고 로그인했을 때만 붙는다. 무엇이 붙었는지 주인이 바로 본다.
   console.log(`에이전트: ${running.executors.map((id) => EXECUTOR_NAMES[id]).join(", ")}`);
@@ -251,7 +277,8 @@ async function runner(chosen: string | undefined, chosenMergeCheck: string | und
   // 검사 명령은 기본 브랜치에서 읽으므로 서버가 받아들인 원격을 안 뒤에 알린다. 합쳐 돌려 보기는 붙은 뒤에도 잠잠해지기를 기다려야 돈다.
   console.log(checkNotice(await readCheck(running.folder, running.remote), mergeCheck === "on"));
   const reason = await running.ended;
-  if (reason) throw reason;
+  // 켜진 뒤 다시 붙다 거절당해도(서버가 새 계약으로 다시 떴다) 같다.
+  if (reason) await selfUpdate(reason, paths.log);
   console.log("러너를 껐다");
 }
 
@@ -302,7 +329,13 @@ async function log() {
   const lines = await readFile(log, "utf8").catch(() => "");
   if (!lines) return console.log("러너가 실행한 것이 아직 없다");
   for (const line of lines.trimEnd().split("\n")) {
-    const run: RunRecord | CheckRecord = JSON.parse(line);
+    const run: RunRecord | CheckRecord | UpdateRecord = JSON.parse(line);
+    if ("kind" in run && run.kind === "update") {
+      console.log(
+        `${run.at}  러너가 클론을 받음 ${run.branch} ${run.from.slice(0, 7)} → ${run.to.slice(0, 7)}`,
+      );
+      continue;
+    }
     if ("kind" in run) {
       const why = run.reason ? `: ${run.reason}` : "";
       const setup = run.setup ? `  준비 명령 ${JSON.stringify(run.setup)}` : "";

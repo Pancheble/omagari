@@ -49,7 +49,7 @@ import {
   type WorkRef,
   type WorkView,
 } from "@omagari/contract";
-import { checkoutVersion } from "@omagari/contract/version";
+import { checkoutBranch, checkoutVersion } from "@omagari/contract/version";
 import {
   CHECK_LIMITS,
   type CheckLimits,
@@ -660,20 +660,32 @@ export async function readRepo(folder: string) {
   return { folder: top, repos, remotes };
 }
 
+/** 서버가 계약 버전이 달라 거절했다. `newer`면 서버의 계약이 더 새롭다(이 클론을 받을 때). */
+export class ServerContractMismatch extends ContractFailure {
+  newer: boolean;
+  constructor(error: ContractError, newer: boolean) {
+    super(error);
+    this.newer = newer;
+  }
+}
+
 /**
- * 서버가 계약 버전이 달라 거절했으면(`VersionMismatch`) 할 일을 담은 오류. ADR-0019.
- * 서버의 계약이 더 새로우면 이 기기를, 더 오래됐으면 서버를 올린다. 그 꼴이 아닌 프레임이면 없다.
+ * 서버가 계약 버전이 달라 거절했으면(`VersionMismatch`) 할 일을 담은 오류. ADR-0019, ADR-0042.
+ * 서버의 계약이 더 새로우면 이 클론의 브랜치를 받고, 더 오래됐으면 서버를 올린다. 그 꼴이 아닌 프레임이면 없다.
  */
-function versionAdvice(frame: unknown): ContractError | undefined {
+function versionAdvice(frame: unknown) {
   const refusal = VersionMismatch.safeParse(JSON.parse(String(frame)));
   if (!refusal.success) return undefined;
   const server = refusal.data.payload;
   const versions = `서버는 ${server.version}, 이 기기는 ${checkoutVersion()}이에요.`;
-  const todo =
-    server.contract > CONTRACT_VERSION
-      ? "`main`을 받고(`git pull`, `npm ci`) 러너를 다시 켜세요"
-      : "서버가 더 오래됐어요. 서버를 올려야 해요(서버를 띄운 사람에게 알리세요)";
-  return { code: "version_mismatch", message: `${versions} ${todo}` };
+  const newer = server.contract > CONTRACT_VERSION;
+  const todo = newer
+    ? `\`${checkoutBranch() ?? "이 클론의 브랜치"}\`를 받고(\`git pull\`, \`npm ci\`) 러너를 다시 켜세요`
+    : "서버가 더 오래됐어요. 서버를 올려야 해요(서버를 띄운 사람에게 알리세요)";
+  return new ServerContractMismatch(
+    { code: "version_mismatch", message: `${versions} ${todo}` },
+    newer,
+  );
 }
 
 /**
@@ -816,7 +828,7 @@ export async function startRunner(options: {
       if ("error" in decoded) {
         current.send(encode(runnerToServer, "error", decoded.error, decoded.re));
         if (decoded.error.code === "version_mismatch") {
-          welcomed.reject(new ContractFailure(versionAdvice(data) ?? decoded.error));
+          welcomed.reject(versionAdvice(data) ?? new ContractFailure(decoded.error));
           // 내장 WebSocket의 close()는 코드 1000과 3000~4999만 받는다. 코드 없이 닫는다.
           current.close();
         }
