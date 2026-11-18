@@ -2832,6 +2832,25 @@ export async function startServer(options: {
     return { repos: reposOf(login) };
   });
 
+  mount(app, api.adminRepos, async (_, c) => {
+    const found = await github.adminRepos(callerToken(c), workspaceOf(c));
+    if (!found)
+      throw new ContractFailure({
+        code: "github_failed",
+        message: "GitHub에서 Admin인 레포를 읽지 못했다. 잠시 뒤 다시 하라",
+      });
+    const added = new Set(
+      (db.prepare("SELECT name FROM repos").all() as { name: string }[]).map((row) =>
+        row.name.toLowerCase(),
+      ),
+    );
+    return {
+      repos: found
+        .map((repo) => ({ ...repo, added: added.has(repo.name.toLowerCase()) }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    };
+  });
+
   mount(app, api.removeRepo, async ({ repo }, c) => {
     const login = c.get("login") as string;
     const found = db.prepare("SELECT name FROM repos WHERE name = ?").get(repo) as

@@ -108,6 +108,11 @@ await attempt("canAdmin", async () => {
   expect(typeof admin === "boolean", `Admin인지 답하지 않았다: ${admin}`);
   return { detail: String(admin) };
 });
+await attempt("adminRepos", async () => {
+  const found = await github.adminRepos(token, repo.split("/")[0] as string);
+  expect(Array.isArray(found), `Admin인 레포를 읽지 못했다: ${found}`);
+  return { detail: found?.map((r) => `${r.name}(${r.pushers})`).join(", ") || "없음" };
+});
 const base = await attempt("defaultBranch", async () => {
   const b = await github.defaultBranch(token, repo);
   expect(b.name && /^[0-9a-f]{40}$/.test(b.sha), `이름이나 sha가 이상하다: ${JSON.stringify(b)}`);

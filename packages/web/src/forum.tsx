@@ -199,9 +199,12 @@ export function Forum({
   selected,
   unread,
   me,
+  repos,
   onSaveFilter,
 }: {
   forum: Channel;
+  /** 워크스페이스에서 내게 보이는 레포들. 필터 줄의 레포 칩이 고른다. */
+  repos: string[];
   /** 내 GitHub 아이디. 사람 줄에서 내 이름 대신 "나"를 쓴다. */
   me: string;
   /** 포스트 전부. 필터로 고르는 것은 이 화면이 한다. */
@@ -273,6 +276,7 @@ export function Forum({
         <ViewMenu sort={sort} view={view} onSort={setSort} onView={setView} />
         <span className="forum-rule" aria-hidden />
         <FilterRow
+          repos={repos}
           states={states}
           counts={counts}
           onStates={setStates}

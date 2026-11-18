@@ -5,16 +5,30 @@ import "./app.css";
 import { api, call } from "@omagari/contract";
 import { StrictMode, useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { type Me, savedSession, saveSession, server, signedOut } from "./api.ts";
+import {
+  type Me,
+  remember,
+  remembered,
+  type Workspace as Space,
+  savedSession,
+  saveSession,
+  server,
+  setWorkspace,
+  signedOut,
+} from "./api.ts";
 import { Centered, Login } from "./login.tsx";
 import { Tooltip } from "./tooltip.tsx";
 import { Workspace } from "./workspace.tsx";
+
+/** 이 기기에서 마지막에 고른 워크스페이스와, 워크스페이스마다 마지막에 본 채널(주소의 `#…`). */
+const WORKSPACE_KEY = "omagari.workspace";
+const LAST_KEY = "omagari.last-channel";
 
 type State =
   | { kind: "checking" }
   | { kind: "out"; notice?: string }
   | { kind: "unreachable"; session: string }
-  | { kind: "in"; session: string; me: Me };
+  | { kind: "in"; session: string; me: Me; workspaces: Space[]; workspace: string };
 
 function App() {
   const [state, setState] = useState<State>(() =>
@@ -31,9 +45,17 @@ function App() {
   const enter = useCallback(
     async (session: string) => {
       try {
-        const me = await call(server(session), api.me);
+        const [me, { workspaces }] = await Promise.all([
+          call(server(session), api.me),
+          call(server(session), api.workspaces),
+        ]);
         saveSession(session);
-        setState({ kind: "in", session, me });
+        // 지난번에 본 워크스페이스로 들어간다. 없어졌으면 첫째다.
+        const saved = remembered(WORKSPACE_KEY);
+        const workspace =
+          workspaces.find((space) => space.id === saved)?.id ?? workspaces[0]?.id ?? "";
+        setWorkspace(workspace);
+        setState({ kind: "in", session, me, workspaces, workspace });
       } catch (error) {
         if (!signedOut(error)) return setState({ kind: "unreachable", session });
         expire();
@@ -70,7 +92,26 @@ function App() {
     setState({ kind: "out" });
     void call(server(session), api.logout).catch(() => {});
   };
-  return <Workspace me={state.me} session={session} onLogout={logout} onSignedOut={expire} />;
+  /** 워크스페이스를 바꾼다. 앱 틀을 새로 그리고, 그 워크스페이스에서 마지막에 본 채널로 간다(시안 89-A). */
+  const switchTo = (workspace: string) => {
+    remember(`${LAST_KEY}.${state.workspace}`, location.hash);
+    remember(WORKSPACE_KEY, workspace);
+    setWorkspace(workspace);
+    history.replaceState(null, "", remembered(`${LAST_KEY}.${workspace}`) || location.pathname);
+    setState({ ...state, workspace });
+  };
+  return (
+    <Workspace
+      key={state.workspace}
+      me={state.me}
+      session={session}
+      workspaces={state.workspaces}
+      workspace={state.workspace}
+      onSwitch={switchTo}
+      onLogout={logout}
+      onSignedOut={expire}
+    />
+  );
 }
 
 createRoot(document.getElementById("root") as HTMLElement).render(
