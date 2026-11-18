@@ -225,6 +225,25 @@ async function remembered<T extends string>(
   return found;
 }
 
+/**
+ * 서버의 계약이 더 새로워 거절당했으면 깔린 클론을 받고 다시 켠다(돌아오지 않는다). 아니면 오류를 그대로 던진다.
+ * 받은 직후 다시 켠 러너가 붙기도 전에 또 거절당하면 거듭 받지 않는다.
+ */
+async function selfUpdate(error: Error, log: string): Promise<never> {
+  if (!(error instanceof ServerContractMismatch) || !error.newer || process.env[UPDATED])
+    throw error;
+  console.log(`${error.message}\n서버의 계약이 더 새로워 이 클론을 받는다`);
+  const updated = await updateClone();
+  if ("todo" in updated) throw new Error(`${error.message}\n자동으로 받지 못했다. ${updated.todo}`);
+  const record: UpdateRecord = { at: new Date().toISOString(), kind: "update", ...updated.record };
+  await mkdir(dirname(log), { recursive: true });
+  await appendFile(log, `${JSON.stringify(record)}\n`);
+  console.log(
+    `${record.branch}를 ${record.from.slice(0, 7)}에서 ${record.to.slice(0, 7)}로 받았다. 러너를 다시 켠다`,
+  );
+  process.exit(await restart());
+}
+
 /** 이 폴더에서 러너를 켜고, 끄거나 서버가 거절할 때까지 돈다. */
 async function runner(chosen: string | undefined, chosenMergeCheck: string | undefined) {
   const folder = process.cwd();
@@ -248,26 +267,9 @@ async function runner(chosen: string | undefined, chosenMergeCheck: string | und
       await saveSession(undefined);
       return start(await login());
     })
-    .catch(async (error) => {
-      // 서버의 계약이 더 새로우면 깔린 클론을 받고 다시 켠다. 받고도 안 맞으면 거듭 받지 않는다.
-      if (!(error instanceof ServerContractMismatch) || !error.newer || process.env[UPDATED])
-        throw error;
-      console.log(`${error.message}\n서버의 계약이 더 새로워 이 클론을 받는다`);
-      const updated = await updateClone();
-      if ("todo" in updated)
-        throw new Error(`${error.message}\n자동으로 받지 못했다. ${updated.todo}`);
-      const record: UpdateRecord = {
-        at: new Date().toISOString(),
-        kind: "update",
-        ...updated.record,
-      };
-      await mkdir(dirname(paths.log), { recursive: true });
-      await appendFile(paths.log, `${JSON.stringify(record)}\n`);
-      console.log(
-        `${record.branch}를 ${record.from.slice(0, 7)}에서 ${record.to.slice(0, 7)}로 받았다. 러너를 다시 켠다`,
-      );
-      process.exit(await restart());
-    });
+    .catch((error) => selfUpdate(error, paths.log));
+  // 잘 붙었다. 이 러너가 앞으로 받는 것은 받은 직후의 거절과 다르다.
+  delete process.env[UPDATED];
   console.log(`러너가 켜졌다: ${running.login}의 에이전트, ${running.repo} ↔ ${running.folder}`);
   // Codex는 깔려 있고 로그인했을 때만 붙는다. 무엇이 붙었는지 주인이 바로 본다.
   console.log(`에이전트: ${running.executors.map((id) => EXECUTOR_NAMES[id]).join(", ")}`);
@@ -275,7 +277,8 @@ async function runner(chosen: string | undefined, chosenMergeCheck: string | und
   // 검사 명령은 기본 브랜치에서 읽으므로 서버가 받아들인 원격을 안 뒤에 알린다. 합쳐 돌려 보기는 붙은 뒤에도 잠잠해지기를 기다려야 돈다.
   console.log(checkNotice(await readCheck(running.folder, running.remote), mergeCheck === "on"));
   const reason = await running.ended;
-  if (reason) throw reason;
+  // 켜진 뒤 다시 붙다 거절당해도(서버가 새 계약으로 다시 떴다) 같다.
+  if (reason) await selfUpdate(reason, paths.log);
   console.log("러너를 껐다");
 }
 
