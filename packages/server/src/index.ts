@@ -2020,7 +2020,15 @@ export async function startServer(options: {
         executor: answerer.executor,
         branch: row.branch,
         post: { id: row.post, name: channelName(row.post) },
-        messages: recentOf(row.post),
+        // 토론의 입장은 검토 없이 공개로 올라가므로, 멤버가 아닌 사람이 GitHub에 단 댓글은 넣지 않는다.
+        messages: recentOf(row.post).filter(
+          (m) =>
+            !(
+              m.kind === "text" &&
+              m.github &&
+              !db.prepare("SELECT 1 FROM sessions WHERE login = ?").get(m.login)
+            ),
+        ),
         ...(mine && { mine }),
         ...(theirs && { theirs }),
         against: { login: other?.login ?? "", branch: other?.branch ?? "" },
@@ -2839,7 +2847,9 @@ export async function startServer(options: {
     const deciders = (
       db
         .prepare(
+          // GitHub에서 들여온 댓글의 쓴 사람은 지금 멤버(세션이 있다)일 때만 결정자다.
           `SELECT login FROM messages WHERE channel = ? AND login != '' AND decision IS NULL
+           AND (github = 0 OR login IN (SELECT login FROM sessions))
            GROUP BY login ORDER BY MIN(id)`,
         )
         .all(post) as { login: string }[]
@@ -4427,13 +4437,16 @@ export async function startServer(options: {
               .prepare("SELECT login FROM objections WHERE decision = ? AND via = 'github'")
               .all(id) as { login: string }[]
           ).map((row) => row.login);
-          for (const login of requested.filter((l) => !known.includes(l))) {
+          // GitHub의 변경 요청 리뷰는 지금 멤버(세션이 있다)가 단 것만 이의다.
+          const member = (l: string) =>
+            !!db.prepare("SELECT 1 FROM sessions WHERE login = ?").get(l);
+          for (const login of requested.filter((l) => member(l) && !known.includes(l))) {
             db.prepare(
               "INSERT INTO objections (decision, login, via, at) VALUES (?, ?, 'github', ?)",
             ).run(id, login, Date.now());
             announce(id, "objected", { by: login });
           }
-          const withdrawn = known.filter((l) => !requested.includes(l));
+          const withdrawn = known.filter((l) => !requested.includes(l) || !member(l));
           for (const login of withdrawn)
             db.prepare(
               "DELETE FROM objections WHERE decision = ? AND login = ? AND via = 'github'",
