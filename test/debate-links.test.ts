@@ -72,10 +72,16 @@ test("토론의 공개된 입장과 결론이 이슈 댓글로 가고(가린 라
 
   // 토론이 열렸다는 소식이 두 작업의 편지함에 간다. 첫 라운드는 가려져 있어 입장이 댓글로 가지 않는다.
   const opened = /토론이 열렸다: 포스트 /;
-  await eventually(async () => {
-    assert.match((await world.cli("status")).stdout, opened);
-    assert.match((await world.cliIn(desk.folder, "status")).stdout, opened);
-  });
+  // 편지함은 한 번 넘기면 비워진다(CLI는 어느 명령이든 응답 끝에 밀린 소식을 싣는다). 먼저 받은 쪽을 다시 확인하면 빈 채로 보이고,
+  // 위 claim의 응답에 이미 실려 갔을 수도 있다. 그래서 받은 것을 쌓아 두고, 쌓인 것에서 찾는다.
+  const seen = new Map([[world.repo.folder, claimed.stdout]]);
+  for (const cwd of [world.repo.folder, desk.folder])
+    await eventually(async () => {
+      const { code, stdout, stderr } = await world.cliIn(cwd, "status");
+      const all = `${seen.get(cwd) ?? ""}${stdout}`;
+      seen.set(cwd, all);
+      assert.match(all, opened, `종료 코드 ${code}\nstdout: ${stdout}\nstderr: ${stderr}`);
+    });
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.equal(issue.comments.filter((c) => c.body.includes("AI가 쓴 답")).length, 0);
 

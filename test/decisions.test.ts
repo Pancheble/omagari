@@ -327,7 +327,9 @@ test("고른 길이대로 창이 닫히고 이의가 없으면 Omagari가 머지
       window,
     });
     assert.deepEqual(decision.window, window);
-    assert.equal(Date.parse(decision.closes ?? "") - Date.parse(decision.at), hours * HOUR);
+    // 1시간 창(50ms)은 응답이 오기 전에 닫혀 `closes`가 null일 수 있다. 창의 길이는 아래 머지 시각으로도 확인한다.
+    if (decision.closes !== null)
+      assert.equal(Date.parse(decision.closes) - Date.parse(decision.at), hours * HOUR);
     assert.match(
       world.github.pulls.at(-1)?.body ?? "",
       new RegExp(`이의 창: ${title.replace("직접 ", "")}`),
