@@ -8,7 +8,7 @@ import {
   MAX_CHANNEL_NAME_CHARS,
   shows,
 } from "@omagari/contract";
-import { Check, ChevronDown, Search, Tag } from "lucide-react";
+import { Check, ChevronDown, Hash, MessagesSquare, Search, Tag } from "lucide-react";
 import {
   createContext,
   type FormEvent,
@@ -420,14 +420,21 @@ function FilterPicker({ draft, onDraft }: { draft: Draft; onDraft: (draft: Draft
   );
 }
 
+/** 만들 것의 종류. 카테고리의 `+`가 제 종류를 골라 둔 채로 연다(시안 88-A). */
+export type CreateKind = "chat" | "forum";
+
 /**
- * "포럼 만들기" 대화 상자(시안 52). 이름과 필터(묶음 두 줄과 라벨 칩)를 정하고, 맞는 포스트를 미리 보인다.
- * `forum`을 주면 그 포럼을 고친다: 이름과 필터를 고치고 포럼을 지운다(시안에 없는 자리, PR #194에 까닭).
+ * "만들기" 대화 상자(시안 88-A, 52). 맨 위에서 종류(채팅 채널, 포럼)를 고른다. 채팅 채널은 이름만,
+ * 포럼은 이름과 필터(묶음 두 줄과 라벨 칩)를 정하고 맞는 포스트를 미리 보인다.
+ * `forum`을 주면 그 포럼을 고친다: 종류 고르기 없이 이름과 필터를 고치고 포럼을 지운다(시안에 없는 자리, PR #194에 까닭).
  */
 export function ForumDialog({
   dialog,
   forum,
   posts,
+  kind = "forum",
+  onKind,
+  onCreateChat,
   onSave,
   onDelete,
 }: {
@@ -435,6 +442,10 @@ export function ForumDialog({
   forum?: Channel;
   /** 미리 보기에 쓰는 포스트들과 그 제목 */
   posts: { labels: string[]; importance: Importance; title: string }[];
+  /** 만들 때 고른 종류. `onKind`가 있으면 종류 고르기가 선다. */
+  kind?: CreateKind;
+  onKind?: (kind: CreateKind) => void;
+  onCreateChat?: (name: string) => Promise<void>;
   onSave: (name: string, filter: ForumFilter) => Promise<void>;
   onDelete?: () => Promise<void>;
 }) {
@@ -446,6 +457,8 @@ export function ForumDialog({
   const [deleting, setDeleting] = useState(false);
   const heading = useId();
   const input = useId();
+  const help = useId();
+  const chat = kind === "chat";
   const matched = draft ? posts.filter((post) => shows(draft, post)) : [];
 
   const run = async (act: () => Promise<void>) => {
@@ -457,7 +470,7 @@ export function ForumDialog({
       setError(
         failure instanceof ContractFailure && failure.code === "conflict"
           ? "같은 이름의 채널이나 포럼이 이미 있어요. 다른 이름을 써 주세요."
-          : "포럼을 저장하지 못했어요. 잠시 뒤 다시 시도해 주세요.",
+          : `${chat ? "채널을 만들지" : "포럼을 저장하지"} 못했어요. 잠시 뒤 다시 시도해 주세요.`,
       );
     } finally {
       setBusy(false);
@@ -465,7 +478,8 @@ export function ForumDialog({
   };
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (draft) void run(() => onSave(name, draft));
+    if (chat) void run(() => onCreateChat?.(name.trim()) ?? Promise.resolve());
+    else if (draft) void run(() => onSave(name, draft));
   };
   const bundled = draft !== null && "importance" in draft;
 
@@ -484,10 +498,33 @@ export function ForumDialog({
       onClick={(event) => event.target === event.currentTarget && dialog.current?.close()}
     >
       <form onSubmit={submit}>
-        <h2 id={heading}>{forum ? "포럼 고치기" : "포럼 만들기"}</h2>
-        <p className="dialog-lead">
-          포럼은 라벨로 거른 보기예요. 필터는 만든 뒤에도 포럼의 필터 줄에서 고쳐요.
-        </p>
+        <h2 id={heading}>{forum ? "포럼 고치기" : onKind ? "만들기" : "포럼 만들기"}</h2>
+        {onKind && (
+          <fieldset className="kind-pick">
+            <legend>종류</legend>
+            {KINDS.map(({ value, Icon, name: title, note }) => (
+              <label key={value} className="kind-card">
+                <input
+                  type="radio"
+                  name="create-kind"
+                  checked={kind === value}
+                  onChange={() => {
+                    onKind(value);
+                    setError(undefined);
+                  }}
+                />
+                <Icon size={18} aria-hidden />
+                <strong>{title}</strong>
+                <small>{note}</small>
+              </label>
+            ))}
+          </fieldset>
+        )}
+        {!chat && (
+          <p className="dialog-lead">
+            포럼은 라벨로 거른 보기예요. 필터는 만든 뒤에도 포럼의 필터 줄에서 고쳐요.
+          </p>
+        )}
         <div className="field">
           <label htmlFor={input}>이름</label>
           <input
@@ -501,60 +538,70 @@ export function ForumDialog({
             maxLength={MAX_CHANNEL_NAME_CHARS}
             autoComplete="off"
             aria-invalid={error !== undefined}
+            aria-describedby={chat ? help : undefined}
           />
+          {chat && (
+            <p id={help} className={error ? "help error" : "help"} aria-live="polite">
+              {error ?? "멤버 모두가 읽고 쓰는 채팅 채널이에요."}
+            </p>
+          )}
         </div>
-        <fieldset className="field forum-dialog-filter">
-          <legend>필터</legend>
-          {IMPORTANCES.map((importance, index) => (
-            <label key={importance} className="bundle-check">
-              <input
-                type="checkbox"
-                checked={bundled && draft.importance === importance}
-                onChange={() => setDraft(bundle(draft, importance))}
-              />
-              <span>
-                중요도가 {IMPORTANCE_LABELS[importance]}인 라벨 모두
-                {index === 0 && <small>라벨이 새로 생기거나 중요도가 바뀌면 따라와요</small>}
-              </span>
-            </label>
-          ))}
-          <div className="dialog-chips">
-            {labels.map((label) => {
-              const { on, locked } = labelState(draft, label);
-              return (
-                <button
-                  key={label.name}
-                  type="button"
-                  className="tag-chip"
-                  aria-pressed={on}
-                  disabled={locked}
-                  onClick={() => setDraft(toggleLabel(draft, label.name))}
-                >
-                  <LabelDot color={label.color} />
-                  {label.name}
-                </button>
-              );
-            })}
-          </div>
-          <p className="help">
-            {draft
-              ? `켠 라벨이 하나라도 붙은 포스트가 보여요. 지금 ${matched.length}개가 보여요.`
-              : "묶음이나 라벨을 하나 이상 켜 주세요."}
-          </p>
-        </fieldset>
-        {matched.length > 0 && (
-          <div className="forum-preview">
-            <p>이렇게 보여요</p>
-            <ul>
-              {matched.slice(0, 3).map((post, index) => (
-                // biome-ignore lint/suspicious/noArrayIndexKey: 제목이 겹칠 수 있다
-                <li key={index}>{post.title}</li>
+        {!chat && (
+          <>
+            <fieldset className="field forum-dialog-filter">
+              <legend>필터</legend>
+              {IMPORTANCES.map((importance, index) => (
+                <label key={importance} className="bundle-check">
+                  <input
+                    type="checkbox"
+                    checked={bundled && draft.importance === importance}
+                    onChange={() => setDraft(bundle(draft, importance))}
+                  />
+                  <span>
+                    중요도가 {IMPORTANCE_LABELS[importance]}인 라벨 모두
+                    {index === 0 && <small>라벨이 새로 생기거나 중요도가 바뀌면 따라와요</small>}
+                  </span>
+                </label>
               ))}
-            </ul>
-            {matched.length > 3 && <p>외 {matched.length - 3}개</p>}
-          </div>
+              <div className="dialog-chips">
+                {labels.map((label) => {
+                  const { on, locked } = labelState(draft, label);
+                  return (
+                    <button
+                      key={label.name}
+                      type="button"
+                      className="tag-chip"
+                      aria-pressed={on}
+                      disabled={locked}
+                      onClick={() => setDraft(toggleLabel(draft, label.name))}
+                    >
+                      <LabelDot color={label.color} />
+                      {label.name}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="help">
+                {draft
+                  ? `켠 라벨이 하나라도 붙은 포스트가 보여요. 지금 ${matched.length}개가 보여요.`
+                  : "묶음이나 라벨을 하나 이상 켜 주세요."}
+              </p>
+            </fieldset>
+            {matched.length > 0 && (
+              <div className="forum-preview">
+                <p>이렇게 보여요</p>
+                <ul>
+                  {matched.slice(0, 3).map((post, index) => (
+                    // biome-ignore lint/suspicious/noArrayIndexKey: 제목이 겹칠 수 있다
+                    <li key={index}>{post.title}</li>
+                  ))}
+                </ul>
+                {matched.length > 3 && <p>외 {matched.length - 3}개</p>}
+              </div>
+            )}
+          </>
         )}
-        {error && (
+        {error && !chat && (
           <p className="help error" role="alert">
             {error}
           </p>
@@ -576,7 +623,7 @@ export function ForumDialog({
           <button
             type="submit"
             className="button primary"
-            disabled={busy || !name.trim() || !draft}
+            disabled={busy || !name.trim() || (!chat && !draft)}
           >
             {forum ? "저장" : "만들기"}
           </button>
@@ -585,3 +632,8 @@ export function ForumDialog({
     </dialog>
   );
 }
+
+const KINDS = [
+  { value: "chat", Icon: Hash, name: "채팅 채널", note: "멤버가 메시지를 주고받아요" },
+  { value: "forum", Icon: MessagesSquare, name: "포럼", note: "라벨로 거른 포스트를 모아 봐요" },
+] as const;
