@@ -1619,15 +1619,6 @@ button.member-row:active {
   min-width: 0;
 }
 
-/* 작업 없는 에이전트의 표시: 행 오른쪽, 패널 바탕 위라 점 고리는 패널 바탕색이다. */
-.member-agents {
-  --mark-ring: var(--parchment);
-  display: flex;
-  flex: none;
-  gap: 8px;
-  margin-right: 3px;
-}
-
 .member-names strong {
   display: flex;
   align-items: baseline;
@@ -1740,6 +1731,11 @@ button.member-row:active {
 .agent-mark[data-state="offline"]::after {
   border: 1.5px solid var(--offline);
   background: var(--mark-ring, var(--selected-solid));
+}
+
+.idle-agent {
+  align-items: center;
+  font-size: 13px;
 }
 
 .work-body {

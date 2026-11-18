@@ -96,6 +96,8 @@ function MemberRow({ member, me, direct }: { member: Member; me: boolean; direct
     .filter(Boolean)
     .join(" · ");
   const idle = idleAgents(member);
+  // 작업이 없어도 에이전트가 있으면 펼친다(작업 없는 에이전트는 펼친 행에서 작업 뒤에 한 줄씩 선다).
+  const expandable = count > 0 || idle.length > 0;
   const head = (
     <>
       <Avatar name={member.name} size={40} presence={member.presence} />
@@ -113,19 +115,12 @@ function MemberRow({ member, me, direct }: { member: Member; me: boolean; direct
           <span className="status-rest">{status ? `\u00a0· ${rest}` : rest}</span>
         </span>
       </span>
-      {idle.length > 0 && (
-        <span className="member-agents">
-          {idle.map((agent) => (
-            <AgentMark key={agent.executor} name={member.name} agent={agent} />
-          ))}
-        </span>
-      )}
-      {count > 0 && <ChevronRight size={14} className="chevron" aria-hidden />}
+      {expandable && <ChevronRight size={14} className="chevron" aria-hidden />}
     </>
   );
   return (
     <li className="member" data-open={open || undefined} data-offline={away || undefined}>
-      {count > 0 ? (
+      {expandable ? (
         <button
           type="button"
           className="member-row"
@@ -147,6 +142,9 @@ function MemberRow({ member, me, direct }: { member: Member; me: boolean; direct
               work={work}
               conflict={direct?.has(`${member.login}/${work.branch}`)}
             />
+          ))}
+          {idle.map((agent) => (
+            <IdleAgent key={agent.executor} member={member} agent={agent} />
           ))}
         </ul>
       )}
@@ -182,6 +180,22 @@ function WorkItem({ member, work, conflict }: { member: Member; work: Work; conf
           )}
         </p>
       </div>
+    </li>
+  );
+}
+
+/** 작업 없는 에이전트 한 줄: 표시, "지은의 Claude Code", 상태 글씨(DM 칸의 에이전트 메뉴와 같은 말). */
+function IdleAgent({ member, agent }: { member: Member; agent: Agent }) {
+  const busy = agent.state === "answering";
+  return (
+    <li className="work idle-agent">
+      <AgentMark name={member.name} agent={agent} />
+      <span className="agent-name">
+        {member.name}의 {EXECUTOR_NAMES[agent.executor]}
+      </span>
+      <span className={busy ? "agent-state busy" : "agent-state"}>
+        {busy ? "답하는 중…" : agent.state === "offline" ? "러너가 꺼져 있어요" : "쉬는 중"}
+      </span>
     </li>
   );
 }
