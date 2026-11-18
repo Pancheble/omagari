@@ -1140,6 +1140,12 @@ svg.lucide {
   line-height: 1.38;
 }
 
+/* 포럼 머리 띠의 설명은 12px이다(DESIGN.md "부딪힘 포럼"). */
+.forum-lead {
+  font-size: 12px;
+  line-height: 1.33;
+}
+
 /* 알림 띠: 머리 띠 바로 아래, 대화 칸 폭에 맞춘다. 오른쪽 동작은 밑줄 600 글씨. */
 .conversation > .banner {
   flex: none;
@@ -3180,7 +3186,7 @@ code.settings-value {
 }
 
 .forum-post:hover {
-  background: var(--chip);
+  background: var(--selected);
 }
 
 .forum-post[aria-current="true"] {
@@ -4208,7 +4214,6 @@ a.issue-number:hover {
 
 .labels-list .settings-item {
   width: 100%;
-  font-size: 14px;
 }
 
 .labels-name {
@@ -4755,5 +4760,20 @@ a.issue-number:hover {
 @media (max-width: 833px) {
   .debate-button span {
     display: none;
+  }
+}
+
+/* 좁은 화면의 줄과 버튼은 44px이다(DESIGN.md "앱의 좁은 화면"). 기본 규칙보다 뒤에 둬야 이긴다. */
+@media (max-width: 833px) {
+  .branch-item,
+  .tag-chip {
+    height: 44px;
+  }
+
+  .forum-fold {
+    top: 0;
+    right: 0;
+    width: 44px;
+    height: 44px;
   }
 }

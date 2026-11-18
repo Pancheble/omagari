@@ -177,7 +177,7 @@ export const ForumTitle = ({ forum }: { forum: Channel }) => {
         <Icon className="channel-mark" size={20} aria-hidden />
         <span>{forum.name}</span>
       </h2>
-      <span className="channel-members">
+      <span className="channel-members forum-lead">
         {forum.id === OTHER.id
           ? "어느 포럼에도 맞지 않는 포스트예요"
           : "Omagari가 알림을 포스트로 올려요"}
@@ -198,9 +198,12 @@ export function Forum({
   posts,
   selected,
   unread,
+  me,
   onSaveFilter,
 }: {
   forum: Channel;
+  /** 내 GitHub 아이디. 사람 줄에서 내 이름 대신 "나"를 쓴다. */
+  me: string;
   /** 포스트 전부. 필터로 고르는 것은 이 화면이 한다. */
   posts?: PostItem[];
   selected?: number;
@@ -303,6 +306,7 @@ export function Forum({
                 post={post}
                 selected={post.alert === selected}
                 unread={unread(post)}
+                me={me}
               />
             </li>
           ))}
@@ -388,12 +392,14 @@ function PostRow({
   post,
   selected,
   unread,
+  me,
 }: {
   /** 지금 보는 포럼. 같은 포스트가 여러 포럼에 보여도 지금 포럼에서 연다. */
   forum: string;
   post: PostItem;
   selected: boolean;
   unread: boolean;
+  me: string;
 }) {
   const { alert } = post.message;
   const resolved = settled(post);
@@ -441,7 +447,7 @@ function PostRow({
             <Avatar key={work.login} name={work.name} size={22} />
           ))}
           <span className="forum-post-names">
-            {alert.works.map((work) => work.name).join(" · ")}
+            {alert.works.map((work) => (work.login === me ? "나" : work.name)).join(" · ")}
           </span>
         </span>
         <span aria-hidden>·</span>

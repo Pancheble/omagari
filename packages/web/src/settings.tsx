@@ -270,7 +270,7 @@ function AlertsPage({
       />
       <Group title="워크스페이스">
         <Row name="이름">
-          <span className="settings-value">{workspace}</span>
+          <code className="settings-value">{workspace}</code>
         </Row>
         <Row name="레포">
           <code className="settings-value">{repo}</code>
