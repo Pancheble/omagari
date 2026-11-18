@@ -66,6 +66,7 @@ import { covers, overlap, resolve, see } from "./claims.ts";
 import { conflicts, newMemo, sameWork, symbolConflicts } from "./conflicts.ts";
 import {
   claudeRecentSession,
+  codexRecentSession,
   contextless,
   debateInstructions,
   escapeXml,
@@ -319,27 +320,31 @@ type CodexEvent = {
  * Codex에는 쓸 도구를 고르는 플래그가 없어 `tools`는 쓰지 않는다.
  * 세션 id는 `thread.started`의 `thread_id`, 답은 마지막 `item.completed`(`agent_message`)의 `text`다.
  */
-export const codex: Executor = async ({ message, resume, folder, signal, model, effort }) => {
+export const codex: Executor = async ({ message, resume, fork, folder, signal, model, effort }) => {
   // 레포의 `.codex/config.toml`까지 읽히도록 작업 폴더에서 묻는다. 서버 이름은 Codex가 `[a-zA-Z0-9_-]`만 받는다.
   const listed = await execFileAsync("codex", ["mcp", "list", "--json"], { cwd: folder, signal });
   const servers: { name: string }[] = JSON.parse(listed.stdout);
-  const run = execFileAsync(
-    "codex",
-    [
-      "exec",
-      "--json",
-      "--sandbox=read-only",
-      `--cd=${folder}`,
-      "--disable=apps",
-      "--disable=plugins",
-      ...servers.flatMap(({ name }) => ["-c", `mcp_servers.${name}.enabled=false`]),
-      ...(model ? ["-m", model] : []),
-      ...(effort ? ["-c", `model_reasoning_effort=${effort}`] : []),
-      ...(resume ? ["resume", resume] : []),
-      "-",
-    ],
-    { cwd: folder, maxBuffer: 64 * 1024 * 1024, signal },
-  );
+  const common = [
+    "--disable=apps",
+    "--disable=plugins",
+    ...servers.flatMap(({ name }) => ["-c", `mcp_servers.${name}.enabled=false`]),
+    ...(model ? ["-m", model] : []),
+    ...(effort ? ["-c", `model_reasoning_effort=${effort}`] : []),
+  ];
+  // `fork`에는 `-s`와 `-C`가 없다(#219 손 점검). 읽기 전용은 `-c`로 주고, 작업 폴더는 띄우는 폴더로 정한다.
+  const args =
+    resume && fork
+      ? ["exec", "fork", "--json", "-c", 'sandbox_mode="read-only"', ...common, resume, "-"]
+      : [
+          "exec",
+          "--json",
+          "--sandbox=read-only",
+          `--cd=${folder}`,
+          ...common,
+          ...(resume ? ["resume", resume] : []),
+          "-",
+        ];
+  const run = execFileAsync("codex", args, { cwd: folder, maxBuffer: 64 * 1024 * 1024, signal });
   run.child.stdin?.end(message);
   // 실패한 턴도 이벤트를 stdout에 내고 0이 아닌 코드로 끝난다. 뜨지 못했거나 끊긴 것만 그대로 던진다.
   const { stdout, stderr, code } = await run.then(
@@ -380,6 +385,8 @@ type CodexModel = {
  * "기본"의 effort 값은 Codex가 기본으로 둔 모델(`isDefault`)의 것이다.
  */
 // ponytail: model/list의 첫 쪽만 읽는다. 모델이 많아져 nextCursor가 오면 이어 읽는다.
+codex.recent = codexRecentSession;
+
 codex.choices = () =>
   converse(
     "codex",

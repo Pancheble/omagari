@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { api, type ContractFailure, call, type Debate } from "@omagari/contract";
-import type { Executor, Sandbox } from "@omagari/runner";
-import { eventually, fakeExecutor, fakeSandbox, startWorld, writer } from "./harness.ts";
+import { codex, type Executor, type Sandbox } from "@omagari/runner";
+import { eventually, fakeCodex, fakeExecutor, fakeSandbox, startWorld, writer } from "./harness.ts";
 
 type World = Awaited<ReturnType<typeof startWorld>>;
 type As = { url: string; session: string };
@@ -966,4 +969,64 @@ test("대행의 입장에 붙은 패치는 부른 사람의 러너가 부재자�
   assert.equal(proxied?.experiment?.verdict, "pass", JSON.stringify(proxied?.experiment));
   assert.ok(bobSandbox.calls.some((c) => c.command.endsWith("sh check.sh")));
   assert.equal(debate.conclusion?.by, "experiment");
+});
+
+/** Codex가 주인 기기에 남기는 작업 세션 기록(`$CODEX_HOME/sessions/…/rollout-*.jsonl`)의 첫 줄만 흉내 낸다. */
+async function codexSession(home: string, id: string, cwd: string, branch: string) {
+  const dir = join(home, "sessions", "2026", "11", "18");
+  await mkdir(dir, { recursive: true });
+  const meta = { type: "session_meta", payload: { id, cwd, git: { branch } } };
+  await writeFile(
+    join(dir, `rollout-2026-11-18T00-00-00-${id}.jsonl`),
+    `${JSON.stringify(meta)}\n{}\n`,
+  );
+}
+
+const codexDebate = async (t: TestContext, sessions: (world: World) => Promise<void>) => {
+  const fake = await fakeCodex(t);
+  const home = await mkdtemp(join(tmpdir(), "omagari-codex-"));
+  const before = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = home;
+  t.after(() => {
+    if (before === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = before;
+  });
+  const world = await startWorld({ observeMs: 50, followMs: 50, executors: { codex } });
+  t.after(world.stop);
+  await base(world);
+  await codexSession(home, "other-branch", world.repo.folder, "main");
+  await sessions(world);
+  const alice = fakeExecutor(() => JSON.stringify({ claim: "reason은 선택", evidence: [] }));
+  const { desk } = await member(world, "alice", "refund", alice.executor);
+  t.after(desk.remove);
+  await declare(world);
+  const debate = await eventually(async () => {
+    const found = (await postOf(world.owner, "declared"))?.debate;
+    assert.ok(found?.revealed);
+    return found;
+  });
+  const mine = debate.options.flatMap((o) => o.stances).find((s) => s.claim === "…");
+  return { calls: await fake.calls(), context: mine?.context };
+};
+
+test("Codex 에이전트는 주인이 그 브랜치에서 쓰던 Codex 작업 세션을 읽기 전용으로 갈라 띄워 토론에 참여한다", async (t) => {
+  const { calls, context } = await codexDebate(t, (world) =>
+    codexSession(process.env.CODEX_HOME ?? "", "payment-work", world.repo.folder, "payment"),
+  );
+  assert.equal(calls.length, 1);
+  const args = calls[0]?.args ?? [];
+  assert.deepEqual(args.slice(0, 2), ["exec", "fork"]);
+  assert.ok(args.includes("payment-work"));
+  assert.ok(args.includes('sandbox_mode="read-only"'));
+  assert.ok(!args.includes("other-branch"));
+  assert.ok(!calls[0]?.input.includes("맥락 없이 참여한다"));
+  assert.equal(context, "session");
+});
+
+test("그 브랜치의 Codex 작업 세션이 없으면 Codex 에이전트는 맥락 없이 참여한다", async (t) => {
+  const { calls, context } = await codexDebate(t, async () => {});
+  assert.equal(calls.length, 1);
+  assert.ok(!calls[0]?.args.includes("fork"));
+  assert.match(calls[0]?.input ?? "", /맥락 없이 참여한다/);
+  assert.equal(context, "none");
 });

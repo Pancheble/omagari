@@ -1,8 +1,10 @@
 // 토론 참여(ADR-0040, 구현 7장): 지시문, 입장 읽기, 근거 표시, 갈라 띄울 작업 세션 찾기.
 import { execFile } from "node:child_process";
+import { createReadStream } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, normalize } from "node:path";
+import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 import {
   EVIDENCE_MARKS,
@@ -194,6 +196,50 @@ export async function claudeRecentSession(folder: string, branch: string, skip: 
   const marker = `"gitBranch":${JSON.stringify(branch)}`;
   for (const { name } of sessions.sort((a, b) => b.mtime - a.mtime)) {
     if ((await readFile(join(dir, name), "utf8")).includes(marker)) return name.slice(0, -6);
+  }
+  return undefined;
+}
+
+/**
+ * Codex에서 주인이 이 폴더의 그 브랜치에서 쓰던 가장 최근 작업 세션. Codex는 세션 기록을
+ * `<CODEX_HOME>/sessions/<연>/<월>/<일>/rollout-*.jsonl`에 두고, 첫 줄(`session_meta`)의 `payload`에 세션 `id`, `cwd`,
+ * `git.branch`가 있다(codex-cli 0.167.1에서 본 꼴, 문서로는 확인하지 못했다). `cwd`가 이 폴더이고 `git.branch`가 이 브랜치인 것 가운데
+ * 러너가 띄운 세션(`skip`)을 빼고 고친 시각이 가장 늦은 것을 고른다. 없으면 없다.
+ */
+// ponytail: 기록 폴더를 통째로 훑는다. 기록이 아주 많아 느려지면 최근 날짜 폴더부터 보고 첫 것에서 멈춘다.
+export async function codexRecentSession(folder: string, branch: string, skip: Set<string>) {
+  const home = process.env.CODEX_HOME ?? join(homedir(), ".codex");
+  const root = join(home, "sessions");
+  const names = await readdir(root, { recursive: true }).catch(() => []);
+  const files = await Promise.all(
+    names
+      .filter((name) => name.endsWith(".jsonl"))
+      .map(async (name) => ({
+        path: join(root, name),
+        mtime: (await stat(join(root, name))).mtimeMs,
+      })),
+  );
+  for (const { path } of files.sort((a, b) => b.mtime - a.mtime)) {
+    const input = createReadStream(path, "utf8");
+    let first = "";
+    for await (const line of createInterface({ input })) {
+      first = line;
+      break;
+    }
+    input.destroy();
+    const meta = (() => {
+      try {
+        return JSON.parse(first ?? "").payload as {
+          id?: string;
+          cwd?: string;
+          git?: { branch?: string };
+        };
+      } catch {
+        return {};
+      }
+    })();
+    if (meta.id && meta.cwd === folder && meta.git?.branch === branch && !skip.has(meta.id))
+      return meta.id;
   }
   return undefined;
 }
