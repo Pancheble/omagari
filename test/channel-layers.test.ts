@@ -45,24 +45,34 @@ test("레포 채널은 그 레포가 보이는 멤버만 보고 그 레포의 �
   assert.equal(shared.repo, undefined);
   assert.equal(coreChat.repo, REPO);
   assert.equal(payChat.repo, REPO2);
-  // 이름은 워크스페이스에 하나다. 레포가 달라도 겹치면 conflict.
+  // 이름은 층마다 하나다: 같은 레포 안에서만 겹치면 conflict이고, 권한 없는 레포의 채널 이름은 드러나지 않는다.
   await assert.rejects(
-    call(owner, api.createChannel, { name: "코어", repo: REPO2 }),
+    call(owner, api.createChannel, { name: "코어", repo: REPO }),
     refused("conflict"),
   );
-
+  const sameName = (await call(alice, api.createChannel, { name: "코어" })).channel;
+  assert.equal(
+    sameName.repo,
+    undefined,
+    "REPO의 코어를 볼 수 없는 alice도 워크스페이스에 코어를 만든다",
+  );
+  const samePay = (await call(owner, api.createChannel, { name: "코어", repo: REPO2 })).channel;
+  assert.equal(samePay.repo, REPO2);
   // 채널 목록: alice는 워크스페이스 채널과 REPO2의 채널만 본다.
   const names = async (as: As) =>
     (await call(as, api.channels)).channels
       .filter((c) => c.kind === "chat")
       .map((c) => `${c.name}:${c.repo ?? ""}`)
       .sort();
-  assert.deepEqual(await names(owner), [`결제:${REPO2}`, `공용:`, `코어:${REPO}`].sort());
-  assert.deepEqual(await names(alice), [`결제:${REPO2}`, `공용:`].sort());
+  assert.deepEqual(
+    await names(owner),
+    [`결제:${REPO2}`, `공용:`, `코어:`, `코어:${REPO}`, `코어:${REPO2}`].sort(),
+  );
+  assert.deepEqual(await names(alice), [`결제:${REPO2}`, `공용:`, `코어:`, `코어:${REPO2}`].sort());
   // 실시간 연결도 그렇다: 만든 채널과 그 글이 REPO를 볼 수 없는 alice의 연결에는 가지 않는다.
   await eventually(() => {
     const seen = live.received.flatMap((m) => (m.kind === "channel" ? [m.payload.name] : []));
-    assert.deepEqual(seen.sort(), ["결제", "공용"]);
+    assert.deepEqual(seen.sort(), ["결제", "공용", "코어", "코어"]);
   });
   await call(owner, api.send, { channel: coreChat.id, text: "코어 이야기" });
   await call(owner, api.send, { channel: payChat.id, text: "결제 이야기" });
@@ -241,10 +251,15 @@ test("포럼은 레포로 거르고, 레포의 라벨 이름을 바꾸면 그 �
       [payPost.channel],
     ),
   );
-  // 포럼 자체는 워크스페이스의 것이라 alice도 본다. 거르기의 레포 조건도 보인다.
-  assert.deepEqual(
-    (await call(alice, api.channels)).channels.find((c) => c.id === coreForum.id)?.filter,
-    { labels: ["직접 충돌"], repos: [REPO] },
+  // REPO만 거르는 포럼은 REPO를 볼 수 없는 alice에게 아예 없다. REPO2도 거르는 포럼은 보이는 레포 조건만 보인다.
+  const aliceForums = (await call(alice, api.channels)).channels;
+  assert.equal(
+    aliceForums.some((c) => c.id === coreForum.id),
+    false,
+  );
+  assert.equal(
+    aliceForums.some((c) => JSON.stringify(c).includes(REPO)),
+    false,
   );
 
   // REPO2에서 라벨 이름을 바꾸면: REPO2만 거르는 포럼은 이름을 바꾸고, 모든 레포를 거르는 포럼은 새 이름을 더하고,
@@ -304,4 +319,108 @@ test("채널이 워크스페이스에만 속하던 판(계약 47)의 DB로 켜�
   await eventually(async () =>
     assert.deepEqual(await channels(owner), [...expected, "chat:공용:"].sort()),
   );
+});
+
+test("비공개 레포의 이름은 push 권한이 없는 멤버에게 포럼의 거르기, 실시간 전송, 응답, 거절 어디로도 새지 않는다", async (t) => {
+  const world = await startWorld({ accept: [REPO, REPO2] });
+  t.after(world.stop);
+  const owner = world.owner as As & { login: string };
+  world.github.admin("owner", REPO2);
+  world.github.grant("owner", REPO2);
+  await call(owner, api.addRepo, { repo: REPO2 });
+  world.github.grant("alice", REPO2); // alice는 REPO2만 보고 REPO는 모른다
+  const alice = await world.login("alice");
+  const live = await world.live(alice);
+  const forum = async (as: As, name: string, repos: string[]) =>
+    (await call(as, api.createForum, { name, filter: { labels: ["가"], repos } })).channel;
+  const coreOnly = await forum(owner, "코어만", [REPO]);
+  const both = await forum(owner, "둘", [REPO, REPO2]);
+  await forum(owner, "결제만", [REPO2]);
+
+  // 목록과 실시간 전송: alice에게 REPO가 없고, REPO만 거르는 포럼은 통째로 없다.
+  const leaked = (value: unknown) => JSON.stringify(value).includes(REPO);
+  const listed = (await call(alice, api.channels)).channels;
+  assert.equal(leaked(listed), false);
+  assert.deepEqual(
+    listed
+      .filter((c) => c.kind === "forum" && c.filter && "labels" in c.filter)
+      .map((c) => [c.name, c.filter]),
+    [
+      ["결제만", { labels: ["가"], repos: [REPO2] }],
+      ["둘", { labels: ["가"], repos: [REPO2] }],
+    ],
+  );
+  await eventually(() =>
+    assert.ok(live.received.some((m) => m.kind === "channel" && m.payload.id === both.id)),
+  );
+  const frames = live.received.filter((m) => m.kind === "channel" || m.kind === "forumDeleted");
+  assert.equal(leaked(frames), false);
+  assert.equal(
+    frames.some((m) => m.kind === "channel" && m.payload.id === coreOnly.id),
+    false,
+  );
+  // owner는 전부 본다.
+  const mine = (await call(owner, api.channels)).channels.find((c) => c.id === both.id);
+  assert.deepEqual(mine?.filter, { labels: ["가"], repos: [REPO, REPO2] });
+
+  // 만들기: 응답에 REPO가 없고, 안 보이는 레포는 없는 레포와 같게 거절한다.
+  const made = await forum(alice, "내 것", [REPO2]);
+  assert.equal(leaked(made), false);
+  const hidden = await call(alice, api.createForum, {
+    name: "x",
+    filter: { labels: ["가"], repos: [REPO] },
+  }).catch((e) => e);
+  const absent = await call(alice, api.createForum, {
+    name: "y",
+    filter: { labels: ["가"], repos: ["omagari-test/nowhere"] },
+  }).catch((e) => e);
+  assert.equal(hidden.code, "invalid_request");
+  assert.equal(hidden.code, absent.code);
+  assert.equal(
+    hidden.message.replace(REPO, "R"),
+    absent.message.replace("omagari-test/nowhere", "R"),
+  );
+
+  // 안 보이는 포럼은 고치지도 지우지도 못하고, 보이는 포럼을 고쳐도 안 보이는 레포 조건은 남는다.
+  await assert.rejects(call(alice, api.deleteForum, { id: coreOnly.id }), refused("not_found"));
+  await assert.rejects(
+    call(alice, api.updateForum, { id: coreOnly.id, name: "코어만", filter: { labels: ["가"] } }),
+    refused("not_found"),
+  );
+  const edited = (
+    await call(alice, api.updateForum, {
+      id: both.id,
+      name: "둘 고침",
+      filter: { labels: ["나"], repos: [REPO2] },
+    })
+  ).channel;
+  assert.deepEqual(edited.filter, { labels: ["나"], repos: [REPO2] });
+  const after = (await call(owner, api.channels)).channels.find((c) => c.id === both.id);
+  assert.deepEqual(
+    after?.filter && "repos" in after.filter ? [...(after.filter.repos ?? [])].sort() : [],
+    [REPO, REPO2].sort(),
+  );
+
+  // owner가 그 포럼을 REPO만 거르게 바꾸면 alice에게는 사라진다.
+  await call(owner, api.updateForum, {
+    id: both.id,
+    name: "둘 고침",
+    filter: { labels: ["나"], repos: [REPO] },
+  });
+  await eventually(() =>
+    assert.ok(live.received.some((m) => m.kind === "forumDeleted" && m.payload.id === both.id)),
+  );
+  assert.equal(
+    leaked(live.received.filter((m) => m.kind === "channel" || m.kind === "forumDeleted")),
+    false,
+  );
+  assert.equal(
+    (await call(alice, api.channels)).channels.some((c) => c.id === both.id),
+    false,
+  );
+  // 안 보이는 레포를 비우고 싶은 alice는 못 보는 포럼이라 못 고치지만, 보이는 포럼의 조건을 비우면 모든 레포가 된다.
+  const cleared = (
+    await call(alice, api.updateForum, { id: made.id, name: "내 것", filter: { labels: ["가"] } })
+  ).channel;
+  assert.deepEqual(cleared.filter, { labels: ["가"] });
 });
