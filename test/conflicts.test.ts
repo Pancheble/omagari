@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { type Alert, api, type ContractFailure, call } from "@omagari/contract";
-import { eventually, fakeExecutor, said, startWorld, writer } from "./harness.ts";
+import { eventually, fakeExecutor, REPO, said, startWorld, writer } from "./harness.ts";
 
 type World = Awaited<ReturnType<typeof startWorld>>;
 type As = { url: string; session: string };
@@ -310,6 +310,7 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
   const noIssue = <T extends { issue: unknown }>({ issue, ...rest }: T) => rest;
   assert.deepEqual(noIssue(arrived.post), {
     channel: post,
+    repo: REPO,
     count: 0,
     last: null,
     activity: arrived.at,
@@ -324,6 +325,7 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
     [
       {
         channel: post,
+        repo: REPO,
         alert: alert.id,
         count: 0,
         last: null,
@@ -344,6 +346,7 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
   const opened = await call(world.owner, api.openPost, { alert: alert.id });
   assert.deepEqual(noIssue(opened.post), {
     channel: post,
+    repo: REPO,
     alert: alert.id,
     count: 0,
     last: null,

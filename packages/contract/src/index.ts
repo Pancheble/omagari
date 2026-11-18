@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 47;
+export const CONTRACT_VERSION = 48;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -302,6 +302,8 @@ export const Source = z.strictObject({
   branch: z.string().nullable(),
   commit: z.string(),
   dirty: z.boolean(),
+  /** 답한 러너의 레포 `owner/name`. 서버가 답을 받을 때 붙인다. 워크스페이스 채널의 답은 어느 레포를 본 것인지 이것으로 안다. */
+  repo: z.string().optional(),
 });
 export type Source = z.infer<typeof Source>;
 
@@ -484,26 +486,36 @@ export type Label = z.infer<typeof Label>;
 const LabelName = z.string().trim().min(1).max(50);
 
 /**
- * 포럼의 거르기(ADR-0039): 중요도가 같거나, 라벨 목록 가운데 하나라도 포스트에 붙어 있으면 그 포럼에 보인다.
+ * 포럼의 거르기(ADR-0039, ADR-0043): 중요도가 같거나, 라벨 목록 가운데 하나라도 포스트에 붙어 있으면 그 포럼에 보인다.
+ * `repos`(`owner/name`)가 있고 비지 않았으면 그 레포의 포스트만이다. 없거나 비면 모든 레포다.
  * 포스트는 맞는 포럼마다 보이고, 어느 포럼에도 맞지 않으면 "다른 포스트"다(`Post.forums`가 빈 것).
  */
+const ForumRepos = z.array(z.string().trim().min(1)).optional();
 export const ForumFilter = z.union([
-  z.strictObject({ importance: Importance }),
-  z.strictObject({ labels: z.array(z.string().trim().min(1)).min(1) }),
+  z.strictObject({ importance: Importance, repos: ForumRepos }),
+  z.strictObject({ labels: z.array(z.string().trim().min(1)).min(1), repos: ForumRepos }),
 ]);
 export type ForumFilter = z.infer<typeof ForumFilter>;
 
 /** 포스트가 거르기에 맞나. */
-export const shows = (filter: ForumFilter, post: { labels: string[]; importance: Importance }) =>
-  "importance" in filter
+export const shows = (
+  filter: ForumFilter,
+  post: { labels: string[]; importance: Importance; repo: string },
+) =>
+  (!filter.repos?.length || filter.repos.includes(post.repo)) &&
+  ("importance" in filter
     ? filter.importance === post.importance
-    : filter.labels.some((label) => post.labels.includes(label));
+    : filter.labels.some((label) => post.labels.includes(label)));
 
-/** 채널. 워크스페이스의 멤버 모두가 읽는다. 포럼이면 거르기(`filter`)가 있다. */
+/**
+ * 채널. 포럼이면 거르기(`filter`)가 있다. 채팅 채널은 `repo`(`owner/name`)가 있으면 그 레포의 채널이라
+ * 그 레포에 push 권한이 있는 멤버만 보고, 없으면 워크스페이스의 채널이라 워크스페이스의 멤버 모두가 읽는다(ADR-0043).
+ */
 export const Channel = z.strictObject({
   id: z.string(),
   name: z.string(),
   kind: ChannelKind,
+  repo: z.string().optional(),
   filter: ForumFilter.optional(),
 });
 export type Channel = z.infer<typeof Channel>;
@@ -715,6 +727,8 @@ export type PostIssue = z.infer<typeof PostIssue>;
  */
 export const Post = z.strictObject({
   channel: z.string(),
+  /** 이 포스트의 레포 `owner/name`. */
+  repo: z.string(),
   alert: z.number(),
   count: z.number(),
   last: z.strictObject({ login: z.string(), name: z.string(), line: z.string() }).nullable(),
@@ -2077,17 +2091,19 @@ export const api = {
     response: z.strictObject({ channels: z.array(Channel) }),
   },
   /**
-   * 채팅 채널을 만든다. 같은 이름(대소문자를 가리지 않는다)의 채널이나 포럼이 있으면 `conflict`다.
-   * 실시간 연결이 붙어 있는 웹 모두에 `channel`이 간다.
+   * 채팅 채널을 만든다. `repo`가 있으면 그 레포의 채널(그 레포가 보이는 멤버만 만들고 본다, 아니면 `not_found`), 없으면 워크스페이스의 채널이다.
+   * 같은 이름(대소문자를 가리지 않는다)의 채널이나 포럼이 워크스페이스에 있으면 `conflict`다.
+   * 실시간 연결이 붙어 있는 웹 가운데 그 채널이 보이는 쪽에 `channel`이 간다.
    */
   createChannel: {
     method: "POST",
     path: "/api/channels",
-    body: z.strictObject({ name: ChannelName }),
+    body: z.strictObject({ name: ChannelName, repo: z.string().optional() }),
     response: z.strictObject({ channel: Channel }),
   },
   /**
    * 포럼을 만든다(ADR-0039). 멤버 누구나 한다. 같은 이름(대소문자를 가리지 않는다)의 채널이나 포럼이 있으면 `conflict`다.
+   * `filter.repos`에 이 워크스페이스의 레포가 아닌 것이 있으면 `invalid_request`다(`updateForum`도 같다).
    * 실시간 연결이 붙어 있는 웹 모두에 `channel`이 가고, 보이는 포럼이 바뀐 포스트의 알림 줄이 다시 간다.
    */
   createForum: {

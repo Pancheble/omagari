@@ -7,7 +7,15 @@ import { test } from "node:test";
 import { api, call } from "@omagari/contract";
 import { codex, runnerPaths } from "@omagari/runner";
 import { idleAgents } from "../packages/web/src/idle-agents.ts";
-import { eventually, fakeCodex, fakeExecutor, startWorld, tempRepo, writer } from "./harness.ts";
+import {
+  eventually,
+  fakeCodex,
+  fakeExecutor,
+  REPO,
+  startWorld,
+  tempRepo,
+  writer,
+} from "./harness.ts";
 
 type World = Awaited<ReturnType<typeof startWorld>>;
 type Group = { matcher?: string; hooks: { type: string; command: string; timeout?: number }[] };
@@ -38,7 +46,12 @@ test("Codex에게 물으면 러너가 codex exec를 읽기 전용으로 화면 �
   assert.deepEqual((await ask("결제는 어디서?")).answer, {
     state: "answered",
     text: "Codex: 결제는 어디서?",
-    source: { branch: "main", commit: await world.repo.git("rev-parse", "HEAD"), dirty: false },
+    source: {
+      branch: "main",
+      commit: await world.repo.git("rev-parse", "HEAD"),
+      dirty: false,
+      repo: REPO,
+    },
   });
   await call(world.owner, api.send, { channel, text: "환불은 refund.ts" });
   assert.equal((await ask("환불은?")).answer.state, "answered");

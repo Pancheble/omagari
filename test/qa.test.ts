@@ -7,7 +7,7 @@ import {
   call,
   MAX_MESSAGE_CHARS,
 } from "@omagari/contract";
-import { eventually, fakeExecutor, gatedExecutor, said, startWorld } from "./harness.ts";
+import { eventually, fakeExecutor, gatedExecutor, REPO, said, startWorld } from "./harness.ts";
 
 type Member = { url: string; session: string; login: string };
 
@@ -64,6 +64,7 @@ test("DM의 문답은 올리기 전까지 주인에게만 보이고, 올리면 �
     branch: "main",
     commit: await world.repo.git("rev-parse", "HEAD"),
     dirty: false,
+    repo: REPO,
   });
 
   // 올린 것만 모두에게 보인다. 질문과 답이 한 줄에 함께 있다.
