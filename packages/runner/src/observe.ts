@@ -34,7 +34,7 @@ ${ALWAYS}
 }
 
 /** 추적되더라도 늘 빼는 것: 경로의 어느 마디든 `.env`이거나 `.env.`로 시작한다. `.env.example`은 남긴다. */
-const secret = (path: string) =>
+export const secret = (path: string) =>
   path
     .split("/")
     .some((part) => part === ".env" || (part.startsWith(".env.") && part !== ".env.example"));
@@ -120,10 +120,14 @@ export async function observe(
       },
     );
     // 기준 커밋과 작업 트리의 차이(커밋한 것과 안 한 것)와, 추적하지 않는 새 파일(gitignore된 것은 빼고).
-    const [changed, untracked] = await Promise.all([
+    // Git이 지웠다고 보는 경로는 디스크를 다시 보지 않는다. 추적을 끊고 gitignore한 파일이나 링크로 바뀐 폴더 너머의 파일을 읽지 않으려는 것이다.
+    const [changed, removed, untracked] = await Promise.all([
       git(tree, "diff", "--name-only", "--no-renames", "-z", base, "--"),
+      git(tree, "diff", "--name-only", "--no-renames", "--diff-filter=D", "-z", base, "--"),
       git(tree, "ls-files", "--others", "--exclude-standard", "-z"),
     ]);
+    const fresh = new Set(untracked.split("\0"));
+    const gone = new Set(removed.split("\0").filter((path) => !fresh.has(path)));
     const paths = [...new Set(`${changed}${untracked}`.split("\0"))]
       .filter((path) => path && !secret(path))
       .sort();
@@ -131,7 +135,7 @@ export async function observe(
     const files: ObservedFile[] = [];
     for (const path of paths) {
       const full = join(tree, path);
-      const stat = await lstat(full).catch(() => undefined);
+      const stat = gone.has(path) ? undefined : await lstat(full).catch(() => undefined);
       const open = share === "full" || (share === "declared" && claimed(branch, path));
       if (!stat) {
         const definitions = open ? await changedDefinitions(path) : undefined;

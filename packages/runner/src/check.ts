@@ -27,6 +27,7 @@ import {
   type ObservedFile,
   type Verdict,
 } from "@omagari/contract";
+import { secret } from "./observe.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -450,6 +451,21 @@ export async function workTree(folder: string, index: string) {
   await copyFile(current, index).catch(() => {});
   const withIndex = { GIT_INDEX_FILE: index };
   await gitOut(folder, ["add", "--all"], withIndex);
+  // 관측이 늘 빼는 것(.env, .env.*)은 검사 트리에도 담지 않는다. 합친 코드가 그것을 출력해 서버로 내보내지 못하게 한다.
+  const secrets = (await gitOut(folder, ["ls-files", "--cached", "-z"], withIndex))
+    .split("\0")
+    .filter((path) => path && secret(path));
+  if (secrets.length > 0) {
+    const drop = execFileAsync(
+      "git",
+      ["-C", folder, "update-index", "--force-remove", "-z", "--stdin"],
+      {
+        env: { ...process.env, ...withIndex },
+      },
+    );
+    drop.child.stdin?.end(secrets.join("\0"));
+    await drop;
+  }
   return gitOut(folder, ["write-tree"], withIndex);
 }
 
