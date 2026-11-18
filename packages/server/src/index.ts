@@ -177,18 +177,19 @@ const nameSql = (l: string) => `COALESCE((SELECT name FROM people WHERE login = 
 
 /**
  * 결정 하나를 계약의 꼴로 읽는 JSON. `d`가 decisions, `dp`가 정리한 사람의 people이다. `decisionView`가 상태를 짓고 시각을 고친다.
+ * 서브쿼리가 돌려준 JSON은 `json()`으로 감싼다. 안 그러면 SQLite 판에 따라 `json_object` 안에서 배열이 문자열로 들어간다(Node 24.22.3, #258).
  * 결정자(`d.deciders`, 로그인의 JSON 배열) 가운데 정리한 사람은 늘 동의한 것이다(ADR-0029).
  */
 const DECISION = `json_object('id', d.id, 'post', d.post, 'login', d.login, 'name', COALESCE(dp.name, d.login),
   'title', d.title, 'path', d.path, 'pull', json_object('number', d.pull, 'url', d.url),
   'window', CASE WHEN d.span LIKE '{%' THEN json(d.span) ELSE d.span END, 'state', d.state,
   'closes', d.closes, 'reopened', d.reopened, 'early', d.early, 'stuck', json(d.stuck),
-  'deciders', (SELECT json_group_array(json_object('login', j.value, 'name', ${nameSql("j.value")},
+  'deciders', json((SELECT json_group_array(json_object('login', j.value, 'name', ${nameSql("j.value")},
     'agreed', j.value = d.login OR EXISTS (SELECT 1 FROM agreements g WHERE g.decision = d.id AND g.login = j.value)))
-    FROM json_each(d.deciders) j),
+    FROM json_each(d.deciders) j)),
   'absent', json(d.absent),
-  'objections', (SELECT json_group_array(json_object('login', o.login, 'name', ${nameSql("o.login")}, 'via', o.via, 'at', o.at))
-    FROM (SELECT * FROM objections WHERE decision = d.id ORDER BY at, rowid) o),
+  'objections', json((SELECT json_group_array(json_object('login', o.login, 'name', ${nameSql("o.login")}, 'via', o.via, 'at', o.at))
+    FROM (SELECT * FROM objections WHERE decision = d.id ORDER BY at, rowid) o)),
   'at', d.at)`;
 const iso = (ms: number) => new Date(ms).toISOString();
 const decisionView = (json: string): Decision => {
