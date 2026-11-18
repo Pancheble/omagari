@@ -1,6 +1,7 @@
 import { ago, EXECUTOR_NAMES, type ExecutorId, type MemberView } from "@omagari/contract";
 import { ChevronRight, Clock } from "lucide-react";
 import { type ComponentProps, useEffect, useId, useReducer, useState } from "react";
+import { idleAgents } from "./idle-agents.ts";
 import { StatusText } from "./profile.tsx";
 import { Avatar, PRESENCE_WORDS } from "./workspace.tsx";
 
@@ -94,6 +95,7 @@ function MemberRow({ member, me, direct }: { member: Member; me: boolean; direct
   const rest = [!status && word, ...answering, count > 0 ? `작업 ${count}개` : "작업 없음"]
     .filter(Boolean)
     .join(" · ");
+  const idle = idleAgents(member);
   const head = (
     <>
       <Avatar name={member.name} size={40} presence={member.presence} />
@@ -111,6 +113,13 @@ function MemberRow({ member, me, direct }: { member: Member; me: boolean; direct
           <span className="status-rest">{status ? `\u00a0· ${rest}` : rest}</span>
         </span>
       </span>
+      {idle.length > 0 && (
+        <span className="member-agents">
+          {idle.map((agent) => (
+            <AgentMark key={agent.executor} name={member.name} agent={agent} />
+          ))}
+        </span>
+      )}
       {count > 0 && <ChevronRight size={14} className="chevron" aria-hidden />}
     </>
   );
