@@ -17,6 +17,10 @@
 //   깨짐으로 확인된 포스트("tax" 등)에는 토론이 저절로 열려 있다. 만료는 DB에서 연 시각을 당겨 만든다.
 // - DEMO_MERGE_CHECK=off|no_sandbox: 설정 창의 내 러너의 합쳐 돌려 보기를 꺼 둠이나 샌드박스 없음으로 둔다. 안 주면 켜짐이다.
 // - DEMO_CHECK=none: 기본 브랜치에 검사 명령(.omagari.json)을 두지 않는다. 설정 창의 "검사 명령 없음"을 본다.
+// - 워크스페이스와 레포(ADR-0043, #238): 워크스페이스 "omagari-test"에 레포 둘(space, other)과 "나"가 Admin이지만 넣지 않은 레포(billing),
+//   다른 계정의 워크스페이스 "other-team"(레포 code)이 있다. 레포마다 채팅 채널, other만 보는 포럼("other 논의"), 두 레포를 보는 포럼("릴리즈")이 있다.
+// - DEMO_AS=minsu: 브라우저 로그인을 Admin이 아닌 박민수로 한다(omagari-test에서는 space에만, other-team의 code에 push 권한). 레포 넣기·빼기가 없다.
+//   other의 채널 주소(콘솔에 찍는다)로 가면 "이 레포는 볼 수 없어요"가 보인다.
 // - 끝내면(Ctrl+C) 임시 레포와 DB를 지운다. 이름이 *.test.ts가 아니라 npm test와 CI는 돌리지 않는다.
 // - 포스트마다 가짜 GitHub 이슈가 열리고 글이 댓글로 간다. 포스트 "박민수 · 최하준"에는 GitHub에서 단 댓글과 바꾼 제목·라벨이 들어온다.
 // - GitHub 머지를 막아 둔 채로 끝난다("머지 막힘"을 보이려고). 그 뒤로 Omagari가 하는 머지는 모두 막힌다.
@@ -38,7 +42,16 @@ import {
   serverToRunner,
 } from "@omagari/contract";
 import { claudeCode, codex, codexReady, type Executor } from "@omagari/runner";
-import { eventually, fakeExecutor, fakeSandbox, REPO, startWorld, writer } from "./harness.ts";
+import {
+  eventually,
+  fakeExecutor,
+  fakeSandbox,
+  REPO,
+  REPO2,
+  REPO3,
+  startWorld,
+  writer,
+} from "./harness.ts";
 
 type As = { url: string; session: string; login: string };
 
@@ -110,6 +123,8 @@ const world = await startWorld({
   mergeCheck: process.env.DEMO_MERGE_CHECK === "off" ? "off" : undefined,
   // 판정은 아래에서 정해 둔 것을 올린다. 러너들이 실제로 돌리지 않게 잠잠한 시간을 끝없이 둔다.
   quietMs: FOREVER,
+  // 워크스페이스 둘: REPO의 계정과 REPO3의 계정(ADR-0043).
+  accept: [REPO, REPO3],
 });
 const fake = world.github;
 const NAMES = {
@@ -871,6 +886,35 @@ await say(woojin, wallet, "wallet이 pay 시그니처를 따라 바뀌어야 해
 await say(world.owner, wallet, "그럼 pay 쪽을 먼저 머지하죠.");
 await propose(woojin, wallet, "wallet은 pay 시그니처를 따른다");
 
+// 워크스페이스와 레포(#238): "나"는 space, other, billing의 Admin이고 other를 넣는다. 박민수는 space에만, 이서연은 space와 other에 push 권한이 있다.
+fake.admin("owner");
+fake.admin("owner", REPO2);
+fake.admin("owner", "omagari-test/billing");
+fake.grant("owner", REPO2);
+fake.grant("seoyeon", REPO2);
+fake.grant("owner", REPO3);
+fake.grant("minsu", REPO3);
+await call(world.owner, api.addRepo, { repo: REPO2 });
+const repoChannel = async (name: string, repo: string) =>
+  (await call(world.owner, api.createChannel, { name, repo })).channel.id;
+await repoChannel("space-배포", REPO);
+const otherChannel = await repoChannel("other-배포", REPO2);
+await say(world.owner, otherChannel, "other 레포의 배포 이야기는 여기서 해요.");
+await call(world.owner, api.createForum, {
+  name: "other 논의",
+  filter: { importance: "discuss", repos: [REPO2] },
+});
+await call(world.owner, api.createForum, {
+  name: "릴리즈",
+  filter: { importance: "discuss", repos: [REPO, REPO2] },
+});
+const team = { ...world.owner, workspace: REPO3.split("/")[0] };
+await say(
+  team,
+  (await call(team, api.createChannel, { name: "일반" })).channel.id,
+  "다른 팀이에요.",
+);
+
 if (process.env.DEMO_RUNNER === "off") await world.runner.stop();
 
 // 미리 넣을 것을 다 넣은 뒤부터, 브라우저에서 연 기기 인증은 GitHub에서 코드를 넣는 대신 여기서 "나"로 승인한다.
@@ -879,7 +923,7 @@ fake.github.startDevice = async () => {
   const device = await startDevice();
   setTimeout(() => {
     try {
-      fake.approve(device.userCode, "owner");
+      fake.approve(device.userCode, process.env.DEMO_AS ?? "owner");
     } catch {
       // 그사이 만료됐거나 이미 끝난 인증이다.
     }
@@ -894,6 +938,7 @@ const web = spawn("npx", ["vite", "--port", PORT, "--strictPort"], {
   env: { ...process.env, OMAGARI_SERVER: world.server.url },
 });
 console.log(`Omagari 데모 서버: ${world.server.url}`);
+console.log(`other 레포의 채널(DEMO_AS=minsu로 보면 "볼 수 없어요"): #${otherChannel}`);
 console.log(`화면: http://localhost:${PORT} (실행기: ${Object.keys(executors).join(", ")})`);
 
 // 신호가 거듭 와도 한 번만 끈다. 두 번 끄면 이미 닫힌 DB를 다시 닫다가 죽는다.

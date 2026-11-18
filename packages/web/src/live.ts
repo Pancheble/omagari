@@ -20,6 +20,8 @@ export type LiveState = "connecting" | "open" | "reconnecting";
 // ponytail: 계약 버전이 달라 거절되면(배포 뒤 낡은 화면) 다시 붙기를 되풀이한다. 그런 일이 잦으면 "새로 고침" 띠를 낸다.
 export function useLive(
   session: string,
+  /** 받을 워크스페이스. 연결은 한 워크스페이스의 것만 받는다. */
+  workspace: string,
   onEvent: (event: LiveEvent) => void,
   onSignedOut: () => void,
 ): LiveState {
@@ -40,7 +42,8 @@ export function useLive(
       url.protocol = url.protocol.replace("http", "ws");
       const current = new WebSocket(url);
       socket = current;
-      current.onopen = () => current.send(encode(webToServer, "hello", { session, after: cursor }));
+      current.onopen = () =>
+        current.send(encode(webToServer, "hello", { session, after: cursor, workspace }));
       current.onmessage = ({ data }) => {
         const decoded = decode(serverToWeb, data);
         if ("error" in decoded) return; // 계약과 다른 것은 버린다
@@ -74,7 +77,7 @@ export function useLive(
       if (socket?.readyState === WebSocket.CONNECTING) socket.onopen = () => socket?.close();
       else socket?.close();
     };
-  }, [session]);
+  }, [session, workspace]);
 
   return state;
 }

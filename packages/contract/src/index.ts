@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 48;
+export const CONTRACT_VERSION = 49;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -1694,6 +1694,25 @@ export const api = {
     path: "/api/repos/add",
     body: z.strictObject({ repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/) }),
     response: z.strictObject({ repos: z.array(z.string()) }),
+  },
+  /**
+   * 레포 넣기 목록(ADR-0043, 시안 91-A): 고른 워크스페이스 계정의 레포 가운데 부른 사람이 GitHub Admin인 것, 이름 순서.
+   * `added`는 워크스페이스에 넣었는지, `pushers`는 그 레포에 push 권한이 있는 사람 수다. Admin이 아닌 레포는 이름도 수도 싣지 않는다.
+   * 웹은 이것이 비지 않았을 때만 "레포 넣기"를, `added`인 레포에만 레포 메뉴(빼기)를 보인다. GitHub이 답하지 못하면 `github_failed`다.
+   */
+  adminRepos: {
+    method: "GET",
+    path: "/api/repos/admin",
+    response: z.strictObject({
+      repos: z.array(
+        z.strictObject({
+          name: z.string(),
+          private: z.boolean(),
+          pushers: z.number().int().nonnegative(),
+          added: z.boolean(),
+        }),
+      ),
+    }),
   },
   /** 워크스페이스에서 레포를 뺀다. 넣을 때처럼 그 레포의 GitHub Admin만 한다. 그 레포의 것은 지우지 않고 다시 넣으면 돌아온다. */
   removeRepo: {

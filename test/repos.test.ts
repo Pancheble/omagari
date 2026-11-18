@@ -40,6 +40,16 @@ test("Admin만 같은 계정의 레포를 넣고 빼며, 러너는 원격으로 
     repos: [REPO2],
   });
   await assert.rejects(call(alice, api.removeRepo, { repo: REPO2 }), refused("forbidden"));
+  // 레포 넣기 목록에는 내가 Admin인 레포만 실린다. Admin이 아니면 비어 다른 레포의 이름도 수도 보이지 않는다(시안 93-C).
+  assert.deepEqual(await call(alice, api.adminRepos), { repos: [] });
+  world.github.admin("owner", "omagari-test/later");
+  assert.deepEqual(
+    (await call(owner, api.adminRepos)).repos.filter((repo) => repo.name !== REPO),
+    [
+      { name: "omagari-test/later", private: true, pushers: 0, added: false },
+      { name: REPO2, private: true, pushers: 2, added: true },
+    ],
+  );
   await assert.rejects(call(on(alice, REPO), api.works), refused("not_found"));
 
   // 워크스페이스에 없는 레포의 러너는 거절된다.
