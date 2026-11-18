@@ -43,7 +43,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { type Me, savedPicks, savePicks, server, signedOut } from "./api.ts";
-import { byName, ChannelList, CreateChannel, useCollapsed } from "./channels.tsx";
+import { byName, ChannelList, useCollapsed } from "./channels.tsx";
 import { ChannelTitle, Conversation, type View } from "./conversation.tsx";
 import { DEBATE_STRIP, DebateDialog, DebateLog, DebateStrip, ProxyDialog } from "./debate.tsx";
 import { DecisionDialog, type Fields } from "./decision.tsx";
@@ -60,7 +60,7 @@ import {
   postTitle,
   settled,
 } from "./forum.tsx";
-import { ForumDialog, LabelsContext, PostLabels } from "./labels.tsx";
+import { type CreateKind, ForumDialog, LabelsContext, PostLabels } from "./labels.tsx";
 import { useLive } from "./live.ts";
 import { MemberList, MemberSkeleton } from "./members.tsx";
 import { ProfilePanel } from "./profile.tsx";
@@ -156,7 +156,8 @@ export function Workspace({
 }) {
   const drawer = useRef<HTMLDialogElement>(null);
   const creator = useRef<HTMLDialogElement>(null);
-  const forumCreator = useRef<HTMLDialogElement>(null);
+  /** "만들기" 대화 상자에서 고른 종류. 누른 카테고리의 `+`가 정해 둔다(시안 88-A). */
+  const [createKind, setCreateKind] = useState<CreateKind>("chat");
   const forumEditor = useRef<HTMLDialogElement>(null);
   /** 레포의 라벨 전부(ADR-0039). 붙을 때 읽고, 실시간 연결의 `labels`로 갈아 끼운다. */
   const [labels, setLabels] = useState<Label[]>([]);
@@ -602,9 +603,12 @@ export function Workspace({
     }
   };
 
-  const openCreator = () => {
+  const openCreator = (kind: CreateKind) => {
     drawer.current?.close();
+    setCreateKind(kind);
     creator.current?.showModal();
+    // 종류는 이미 골라져 있으니 초점은 종류 고르기가 아니라 이름 칸에 둔다.
+    creator.current?.querySelector<HTMLInputElement>(".text-input")?.focus();
   };
 
   /** 내 접속 상태와 상태 메시지를 바꾼다. 바뀐 것은 실시간 연결의 멤버 목록으로 돌아온다. */
@@ -648,11 +652,8 @@ export function Workspace({
         onToggle={toggleCollapsed}
         onForumToggle={toggleForumCollapsed}
         onPick={onPick}
-        onCreate={openCreator}
-        onCreateForum={() => {
-          drawer.current?.close();
-          forumCreator.current?.showModal();
-        }}
+        onCreate={() => openCreator("chat")}
+        onCreateForum={() => openCreator("forum")}
       />
     </ChannelPanel>
   );
@@ -953,7 +954,7 @@ export function Workspace({
             <div className="empty">
               <h2>아직 채널이 없어요</h2>
               <p>채널을 만들어 멤버들과 이야기를 시작해 보세요.</p>
-              <button type="button" className="button primary" onClick={openCreator}>
+              <button type="button" className="button primary" onClick={() => openCreator("chat")}>
                 채널 만들기
               </button>
             </div>
@@ -1049,8 +1050,14 @@ export function Workspace({
         >
           <div className="side-panel">{panel(() => drawer.current?.close())}</div>
         </dialog>
-        <CreateChannel dialog={creator} onCreate={create} />
-        <ForumDialog dialog={forumCreator} posts={previews} onSave={createForum} />
+        <ForumDialog
+          dialog={creator}
+          posts={previews}
+          kind={createKind}
+          onKind={setCreateKind}
+          onCreateChat={create}
+          onSave={createForum}
+        />
         {forum && current && current.id !== OTHER.id && (
           <ForumDialog
             key={`${current.id}:${current.name}:${JSON.stringify(current.filter)}`}
