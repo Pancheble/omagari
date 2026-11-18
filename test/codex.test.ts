@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { api, call } from "@omagari/contract";
 import { codex, runnerPaths } from "@omagari/runner";
+import { idleAgents } from "../packages/web/src/idle-agents.ts";
 import { eventually, fakeCodex, fakeExecutor, startWorld, tempRepo, writer } from "./harness.ts";
 
 type World = Awaited<ReturnType<typeof startWorld>>;
@@ -367,4 +368,65 @@ test("Codex의 편집 전 훅은 셸 명령이나 다른 도구에는 아무것�
   ]) {
     assert.deepEqual(await hook(input), { code: 0, stdout: "", stderr: "" }, input.tool_name);
   }
+});
+
+test("실행기가 둘인 러너에서 작업의 에이전트는 그 브랜치에서 마지막으로 훅을 부른 실행기이고, 관측만 있으면 모른다", async (t) => {
+  const executors = {
+    "claude-code": fakeExecutor(() => "").executor,
+    codex: fakeExecutor(() => "").executor,
+  };
+  const world = await startWorld({ observeMs: 50, executors });
+  t.after(world.stop);
+  const folder = world.repo.folder;
+  await world.repo.git("switch", "--create", "b");
+  await writer(folder)("b.ts", "b\n");
+  const owner = async () =>
+    (await call(world.owner, api.members)).members.find((m) => m.login === "owner");
+  const seen = async () => {
+    const member = await owner();
+    return {
+      works: member?.works.map(({ branch, executor }) => ({ branch, executor })),
+      idle: member && idleAgents(member).map((agent) => agent.executor),
+    };
+  };
+  // 훅도 status set도 없이 관측만 있다.
+  await eventually(async () =>
+    assert.deepEqual(await seen(), {
+      works: [{ branch: "b", executor: null }],
+      idle: ["claude-code", "codex"],
+    }),
+  );
+
+  // Codex의 세션 시작 훅이 b에서 불렸다. Codex는 작업 없는 에이전트에서 빠진다.
+  await world.hook(JSON.stringify(codexInput.sessionStart(folder)), { executor: "codex" });
+  await eventually(async () =>
+    assert.deepEqual(await seen(), {
+      works: [{ branch: "b", executor: "codex" }],
+      idle: ["claude-code"],
+    }),
+  );
+
+  // 같은 브랜치에서 Claude Code의 훅(셸 명령의 편집 전 훅)이 불리면 그쪽으로 바뀐다.
+  const bash = {
+    ...claudeInput.edit(folder, "b.ts"),
+    tool_name: "Bash",
+    tool_input: { command: "ls" },
+  };
+  await world.hook(JSON.stringify(bash));
+  await eventually(async () =>
+    assert.deepEqual(await seen(), {
+      works: [{ branch: "b", executor: "claude-code" }],
+      idle: ["codex"],
+    }),
+  );
+
+  await world.signInCli(world.owner);
+  const status = await world.cli("status");
+  assert.match(status.stdout, /^ {2}"b" \(Claude Code\): /m, status.stderr);
+
+  // 서버가 다시 떠도 남는다.
+  await world.restartServer();
+  await eventually(async () =>
+    assert.deepEqual((await seen()).works, [{ branch: "b", executor: "claude-code" }]),
+  );
 });
