@@ -380,7 +380,10 @@ async function status() {
   ]);
   console.log(DATA_NOTE);
   for (const { login, agents, works: seen } of members) {
-    const own = works.filter((work) => work.login === login);
+    // 보이는 작업은 멤버 목록이 정한다(ADR-0006). api.works는 걸러지지 않은 것이다.
+    const own = works.filter(
+      (work) => work.login === login && seen.some((shown) => shown.branch === work.branch),
+    );
     const since = own[0]?.offlineSince;
     // 에이전트는 실행기마다 하나다(ADR-0015). 러너를 켠 적이 없으면 없다.
     const shown =
