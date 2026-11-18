@@ -46,6 +46,8 @@ const shim = (bin: string, name: string, script: string) =>
 // 러너와 CLI가 부르는 Git도 기기의 Git 설정(전역 gitignore 등)을 읽지 않는다.
 process.env.GIT_CONFIG_GLOBAL = devNull;
 process.env.GIT_CONFIG_NOSYSTEM = "1";
+// Claude Code 안에서 테스트를 돌려도 CLI가 자기를 Claude Code 안이라고 여기지 않게 한다(CI와 같게).
+delete process.env.CLAUDECODE;
 
 /** 워크스페이스의 레포. `tempRepo`의 origin이 이 레포를 가리킨다. */
 export const REPO = "omagari-test/space";

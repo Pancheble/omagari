@@ -26,4 +26,6 @@ status: accepted
 - Codex(#16)는 같은 에이전트의 두 번째 실행기가 아니라 두 번째 에이전트로 붙는다.
 - 같은 브랜치에서 두 실행기가 번갈아 일하면 작업의 에이전트 표시가 마지막에 보낸 쪽으로 바뀐다. 상태 한 줄은 지금처럼 나중에 쓴 것이 남는다.
 - 미정: 한 사람이 러너를 여럿 붙였을 때, 같은 실행기의 문답을 어느 러너가 받는지.
+- 훅은 편지함을 물을 때 자기 실행기를 싣고, 러너가 작업마다 바뀔 때만 서버에 알린다(#270). `omagari status set`은 Claude Code가 자기가 띄운 셸에 넣는 `CLAUDECODE=1`([Claude Code 문서 "Environment variables"](https://code.claude.com/docs/en/env-vars), 2026-11-19 확인)이 있으면 Claude Code를 함께 보낸다.
+- 미정: CLI가 Codex 안에서 도는지 알 길. Codex 문서의 환경 변수 쪽([Environment variables](https://learn.chatgpt.com/docs/config-file/environment-variables), 2026-11-19 확인)은 Codex가 읽는 변수만 적고 셸에 넣는 변수는 적지 않는다. 그래서 Codex 작업은 훅으로만 정하고, Codex 안의 `status set`은 실행기를 보내지 않는다.
 - PRD(#3)와 이슈 #16, #19, #21, #22의 본문을 이 결정에 맞게 고친다.
