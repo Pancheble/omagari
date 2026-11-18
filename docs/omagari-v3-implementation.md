@@ -75,6 +75,18 @@
   - Claude Code: haiku로 암호를 기억시킨 세션을 `--resume --model=sonnet --effort=low`로 이었더니 sonnet이 암호를 답했다(`modelUsage`에 sonnet이 더해짐). 이어서 `--model` 없이 이었더니 설정의 기본(Fable 5.2)이 아니라 **sonnet으로** 답했다(`system`/`init`의 `model`이 `claude-sonnet-5-5`). 세션 기록의 요청 effort는 `--effort=low`를 준 턴만 low이고 나머지는 medium이라 effort는 이어지지 않는다. 결과의 `modelUsage`는 세션 전체를 더한 것이라 이 턴의 모델을 가리지 못한다. 러너의 `claudeCode` 실행기로 다시 돌려도 같았다: 실행기가 돌려준 답한 모델이 haiku → (`--model` sonnet, `--effort` low) sonnet → (플래그 없음) sonnet이고 셋째 턴까지 암호를 답했다
   - Codex: `-m gpt-5.6-luna -c model_reasoning_effort=low`로 암호를 기억시킨 세션을 `exec -m gpt-6-luna -c model_reasoning_effort=high resume <id> -`로 이었더니 "This session was recorded with model `gpt-5.6-luna` but is resuming with `gpt-6-luna`" 경고(`item.completed`의 `error` 항목) 뒤에 같은 턴에서 암호를 답했고 종료 코드는 0이다. 세션 기록의 `turn_context`가 턴마다 모델과 effort를 적는다: luna/low → 6-luna/high → (플래그 없음) 6-luna/없음 → `-m gpt-5.6-terra` terra/없음 → (플래그 없음) **6-luna**/없음. `-m` 없이 이으면 그 세션의 모델이 아니라 설정의 모델로 돌고, effort도 이어지지 않는다
 
+**도그푸딩 서버 첫 배포 손 점검 결과** (2026-11-18~19, #234. 서버는 Fly.io `omagari-dogfood`, 도쿄, 볼륨 `omagari_data`. @Pancheble이 계정, 결제, 비밀값, 첫 `fly deploy`를 직접 하고 이 세션이 옆에서 봤다. 판은 fee180c(손 배포), 이어 cd14ac7(자동 배포) 뒤 계약 43)
+
+- [x] 건강 확인과 웹: `GET /api/health`가 `{"contract":43}`(200)이고, 서버가 웹의 로그인 화면을 낸다. @Pancheble이 GitHub 기기 인증으로 웹에 로그인해 화면이 나오는 것을 봤다
+- [x] 러너와 에이전트: 설치 클론(`dev`)에서 `omagari install`, `OMAGARI_SERVER`를 서버 주소로 주고 러너를 켰다. `omagari status`에 Claude Code와 Codex가 온라인이다. 웹 채널에서 보낸 메시지에 두 에이전트가 답했고(`omagari runner log`), 앞 대화가 다음 질문의 맥락으로 들어갔다. 웹 화면의 에이전트 목록은 @Pancheble이 봤다
+- [x] 하위 세션의 워크트리가 작업으로 보임: 러너가 켜진 뒤 띄운 하위 세션(#253, #254)과 이 세션의 워크트리가 웹 멤버 목록에 작업으로 보였다(@Pancheble의 스크린샷, 허브가 확인). 작업 줄의 에이전트 표시는 그때 없었고 #270(591f62c)에서 들어갔다
+- [x] 세션 시작 훅: 이 세션이 다시 시작될 때 훅 출력에 `<omagari-inbox>`(풀린 간접 충돌 소식 여섯 줄)가 들어왔다(이 세션이 직접 봄). 허브 세션의 SessionStart 훅에는 `<omagari-situation>`이, 편집 전 훅에는 직접 충돌, 간접 충돌, "합쳐 돌려 본 판정이 통과라 닫혔다" 소식이 왔다(허브가 확인)
+- [x] 자동 배포: #250 머지(cd14ac7) 뒤 dev CI가 통과하고 Deploy가 돌았다(run 44305609539). "올릴지 정한다"에서 `DEPLOY=1`, `flyctl deploy` 성공, 같은 기계와 볼륨에 새 이미지가 올라갔다(이 세션이 run 단계와 `fly machine list`로 확인). 이후 세 번(922e1e4, 3e14908, 591f62c)도 모두 성공이었다(허브)
+- [x] 다시 띄운 뒤 DB: 채널 "일반"의 대화 5개(2026-11-18 12:15~12:25 UTC)와 CLI 로그인이 자동 배포 세 번 뒤에도 그대로다(허브가 `api.history`와 `omagari status`로 확인). 이 세션은 `omagari status`에서 멤버와 에이전트가 남은 것을 봤다
+- 못 본 것: 볼륨 스냅샷에서 되살리기(스냅샷이 쌓이는지만 켜져 있다, 되살리기는 해 보지 않았다). 건강 확인에 실패하는 판이 옛 판을 남기는 동작. `dev`의 끝이 아닌 옛 CI 실행을 다시 돌렸을 때 Deploy가 건너뛰는 동작(#250의 검사, 판이 같았다). 멤버 여럿이 붙은 서버
+- 이 점검에서 정한 것: `FLY_API_TOKEN`은 레포 시크릿이 아니라 `dev`에서만 쓸 수 있는 GitHub Environment `dogfood`의 시크릿이다(#250). 첫 배포 때 계약이 42였다가 43이 되어 자동 배포가 아직 없던 서버를 손으로 한 번 더 올렸다
+
+
 Sources: [Claude Code 비대화 실행](https://code.claude.com/docs/en/headless), [세션 다루기](https://code.claude.com/docs/en/agent-sdk/sessions), [플랜으로 Agent SDK 쓰기](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan), [/btw 설명](https://blog.vincentqiao.com/en/posts/claude-code-btw/), [Codex 비대화 모드](https://learn.chatgpt.com/docs/non-interactive-mode)
 
 러너는 동작만 확인하고 빨리 화면까지 간다. "공간에 머무는가"는 4번까지 가야 잴 수 있다.
