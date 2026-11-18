@@ -7,6 +7,7 @@ import { StrictMode, useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { type Me, savedSession, saveSession, server, signedOut } from "./api.ts";
 import { Centered, Login } from "./login.tsx";
+import { Tooltip } from "./tooltip.tsx";
 import { Workspace } from "./workspace.tsx";
 
 type State =
@@ -75,5 +76,6 @@ function App() {
 createRoot(document.getElementById("root") as HTMLElement).render(
   <StrictMode>
     <App />
+    <Tooltip />
   </StrictMode>,
 );

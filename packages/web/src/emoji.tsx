@@ -306,7 +306,7 @@ export function EmojiPalette({
           type="button"
           className="tone-button"
           aria-label={`피부색: ${TONES[tone]}`}
-          title={`피부색: ${TONES[tone]}`}
+          data-tip={`피부색: ${TONES[tone]}`}
           onClick={() => {
             const next = (tone + 1) % TONES.length;
             setTone(next);
@@ -345,7 +345,7 @@ export function EmojiPalette({
                           tabIndex={active[0] === index && active[1] === column ? 0 : -1}
                           aria-label={label}
                           aria-selected={emoji === current}
-                          title={label}
+                          data-tip={label}
                           onFocus={() => setActive([index, column])}
                           onClick={() => pick(emoji)}
                         >
@@ -367,7 +367,6 @@ export function EmojiPalette({
               key={section.name}
               type="button"
               aria-label={section.name}
-              title={section.name}
               aria-current={at >= 0 && at === shown ? "true" : undefined}
               disabled={at < 0}
               onClick={() => {
