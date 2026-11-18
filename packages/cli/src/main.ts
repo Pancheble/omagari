@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -37,9 +37,11 @@ import {
   readCheck,
   readRepo,
   runnerPaths,
+  ServerContractMismatch,
   startRunner,
 } from "@omagari/runner";
 import { install } from "./install.ts";
+import { restart, UPDATED, type UpdateRecord, updateClone } from "./update.ts";
 
 /** 토론이 끝난 길과 지표에 쓰는 이름. */
 const DEBATE_PATHS = [
@@ -238,12 +240,34 @@ async function runner(chosen: string | undefined, chosenMergeCheck: string | und
   const saved = (await readSessions())[server];
   const start = async (session: string) =>
     startRunner({ serverUrl: server, folder, session, share, mergeCheck });
-  const running = await start(saved ?? (await login())).catch(async (error) => {
-    // 남겨 둔 세션이 끝났으면 한 번 다시 로그인한다.
-    if (!saved || !(error instanceof ContractFailure) || error.code !== "unauthorized") throw error;
-    await saveSession(undefined);
-    return start(await login());
-  });
+  const running = await start(saved ?? (await login()))
+    .catch(async (error) => {
+      // 남겨 둔 세션이 끝났으면 한 번 다시 로그인한다.
+      if (!saved || !(error instanceof ContractFailure) || error.code !== "unauthorized")
+        throw error;
+      await saveSession(undefined);
+      return start(await login());
+    })
+    .catch(async (error) => {
+      // 서버의 계약이 더 새로우면 깔린 클론을 받고 다시 켠다. 받고도 안 맞으면 거듭 받지 않는다.
+      if (!(error instanceof ServerContractMismatch) || !error.newer || process.env[UPDATED])
+        throw error;
+      console.log(`${error.message}\n서버의 계약이 더 새로워 이 클론을 받는다`);
+      const updated = await updateClone();
+      if ("todo" in updated)
+        throw new Error(`${error.message}\n자동으로 받지 못했다. ${updated.todo}`);
+      const record: UpdateRecord = {
+        at: new Date().toISOString(),
+        kind: "update",
+        ...updated.record,
+      };
+      await mkdir(dirname(paths.log), { recursive: true });
+      await appendFile(paths.log, `${JSON.stringify(record)}\n`);
+      console.log(
+        `${record.branch}를 ${record.from.slice(0, 7)}에서 ${record.to.slice(0, 7)}로 받았다. 러너를 다시 켠다`,
+      );
+      process.exit(await restart());
+    });
   console.log(`러너가 켜졌다: ${running.login}의 에이전트, ${running.repo} ↔ ${running.folder}`);
   // Codex는 깔려 있고 로그인했을 때만 붙는다. 무엇이 붙었는지 주인이 바로 본다.
   console.log(`에이전트: ${running.executors.map((id) => EXECUTOR_NAMES[id]).join(", ")}`);
@@ -302,7 +326,13 @@ async function log() {
   const lines = await readFile(log, "utf8").catch(() => "");
   if (!lines) return console.log("러너가 실행한 것이 아직 없다");
   for (const line of lines.trimEnd().split("\n")) {
-    const run: RunRecord | CheckRecord = JSON.parse(line);
+    const run: RunRecord | CheckRecord | UpdateRecord = JSON.parse(line);
+    if ("kind" in run && run.kind === "update") {
+      console.log(
+        `${run.at}  러너가 클론을 받음 ${run.branch} ${run.from.slice(0, 7)} → ${run.to.slice(0, 7)}`,
+      );
+      continue;
+    }
     if ("kind" in run) {
       const why = run.reason ? `: ${run.reason}` : "";
       const setup = run.setup ? `  준비 명령 ${JSON.stringify(run.setup)}` : "";

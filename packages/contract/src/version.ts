@@ -24,3 +24,14 @@ export function checkoutVersion() {
   const commit = git("rev-parse", "--short", "HEAD");
   return commit ? `버전 모름(커밋 ${commit})` : "버전 모름";
 }
+
+/** 이 체크아웃의 최상위 폴더. 클론이 아니면 없다. */
+export function checkoutRoot() {
+  return git("rev-parse", "--show-toplevel");
+}
+
+/** 이 체크아웃이 서 있는 브랜치. 브랜치가 아니면(태그나 커밋을 받은 상태) 없다. */
+export function checkoutBranch() {
+  const branch = git("rev-parse", "--abbrev-ref", "HEAD");
+  return branch && branch !== "HEAD" ? branch : undefined;
+}
