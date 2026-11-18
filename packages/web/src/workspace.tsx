@@ -963,6 +963,7 @@ export function Workspace({
               posts={posts}
               selected={openPost?.alert}
               unread={unread}
+              me={me.login}
               onSaveFilter={(filter) => updateForum(current, current.name, filter)}
             />
           ) : (
