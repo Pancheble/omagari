@@ -81,7 +81,7 @@ export const parseYaml = (source: string): Yaml => {
     const map: { [key: string]: Yaml } = {};
     while (lines[at] && lines[at]?.indent === indent && !lines[at]?.text.startsWith("-")) {
       const { text } = lines[at] as (typeof lines)[number];
-      const found = /^("[^"]*"|'[^']*'|[^:]+?):(?:\s+(.*))?$/.exec(text);
+      const found = /^("[^"]*"|'[^']*'|[^:]+?):(?:\s+([\s\S]*))?$/.exec(text);
       if (!found) throw new Error(`읽을 수 없는 줄: ${text}`);
       at++;
       const key = unquote((found[1] as string).trim());
@@ -106,8 +106,19 @@ const asList = (value: Yaml | undefined): Yaml[] =>
 const isMap = (value: Yaml | undefined): value is { [key: string]: Yaml } =>
   typeof value === "object" && !Array.isArray(value);
 
+/**
+ * 맞춰 보는 데 오래 걸릴 수 있는 글롭(길거나 `*`, `{`가 많은 것)은 어느 파일에도 맞지 않는 것으로 친다.
+ * 서버 하나가 모든 멤버를 받으므로 설정 파일 하나가 서버를 붙잡지 못하게 한다.
+ */
+const tame = (glob: string) =>
+  glob.length <= 200 &&
+  (glob.match(/\*+/g) ?? []).length <= 6 &&
+  (glob.match(/\{/g) ?? []).length <= 4;
+
 const match = (glob: string, file: string) =>
-  glob.startsWith("!") ? !matchesGlob(file, glob.slice(1)) : matchesGlob(file, glob);
+  glob.startsWith("!")
+    ? tame(glob) && !matchesGlob(file, glob.slice(1))
+    : tame(glob) && matchesGlob(file, glob);
 
 const MODES: Record<string, (globs: string[], files: string[]) => boolean> = {
   "any-glob-to-any-file": (globs, files) => globs.some((g) => files.some((f) => match(g, f))),
@@ -144,8 +155,12 @@ const matches = (rule: Yaml, files: string[]): boolean | undefined => {
   return checks.length > 0 ? checks.every(Boolean) : undefined;
 };
 
+/** 이보다 긴 labeler.yml은 읽지 않는다(던진다). */
+const MAX_LABELER_CHARS = 64 * 1024;
+
 /** labeler.yml의 내용과 알림의 파일에 맞는 라벨 이름들. 읽을 수 없는 꼴이면 던진다. */
 export const labelsFor = (source: string, files: string[]): string[] => {
+  if (source.length > MAX_LABELER_CHARS) throw new Error("labeler.yml이 너무 길다");
   const config = parseYaml(source);
   if (!isMap(config)) throw new Error("labeler.yml은 라벨 이름을 키로 하는 맵이어야 한다");
   if (files.length === 0) return [];

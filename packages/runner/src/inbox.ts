@@ -27,7 +27,7 @@ const UNREADABLE: Record<Unreadable, string> = {
 };
 
 /** 남이 쓴 글(브랜치, 경로, 심볼 이름)을 따옴표 안의 데이터로 적는다. 줄바꿈, 따옴표, `<`, `>`는 이스케이프되어 줄도 감싼 블록도 넘지 못한다. */
-const quote = (data: string) =>
+export const quote = (data: string) =>
   JSON.stringify(data).replaceAll("<", "\\u003c").replaceAll(">", "\\u003e");
 
 /** 출력의 끝에서 이만큼만 싣는다(러너가 이미 끝 25줄만 올린다). */
