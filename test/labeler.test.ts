@@ -77,6 +77,32 @@ test("labeler.yml이 없거나 틀린 꼴이면 종류 라벨만 붙고 서버�
   assert.deepEqual(await directLabels("- 틀린\n- 꼴"), ["직접 충돌"]);
 });
 
+test("labeler.yml이 오래 걸리는 꼴이어도 서버를 붙잡지 않고, 그 글롭만 빼고 읽는다", {
+  timeout: 60_000,
+}, async () => {
+  const braces = Array.from({ length: 24 }, () => "{a,b}").join("");
+  const labels = await directLabels(
+    text([
+      "backend:",
+      "  - changed-files:",
+      "    - any-glob-to-any-file: 'src/**'",
+      "web:",
+      "  - changed-files:",
+      `    - any-glob-to-any-file: 'src/${braces}x'`,
+      `note: ${" ".repeat(60_000)}a\u2028b`,
+    ]),
+  );
+  assert.deepEqual(labels, ["직접 충돌", "backend"]);
+  // 너무 긴 파일은 읽지 않는다.
+  const long = text([
+    "backend:",
+    "  - changed-files:",
+    "    - any-glob-to-any-file: 'src/**'",
+    `#${"x".repeat(64 * 1024)}`,
+  ]);
+  assert.deepEqual(await directLabels(long), ["직접 충돌"]);
+});
+
 test("간접 충돌과 중복 구현은 심볼이 있는 파일에 맞는 팀 라벨이 붙는다", async (t) => {
   const world = await startWorld({ observeMs: 50, followMs: 50 });
   t.after(world.stop);

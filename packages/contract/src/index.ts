@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 42;
+export const CONTRACT_VERSION = 43;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -109,8 +109,8 @@ export type ObservedFile = z.infer<typeof ObservedFile>;
  */
 export const Work = z.strictObject({
   branch: z.string(),
-  /** 기준 커밋. 이 브랜치와 기본 브랜치(원격 추적)가 갈라진 지점이다(ADR-0002). */
-  base: z.string(),
+  /** 기준 커밋. 이 브랜치와 기본 브랜치(원격 추적)가 갈라진 지점이다(ADR-0002). 커밋의 전체 id(SHA-1이나 SHA-256)만 받는다. */
+  base: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
   /** 이 관측의 공유 수준. intent의 빈 `files`는 바뀐 것이 없다는 뜻이 아니라 보내지 않았다는 뜻이다. */
   share: ShareLevel,
   files: z.array(ObservedFile),
@@ -1107,6 +1107,9 @@ export const CheckReading = z.union([
 export type CheckReading = z.infer<typeof CheckReading>;
 
 /** 러너가 서버에 보내는 것. 이후의 이슈는 자기 메시지를 여기에 더한다. */
+/** 선점 하나에 싣는 겹친 선점의 최대 수. 넘는 것은 러너가 싣지 않는다. */
+export const MAX_OVERLAPS = 100;
+
 export const runnerToServer = {
   /**
    * 붙자마자 보낸다. `repos`는 러너 폴더의 GitHub 원격이 가리키는 레포(`owner/name`)들이다.
@@ -1167,7 +1170,7 @@ export const runnerToServer = {
     unit: Claim.shape.unit,
     symbol: z.string().optional(),
     lines: LineRange.optional(),
-    overlaps: z.array(z.number()),
+    overlaps: z.array(z.number()).max(MAX_OVERLAPS),
     plan: Plan.optional(),
   }),
   /**

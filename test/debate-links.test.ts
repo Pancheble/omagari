@@ -115,6 +115,8 @@ test("토론의 공개된 입장과 결론이 이슈 댓글로 가고(가린 라
   });
   assert.equal(ended?.login, "alice");
   assert.match(ended?.body ?? "", /alice가 골라서/);
+  // 결론 댓글은 서버가 지은 글만 싣는다. 이긴 주장은 그 사람의 입장 댓글에 있다.
+  assert.doesNotMatch(ended?.body ?? "", /라운드 주장/);
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.equal(issue.comments.length, 7);
   // 우리가 단 댓글은 포스트의 글로 들어오지 않는다.

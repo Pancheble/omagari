@@ -29,6 +29,7 @@ import {
   type InboxItem,
   type LineRange,
   MAX_FRAME_BYTES,
+  MAX_OVERLAPS,
   MAX_PATCH_CHARS,
   type MergeCheckState,
   type MergeRun,
@@ -88,7 +89,15 @@ export {
   type Sandbox,
   type SandboxInput,
 } from "./check.ts";
-export { alertLine, claimNews, claimOwner, claimPlace, inboxNotice, planLine } from "./inbox.ts";
+export {
+  alertLine,
+  claimNews,
+  claimOwner,
+  claimPlace,
+  inboxNotice,
+  planLine,
+  quote,
+} from "./inbox.ts";
 export { observationNotice } from "./observe.ts";
 
 const execFileAsync = promisify(execFile);
@@ -1442,7 +1451,7 @@ export async function startRunner(options: {
     const reply = await request("claim", {
       branch,
       ...place,
-      overlaps: overlaps.map((c) => c.id),
+      overlaps: overlaps.slice(0, MAX_OVERLAPS).map((c) => c.id),
       ...(plan && { plan }),
     });
     if (reply.kind !== "claimed") throw new Error(`서버가 다른 것으로 답했다: ${reply.kind}`);
