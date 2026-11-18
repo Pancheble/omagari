@@ -1733,6 +1733,11 @@ button.member-row:active {
   background: var(--mark-ring, var(--selected-solid));
 }
 
+.idle-agent {
+  align-items: center;
+  font-size: 13px;
+}
+
 .work-body {
   display: grid;
   gap: 2px;
