@@ -12,13 +12,12 @@ type World = Awaited<ReturnType<typeof startWorld>>;
 type As = { url: string; session: string };
 type Indirect = Exclude<Alert, { kind: "direct" }>;
 
-/** owner의 새 파일과 bob의 currency가 함께 있을 때만 깨지는 검사 명령. 따로 돌리면 둘 다 통과한다. */
-const CHECK2 =
-  "if [ -e src/draft.ts ] && grep -q currency src/pay.ts; then echo 깨졌다; exit 1; fi";
+/** A check command that breaks only when the owner's new file and bob's currency are together. Run separately, both pass. */
+const CHECK2 = "if [ -e src/draft.ts ] && grep -q currency src/pay.ts; then echo broke; exit 1; fi";
 
 /**
- * 잠잠해지기를 기다리는 시간. 테스트에서는 줄여 본다.
- * 고친 뒤 새로 돌기 전까지 "지난 결과" 알림이 보이는 틈이 이 시간이라, 너무 짧으면 기계가 느릴 때 폴링이 그 틈을 놓친다(#241).
+ * How long to wait for things to settle. Shortened for tests.
+ * This is the gap after a fix and before the new run when the "stale result" alert shows, so if it is too short, polling misses it on a slow machine (#241).
  */
 const QUIET_MS = 1500;
 
@@ -36,8 +35,8 @@ refund(1);
 `;
 
 /**
- * 기본 브랜치(origin/main)에 파일들을 머지한 것처럼 둔다. 지금 브랜치와 작업 폴더는 건드리지 않는다(관측이 흔들리지 않게).
- * 테스트의 준비라 Git을 직접 부른다.
+ * Make it look as if the files were merged into the default branch (origin/main). The current branch and the working folder are left alone (so observation isn't shaken).
+ * This is test setup, so it calls Git directly.
  */
 function mergeToMain(folder: string, files: Record<string, string>) {
   const env = {
@@ -49,7 +48,11 @@ function mergeToMain(folder: string, files: Record<string, string>) {
     GIT_COMMITTER_EMAIL: "test@omagari.invalid",
   };
   const git = (args: string[], input?: string) =>
-    execFileSync("git", ["-C", folder, ...args], { env, input, encoding: "utf8" }).trim();
+    execFileSync("git", ["-C", folder, ...args], {
+      env,
+      input,
+      encoding: "utf8",
+    }).trim();
   git(["read-tree", "refs/remotes/origin/main"]);
   for (const [path, content] of Object.entries(files)) {
     const blob = git(["hash-object", "-w", "--stdin"], content);
@@ -62,7 +65,7 @@ function mergeToMain(folder: string, files: Record<string, string>) {
   git(["update-ref", "refs/remotes/origin/main", commit]);
 }
 
-/** 기준 커밋에 `files`를 두고 origin/main을 올린다. 멤버들이 같은 판에서 시작한다. */
+/** Put `files` on the base commit and push origin/main. The members start from the same base. */
 async function base(world: World, files: Record<string, string>) {
   for (const [path, content] of Object.entries(files))
     await writer(world.repo.folder)(path, content);
@@ -71,12 +74,16 @@ async function base(world: World, files: Record<string, string>) {
   await world.repo.git("update-ref", "refs/remotes/origin/main", "HEAD");
 }
 
-/** 멤버 `login`의 기기: 같은 레포의 다른 클론에서 `branch`를 시작한다. 받는 동안은 러너를 꺼 둔다. */
+/** Member `login`'s machine: start `branch` in another clone of the same repo. The runner is kept off while it fetches. */
 async function member(
   world: World,
   login: string,
   branch: string,
-  extra: { sandbox?: Sandbox; quietMs?: number; mergeCheck?: "on" | "off" } = {},
+  extra: {
+    sandbox?: Sandbox;
+    quietMs?: number;
+    mergeCheck?: "on" | "off";
+  } = {},
 ) {
   world.github.grant(login);
   const as = await world.login(login);
@@ -90,7 +97,7 @@ async function member(
   return { as, desk };
 }
 
-/** 간접 충돌(추정) 알림들을 두 작업의 상대 멤버로 찾는다. */
+/** Find indirect conflict (guessed) alerts by the other member of the two works. */
 async function indirect(as: As) {
   const messages = (await call(as, api.posts)).posts.map((p) => p.message);
   return messages.flatMap((m) =>
@@ -98,7 +105,7 @@ async function indirect(as: As) {
   );
 }
 
-/** `login`과의 간접 충돌 알림 하나가 `check`를 지날 때까지 기다린다. */
+/** Wait until one indirect conflict alert with `login` passes `check`. */
 const alertWith = (as: As, login: string, check: (alert: Indirect) => void = () => {}) =>
   eventually(async () => {
     const found = (await indirect(as)).filter(
@@ -113,7 +120,7 @@ const alertWith = (as: As, login: string, check: (alert: Indirect) => void = () 
     return alert;
   }, 30_000);
 
-/** `login`과의 간접 충돌 알림이 합쳐 돌려 보니 통과해 풀림으로 닫힐 때까지 기다린다. 통과한 검사 명령이 남는다. */
+/** Wait until an indirect conflict alert with `login` passes the merge run and closes as lifted. The passed check command remains. */
 const closedWith = (as: As, login: string) =>
   eventually(async () => {
     const found = (await indirect(as)).filter(
@@ -126,11 +133,11 @@ const closedWith = (as: As, login: string) =>
     return last;
   }, 30_000);
 
-/** 넣은 글(CLI의 응답)에서 편지함의 소식 줄만. */
+/** Only the news lines of the mailbox in the added text (the CLI's reply). */
 const inboxLines = (output: string) =>
   output.split("<omagari-inbox>\n")[1]?.split("\n</omagari-inbox>")[0]?.split("\n") ?? [];
 
-/** `cwd`에서 `omagari status`를 거듭 돌려 편지함에 `prefix`로 시작하는 줄이 넘겨질 때까지 기다린다. */
+/** Run `omagari status` in `cwd` repeatedly and wait until a line starting with `prefix` is handed to the mailbox. */
 async function receives(world: World, cwd: string, prefix: string) {
   await eventually(async () => {
     const lines = inboxLines((await world.cliIn(cwd, "status")).stdout);
@@ -141,11 +148,11 @@ async function receives(world: World, cwd: string, prefix: string) {
   });
 }
 
-test("간접 충돌(추정)이 걸린 쌍이 잠잠해지면 쓰는 쪽 러너가 두 작업을 합쳐 검사 명령을 돌리고, 판정이 알림과 두 편지함에 붙는다", {
+test("when a pair with a guessed indirect conflict settles, the user's runner merges the two works and runs the check command, and the verdict is attached to the alert and both mailboxes", {
   timeout: 150_000,
 }, async (t) => {
   const fake = fakeSandbox();
-  // 문이 열리지 않은 채 실패해도 오래 걸리지 않게 검사 명령의 상한을 줄인다.
+  // Shorten the check command's limit so a failure with the gate unopened doesn't take long.
   const world = await startWorld({
     observeMs: 50,
     sandbox: fake.sandbox,
@@ -154,26 +161,26 @@ test("간접 충돌(추정)이 걸린 쌍이 잠잠해지면 쓰는 쪽 러너�
   });
   t.after(world.stop);
   const gate = (await place(t))("gate");
-  // 검사 명령: 합친 폴더의 src를 적고, 문이 열릴 때까지 기다렸다가, pay에 currency가 생겼는데 owner의 새 파일이 pay(1)로 부르면 깨진다.
-  // 그래서 bob의 작업만, owner의 작업만 돌리면 통과한다(ADR-0035의 깨짐).
+  // Check command: write the merged folder's src, wait until the gate opens, and break if pay gained currency while the owner's new file calls pay(1).
+  // So bob's work alone or the owner's work alone passes (the break in ADR-0035).
   await base(world, {
     "src/pay.ts": PAY,
     "src/use.ts": USE,
     ".omagari.json": `${JSON.stringify({ check: "sh check.sh" })}\n`,
     "check.sh": `ls src
 while [ ! -e ${gate} ]; do sleep 0.05; done
-if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo "pay(1)에 currency가 빠졌다"; exit 1; fi
+if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo "pay(1) is missing currency"; exit 1; fi
 `,
   });
-  // owner는 pay와 refund를 쓴다. 푸시하지 않은 커밋과 커밋하지 않은 새 파일이 있다.
+  // The owner uses pay and refund. There is an unpushed commit and an uncommitted new file.
   const { git, folder } = world.repo;
   await git("switch", "--create", "payment");
   await writer(folder)("src/committed.ts", "export const a = 1;\n");
   await git("add", ".");
-  await git("commit", "--message=푸시하지 않은 커밋");
+  await git("commit", "--message=unpushed commit");
   const DRAFT = `import { pay } from "./pay";\npay(1);\n`;
   await writer(folder)("src/draft.ts", DRAFT);
-  // bob은 pay의, carol은 refund의 정의 줄을 커밋하지 않고 바꾼다. 둘의 러너는 잠잠한 시간이 길어(기본 2분) 이 테스트에서 돌리지 않는다.
+  // bob changes pay's definition line and carol changes refund's, uncommitted. Their runners' settle time is long (2 minutes by default), so this test doesn't run them.
   const bob = await member(world, "bob", "currency");
   t.after(bob.desk.remove);
   const carol = await member(world, "carol", "reason");
@@ -188,18 +195,18 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo "pay
     PAY.replace("refund(amount: number)", "refund(amount: number, reason: string)"),
   );
 
-  // 알림이 막 섰을 때는 아직 잠잠하지 않아 돌리지 않았다.
+  // Right after the alert stands it hasn't settled yet, so it wasn't run.
   const fresh = await alertWith(world.owner, "bob");
   assert.equal(fresh.run, undefined);
   assert.equal(fake.calls.length, 0);
   await alertWith(world.owner, "carol");
-  // 알림이 처음 들어간 것은 넘겨 둔다. 판정이 나면 다시 들어오는지 본다.
+  // Set aside that the alert first went in. After the verdict, see whether it goes in again.
   const OWNER_SEES = `- Indirect conflict (estimated): my Work and bob's branch "currency"`;
   const BOB_SEES = `- Indirect conflict (estimated): my Work and owner's branch "payment"`;
   await receives(world, folder, OWNER_SEES);
   await receives(world, bob.desk.folder, BOB_SEES);
 
-  // 잠잠해지면 한 쌍을 돌린다. 도는 동안은 "돌려 보는 중"이고, 러너는 한 번에 하나만 돌린다.
+  // Once settled it runs one pair. While running it's "running a merge run", and the runner runs only one at a time.
   const first = await eventually(async () => {
     const runs = (await indirect(world.owner)).flatMap((a) =>
       a.run && a.works.some((w) => w.login === "owner") ? [a] : [],
@@ -212,55 +219,55 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo "pay
   assert.equal(first.run?.login, "owner");
   assert.equal(first.run?.stale, false);
   assert.equal(first.confirmed, false);
-  // "돌려 보는 중"은 임시 워크트리를 마련하기 전에 올라가니, 샌드박스에 닿을 때까지 기다린 뒤 하나만 도는지 본다.
+  // "Running a merge run" goes up before the temporary worktree is prepared, so wait until it reaches the sandbox, then check that only one runs.
   await eventually(() => assert.equal(fake.calls.length, 1));
   await sleep(QUIET_MS * 2);
   assert.equal(fake.calls.length, 1);
   assert.equal((await indirect(world.owner)).filter((a) => a.run).length, 1);
 
-  // 문을 열면 판정이 난다. bob과의 쌍은 깨지고 따로 돌리면 둘 다 통과해 확인됨이고 출력의 끝부분이 실린다. carol과의 쌍은 통과해 닫힌다.
+  // Opening the gate gives the verdicts. The pair with bob breaks; run separately both pass, so it's Confirmed, and the end of the output is attached. The pair with carol passes and closes.
   await writeFile(gate, "");
   const broken = await alertWith(world.owner, "bob", (a) => assert.equal(a.run?.verdict, "broken"));
   assert.equal(broken.confirmed, true);
   assert.equal(broken.run?.stale, false);
   assert.deepEqual(broken.run?.omitted, []);
   assert.equal(typeof broken.run?.ms, "number");
-  // 합친 것에는 bob의 커밋하지 않은 변경, owner의 푸시하지 않은 커밋과 커밋하지 않은 새 파일이 모두 있다.
+  // The merged one has all of bob's uncommitted changes and the owner's unpushed commit and uncommitted new file.
   assert.match(
     broken.run?.output ?? "",
-    /bob\.ts\ncommitted\.ts\ndraft\.ts\npay\.ts\nuse\.ts\npay\(1\)에 currency가 빠졌다$/,
+    /bob\.ts\ncommitted\.ts\ndraft\.ts\npay\.ts\nuse\.ts\npay\(1\) is missing currency$/,
   );
   assert.equal(broken.run?.alone, undefined);
   const passed = await closedWith(world.owner, "carol");
   assert.equal(passed.confirmed, false);
-  // 합친 것 둘에, 깨진 쪽만 따로 둘을 더 돌렸다.
+  // Besides the two merged runs, two more were run separately, only for the broken one.
   assert.equal(fake.calls.length, 4);
 
-  // 판정이 바뀌면 두 작업의 편지함에 다시 들어가 CLI 응답으로 넘어간다.
-  // 깨짐은 알림 줄 끝에 판정과 출력의 끝을 싣는다. 출력은 JSON 문자열이라 줄바꿈이 \n으로 남는다.
-  // 편지함은 한 번 넘기면 비워지므로, 판정이 든 줄을 넘겨받는 같은 확인에서 본다.
+  // When the verdict changes it goes into both works' mailboxes again and comes over in a CLI reply.
+  // A break puts the verdict and the end of the output at the end of the alert line. The output is a JSON string, so line breaks stay as \n.
+  // A mailbox is emptied once handed over, so look in the same check that receives the line with the verdict.
   await eventually(async () => {
     const line = inboxLines((await world.cliIn(folder, "status")).stdout).find((l) =>
       l.startsWith(OWNER_SEES),
     );
-    assert.ok(line, "Broken 판정이 든 소식이 오지 않았다");
+    assert.ok(line, "no news with the Broken verdict came");
     assert.match(
       line,
-      /· Merge run verdict: Broken \(run by member owner, check command "sh check\.sh", \d+s\)\. End of output: "bob\.ts\\ncommitted\.ts\\ndraft\.ts\\npay\.ts\\nuse\.ts\\npay\(1\)에 currency가 빠졌다"$/,
+      /· Merge run verdict: Broken \(run by member owner, check command "sh check\.sh", \d+s\)\. End of output: "bob\.ts\\ncommitted\.ts\\ndraft\.ts\\npay\.ts\\nuse\.ts\\npay\(1\) is missing currency"$/,
     );
   });
   await receives(world, bob.desk.folder, BOB_SEES);
 
-  // 같은 내용이면 다시 돌리지 않는다.
+  // The same content isn't run again.
   await sleep(QUIET_MS * 2);
   assert.equal(fake.calls.length, 4);
 
-  // bob의 러너가 꺼져도 서버에 남은 관측으로 돈다. owner가 고치면 지난 판정은 지난 결과가 되고, 잠잠해지면 다시 돌려 통과다.
+  // Even if bob's runner goes off, it runs from the observation left on the server. When the owner fixes it, the old verdict becomes a stale result, and once settled it runs again and passes.
   await bob.desk.stop();
   await eventually(async () =>
     assert.ok((await world.works(world.owner)).some((w) => w.login === "bob" && w.offlineSince)),
   );
-  // 다시 돌리는 동안 문을 닫아, 지난 결과인 알림이 통과로 바로 닫히기 전에 볼 수 있게 한다(#153).
+  // Close the gate during the re-run so the stale alert can be seen before it closes straight to pass (#153).
   await rm(gate);
   await writer(folder)("src/draft.ts", DRAFT.replace("pay(1);", 'pay(1, "krw");'));
   await alertWith(world.owner, "bob", (a) => {
@@ -272,8 +279,8 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo "pay
   const fixed = await closedWith(world.owner, "bob");
   assert.equal(fixed.run?.stale, false);
   assert.equal(fixed.confirmed, false);
-  // owner가 고쳐 carol의 쌍도 새 지문으로 다시 돈다. 러너는 한 번에 하나만 돌려 bob의 판정이 난 뒤에 돌 수 있다.
-  // bob의 통과만 기다리면 carol의 새 판정이 서버에 닿기 전에 지표를 읽는다(#135). 통과해 닫힌 carol의 알림이 새 지문의 판정을 보일 때까지 기다린다.
+  // The owner's fix makes carol's pair run again with the new fingerprint. The runner runs one at a time, so it can run after bob's verdict.
+  // Waiting only for bob's pass reads the metrics before carol's new verdict reaches the server (#135). Wait until carol's alert, closed as passed, shows the verdict for the new fingerprint.
   await eventually(async () => {
     const found = (await indirect(world.owner)).filter(
       (a) => a.works.some((w) => w.login === "carol") && a.works.some((w) => w.login === "owner"),
@@ -283,7 +290,7 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo "pay
     assert.notEqual(last?.run?.fingerprint, passed.run?.fingerprint);
   }, 30_000);
 
-  // 합쳐 돌린 것이 실행 기록에 남는다: 두 작업, 검사 명령, 판정.
+  // The merged runs stay in the run log: two works, check command, verdict.
   const log = (await world.cli("runner", "log")).stdout;
   assert.match(
     log,
@@ -292,7 +299,7 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo "pay
   assert.match(log, /merge run payment \+ reason of carol {2}folder .+ {2}verdict Pass /);
   assert.match(log, /merge run payment \+ currency of bob {2}folder .+ {2}verdict Pass /);
 
-  // 지표: 오늘 돌려 본 것은 넷이다. bob의 깨짐, carol의 통과, owner가 고친 뒤 다시 돌린 carol과 bob의 통과. 돌려 보는 중과 다시 올린 것(같은 지문)은 세지 않는다.
+  // Metrics: four were run today. bob's break, carol's pass, and carol's and bob's passes re-run after the owner's fix. Running ones and re-posted ones (same fingerprint) aren't counted.
   await world.signInCli(world.owner);
   const shown = await world.cli("metrics", "--days", "1");
   assert.equal(shown.code, 0, shown.stderr);
@@ -307,7 +314,7 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo "pay
   );
 });
 
-test("검사 명령이 없거나 샌드박스를 쓸 수 없거나 줄이 부딪히면 돌리지 못함과 까닭이 붙고, 빠진 파일은 빼고 돌려 적으며, 공유 수준이 full이 아니면 출력을 올리지 않는다", {
+test("with no check command, no usable sandbox, or lines that collide, it says not run with the reason; missing files are left out and noted; and below the full share level the output isn't uploaded", {
   timeout: 150_000,
 }, async (t) => {
   const fake = fakeSandbox();
@@ -328,25 +335,25 @@ test("검사 명령이 없거나 샌드박스를 쓸 수 없거나 줄이 부딪
   await world.repo.git("switch", "--create", "payment");
   await writer(world.repo.folder)("src/draft.ts", "export const b = 1;\n");
 
-  // 기본 브랜치에 검사 명령이 없다.
+  // The default branch has no check command.
   await alertWith(world.owner, "bob", (a) => {
     assert.equal(a.run?.verdict, "not_run");
     assert.match(a.run?.reason ?? "", /The default branch \(origin\/main\) has no \.omagari\.json/);
   });
 
-  // 검사 명령이 머지되면 다시 돈다. 샌드박스를 쓸 수 없으면 가두지 않고 돌리지 않는다.
-  fake.unavailable = "샌드박스 도구가 없다: bubblewrap";
+  // It runs again once the check command is merged. If the sandbox is unusable, it isn't confined and isn't run.
+  fake.unavailable = "sandbox tool is missing: bubblewrap";
   mergeToMain(world.repo.folder, {
     ".omagari.json": `${JSON.stringify({ check: CHECK2 })}\n`,
   });
   await alertWith(world.owner, "bob", (a) => {
     assert.equal(a.run?.verdict, "not_run");
-    assert.equal(a.run?.reason, "샌드박스 도구가 없다: bubblewrap");
+    assert.equal(a.run?.reason, "sandbox tool is missing: bubblewrap");
     assert.equal(a.run?.check, CHECK2);
   });
   assert.equal(fake.calls.length, 0);
 
-  // 상대의 내용이 빠진 파일(바이너리)은 그 파일 없이 돌리고 적는다. 이런 판정은 깨져도 확인됨이 아니다. owner는 declared라 출력을 올리지 않는다.
+  // A file missing the other side's content (binary) is run without that file and noted. Such a verdict isn't Confirmed even if it breaks. The owner is declared, so the output isn't uploaded.
   fake.unavailable = undefined;
   await writer(bob.desk.folder)("logo.bin", Buffer.from([0, 1, 2, 0]));
   const broken = await alertWith(world.owner, "bob", (a) => {
@@ -357,7 +364,7 @@ test("검사 명령이 없거나 샌드박스를 쓸 수 없거나 줄이 부딪
   assert.equal(broken.run?.output, undefined);
   assert.equal(fake.calls.length, 3);
 
-  // 빠진 파일이 있으면 통과해도 닫지 않는다.
+  // With a missing file, it doesn't close even on a pass.
   await rm(join(world.repo.folder, "src/draft.ts"));
   await alertWith(world.owner, "bob", (a) => {
     assert.equal(a.run?.verdict, "pass");
@@ -365,7 +372,7 @@ test("검사 명령이 없거나 샌드박스를 쓸 수 없거나 줄이 부딪
   });
   assert.equal(fake.calls.length, 4);
 
-  // 두 작업이 같은 줄을 바꿔 합쳐지지 않으면 돌리지 못함이고 까닭이 붙는다.
+  // If two works change the same line and can't merge, it's not run, with the reason attached.
   await writer(world.repo.folder)(
     "src/pay.ts",
     PAY.replace("pay(amount: number)", "pay(amount: string)"),
@@ -377,11 +384,15 @@ test("검사 명령이 없거나 샌드박스를 쓸 수 없거나 줄이 부딪
   assert.equal(fake.calls.length, 4);
 });
 
-test("직접 충돌만 걸린 쌍과 정의를 바꾼 쪽은 돌리지 않고, 합쳐 돌려 보기를 꺼 둔 러너도 돌리지 않는다", {
+test("a pair with only a direct conflict and the side that changed the definition aren't run, and a runner with merge runs turned off doesn't run either", {
   timeout: 60_000,
 }, async (t) => {
   const fake = fakeSandbox();
-  const world = await startWorld({ observeMs: 50, sandbox: fake.sandbox, quietMs: 0 });
+  const world = await startWorld({
+    observeMs: 50,
+    sandbox: fake.sandbox,
+    quietMs: 0,
+  });
   t.after(world.stop);
   await base(world, {
     "src/pay.ts": PAY,
@@ -389,11 +400,11 @@ test("직접 충돌만 걸린 쌍과 정의를 바꾼 쪽은 돌리지 않고, �
     "notes.txt": "a\nb\n",
     ".omagari.json": `${JSON.stringify({ check: "true" })}\n`,
   });
-  // carol과 owner는 같은 줄을 바꿔 직접 충돌만 걸린다.
+  // carol and the owner change the same line, so only a direct conflict is raised.
   const carol = await member(world, "carol", "notes");
   t.after(carol.desk.remove);
   await writer(carol.desk.folder)("notes.txt", "carol\nb\n");
-  // bob은 pay를 쓰고 owner가 pay의 정의 줄을 바꾼다. 쓰는 쪽인 bob의 러너는 합쳐 돌려 보기를 꺼 뒀다.
+  // bob uses pay and the owner changes pay's definition line. The runner of bob, the user, has merge runs turned off.
   const bobSandbox = fakeSandbox();
   const bob = await member(world, "bob", "more", {
     sandbox: bobSandbox.sandbox,
@@ -420,13 +431,13 @@ test("직접 충돌만 걸린 쌍과 정의를 바꾼 쪽은 돌리지 않고, �
   assert.equal(bobSandbox.calls.length, 0);
 });
 
-/** 멤버 목록에서 `login`의 `branch` 작업에 "합치면 깨짐" 표시가 붙었는지. */
+/** Whether the member list shows the "breaks when merged" mark on `login`'s `branch` work. */
 async function brokenMark(world: World, login: string, branch: string) {
   const { members } = await call(world.owner, api.members);
   return members.find((m) => m.login === login)?.works.find((w) => w.branch === branch)?.broken;
 }
 
-test("합친 것이 깨지면 두 작업을 따로 돌려 가린다: 둘 다 통과할 때만 확인됨이고, 통과하면 알림을 닫고 다시 돌린 판정이 나올 때까지 세우지 않는다", {
+test("when the merge breaks, the two works are run separately to sort it out: it's Confirmed only if both pass; on a pass the alert closes and doesn't stand again until the re-run verdict comes", {
   timeout: 240_000,
 }, async (t) => {
   const fake = fakeSandbox();
@@ -437,17 +448,17 @@ test("합친 것이 깨지면 두 작업을 따로 돌려 가린다: 둘 다 통
     quietMs: QUIET_MS,
   });
   t.after(world.stop);
-  fake.blocksUnixSockets = true; // Linux처럼
+  fake.blocksUnixSockets = true; // like Linux
   const hold = (await place(t))("hold");
-  // 합친 것은 bob의 currency와 owner의 pay(1)이 함께 있으면 깨진다. 표시 파일이 있는 쪽은 혼자서도 깨진다. `hold`가 있는 동안은 기다린다.
+  // The merged one breaks if bob's currency and the owner's pay(1) are together. The side with a marker file breaks even alone. While `hold` exists it waits.
   await base(world, {
     "src/pay.ts": PAY,
     "src/use.ts": USE,
     ".omagari.json": `${JSON.stringify({ check: "sh check.sh" })}\n`,
     "check.sh": `while [ -e ${hold} ]; do sleep 0.05; done
 if [ -e src/owner-oops ]; then echo "Error: listen EPERM: operation not permitted /tmp/x.sock"; exit 1; fi
-if [ -e src/bob-oops ]; then echo 혼자서도 깨진다; exit 1; fi
-if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합치면 깨진다; exit 1; fi
+if [ -e src/bob-oops ]; then echo breaks even alone; exit 1; fi
+if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo breaks when merged; exit 1; fi
 `,
   });
   const { git, folder } = world.repo;
@@ -464,15 +475,15 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
     PAY.replace("pay(amount: number)", "pay(amount: number, currency: string)"),
   );
 
-  // owner의 작업이 혼자서도 깨진다: 가릴 수 없음이고 추정으로 남는다.
+  // The owner's work breaks even alone: it can't be sorted out and stays a guess.
   const mine = await alertWith(world.owner, "bob", (a) => assert.equal(a.run?.verdict, "unclear"));
   assert.deepEqual(mine.run?.alone, ["mine"]);
   assert.equal(mine.confirmed, false);
   assert.equal(fake.calls.length, 3);
-  // 소켓 막기로 깨졌으므로 까닭이 붙는다(#163). 소켓과 상관없이 깨진 bob의 것에는 붙지 않는다.
+  // It broke from the socket block, so the reason is attached (#163). It isn't attached to bob's, which broke regardless of sockets.
   assert.match(mine.run?.reason ?? "", /On this machine \(Linux\) the sandbox blocks Unix sockets/);
 
-  // bob의 작업이 혼자서도 깨진다: 가릴 수 없음이고 그쪽이 적힌다.
+  // bob's work breaks even alone: it can't be sorted out and that side is noted.
   await rm(join(folder, "src/owner-oops"));
   await bobWrite("src/bob-oops", "");
   const theirs = await alertWith(world.owner, "bob", (a) =>
@@ -483,7 +494,7 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
   assert.equal(theirs.confirmed, false);
   assert.equal(fake.calls.length, 6);
   assert.equal(await brokenMark(world, "owner", "payment"), false);
-  // 추정인 동안 포스트는 종류 라벨만 붙은 참고라 "참고" 포럼에 보이고 이슈가 없다.
+  // While it's a guess, the post is a reference with only the kind label, so it shows in the "Reference" forum and has no issue.
   const forums = Object.fromEntries(
     (await call(world.owner, api.channels)).channels.map((c) => [c.name, c.id]),
   );
@@ -492,16 +503,16 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
   assert.equal(guessed?.importance, "reference");
   assert.deepEqual(guessed?.forums, [forums.FYI]);
   assert.equal(guessed?.issue, null);
-  assert.equal(guessed?.debate, null); // 추정에는 토론이 열리지 않는다(ADR-0040)
+  assert.equal(guessed?.debate, null); // no debate opens on a guess (ADR-0040)
   assert.equal(world.github.issues.length, 0);
 
-  // bob이 고치면 둘 다 혼자서는 통과해 깨짐이고 확인됨이다. 두 작업 모두 앞에서 혼자 돌린 내용과 같아(owner는 바로 앞, bob은 처음) 따로 돌리지 않는다.
+  // When bob fixes it, both pass alone, so it breaks and is Confirmed. Both works have the same content as the earlier solo runs (the owner's just before, bob's first), so they aren't run separately.
   await rm(join(bob.desk.folder, "src/bob-oops"));
   const broken = await alertWith(world.owner, "bob", (a) => assert.equal(a.run?.verdict, "broken"));
   assert.equal(broken.confirmed, true);
   assert.equal(broken.run?.alone, undefined);
   assert.equal(fake.calls.length, 7);
-  // 확인됨이 붙어 논의가 되면 포스트의 라벨을 단 이슈가 열리고 판정 댓글 하나가 달린다. 같은 판정이 거듭 와도 늘지 않고, 댓글은 포스트의 글로 들어오지 않는다.
+  // Once Confirmed and discussed, the issue with the post's label opens and one verdict comment is added. The same verdict coming repeatedly doesn't add more, and the comment doesn't come in as the post's text.
   const issue = await eventually(() => {
     const [opened] = world.github.issues;
     assert.ok(opened);
@@ -511,37 +522,39 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
   });
   assert.match(issue.comments[0]?.body ?? "", /The merge run broke/);
   assert.match(issue.comments[0]?.body ?? "", /`sh check\.sh`/);
-  assert.match(issue.comments[0]?.body ?? "", /```\n합치면 깨진다\n```/);
+  assert.match(issue.comments[0]?.body ?? "", /```\nbreaks when merged\n```/);
   await sleep(300);
   assert.equal(issue.comments.length, 1);
   const [post] = (await call(world.owner, api.posts)).posts;
   assert.ok(post?.issue?.labels.includes("Confirmed"));
   assert.deepEqual(post?.labels, ["Indirect conflict", "Confirmed"]);
   assert.equal(post?.importance, "discuss");
-  // 논의가 되면 "참고" 포럼에서 빠지고 "논의" 포럼에 보인다(ADR-0039).
+  // Once discussed it leaves the "Reference" forum and shows in the "Discuss" forum (ADR-0039).
   assert.deepEqual(post?.forums, [forums.Discuss]);
-  // 확인되면 두 작업의 주인 에이전트로 토론이 열린다(ADR-0040).
+  // Once Confirmed, a debate opens with the two works' owner agents (ADR-0040).
   assert.deepEqual(post?.debate?.seats.map((seat) => seat.login).sort(), ["bob", "owner"]);
-  const thread = await call(world.owner, api.history, { channel: post?.message.channel ?? "" });
+  const thread = await call(world.owner, api.history, {
+    channel: post?.message.channel ?? "",
+  });
   assert.ok(!thread.messages.some((m) => "github" in m && m.github));
-  // 깨짐인 두 작업에 멤버 목록의 표시가 붙는다.
+  // The member list mark goes on the two broken works.
   await eventually(async () => {
     assert.equal(await brokenMark(world, "owner", "payment"), true);
     assert.equal(await brokenMark(world, "bob", "currency"), true);
   });
 
-  // owner가 고치면 합친 것이 통과하고 따로 돌리지 않는다. 알림은 풀림으로 닫히고 두 편지함에 들어가며, 표시가 사라진다.
+  // When the owner fixes it, the merged one passes and isn't run separately. The alert closes as lifted and goes into both mailboxes, and the mark goes away.
   await write("src/draft.ts", DRAFT.replace("pay(1);", 'pay(1, "krw");'));
   await closedWith(world.owner, "bob");
   assert.equal(fake.calls.length, 8);
-  // 통과로 닫히면 라벨이 떼어지고 이슈가 닫히며 통과한 검사 명령이 댓글에 남는다.
+  // On a pass the label is removed, the issue closes, and the passed check command is left in the comment.
   await eventually(() => {
     assert.ok(!issue.labels.includes("Confirmed"));
     assert.equal(issue.open, false);
     assert.equal(issue.comments.length, 2);
   });
   assert.match(issue.comments[1]?.body ?? "", /The merge run passed[\s\S]*`sh check\.sh`/);
-  // 새 알림을 만들지 않고 그 알림을 닫았다.
+  // It closed that alert without making a new one.
   const withBob = async () =>
     (await indirect(world.owner)).filter((a) => a.works.some((w) => w.login === "bob")).length;
   assert.equal(await withBob(), 1);
@@ -559,12 +572,12 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
     assert.equal(await brokenMark(world, "owner", "payment"), false);
     assert.equal(await brokenMark(world, "bob", "currency"), false);
   });
-  // 내용이 그대로인 동안에는 다시 서지 않는다.
+  // While the content stays the same it doesn't stand again.
   await sleep(QUIET_MS * 2);
   const open = async () => (await indirect(world.owner)).filter((a) => a.resolved === null);
   assert.deepEqual(await open(), []);
 
-  // 내용이 바뀌어도 다시 돌린 판정이 나올 때까지 서지 않는다. 다시 돌려 깨지면 확인된 새 알림이 선다.
+  // Even if the content changes it doesn't stand until the re-run verdict comes. If the re-run breaks, a new Confirmed alert stands.
   await writeFile(hold, "");
   await write("src/draft.ts", `${DRAFT}pay(2);\n`);
   await eventually(() => assert.equal(fake.calls.length, 9), 30_000);
@@ -574,7 +587,7 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
   const again = await alertWith(world.owner, "bob", (a) => assert.equal(a.run?.verdict, "broken"));
   assert.equal(await withBob(), 2);
   assert.equal(again.confirmed, true);
-  // owner만 한 번 더 돌렸다. bob만 돌린 것은 앞에서 같은 내용으로 돌렸다.
+  // Only the owner ran once more. What only bob ran was run before with the same content.
   assert.equal(fake.calls.length, 10);
   const reopened = await eventually(() => {
     const opened = world.github.issues[1];
@@ -582,7 +595,7 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
     return opened;
   });
 
-  // 확인이 풀려(가릴 수 없음) 참고로 내려가도 알림이 남아 있으면 이슈는 닫지 않는다. 확인됨은 포스트와 이슈에서 뗀다.
+  // If Confirmed is lifted (can't be sorted out) and it drops to reference, the issue isn't closed while an alert remains. Confirmed is removed from the post and the issue.
   await write("src/owner-oops", "");
   await alertWith(world.owner, "bob", (a) => assert.equal(a.run?.verdict, "unclear"));
   await eventually(async () => {
@@ -594,7 +607,7 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
   assert.equal(reopened.open, true);
   await rm(join(folder, "src/owner-oops"));
 
-  // 다시 통과해 닫힌 뒤 가릴 수 없음이 나면 추정인 새 알림이 선다. 둘 다 앞에서 돌린 내용이라 지난 판정을 다시 쓴다.
+  // After closing on a pass again, if cannot-tell comes up, a new guessed alert stands. Both were run before with the same content, so the old verdicts are reused.
   await write("src/draft.ts", DRAFT.replace("pay(1);", 'pay(1, "krw");'));
   await closedWith(world.owner, "bob");
   await write("src/draft.ts", DRAFT);
@@ -605,7 +618,7 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
   assert.equal(await withBob(), 3);
   assert.equal(unclear.confirmed, false);
 
-  // 지표: 지문이 다른 판정만 센다. 통과 하나, 깨짐 둘, 가릴 수 없음 셋. 앞에서 돌린 내용의 판정을 다시 쓴 것은 세지 않는다.
+  // Metrics: only verdicts with different fingerprints are counted. One pass, two breaks, three cannot-tell. Old-content verdicts reused aren't counted.
   await world.signInCli(world.owner);
   const shown = await world.cli("metrics", "--days", "1");
   assert.equal(shown.code, 0, shown.stderr);
@@ -615,7 +628,7 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
   );
 });
 
-test("다른 러너가 올린 같은 내용의 판정이 서버에 있으면 돌리지 않는다", {
+test("a verdict of the same content that another runner posted is on the server, so it isn't run", {
   timeout: 120_000,
 }, async (t) => {
   const world = await startWorld({ observeMs: 50 });
@@ -626,9 +639,12 @@ test("다른 러너가 올린 같은 내용의 판정이 서버에 있으면 돌
     ".omagari.json": `${JSON.stringify({ check: "sh check.sh" })}\n`,
     "check.sh": "exit 0\n",
   });
-  // bob이 pay를 쓰는 쪽이라 bob의 러너가 돌린다. owner가 pay의 정의 줄을 바꾼다.
+  // bob uses pay, so bob's runner runs it. The owner changes pay's definition line.
   const fake = fakeSandbox();
-  const bob = await member(world, "bob", "more", { sandbox: fake.sandbox, quietMs: QUIET_MS });
+  const bob = await member(world, "bob", "more", {
+    sandbox: fake.sandbox,
+    quietMs: QUIET_MS,
+  });
   t.after(bob.desk.remove);
   await writer(bob.desk.folder)("src/draft.ts", `import { pay } from "./pay";\npay(1);\n`);
   await world.repo.git("switch", "--create", "payment");
@@ -639,7 +655,7 @@ test("다른 러너가 올린 같은 내용의 판정이 서버에 있으면 돌
   await closedWith(world.owner, "bob");
   assert.equal(fake.calls.length, 1);
 
-  // bob의 러너를 다시 켜면 기억은 없지만, 서버에 붙은 같은 지문의 판정을 받아 다시 돌리지 않는다.
+  // When bob's runner is back on, it has no memory, but it takes the same-fingerprint verdict attached on the server and doesn't run again.
   await bob.desk.stop();
   await bob.desk.start();
   await eventually(async () =>

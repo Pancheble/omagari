@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { api, call, HISTORY_PAGE, MAX_MESSAGE_CHARS } from "@omagari/contract";
 import { eventually, said, startWorld } from "./harness.ts";
 
-/** owner와 alice가 들어온 워크스페이스. */
+/** A workspace that owner and alice have joined. */
 async function team(
   t: { after: (fn: () => Promise<void>) => void },
   options: Parameters<typeof startWorld>[0] = {},
@@ -11,19 +11,21 @@ async function team(
   const world = await startWorld(options);
   t.after(world.stop);
   world.github.grant("alice");
-  world.github.names.set("alice", "앨리스");
+  world.github.names.set("alice", "Alice Lee");
   const alice = await world.login("alice");
   return { world, owner: world.owner, alice };
 }
 
-test("멤버가 채팅 채널을 만들면 다른 멤버의 목록에 보이고, 같은 이름은 또 만들지 못한다", async (t) => {
+test("when a member creates a chat channel, it shows in other members' lists, and the same name can't be created again", async (t) => {
   const { owner, alice } = await team(t);
 
-  const { channel } = await call(owner, api.createChannel, { name: "  결제\n 처리  " });
-  assert.equal(channel.name, "결제 처리"); // 앞뒤 공백을 떼고 겹친 공백은 하나로 접는다
+  const { channel } = await call(owner, api.createChannel, {
+    name: "  Payment\n processing  ",
+  });
+  assert.equal(channel.name, "Payment processing"); // trims the ends and folds repeated whitespace into one
   const general = (await call(alice, api.createChannel, { name: "General" })).channel;
 
-  // 처음부터 있는 포럼("논의", "참고")은 빼고 본다.
+  // Leave out the forums that exist from the start ("Discuss", "FYI").
   const chats = async () =>
     (await call(alice, api.channels)).channels.filter((c) => c.kind === "chat");
   assert.deepEqual(await chats(), [general, channel]);
@@ -35,11 +37,13 @@ test("멤버가 채팅 채널을 만들면 다른 멤버의 목록에 보이고,
   });
 });
 
-test("채널에 쓴 메시지를 다른 멤버가 새로 고침 없이 받는다", async (t) => {
+test("another member receives a message written in a channel without refreshing", async (t) => {
   const { world, owner, alice } = await team(t);
   const watching = await world.live(alice);
 
-  const { channel } = await call(owner, api.createChannel, { name: "결제" });
+  const { channel } = await call(owner, api.createChannel, {
+    name: "Payments",
+  });
   await eventually(() =>
     assert.deepEqual(
       watching.received.flatMap((m) => (m.kind === "channel" ? [m.payload] : [])),
@@ -49,7 +53,7 @@ test("채널에 쓴 메시지를 다른 멤버가 새로 고침 없이 받는다
 
   const { message } = await call(owner, api.send, {
     channel: channel.id,
-    text: "  환불은 어디서 해요?\n",
+    text: "  Where do I issue refunds?\n",
   });
   assert.deepEqual(message, {
     kind: "text",
@@ -57,55 +61,75 @@ test("채널에 쓴 메시지를 다른 멤버가 새로 고침 없이 받는다
     channel: channel.id,
     login: "owner",
     name: "owner",
-    text: "환불은 어디서 해요?",
+    text: "Where do I issue refunds?",
     at: message.at,
     reactions: [],
   });
   await eventually(() => assert.deepEqual(watching.messages(), [message]));
 
-  // 쓴 사람의 다른 창도 받는다. 이름은 GitHub 프로필의 것이다.
+  // The writer's other windows get it too. The name is the one from the GitHub profile.
   const mine = await world.live(alice);
-  const reply = (await call(alice, api.send, { channel: channel.id, text: "payment.ts요" }))
+  const reply = (await call(alice, api.send, { channel: channel.id, text: "In payment.ts" }))
     .message;
-  assert.equal(reply.kind === "text" && reply.name, "앨리스");
+  assert.equal(reply.kind === "text" && reply.name, "Alice Lee");
   await eventually(() => assert.deepEqual(watching.messages(), [message, reply]));
   await eventually(() => assert.deepEqual(mine.messages(), [reply]));
 });
 
-test("지난 대화는 남아 있어 서버가 다시 떠도 오래된 것부터 이어서 읽는다", async (t) => {
+test("past conversation stays, and even after the server restarts it's read on from the oldest", async (t) => {
   const { world, owner, alice } = await team(t);
-  const { channel } = await call(owner, api.createChannel, { name: "결제" });
-  const other = (await call(owner, api.createChannel, { name: "잡담" })).channel;
+  const { channel } = await call(owner, api.createChannel, {
+    name: "Payments",
+  });
+  const other = (await call(owner, api.createChannel, { name: "Random" })).channel;
   const total = HISTORY_PAGE + 5;
   for (let i = 1; i <= total; i++) {
-    await call(i % 2 ? owner : alice, api.send, { channel: channel.id, text: `메시지 ${i}` });
+    await call(i % 2 ? owner : alice, api.send, {
+      channel: channel.id,
+      text: `Message ${i}`,
+    });
   }
-  await call(owner, api.send, { channel: other.id, text: "다른 채널" });
+  await call(owner, api.send, { channel: other.id, text: "Another channel" });
 
   await world.restartServer();
-  // 꺼진 서버와의 연결이 끊긴 채 남아 있어 첫 요청이 실패할 수 있다.
+  // The connection to the stopped server stays broken, so the first request may fail.
   await eventually(() => call(alice, api.channels));
 
   const latest = (await call(alice, api.history, { channel: channel.id })).messages;
   assert.deepEqual(
     latest.map(said),
-    Array.from({ length: HISTORY_PAGE }, (_, i) => `메시지 ${i + 6}`),
+    Array.from({ length: HISTORY_PAGE }, (_, i) => `Message ${i + 6}`),
   );
-  const older = (await call(alice, api.history, { channel: channel.id, before: latest[0]?.id }))
-    .messages;
-  assert.deepEqual(older.map(said), ["메시지 1", "메시지 2", "메시지 3", "메시지 4", "메시지 5"]);
+  const older = (
+    await call(alice, api.history, {
+      channel: channel.id,
+      before: latest[0]?.id,
+    })
+  ).messages;
+  assert.deepEqual(older.map(said), [
+    "Message 1",
+    "Message 2",
+    "Message 3",
+    "Message 4",
+    "Message 5",
+  ]);
   assert.deepEqual((await call(alice, api.history, { channel: other.id })).messages.map(said), [
-    "다른 채널",
+    "Another channel",
   ]);
 });
 
-test("연결이 끊겼다 붙으면 그 사이에 쌓인 메시지를 빠짐없이 받는다", async (t) => {
+test("when the connection drops and reattaches, it receives every message that piled up in between", async (t) => {
   const { world, owner, alice } = await team(t);
   const general = (await call(owner, api.createChannel, { name: "general" })).channel;
-  const payments = (await call(owner, api.createChannel, { name: "결제" })).channel;
-  const old = (await call(owner, api.send, { channel: general.id, text: "붙기 전" })).message;
+  const payments = (await call(owner, api.createChannel, { name: "Payments" })).channel;
+  const old = (
+    await call(owner, api.send, {
+      channel: general.id,
+      text: "Before attaching",
+    })
+  ).message;
 
-  // 처음 붙을 때는 지난 것을 다시 받지 않고, welcome이 지금의 끝 번호를 알려 준다(뒤따르는 멤버 목록은 members.test가 본다).
+  // On the first attach it doesn't receive the past again, and welcome gives the current end number (the member list that follows is checked in members.test).
   const first = await world.live(alice);
   assert.deepEqual(
     first.received
@@ -114,48 +138,67 @@ test("연결이 끊겼다 붙으면 그 사이에 쌓인 메시지를 빠짐없�
     [{ kind: "welcome", payload: { seq: old.id } }],
   );
 
-  // 서버가 다시 뜨는 사이에 끊기고, 그사이 두 채널에 메시지가 쌓인다.
+  // The connection drops while the server restarts, and meanwhile messages pile up in two channels.
   await world.stopServer();
   assert.notEqual(await first.closed, 1008);
   await world.restartServer();
-  // 꺼진 서버와의 연결이 끊긴 채 남아 있어 첫 요청이 실패할 수 있다.
+  // The connection to the stopped server stays broken, so the first request may fail.
   await eventually(() => call(owner, api.channels));
   const missed = [
-    (await call(owner, api.send, { channel: payments.id, text: "끊긴 사이 1" })).message,
-    (await call(owner, api.send, { channel: general.id, text: "끊긴 사이 2" })).message,
+    (
+      await call(owner, api.send, {
+        channel: payments.id,
+        text: "While disconnected 1",
+      })
+    ).message,
+    (
+      await call(owner, api.send, {
+        channel: general.id,
+        text: "While disconnected 2",
+      })
+    ).message,
   ];
 
-  // 받은 메시지가 없었으니 welcome의 번호로 다시 붙는다. 끊긴 사이의 것을 순서대로 받고 이어서 새것을 받는다.
+  // No message had been received, so it reattaches with welcome's number. It receives what came in between in order, then new ones after that.
   const again = await world.live(alice, old.id);
   await eventually(() => assert.deepEqual(again.messages(), missed));
   assert.equal(again.received[0]?.kind, "welcome");
-  const live = (await call(owner, api.send, { channel: general.id, text: "다시 붙은 뒤" })).message;
+  const live = (
+    await call(owner, api.send, {
+      channel: general.id,
+      text: "After reattaching",
+    })
+  ).message;
   await eventually(() => assert.deepEqual(again.messages(), [...missed, live]));
 
-  // 마지막으로 받은 번호로 다시 붙으면 이미 받은 것은 다시 오지 않는다.
+  // Reattaching with the last received number doesn't resend what was already received.
   await again.close();
   const quiet = await world.live(alice, live.id);
-  const next = (await call(owner, api.send, { channel: general.id, text: "그다음" })).message;
+  const next = (await call(owner, api.send, { channel: general.id, text: "Next" })).message;
   await eventually(() => assert.deepEqual(quiet.messages(), [next]));
 });
 
-test("멤버가 아니면 채널과 메시지를 읽지도 쓰지도 받지도 못한다", async (t) => {
+test("a non-member can't read, write, or receive channels and messages", async (t) => {
   const { world, owner, alice } = await team(t, { recheckMs: 50 });
-  const { channel } = await call(owner, api.createChannel, { name: "결제" });
-  await call(owner, api.send, { channel: channel.id, text: "멤버끼리만" });
+  const { channel } = await call(owner, api.createChannel, {
+    name: "Payments",
+  });
+  await call(owner, api.send, { channel: channel.id, text: "Members only" });
 
   for (const stranger of [
     { url: world.server.url },
     { url: world.server.url, session: "made-up" },
   ]) {
-    await assert.rejects(call(stranger, api.channels), { code: "unauthorized" });
+    await assert.rejects(call(stranger, api.channels), {
+      code: "unauthorized",
+    });
     await assert.rejects(call(stranger, api.history, { channel: channel.id }), {
       code: "unauthorized",
     });
-    await assert.rejects(call(stranger, api.send, { channel: channel.id, text: "끼어들기" }), {
+    await assert.rejects(call(stranger, api.send, { channel: channel.id, text: "Butting in" }), {
       code: "unauthorized",
     });
-    await assert.rejects(call(stranger, api.createChannel, { name: "몰래" }), {
+    await assert.rejects(call(stranger, api.createChannel, { name: "Sneaky" }), {
       code: "unauthorized",
     });
   }
@@ -166,26 +209,31 @@ test("멤버가 아니면 채널과 메시지를 읽지도 쓰지도 받지도 �
     ["unauthorized"],
   );
 
-  // push 권한을 잃은 멤버는 다음 재확인에 실시간 연결도 끊기고, 다시 붙지도 읽지도 못한다.
+  // A member who loses push access has their live connection cut at the next recheck, and can't reattach or read.
   const watching = await world.live(alice);
   world.github.revoke("alice");
   assert.equal(await watching.closed, 1008);
-  await call(owner, api.send, { channel: channel.id, text: "앨리스가 나간 뒤" });
+  await call(owner, api.send, {
+    channel: channel.id,
+    text: "After Alice left",
+  });
   await assert.rejects(call(alice, api.history, { channel: channel.id }), {
     code: "unauthorized",
   });
   assert.equal(await (await world.live(alice, 0)).closed, 1008);
   assert.deepEqual(watching.messages(), []);
 
-  // 로그아웃한 세션의 실시간 연결도 끊긴다.
+  // The live connection of a logged-out session is cut too.
   const owners = await world.live(owner);
   await call(owner, api.logout);
   assert.equal(await owners.closed, 1008);
 });
 
-test("메시지에 든 HTML은 서버가 바꾸지 않고 쓴 글자 그대로 돌려준다", async (t) => {
+test("HTML in a message isn't changed by the server and is returned exactly as written", async (t) => {
   const { owner, alice } = await team(t);
-  const { channel } = await call(owner, api.createChannel, { name: "<b>굵게</b>" });
+  const { channel } = await call(owner, api.createChannel, {
+    name: "<b>bold</b>",
+  });
   const text = `<script>alert("x")</script><img src=x onerror="alert(1)"> & &amp;`;
   await call(owner, api.send, { channel: channel.id, text });
 
@@ -193,25 +241,32 @@ test("메시지에 든 HTML은 서버가 바꾸지 않고 쓴 글자 그대로 �
     (await call(alice, api.channels)).channels.filter((c) => c.kind === "chat"),
     [channel],
   );
-  assert.equal(channel.name, "<b>굵게</b>");
+  assert.equal(channel.name, "<b>bold</b>");
   assert.deepEqual((await call(alice, api.history, { channel: channel.id })).messages.map(said), [
     text,
   ]);
 });
 
-test("없는 채널, 빈 메시지, 너무 긴 메시지는 받지 않는다", async (t) => {
+test("a missing channel, an empty message, and a too-long message are not accepted", async (t) => {
   const { owner } = await team(t);
-  const { channel } = await call(owner, api.createChannel, { name: "결제" });
+  const { channel } = await call(owner, api.createChannel, {
+    name: "Payments",
+  });
 
-  await assert.rejects(call(owner, api.history, { channel: "nowhere" }), { code: "not_found" });
-  await assert.rejects(call(owner, api.send, { channel: "nowhere", text: "여보세요" }), {
+  await assert.rejects(call(owner, api.history, { channel: "nowhere" }), {
+    code: "not_found",
+  });
+  await assert.rejects(call(owner, api.send, { channel: "nowhere", text: "Hello?" }), {
     code: "not_found",
   });
   await assert.rejects(call(owner, api.send, { channel: channel.id, text: " \n " }), {
     code: "invalid_request",
   });
   await assert.rejects(
-    call(owner, api.send, { channel: channel.id, text: "가".repeat(MAX_MESSAGE_CHARS + 1) }),
+    call(owner, api.send, {
+      channel: channel.id,
+      text: "a".repeat(MAX_MESSAGE_CHARS + 1),
+    }),
     { code: "invalid_request" },
   );
   assert.deepEqual((await call(owner, api.history, { channel: channel.id })).messages, []);

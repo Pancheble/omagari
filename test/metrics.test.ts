@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { api, call } from "@omagari/contract";
 import { eventually, fakeExecutor, startWorld } from "./harness.ts";
 
-/** 오늘(마지막 날)의 수와, 그 앞의 날들이 모두 0인지. */
+/** Today's (the last day's) count, and whether the days before it are all 0. */
 const today = (days: { members: number; qas: number }[]) => {
   const last = days.at(-1);
   assert.ok(last);
@@ -14,8 +14,10 @@ const today = (days: { members: number; qas: number }[]) => {
   return { members: last.members, qas: last.qas };
 };
 
-test("들어온 멤버는 그날 웹을 열었거나 채널에서 읽고 쓴 멤버다. 러너와 CLI만 쓴 멤버는 세지 않는다. 문답은 수만 센다", async (t) => {
-  const world = await startWorld({ executor: fakeExecutor(() => "환불은 refund.ts").executor });
+test("a member who came in is one who opened the web that day or read and wrote in a channel. A member who used only the runner and the CLI isn't counted. Q&A only counts the number", async (t) => {
+  const world = await startWorld({
+    executor: fakeExecutor(() => "refund is in refund.ts").executor,
+  });
   t.after(world.stop);
   world.github.grant("alice");
   world.github.grant("bob");
@@ -23,35 +25,37 @@ test("들어온 멤버는 그날 웹을 열었거나 채널에서 읽고 쓴 멤
   const bob = await world.login("bob");
   const metrics = async () => (await call(world.owner, api.metrics, {})).days;
 
-  // owner는 러너가 붙어 있고 CLI로 상황을 봤다. bob은 로그인만 하고 CLI가 부르는 API를 불렀다.
+  // owner has a runner attached and looked at the situation with the CLI. bob only logged in and called the API the CLI calls.
   await world.signInCli(world.owner);
   assert.equal((await world.cli("status")).code, 0);
   await call(bob, api.members);
   await call(bob, api.works);
   const empty = await metrics();
-  assert.equal(empty.length, 14); // 기본은 지난 14일, 오래된 날부터
+  assert.equal(empty.length, 14); // the default is the last 14 days, from the oldest day
   assert.deepEqual(today(empty), { members: 0, qas: 0 });
 
-  // 웹을 열면 들어온 것이다. 창을 둘 열어도 한 명이다.
+  // Opening the web counts as coming in. Opening two windows is still one person.
   await world.live(alice);
   await world.live(alice);
   assert.deepEqual(today(await metrics()), { members: 1, qas: 0 });
 
-  // 채널에서 쓰고 묻고 읽는 것도 들어온 것이다. 받아들인 문답만 센다: 러너가 없는 alice의 질문은 문답이 되지 않는다.
-  const channel = await world.channel(world.owner, "결제");
-  await world.settled(world.owner, await world.ask(world.owner, channel, "환불은 어디서 하나?"));
-  await world.settled(world.owner, await world.ask(world.owner, channel, "누가 고치나?"));
-  await assert.rejects(world.ask(alice, channel, "alice의 질문"), { code: "runner_offline" });
+  // Writing, asking and reading in a channel count as coming in too. Only accepted Q&A counts: alice's question with no runner doesn't become Q&A.
+  const channel = await world.channel(world.owner, "pay");
+  await world.settled(world.owner, await world.ask(world.owner, channel, "where is refund done?"));
+  await world.settled(world.owner, await world.ask(world.owner, channel, "who fixes it?"));
+  await assert.rejects(world.ask(alice, channel, "alice's question"), {
+    code: "runner_offline",
+  });
   await call(bob, api.history, { channel });
   const reply = await call(world.owner, api.metrics, {});
   assert.deepEqual(today(reply.days), { members: 3, qas: 2 });
   assert.equal(reply.timeZone, "Asia/Seoul");
-  // 지표에는 수만 있다. 질문, 답, 누가 들어왔는지는 없다.
-  assert.doesNotMatch(JSON.stringify(reply), /환불|누가 고치나|refund|alice|bob|owner/);
+  // Metrics hold only counts. No questions, answers or who came in.
+  assert.doesNotMatch(JSON.stringify(reply), /who fixes it|refund|alice|bob|owner/);
 
-  // 서버가 다시 떠도 남는다. CLI 하나로 지난 날들을 본다.
+  // They stay after the server restarts. One CLI call shows the past days.
   await world.restartServer();
-  // 꺼진 서버와의 연결이 끊긴 채 남아 있어 첫 요청이 실패할 수 있다.
+  // The connection to the stopped server may remain broken, so the first request can fail.
   await eventually(async () => assert.deepEqual(today(await metrics()), { members: 3, qas: 2 }));
   const shown = await world.cli("metrics", "--days", "3");
   assert.equal(shown.code, 0, shown.stderr);
@@ -69,20 +73,25 @@ test("들어온 멤버는 그날 웹을 열었거나 채널에서 읽고 쓴 멤
     lines[3] ?? "",
     /^\d{4}-\d{2}-\d{2} {2}3 {2}2 {2}0 {2}0 {2}0 {2}0 {2}0 {2}0 {2}0 {2}0 {2}0 {2}0 {2}0$/,
   );
-  await assert.rejects(call(world.owner, api.metrics, { days: 0 }), { code: "invalid_request" });
+  await assert.rejects(call(world.owner, api.metrics, { days: 0 }), {
+    code: "invalid_request",
+  });
 });
 
-test("날은 서울의 자정으로 자른다. 지난날의 수는 그날 줄에 그대로 남는다", async (t) => {
+test("a day is cut at midnight in Seoul. The count of a past day stays on that day's row", async (t) => {
   const world = await startWorld({ executor: fakeExecutor().executor });
   t.after(world.stop);
   world.github.grant("alice");
   const alice = await world.login("alice");
-  // 하루는 줄여 흉내 낼 수 없어 시계만 옮긴다. 조작과 확인은 그대로 API로 한다.
-  t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2030-01-01T14:59:59Z") }); // 서울 1월 1일 23:59:59
-  const channel = await world.channel(world.owner, "일반");
-  await world.settled(world.owner, await world.ask(world.owner, channel, "자정 전"));
+  // A day can't be imitated by shortening it, so only the clock moves. Operation and checks still go through the API.
+  t.mock.timers.enable({
+    apis: ["Date"],
+    now: Date.parse("2030-01-01T14:59:59Z"),
+  }); // Seoul Jan 1 23:59:59
+  const channel = await world.channel(world.owner, "일반"); // the harness default channel name
+  await world.settled(world.owner, await world.ask(world.owner, channel, "before midnight"));
 
-  t.mock.timers.setTime(Date.parse("2030-01-01T15:00:00Z")); // 서울 1월 2일 0시, UTC로는 아직 1월 1일
+  t.mock.timers.setTime(Date.parse("2030-01-01T15:00:00Z")); // Seoul Jan 2 00:00, still Jan 1 in UTC
   const metrics = async () =>
     (await call(world.owner, api.metrics, { days: 2 })).days.map(({ day, members, qas }) => ({
       day,
@@ -95,7 +104,7 @@ test("날은 서울의 자정으로 자른다. 지난날의 수는 그날 줄에
   ]);
 
   await world.live(alice);
-  await world.settled(world.owner, await world.ask(world.owner, channel, "자정 뒤"));
+  await world.settled(world.owner, await world.ask(world.owner, channel, "after midnight"));
   assert.deepEqual(await metrics(), [
     { day: "2030-01-01", members: 1, qas: 1 },
     { day: "2030-01-02", members: 2, qas: 1 },

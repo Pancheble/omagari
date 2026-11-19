@@ -1,4 +1,4 @@
-// 답장(ADR-0047, #344): 같은 채널 안의 메시지만 가리키고, 원래 메시지의 지금 첫 줄과 함께 오며, `@호출`이면 원래 메시지가 질문에 함께 간다.
+// Replies (ADR-0047, #344): they point only at a message in the same channel, come with the original message's current first line, and with an `@call` the original message goes along with the question.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { api, ContractFailure, call } from "@omagari/contract";
@@ -7,30 +7,34 @@ import { eventually, fakeExecutor, startWorld } from "./harness.ts";
 const refused = (code: string) => (error: unknown) =>
   error instanceof ContractFailure && error.code === code;
 
-test("답장은 원래 메시지의 쓴 사람과 첫 줄을 달고 오고, 다른 채널이나 없는 메시지를 가리키면 거절된다", async (t) => {
+test("a reply carries the original message's author and first line, and pointing at another channel or a missing message is refused", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
   world.github.grant("alice");
-  world.github.names.set("alice", "앨리스");
+  world.github.names.set("alice", "Alice");
   const owner = world.owner;
   const alice = await world.login("alice");
-  const channel = await world.channel(owner, "결제");
-  const other = await world.channel(owner, "잡담");
+  const channel = await world.channel(owner, "payments");
+  const other = await world.channel(owner, "random");
   const live = await world.live(owner);
 
   const { message: original } = await call(owner, api.send, {
     channel,
-    text: "> **alice**\n> 예전 말\n\n영수증이랑 안 맞아요\n둘째 줄",
+    text: "> **alice**\n> old words\n\nThe receipt doesn't match\nsecond line",
   });
   const { message: reply } = await call(alice, api.send, {
     channel,
-    text: "제가 볼게요",
+    text: "I'll look",
     replyTo: original.id,
   });
   const expected = {
     id: original.id,
     notify: true,
-    original: { login: "owner", name: "owner", line: "영수증이랑 안 맞아요" },
+    original: {
+      login: "owner",
+      name: "owner",
+      line: "The receipt doesn't match",
+    },
   };
   assert.deepEqual(reply.kind === "text" && reply.replyTo, expected);
   await eventually(() =>
@@ -41,39 +45,42 @@ test("답장은 원래 메시지의 쓴 사람과 첫 줄을 달고 오고, 다�
   assert.deepEqual(last?.kind === "text" && last.replyTo, expected);
   assert.equal(messages[0]?.kind === "text" && messages[0].replyTo, undefined);
 
-  // 부르지 않게 끈 답장
+  // A reply that is turned off so it doesn't call
   const { message: quiet } = await call(alice, api.send, {
     channel,
-    text: "조용히",
+    text: "quietly",
     replyTo: original.id,
     notify: false,
   });
   assert.equal(quiet.kind === "text" && quiet.replyTo?.notify, false);
 
-  // 다른 채널의 메시지와 없는 메시지는 같은 거절이다.
-  const { message: elsewhere } = await call(owner, api.send, { channel: other, text: "저쪽" });
+  // A message in another channel and a missing message are refused the same way.
+  const { message: elsewhere } = await call(owner, api.send, {
+    channel: other,
+    text: "over there",
+  });
   for (const replyTo of [elsewhere.id, 999_999])
     await assert.rejects(
-      call(alice, api.send, { channel, text: "답", replyTo }),
+      call(alice, api.send, { channel, text: "reply", replyTo }),
       refused("invalid_request"),
     );
 });
 
-test("답장 안에서 `@호출`하면 원래 메시지가 질문과 함께 데이터로 에이전트에게 가고, 채널의 문답도 답장이다", async (t) => {
+test("an `@call` inside a reply sends the original message to the agent as data along with the question, and a channel Q&A is also a reply", async (t) => {
   const fake = fakeExecutor();
   const world = await startWorld({ executor: fake.executor });
   t.after(world.stop);
   const owner = world.owner;
-  const channel = await world.channel(owner, "결제");
+  const channel = await world.channel(owner, "payments");
   const { message: original } = await call(owner, api.send, {
     channel,
-    text: "환불이 두 번 나갔어요",
+    text: "The refund went out twice",
   });
   const { message } = await call(owner, api.ask, {
     agent: "owner",
     executor: "claude-code",
     channel,
-    message: "왜 그런지 봐 줘",
+    message: "see why",
     visibility: "public",
     replyTo: original.id,
   });
@@ -82,16 +89,16 @@ test("답장 안에서 `@호출`하면 원래 메시지가 질문과 함께 데�
   const [{ message: prompt }] = fake.calls;
   assert.match(
     prompt,
-    /<replying_to>\n<message from="owner \(owner\)"[^>]*>\n환불이 두 번 나갔어요\n<\/message>\n<\/replying_to>\n\n왜 그런지 봐 줘$/,
+    /<replying_to>\n<message from="owner \(owner\)"[^>]*>\nThe refund went out twice\n<\/message>\n<\/replying_to>\n\nsee why$/,
   );
 
-  // DM에는 답장이 없다.
+  // A DM has no replies.
   await assert.rejects(
     call(owner, api.ask, {
       agent: "owner",
       executor: "claude-code",
       channel,
-      message: "몰래",
+      message: "secretly",
       replyTo: original.id,
     }),
     refused("invalid_request"),

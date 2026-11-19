@@ -10,8 +10,8 @@ const text = (lines: string[]) => `${lines.join("\n")}\n`;
 const BASE = Array.from({ length: 5 }, (_, i) => `line ${i + 1}`);
 
 /**
- * owner와 alice가 같은 줄을 고쳐 직접 충돌 알림을 세우고, 그 알림의 포스트를 연다.
- * 포스트와 그 포스트가 보이는 포럼("FYI")과 alice를 돌려준다. 결정 PR은 GitHub 쪽 일이라 알림 종류는 무엇이든 된다.
+ * owner and alice edit the same line to raise a direct conflict notification, and open that notification's post.
+ * Returns the post, the forum ("FYI") where that post shows, and alice. The decision PR is GitHub's side, so any notification kind will do.
  */
 async function postOf(t: { after: (fn: () => Promise<void>) => void }, hourMs?: number) {
   const world = await startWorld({ observeMs: 50, followMs: 50, hourMs });
@@ -41,42 +41,42 @@ async function postOf(t: { after: (fn: () => Promise<void>) => void }, hourMs?: 
 
   const room = await eventually(async () => {
     const found = (await call(world.owner, api.channels)).channels.find((c) => c.name === "FYI");
-    assert.ok(found, "참고 포럼이 없다");
+    assert.ok(found, "no FYI forum");
     return found.id;
   });
   const alert = await eventually(async () => {
     const { posts } = await call(world.owner, api.posts);
     const found = posts.find((p) => p.forums.includes(room))?.message;
-    assert.ok(found, "아직 알림이 없다");
+    assert.ok(found, "no notification yet");
     return found.id;
   });
   const post = (await call(world.owner, api.openPost, { alert })).post.channel;
   return { world, alice, room, post };
 }
 
-/** 채널의 결정 PR 줄들. */
+/** The decision PR lines of a channel. */
 const lines = async (as: As, channel: string) =>
   (await call(as, api.history, { channel })).messages
     .filter((m) => m.kind === "decision")
     .map(said);
 
 const DECISION = {
-  title: "환불은 결제 모듈을 거친다",
-  context: "환불과 결제가 같은 줄을 고친다.",
-  decision: "환불은 결제 모듈의 refund를 부른다.",
-  consequences: "환불 브랜치가 결제 브랜치 뒤에 머지된다.",
+  title: "Refunds go through the payment module",
+  context: "Refunds and payments edit the same line.",
+  decision: "Refunds call refund in the payment module.",
+  consequences: "The refund branch is merged after the payment branch.",
 };
 
-test("포스트에서 결정을 정리하면 정리한 멤버 이름으로 결정 PR이 열리고, 사람이 머지하거나 닫으면 상태가 바뀐다", async (t) => {
+test("when a decision is written up in a post, a decision PR opens under the writer's member name, and its state changes when a person merges or closes it", async (t) => {
   const { world, alice, room, post } = await postOf(t);
   const fake = world.github;
-  await call(alice, api.send, { channel: post, text: "제가 결제 쪽을 먼저 머지할게요" });
-  await call(world.owner, api.send, { channel: post, text: "좋아요, 환불은 그 뒤에" });
+  await call(alice, api.send, { channel: post, text: "I'll merge the payment side first" });
+  await call(world.owner, api.send, { channel: post, text: "Sure, refunds after that" });
   const web = await world.live(world.owner);
 
-  // 아무 멤버나 정리한다. 여기서는 alice다. 창을 고르지 않으면 하루라 바로 머지하지 않는다.
+  // Any member writes it up. Here it is alice. If no window is picked it is one day, so it does not merge right away.
   const { decision } = await call(alice, api.proposeDecision, { post, ...DECISION });
-  const path = "docs/decisions/0001-환불은-결제-모듈을-거친다.md";
+  const path = "docs/decisions/0001-refunds-go-through-the-payment-module.md";
   assert.deepEqual(decision, {
     id: decision.id,
     post,
@@ -97,10 +97,10 @@ test("포스트에서 결정을 정리하면 정리한 멤버 이름으로 결�
     early: false,
     at: decision.at,
   });
-  // 창은 정리한 때부터 하루다.
+  // The window is one day from when it was written up.
   assert.equal(Date.parse(decision.closes ?? "") - Date.parse(decision.at), 24 * 3_600_000);
 
-  // alice의 토큰으로 main에서 딴 브랜치에 커밋 하나, main으로 PR 하나.
+  // With alice's token, one commit on a branch cut from main, and one PR to main.
   const [pull] = fake.pulls;
   assert.ok(pull);
   assert.equal(pull.author, "alice");
@@ -112,7 +112,7 @@ test("포스트에서 결정을 정리하면 정리한 멤버 이름으로 결�
   assert.deepEqual(fake.commits, [
     { branch: pull.branch, message: pull.title, author: "alice", paths: [path, "AGENTS.md"] },
   ]);
-  // 결정 파일: 번호와 제목, 결정자(포스트에서 말한 멤버, 말한 순서), 출처(포스트 링크), 맥락, 결정, 결과.
+  // Decision file: number and title, deciders (members who spoke in the post, in order of speaking), source (post link), context, decision, consequences.
   const files = fake.files.get(pull.branch);
   assert.ok(files);
   assert.equal(
@@ -137,12 +137,12 @@ test("포스트에서 결정을 정리하면 정리한 멤버 이름으로 결�
       "",
     ].join("\n"),
   );
-  // 레포에 AGENTS.md가 없으니 결정 폴더를 가리키는 한 줄로 만든다. main은 그대로다.
+  // The repo has no AGENTS.md, so make one with a line that points to the decisions folder. main stays as it is.
   assert.match(files.get("AGENTS.md") ?? "", /^Decision records are in `docs\/decisions\/`\./);
   assert.deepEqual([...(fake.files.get("main")?.keys() ?? [])], []);
 
-  // 포스트에 한 줄. 부딪힘 포럼에는 올리지 않는다(ADR-0027). 실시간으로도 간다. 포스트의 글 수에는 들지 않는다.
-  const opened = `결정 opened: ${DECISION.title}`;
+  // One line in the post. It is not posted to the conflict forum (ADR-0027). It also goes out live. It does not count toward the post's message count.
+  const opened = `Decision opened: ${DECISION.title}`;
   assert.deepEqual(await lines(world.owner, post), [opened]);
   assert.deepEqual(await lines(world.owner, room), []);
   await eventually(() =>
@@ -156,20 +156,20 @@ test("포스트에서 결정을 정리하면 정리한 멤버 이름으로 결�
   );
   const [summary] = (await call(world.owner, api.posts)).posts;
   assert.equal(summary?.count, 2);
-  assert.equal(summary?.last?.line, "좋아요, 환불은 그 뒤에");
+  assert.equal(summary?.last?.line, "Sure, refunds after that");
 
-  // 첫 결정 PR이 열린 채 두 번째를 정리하면 다음 번호다. owner가 정리해 owner의 이름이다.
+  // Writing up a second while the first decision PR is open gets the next number. owner wrote it up, so it is owner's name.
   const second = (
     await call(world.owner, api.proposeDecision, {
       post,
       ...DECISION,
-      title: "결제 모듈의 refund는 금액을 받는다",
+      title: "Refund in the payment module takes an amount",
     })
   ).decision;
-  assert.equal(second.path, "docs/decisions/0002-결제-모듈의-refund는-금액을-받는다.md");
+  assert.equal(second.path, "docs/decisions/0002-refund-in-the-payment-module-takes-an-amount.md");
   assert.equal(fake.pulls[1]?.author, "owner");
 
-  // 사람이 GitHub에서 첫 PR을 머지하고 둘째 PR을 닫는다. Omagari가 읽어 상태를 바꾸고 한 줄씩 올린다.
+  // A person merges the first PR and closes the second on GitHub. Omagari reads it, changes the state, and posts one line each.
   fake.merge(pull);
   fake.close(fake.pulls[1] as (typeof fake.pulls)[number]);
   await eventually(async () =>
@@ -177,32 +177,32 @@ test("포스트에서 결정을 정리하면 정리한 멤버 이름으로 결�
       (await call(alice, api.decisions)).decisions.map((d) => [d.title, d.state]),
       [
         [DECISION.title, "accepted"],
-        ["결제 모듈의 refund는 금액을 받는다", "closed"],
+        ["Refund in the payment module takes an amount", "closed"],
       ],
     ),
   );
   const after = [
     opened,
-    "결정 opened: 결제 모듈의 refund는 금액을 받는다",
-    `결정 merged: ${DECISION.title}`,
-    "결정 closed: 결제 모듈의 refund는 금액을 받는다",
+    "Decision opened: Refund in the payment module takes an amount",
+    `Decision merged: ${DECISION.title}`,
+    "Decision closed: Refund in the payment module takes an amount",
   ];
   await eventually(async () => {
     assert.deepEqual(await lines(world.owner, post), after);
     assert.deepEqual(await lines(world.owner, room), []);
   });
 
-  // main에 결정 폴더를 가리키는 AGENTS.md가 생겼으니 다음 결정 PR은 AGENTS.md를 건드리지 않는다.
-  // 닫힌 결정의 번호는 비었으니 다시 쓴다. "바로"를 고르면 열자마자 Omagari가 머지한다.
+  // main now has an AGENTS.md pointing to the decisions folder, so the next decision PR does not touch AGENTS.md.
+  // The closed decision's number is free, so it is reused. Picking "now" makes Omagari merge it as soon as it opens.
   const now = (
     await call(alice, api.proposeDecision, {
       post,
       ...DECISION,
-      title: "바로 머지할 결정",
+      title: "Decision to merge now",
       window: "now",
     })
   ).decision;
-  assert.equal(now.path, "docs/decisions/0002-바로-머지할-결정.md");
+  assert.equal(now.path, "docs/decisions/0002-decision-to-merge-now.md");
   assert.equal(now.state, "accepted");
   const third = fake.pulls[2];
   assert.ok(third);
@@ -214,39 +214,39 @@ test("포스트에서 결정을 정리하면 정리한 멤버 이름으로 결�
     ["AGENTS.md", path, now.path].sort(),
   );
   assert.deepEqual((await lines(world.owner, post)).slice(-2), [
-    "결정 opened: 바로 머지할 결정",
-    "결정 merged: 바로 머지할 결정",
+    "Decision opened: Decision to merge now",
+    "Decision merged: Decision to merge now",
   ]);
 });
 
-test("레포의 AGENTS.md가 결정 폴더를 가리키지 않으면 한 줄을 더하고, 가리키면 건드리지 않는다", async (t) => {
+test("if the repo's AGENTS.md does not point to the decisions folder, one line is added, and if it does, it is left alone", async (t) => {
   const { world, post } = await postOf(t);
   const fake = world.github;
   const main = fake.files.get("main") as Map<string, string>;
-  main.set("AGENTS.md", "# 규칙\n\n테스트를 돌린다.\n");
-  main.set("docs/decisions/0007-old.md", "# 0007. 예전 결정\n");
+  main.set("AGENTS.md", "# Rules\n\nRun the tests.\n");
+  main.set("docs/decisions/0007-old.md", "# 0007. Old decision\n");
 
   const { decision } = await call(world.owner, api.proposeDecision, { post, ...DECISION });
-  assert.equal(decision.path, "docs/decisions/0008-환불은-결제-모듈을-거친다.md");
+  assert.equal(decision.path, "docs/decisions/0008-refunds-go-through-the-payment-module.md");
   const branch = fake.files.get(fake.pulls[0]?.branch ?? "");
   assert.equal(
     branch?.get("AGENTS.md"),
-    "# 규칙\n\n테스트를 돌린다.\n\nDecision records are in `docs/decisions/`. Read the related decisions before you start work.\n",
+    "# Rules\n\nRun the tests.\n\nDecision records are in `docs/decisions/`. Read the related decisions before you start work.\n",
   );
 
-  main.set("AGENTS.md", "결정은 docs/decisions 에 있다.\n");
-  await call(world.owner, api.proposeDecision, { post, ...DECISION, title: "둘째" });
+  main.set("AGENTS.md", "Decisions are in docs/decisions.\n");
+  await call(world.owner, api.proposeDecision, { post, ...DECISION, title: "Second" });
   assert.equal(
     fake.files.get(fake.pulls[1]?.branch ?? "")?.get("AGENTS.md"),
-    "결정은 docs/decisions 에 있다.\n",
+    "Decisions are in docs/decisions.\n",
   );
 });
 
-test("바로 머지를 GitHub이 막으면 까닭을 포스트에 알리고, 토큰이 무효면 PR을 열지 못했다고 돌려준다", async (t) => {
+test("if GitHub blocks merging right away, the reason is posted, and if the token is invalid, it returns that the PR could not be opened", async (t) => {
   const { world, room, post } = await postOf(t);
   const fake = world.github;
 
-  // 리뷰 필수 같은 규칙으로 막히면 결정은 제안됨으로 남고, 막힌 까닭이 포스트에 한 줄로 선다. 주기마다 다시 해 봐도 줄은 하나다.
+  // If a rule such as required review blocks it, the decision stays proposed, and the reason it was blocked stands as one line in the post. Even retrying every cycle, there is one line.
   const reason = "HTTP 405 At least 1 approving review is required by reviewers with write access.";
   fake.block(reason);
   const { decision } = await call(world.owner, api.proposeDecision, {
@@ -258,28 +258,35 @@ test("바로 머지를 GitHub이 막으면 까닭을 포스트에 알리고, 토
   assert.equal(decision.status, "blocked");
   assert.equal(decision.reason, reason);
   assert.equal(fake.pulls[0]?.open, true);
-  const blocked = [`결정 opened: ${DECISION.title}`, `결정 blocked: ${DECISION.title} (${reason})`];
+  const blocked = [
+    `Decision opened: ${DECISION.title}`,
+    `Decision blocked: ${DECISION.title} (${reason})`,
+  ];
   assert.deepEqual(await lines(world.owner, post), blocked);
   assert.deepEqual(await lines(world.owner, room), []);
   await sleep(200);
   assert.deepEqual(await lines(world.owner, post), blocked);
 
-  // 막힘이 풀리면 다음 주기에 Omagari가 머지한다.
+  // When the block is lifted, Omagari merges on the next cycle.
   fake.block();
   await eventually(async () =>
     assert.equal((await call(world.owner, api.decisions)).decisions[0]?.state, "accepted"),
   );
   assert.ok(fake.pulls[0]?.mergedAt);
 
-  // 포스트가 아닌 채널이면 없다.
+  // In a channel that is not a post, there is none.
   await assert.rejects(call(world.owner, api.proposeDecision, { post: room, ...DECISION }), {
     code: "not_found",
   } satisfies Partial<ContractFailure>);
 
-  // 정리한 멤버의 GitHub 토큰이 무효면(세션은 그대로) PR을 열지 못했다고 돌려주고 아무것도 남지 않는다.
+  // If the writer's GitHub token is invalid (the session stays), it returns that the PR could not be opened and nothing is left.
   for (const [token, login] of fake.tokens) if (login === "owner") fake.tokens.delete(token);
   await assert.rejects(
-    call(world.owner, api.proposeDecision, { post, ...DECISION, title: "열리지 않을 결정" }),
+    call(world.owner, api.proposeDecision, {
+      post,
+      ...DECISION,
+      title: "Decision that will not open",
+    }),
     (error: ContractFailure) => {
       assert.equal(error.code, "github_failed");
       assert.match(
@@ -293,13 +300,13 @@ test("바로 머지를 GitHub이 막으면 까닭을 포스트에 알리고, 토
   assert.equal((await call(world.owner, api.decisions)).decisions.length, 1);
 });
 
-/** 포스트의 결정 PR 줄을 일어난 일과 한 사람으로. */
+/** The decision PR lines of a post, as what happened and one person. */
 const events = async (as: As, channel: string) =>
   (await call(as, api.history, { channel })).messages.flatMap((m) =>
     m.kind === "decision" ? [`${m.decision.title} ${m.event}${m.by ? ` ${m.by.login}` : ""}`] : [],
   );
 
-/** 포스트에서 말하지 않은 멤버 bob. 결정자가 아니다. */
+/** Member bob, who did not speak in the post. Not a decider. */
 async function bobOf(world: Awaited<ReturnType<typeof postOf>>["world"]) {
   world.github.grant("bob");
   return world.login("bob");
@@ -307,15 +314,15 @@ async function bobOf(world: Awaited<ReturnType<typeof postOf>>["world"]) {
 
 const decisionNamed = async (as: As, title: string) => {
   const found = (await call(as, api.decisions)).decisions.find((d) => d.title === title);
-  assert.ok(found, `결정이 없다: ${title}`);
+  assert.ok(found, `no decision: ${title}`);
   return found;
 };
 
-test("고른 길이대로 창이 닫히고 이의가 없으면 Omagari가 머지한다", async (t) => {
-  // 한 시간을 50ms로 줄인다: 1시간 50ms, 직접 3시간 150ms, 하루 1.2초, 3일 3.6초.
+test("the window closes by the chosen length, and Omagari merges if there is no objection", async (t) => {
+  // One hour is shortened to 50ms: 1 hour is 50ms, 3 hours straight is 150ms, a day is 1.2 seconds, 3 days is 3.6 seconds.
   const HOUR = 50;
   const { world, alice, post } = await postOf(t, HOUR);
-  await call(alice, api.send, { channel: post, text: "결제 쪽을 먼저 머지할게요" });
+  await call(alice, api.send, { channel: post, text: "I'll merge the payment side first" });
   const windows = [
     ["1 hour", "hour", 1],
     ["Custom 3 hours", { amount: 3, unit: "hour" }, 3],
@@ -330,7 +337,7 @@ test("고른 길이대로 창이 닫히고 이의가 없으면 Omagari가 머지
       window,
     });
     assert.deepEqual(decision.window, window);
-    // 1시간 창(50ms)은 응답이 오기 전에 닫혀 `closes`가 null일 수 있다. 창의 길이는 아래 머지 시각으로도 확인한다.
+    // The 1-hour window (50ms) closes before the response arrives, so `closes` may be null. The window's length is also checked by the merge time below.
     if (decision.closes !== null)
       assert.equal(Date.parse(decision.closes) - Date.parse(decision.at), hours * HOUR);
     assert.match(
@@ -346,22 +353,22 @@ test("고른 길이대로 창이 닫히고 이의가 없으면 Omagari가 머지
     }, 20_000);
     assert.equal(decision.early, false);
     assert.equal(decision.closes, null);
-    // 창이 닫히기 전에는 머지하지 않았다.
+    // It did not merge before the window closed.
     const pull = world.github.pulls.find((p) => p.number === decision.pull.number);
     assert.ok(Date.parse(pull?.mergedAt ?? "") >= Date.parse(decision.at) + hours * HOUR);
     assert.ok((await events(world.owner, post)).includes(`${title} merged`));
   }
 });
 
-test("이의(포스트와 GitHub 변경 요청)가 걸리면 창이 닫혀도 머지하지 않고, 모두 거둬지면 같은 길이로 다시 연다", async (t) => {
-  const HOUR = 50; // 하루 1.2초
+test("when an objection (a post and a GitHub change request) is raised, it does not merge even after the window closes, and when all are withdrawn it reopens with the same length", async (t) => {
+  const HOUR = 50; // a day is 1.2 seconds
   const { world, alice, post } = await postOf(t, HOUR);
   const fake = world.github;
-  await call(alice, api.send, { channel: post, text: "결제 쪽을 먼저 머지할게요" });
+  await call(alice, api.send, { channel: post, text: "I'll merge the payment side first" });
   const bob = await bobOf(world);
   const { decision } = await call(world.owner, api.proposeDecision, { post, ...DECISION });
 
-  // 결정자가 아닌 bob도 이의를 낸다. 걸려 있는 동안 창은 없다.
+  // bob, who is not a decider, also raises an objection. While it stands there is no window.
   const objected = (await call(bob, api.respondToDecision, { id: decision.id, response: "object" }))
     .decision;
   assert.equal(objected.status, "objected");
@@ -370,16 +377,16 @@ test("이의(포스트와 GitHub 변경 요청)가 걸리면 창이 닫혀도 �
     objected.objections.map((o) => [o.login, o.via]),
     [["bob", "post"]],
   );
-  // 같은 이의를 또 내도 그대로다.
+  // Raising the same objection again changes nothing.
   await call(bob, api.respondToDecision, { id: decision.id, response: "object" });
 
-  // 남의 이의는 거두지 못한다.
+  // You cannot withdraw someone else's objection.
   await assert.rejects(
     call(alice, api.respondToDecision, { id: decision.id, response: "withdraw" }),
     { code: "not_found" } satisfies Partial<ContractFailure>,
   );
 
-  // GitHub에서 멤버 carol이 변경을 요청한다. 주기마다 읽어 이의로 센다.
+  // On GitHub member carol requests changes. It is read every cycle and counted as an objection.
   fake.grant("carol");
   await world.login("carol");
   fake.review(decision.pull.number, "carol", "CHANGES_REQUESTED");
@@ -393,17 +400,17 @@ test("이의(포스트와 GitHub 변경 요청)가 걸리면 창이 닫혀도 �
     ),
   );
 
-  // 하루(1.2초)가 지나도 머지하지 않는다.
+  // It does not merge even after a day (1.2 seconds) passes.
   await sleep(24 * HOUR + 300);
   assert.equal((await decisionNamed(world.owner, DECISION.title)).state, "proposed");
   assert.equal(fake.pulls[0]?.open, true);
 
-  // bob이 거둬도 carol의 것이 남아 아직 걸려 있다.
+  // Even if bob withdraws, carol's remains, so it is still raised.
   const one = (await call(bob, api.respondToDecision, { id: decision.id, response: "withdraw" }))
     .decision;
   assert.equal(one.status, "objected");
 
-  // carol이 변경 요청을 승인으로 바꾸면 모두 거둬져 창이 처음부터 같은 길이(하루)로 다시 열린다.
+  // If carol changes the change request to an approval, all are withdrawn and the window reopens from the start with the same length (a day).
   const before = Date.now();
   fake.review(decision.pull.number, "carol", "APPROVED");
   const reopened = await eventually(async () => {
@@ -430,10 +437,10 @@ test("이의(포스트와 GitHub 변경 요청)가 걸리면 창이 닫혀도 �
   ]);
 });
 
-test("결정자가 모두 동의하면 창이 남아도 바로 머지하지만, 이의가 걸려 있거나 GitHub이 막으면 머지하지 않는다", async (t) => {
-  const { world, alice, post } = await postOf(t); // 창은 정말 하루다
+test("if all deciders agree it merges right away even with the window left, but it does not merge if an objection stands or GitHub blocks it", async (t) => {
+  const { world, alice, post } = await postOf(t); // the window is really a day
   const fake = world.github;
-  await call(alice, api.send, { channel: post, text: "결제 쪽을 먼저 머지할게요" });
+  await call(alice, api.send, { channel: post, text: "I'll merge the payment side first" });
   const bob = await bobOf(world);
   const { decision } = await call(world.owner, api.proposeDecision, { post, ...DECISION });
   assert.deepEqual(
@@ -444,12 +451,12 @@ test("결정자가 모두 동의하면 창이 남아도 바로 머지하지만, 
     ],
   );
 
-  // 결정자가 아닌 bob의 동의는 거절된다.
+  // bob's agreement, who is not a decider, is rejected.
   await assert.rejects(call(bob, api.respondToDecision, { id: decision.id, response: "agree" }), {
     code: "forbidden",
   } satisfies Partial<ContractFailure>);
 
-  // bob의 이의가 걸려 있으면 alice가 동의해 모두 동의해도 머지하지 않는다.
+  // If bob's objection stands, it does not merge even if alice agrees and all agree.
   await call(bob, api.respondToDecision, { id: decision.id, response: "object" });
   const agreed = (await call(alice, api.respondToDecision, { id: decision.id, response: "agree" }))
     .decision;
@@ -461,7 +468,7 @@ test("결정자가 모두 동의하면 창이 남아도 바로 머지하지만, 
   );
   assert.equal(fake.pulls[0]?.open, true);
 
-  // 거두면 창이 다시 열리고, 모두 동의했으니 바로 머지한다. 일찍 닫았다고 보인다.
+  // If withdrawn, the window reopens, and since all agreed, it merges right away. It shows as closed early.
   const merged = (await call(bob, api.respondToDecision, { id: decision.id, response: "withdraw" }))
     .decision;
   assert.equal(merged.status, "accepted");
@@ -474,16 +481,16 @@ test("결정자가 모두 동의하면 창이 남아도 바로 머지하지만, 
     `${DECISION.title} withdrawn bob`,
     `${DECISION.title} merged`,
   ]);
-  // 끝난 결정에는 더 응답하지 못한다.
+  // A finished decision can no longer be responded to.
   await assert.rejects(call(bob, api.respondToDecision, { id: decision.id, response: "object" }), {
     code: "conflict",
   } satisfies Partial<ContractFailure>);
 
-  // 모두 동의해도 GitHub이 막으면 "머지 막힘"이다. 풀리면 머지한다.
+  // If GitHub blocks it even when all agree, it is "merge blocked". When unblocked, it merges.
   const reason = "HTTP 405 At least 1 approving review is required by reviewers with write access.";
   fake.block(reason);
   const second = (
-    await call(world.owner, api.proposeDecision, { post, ...DECISION, title: "둘째 결정" })
+    await call(world.owner, api.proposeDecision, { post, ...DECISION, title: "Second decision" })
   ).decision;
   const blocked = (await call(alice, api.respondToDecision, { id: second.id, response: "agree" }))
     .decision;
@@ -492,30 +499,30 @@ test("결정자가 모두 동의하면 창이 남아도 바로 머지하지만, 
   assert.ok(blocked.closes);
   fake.block();
   const done = await eventually(async () => {
-    const found = await decisionNamed(world.owner, "둘째 결정");
+    const found = await decisionNamed(world.owner, "Second decision");
     assert.equal(found.status, "accepted");
     return found;
   });
   assert.equal(done.early, true);
   assert.deepEqual((await events(world.owner, post)).slice(-4), [
-    "둘째 결정 opened",
-    "둘째 결정 agreed alice",
-    "둘째 결정 blocked",
-    "둘째 결정 merged",
+    "Second decision opened",
+    "Second decision agreed alice",
+    "Second decision blocked",
+    "Second decision merged",
   ]);
 });
 
-test("정리한 사람만 결정을 고쳐 같은 PR에 커밋을 더하거나 버려 PR을 닫는다", async (t) => {
+test("only the person who wrote it up edits a decision to add a commit to the same PR, or discards it to close the PR", async (t) => {
   const { world, alice, post } = await postOf(t);
   const fake = world.github;
   const bob = await bobOf(world);
-  await call(alice, api.send, { channel: post, text: "결제 쪽을 먼저 머지할게요" });
-  await call(bob, api.send, { channel: post, text: "저도 봤어요" });
+  await call(alice, api.send, { channel: post, text: "I'll merge the payment side first" });
+  await call(bob, api.send, { channel: post, text: "I saw it too" });
   const { decision } = await call(world.owner, api.proposeDecision, { post, ...DECISION });
   await call(alice, api.respondToDecision, { id: decision.id, response: "agree" });
 
-  // 정리한 사람이 아니면 고치지도 버리지도 못한다.
-  const revision = { ...DECISION, decision: "환불은 결제 모듈의 refund(amount)를 부른다." };
+  // Someone other than the writer can neither edit nor discard it.
+  const revision = { ...DECISION, decision: "Refunds call refund(amount) in the payment module." };
   await assert.rejects(call(alice, api.reviseDecision, { id: decision.id, ...revision }), {
     code: "forbidden",
   } satisfies Partial<ContractFailure>);
@@ -523,7 +530,7 @@ test("정리한 사람만 결정을 고쳐 같은 PR에 커밋을 더하거나 �
     code: "forbidden",
   } satisfies Partial<ContractFailure>);
 
-  // 고치면 같은 브랜치에 커밋이 더해진다. 다른 결정자의 동의는 지워지고 창은 다시 하루다.
+  // Editing adds a commit to the same branch. Other deciders' agreement is cleared and the window is a day again.
   const pull = fake.pulls[0];
   assert.ok(pull);
   const before = Date.now();
@@ -549,7 +556,7 @@ test("정리한 사람만 결정을 고쳐 같은 PR에 커밋을 더하거나 �
   );
   assert.ok(Date.parse(revised.closes ?? "") >= before + 24 * 3_600_000);
 
-  // 버리면 PR이 닫히고 결정은 기본 브랜치에 남지 않는다.
+  // Discarding closes the PR and the decision does not stay on the default branch.
   const closed = (await call(world.owner, api.discardDecision, { id: decision.id })).decision;
   assert.equal(closed.status, "closed");
   assert.equal(closed.closes, null);
@@ -567,13 +574,13 @@ test("정리한 사람만 결정을 고쳐 같은 PR에 커밋을 더하거나 �
   } satisfies Partial<ContractFailure>);
 });
 
-test("정리한 사람의 토큰이 무효면 머지가 멈추고 알리며, 다시 로그인하면 이어 간다", async (t) => {
-  const HOUR = 20; // 하루 480ms
+test("if the writer's token is invalid, merging stops and tells, and when they log in again it continues", async (t) => {
+  const HOUR = 20; // a day is 480ms
   const { world, alice, post } = await postOf(t, HOUR);
   const fake = world.github;
-  await call(alice, api.send, { channel: post, text: "결제 쪽을 먼저 머지할게요" });
+  await call(alice, api.send, { channel: post, text: "I'll merge the payment side first" });
   const { decision } = await call(world.owner, api.proposeDecision, { post, ...DECISION });
-  // owner의 세션은 그대로 두고 GitHub 토큰만 무효로 한다.
+  // Leave owner's session as is and make only the GitHub token invalid.
   for (const [token, login] of fake.tokens) if (login === "owner") fake.tokens.delete(token);
 
   const stalled = await eventually(async () => {
@@ -583,14 +590,14 @@ test("정리한 사람의 토큰이 무효면 머지가 멈추고 알리며, 다
   });
   assert.match(stalled.reason ?? "", /^HTTP 401/);
   assert.equal(fake.pulls[0]?.open, true);
-  // 주기마다 다시 해 봐도 줄은 하나다.
+  // Even retrying every cycle, there is one line.
   await sleep(300);
   assert.deepEqual(await events(alice, post), [
     `${DECISION.title} opened`,
     `${DECISION.title} stalled`,
   ]);
 
-  // owner가 다시 로그인하면 새 토큰으로 머지한다.
+  // If the owner logs in again, it merges with the new token.
   await world.login("owner");
   const merged = await eventually(async () => {
     const found = await decisionNamed(alice, DECISION.title);

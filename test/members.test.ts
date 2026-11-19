@@ -3,19 +3,19 @@ import { test } from "node:test";
 import { api, call } from "@omagari/contract";
 import { eventually, fakeExecutor, place, startWorld, textOf, writer } from "./harness.ts";
 
-/** 고를 거리를 알리지 않는 실행기(가짜)의 것. 고를 거리는 model.test가 본다. */
+/** That of an executor (fake) that doesn't report anything to choose from. What to choose from is checked by model.test. */
 const none = { models: [], efforts: [] };
 
-test("멤버 목록에 사람마다 이름과 실행기마다의 에이전트, 작업마다 상태 한 줄이 보이고, 러너가 떨어지면 에이전트는 오프라인, 작업은 떨어진 시각 기준으로 남는다", async (t) => {
+test("the member list shows each person's name, each executor's agent, and one status line per work; when the runner drops, the agent is offline and works stay based on the time it dropped", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
-  world.github.names.set("alice", "김지은");
+  world.github.names.set("alice", "Zoe Kim");
   world.github.grant("alice");
   world.github.grant("bob");
   const alice = await world.login("alice");
-  await world.login("bob"); // 러너를 켠 적이 없는 멤버
+  await world.login("bob"); // a member who never turned a runner on
 
-  // alice는 등록한 폴더와 연결된 워크트리에서 두 작업을 한다.
+  // alice works on two works in worktrees linked to the registered folder.
   const desk = await world.desk(alice);
   t.after(desk.remove);
   const tree = await place(t);
@@ -25,28 +25,28 @@ test("멤버 목록에 사람마다 이름과 실행기마다의 에이전트, �
   await writer(tree("refund"))("refund.ts", "refund\n");
   const { at } = await call(alice, api.setStatus, {
     branch: "payment",
-    text: "결제 붙이는 중",
+    text: "wiring up payment",
     executor: "claude-code",
   });
 
   const members = async () => (await call(world.owner, api.members)).members;
   const aliceOf = async () => (await members()).find((member) => member.login === "alice");
-  // 워크트리를 더한 뒤 파일을 쓰기 전에 관측이 돌면 refund는 바뀐 것 없는 작업(줄 없음)으로 먼저 온다.
-  // 작업 수가 아니라 두 작업의 줄이 다 올 때까지 기다린다.
+  // If observation runs after the worktree is added and before the file is written, refund first arrives as a work with no changes (no lines).
+  // Wait not for the number of works but until both works' lines have arrived.
   await eventually(async () =>
     assert.deepEqual(
       (await aliceOf())?.works.map(
         (work) => work.line && ("text" in work.line ? work.line.text : work.line.file),
       ),
-      ["결제 붙이는 중", "refund.ts"],
+      ["wiring up payment", "refund.ts"],
     ),
   );
 
   const all = await members();
-  // 이름 순이다. 이름이 없는 사람은 아이디가 이름이다.
+  // In name order. A person with no name uses the id as the name.
   assert.deepEqual(
     all.map((member) => member.name),
-    ["bob", "owner", "김지은"],
+    ["Zoe Kim", "bob", "owner"],
   );
   assert.deepEqual(
     all.find((member) => member.login === "bob"),
@@ -54,7 +54,7 @@ test("멤버 목록에 사람마다 이름과 실행기마다의 에이전트, �
       login: "bob",
       name: "bob",
       avatar: null,
-      presence: "offline", // 웹 창을 연 적이 없다
+      presence: "offline", // never opened a web window
       message: null,
       emoji: null,
       agents: [],
@@ -64,7 +64,7 @@ test("멤버 목록에 사람마다 이름과 실행기마다의 에이전트, �
   );
   assert.deepEqual(await aliceOf(), {
     login: "alice",
-    name: "김지은",
+    name: "Zoe Kim",
     avatar: null,
     presence: "offline",
     message: null,
@@ -75,13 +75,13 @@ test("멤버 목록에 사람마다 이름과 실행기마다의 에이전트, �
       {
         branch: "payment",
         executor: "claude-code",
-        line: { source: "agent", text: "결제 붙이는 중", at },
+        line: { source: "agent", text: "wiring up payment", at },
         conflict: false,
         broken: false,
       },
       {
         branch: "refund",
-        executor: null, // 관측만 있고 훅도 status set도 보낸 적이 없다(ADR-0015)
+        executor: null, // only observation, and never sent a hook or status set (ADR-0015)
         line: { source: "files", file: "refund.ts", more: 0 },
         conflict: false,
         broken: false,
@@ -104,12 +104,12 @@ test("멤버 목록에 사람마다 이름과 실행기마다의 에이전트, �
       work.line && ("text" in work.line ? work.line.text : work.line.file),
     ]),
     [
-      ["payment", "결제 붙이는 중"],
+      ["payment", "wiring up payment"],
       ["refund", "refund.ts"],
     ],
   );
 
-  // 서버가 다시 떠도 에이전트는 오프라인으로 남는다.
+  // Even if the server restarts, the agent stays offline.
   await world.restartServer();
   await eventually(async () =>
     assert.deepEqual((await aliceOf())?.agents, [
@@ -118,7 +118,7 @@ test("멤버 목록에 사람마다 이름과 실행기마다의 에이전트, �
   );
 });
 
-test("웹은 실시간 연결에서 멤버 목록을 바로 받고, 작업과 상태 한 줄과 에이전트가 바뀌면 새로 고치지 않아도 따라온다. 세션이 끝나면 연결이 닫힌다", async (t) => {
+test("the web gets the member list right away over the live connection, and follows changes to works, status lines and agents without a refresh. When the session ends the connection closes", async (t) => {
   const answer = Promise.withResolvers<string>();
   const world = await startWorld({
     observeMs: 50,
@@ -136,7 +136,7 @@ test("웹은 실시간 연결에서 멤버 목록을 바로 받고, 작업과 �
     ]),
   );
 
-  // 바꾼 것도 상태 한 줄도 선점도 없는 작업은 브랜치가 무엇이든 보이지 않는다(ADR-0006).
+  // A work with no changes, no status line, and no claim isn't shown whatever the branch is (ADR-0006).
   await world.repo.git("switch", "--create", "payment");
   await eventually(async () =>
     assert.ok((await world.works(world.owner)).some((w) => w.branch === "payment")),
@@ -148,14 +148,14 @@ test("웹은 실시간 연결에서 멤버 목록을 바로 받고, 작업과 �
   await eventually(() =>
     assert.deepEqual(owner()?.works[0]?.line, { source: "files", file: "payment.ts", more: 0 }),
   );
-  await call(world.owner, api.setStatus, { branch: "payment", text: "결제 붙이는 중" });
-  await eventually(() => assert.equal(textOf(owner()?.works[0]?.line), "결제 붙이는 중"));
+  await call(world.owner, api.setStatus, { branch: "payment", text: "wiring up payment" });
+  await eventually(() => assert.equal(textOf(owner()?.works[0]?.line), "wiring up payment"));
 
-  // 문답에 답하는 동안 답하는 중이다.
+  // While answering a Q&A, it is answering.
   const channel = await world.channel(world.owner);
-  const asked = await world.ask(world.owner, channel, "결제는 어디서 하나?");
+  const asked = await world.ask(world.owner, channel, "where is payment done?");
   await eventually(() => assert.equal(owner()?.agents[0]?.state, "answering"));
-  answer.resolve("payment.ts에서 한다");
+  answer.resolve("it's done in payment.ts");
   await world.settled(world.owner, asked);
   await eventually(() => assert.equal(owner()?.agents[0]?.state, "online"));
 

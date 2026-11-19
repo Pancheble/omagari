@@ -9,7 +9,7 @@ import { api, call } from "@omagari/contract";
 import { startRunner } from "@omagari/runner";
 import { eventually, startWorld, stubbed, tempRepo, writer } from "./harness.ts";
 
-test("커밋한 것, 커밋하지 않은 것, 추적하지 않는 새 파일이 푸시 여부와 상관없이 그 작업의 변경으로 올라가고, 다른 멤버가 API로 본다", async (t) => {
+test("committed, uncommitted, and untracked new files go up as that work's changes whether pushed or not, and other members see them through the API", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
   const { git, folder } = world.repo;
@@ -17,7 +17,7 @@ test("커밋한 것, 커밋하지 않은 것, 추적하지 않는 새 파일이 
   world.github.grant("alice");
   const alice = await world.login("alice");
 
-  // 기본 브랜치에 이미 있는 파일(푸시됨)
+  // A file already on the default branch (pushed)
   await write("kept.ts", "base\n");
   await write("gone.ts", "bye\n");
   await git("add", ".");
@@ -29,10 +29,10 @@ test("커밋한 것, 커밋하지 않은 것, 추적하지 않는 새 파일이 
   await write("pushed.ts", "pushed\n");
   await git("add", "pushed.ts");
   await git("commit", "--message=pushed");
-  await git("update-ref", "refs/remotes/origin/feat", "HEAD"); // 푸시한 커밋
+  await git("update-ref", "refs/remotes/origin/feat", "HEAD"); // a pushed commit
   await write("committed.ts", "committed\n");
   await git("add", "committed.ts");
-  await git("commit", "--message=committed"); // 푸시하지 않은 커밋
+  await git("commit", "--message=committed"); // an unpushed commit
   await write("staged.ts", "staged\n");
   await git("add", "staged.ts");
   await write("kept.ts", "base\nchanged\n");
@@ -46,7 +46,7 @@ test("커밋한 것, 커밋하지 않은 것, 추적하지 않는 새 파일이 
         branch: "feat",
         base,
         share: "full",
-        // 경로, 내용, 지웠는지가 온다. 정의가 없는 파일이라 정의 줄은 없다.
+        // The path, content, and whether it was deleted come through. It's a file with no definitions, so there's no definition line.
         files: [
           { path: "committed.ts", content: "committed\n" },
           { path: "gone.ts", deleted: true },
@@ -61,21 +61,21 @@ test("커밋한 것, 커밋하지 않은 것, 추적하지 않는 새 파일이 
     ]),
   );
 
-  // 멤버가 아니면 볼 수 없다.
+  // A non-member can't see it.
   await assert.rejects(call(world.server, api.works), { code: "unauthorized" });
   await assert.rejects(call({ url: world.server.url, session: "made-up-session" }, api.works), {
     code: "unauthorized",
   });
 });
 
-test("기준 커밋은 기본 브랜치(원격 추적)와 갈라진 지점이다. 그 뒤 기본 브랜치에 들어온 남의 변경은 섞이지 않는다", async (t) => {
+test("the base commit is where it forked from the default branch (remote-tracking). Others' changes that landed on the default branch after that don't get mixed in", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
   const { git, folder } = world.repo;
   const write = writer(folder);
   const forkPoint = await git("rev-parse", "origin/main");
 
-  // 로컬 main에만 있는 커밋은 기본 브랜치(원격 추적)에 없으니 이 작업의 변경이다.
+  // A commit only on local main isn't on the default branch (remote-tracking), so it's a change in this work.
   await write("local.ts", "local\n");
   await git("add", "local.ts");
   await git("commit", "--message=local");
@@ -83,7 +83,7 @@ test("기준 커밋은 기본 브랜치(원격 추적)와 갈라진 지점이다
   await write("mine.ts", "mine\n");
   await git("add", "mine.ts");
   await git("commit", "--message=mine");
-  // 남이 기본 브랜치에 머지했고 주인이 fetch로 받았다.
+  // Someone else merged into the default branch and the owner got it with fetch.
   await git("switch", "--detach", forkPoint);
   await write("theirs.ts", "theirs\n");
   await git("add", "theirs.ts");
@@ -109,18 +109,18 @@ test("기준 커밋은 기본 브랜치(원격 추적)와 갈라진 지점이다
   );
 });
 
-test("gitignore된 파일과 .env, .env.*는 추적되더라도 올라가지 않는다. .env.example은 올라간다", async (t) => {
+test("gitignored files and .env, .env.* don't go up even if tracked. .env.example goes up", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
   const { git, folder } = world.repo;
   const write = writer(folder);
 
   await write(".gitignore", "secret.txt\nbuild/\n");
-  await write("secret.txt", "gitignore된 파일\n");
-  await write("build/out.js", "gitignore된 폴더\n");
+  await write("secret.txt", "gitignored file\n");
+  await write("build/out.js", "gitignored folder\n");
   await write(".env", "TOKEN=tracked\n");
   await git("add", ".env");
-  await git("commit", "--message=env"); // 추적되는 .env
+  await git("commit", "--message=env"); // the tracked .env
   await write(".env", "TOKEN=changed\n");
   await write(".env.local", "TOKEN=local\n");
   await write("config/.env.production", "TOKEN=prod\n");
@@ -145,19 +145,19 @@ test("gitignore된 파일과 .env, .env.*는 추적되더라도 올라가지 않
   );
 });
 
-test("바이너리와 크기 상한(파일 하나 512KiB, 합계 8MiB)을 넘는 파일은 경로만 올라간다", async (t) => {
+test("binaries and files over the size caps (512KiB per file, 8MiB total) go up as paths only", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
   const write = writer(world.repo.folder);
   const KiB = 1024;
 
   await write("image.png", new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01]));
-  await write("latin1.txt", new Uint8Array([0x63, 0x61, 0x66, 0xe9])); // UTF-8이 아니다
-  await write("utf16.txt", Buffer.from("hi", "utf16le")); // UTF-8로 읽히지만 NUL이 있다
-  await write("bom.txt", "﻿첫 줄\n"); // BOM도 그대로 온다
-  await write("edge.txt", "e".repeat(512 * KiB)); // 딱 상한: 내용이 온다
-  await write("huge.txt", "h".repeat(512 * KiB + 1)); // 상한을 넘는다
-  // 합계: edge.txt와 part-01~15까지가 8MiB 안이다. part-16, 17은 넘어 경로만, 그 뒤의 작은 small.txt는 들어간다.
+  await write("latin1.txt", new Uint8Array([0x63, 0x61, 0x66, 0xe9])); // not UTF-8
+  await write("utf16.txt", Buffer.from("hi", "utf16le")); // reads as UTF-8 but has NULs
+  await write("bom.txt", "﻿First line\n"); // the BOM comes through as is
+  await write("edge.txt", "e".repeat(512 * KiB)); // exactly the cap: content comes through
+  await write("huge.txt", "h".repeat(512 * KiB + 1)); // over the cap
+  // Total: edge.txt and part-01 to part-15 fit within 8MiB. part-16 and part-17 go over and are paths only, and the small small.txt after them gets in.
   const parts = Array.from({ length: 17 }, (_, i) => `part-${String(i + 1).padStart(2, "0")}.txt`);
   for (const part of parts) await write(part, "p".repeat(500 * KiB));
   await write("small.txt", "s\n");
@@ -165,7 +165,7 @@ test("바이너리와 크기 상한(파일 하나 512KiB, 합계 8MiB)을 넘는
   await eventually(async () => {
     const [work] = await world.works(world.owner);
     assert.deepEqual(work?.files, [
-      { path: "bom.txt", content: "﻿첫 줄\n" },
+      { path: "bom.txt", content: "﻿First line\n" },
       { path: "edge.txt", content: "e".repeat(512 * KiB) },
       { path: "huge.txt", omitted: "too_large" },
       { path: "image.png", omitted: "binary" },
@@ -179,8 +179,8 @@ test("바이너리와 크기 상한(파일 하나 512KiB, 합계 8MiB)을 넘는
   });
 });
 
-// 관측 주기는 러너의 기본값(3초) 그대로다. 단계마다 5초 안에 따라와야 하고, 단계가 다섯이라 시간 제한을 늘린다.
-test("파일을 고치고, 커밋하고, 브랜치를 바꾸면 몇 초 안에 서버의 관측이 따라온다", {
+// The observation interval is the runner's default (3s). Each step must follow within 5s, and there are five steps, so the time limit is extended.
+test("when you edit a file, commit, or switch branches, the server's observation follows within a few seconds", {
   timeout: 60_000,
 }, async (t) => {
   const world = await startWorld();
@@ -198,28 +198,28 @@ test("파일을 고치고, 커밋하고, 브랜치를 바꾸면 몇 초 안에 �
   await write("a.ts", "2\n");
   await follows({ feat: [{ path: "a.ts", content: "2\n" }] });
 
-  // 커밋을 되돌리는 커밋을 하면 바뀐 것이 없어진다.
+  // Making a commit that reverts a commit leaves no changes.
   await git("add", "a.ts");
   await git("commit", "--message=a");
   await git("revert", "--no-edit", "HEAD");
   await follows({ feat: [] });
 
-  // 브랜치를 바꾸면 그 브랜치가 작업이 된다.
+  // Switching branches makes that branch the work.
   await git("switch", "--create", "other", "origin/main");
   await write("b.ts", "b\n");
   await follows({ other: [{ path: "b.ts", content: "b\n" }] });
 
-  // 브랜치가 아니면(detached HEAD) 작업이 없다.
+  // If it isn't a branch (detached HEAD), there is no work.
   await git("switch", "--detach");
   await follows({});
 });
 
-test("러너는 작업 폴더의 어떤 파일도 바꾸지 않는다", async (t) => {
+test("the runner doesn't change any file in the working folder", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
   world.github.grant("alice");
   const alice = await world.login("alice");
-  const desk = await tempRepo(); // alice가 레포를 받은 폴더. 러너가 아직 본 적이 없다.
+  const desk = await tempRepo(); // the folder where alice cloned the repo. The runner hasn't seen it yet.
   t.after(desk.remove);
   const { git, folder } = desk;
   const write = writer(folder);
@@ -230,13 +230,16 @@ test("러너는 작업 폴더의 어떤 파일도 바꾸지 않는다", async (t
   await write("staged.ts", "staged\n");
   await git("add", "staged.ts");
   await write("untracked.ts", "untracked\n");
-  // 내용은 그대로이고 시각만 바뀐 파일. git status라면 덤으로 인덱스를 고쳐 쓰는 상태다.
+  // A file whose content is the same and only the time changed. With git status, that's a state where the index gets rewritten as a bonus.
   const later = new Date(Date.now() + 60_000);
   await utimes(join(folder, "tracked.ts"), later, later);
 
-  /** 폴더 안 모든 파일(.git 포함)의 경로, 내용, 수정 시각. 러너가 남기는 실행 기록 자리(.git/omagari)는 뺀다. */
+  /** Path, content, and modified time of every file in the folder (.git included). Leaves out the run log spot the runner keeps (.git/omagari). */
   const snapshot = async () => {
-    const entries = await readdir(folder, { recursive: true, withFileTypes: true });
+    const entries = await readdir(folder, {
+      recursive: true,
+      withFileTypes: true,
+    });
     const files = entries
       .filter((entry) => entry.isFile())
       .map((entry) => join(entry.parentPath, entry.name))
@@ -266,16 +269,16 @@ test("러너는 작업 폴더의 어떤 파일도 바꾸지 않는다", async (t
     const [work] = (await world.works(alice)).filter((w) => w.login === "alice");
     assert.equal(work?.files.length, 3);
   });
-  await sleep(200); // 관측이 여러 번 돈다
+  await sleep(200); // observation runs several times
   await runner.stop();
   assert.deepEqual(await snapshot(), before);
 });
 
-test("러너를 켤 때 로그인하기 전에 무엇이 서버로 나가는지 주인에게 알린다", async (t) => {
+test("when turning on the runner, it tells the owner what goes to the server before logging in", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
   world.github.grant("alice");
-  const desk = await tempRepo(); // alice가 레포를 받은 폴더
+  const desk = await tempRepo(); // the folder where alice cloned the repo
   t.after(desk.remove);
   await writer(desk.folder)("hello.ts", "hello\n");
 
@@ -321,7 +324,7 @@ test("러너를 켤 때 로그인하기 전에 무엇이 서버로 나가는지 
   );
 });
 
-test("Git이 지웠다고 보는 경로는 디스크를 다시 읽지 않는다: 추적을 끊고 gitignore한 파일도, 링크로 바뀐 폴더 너머의 파일도 지운 것으로만 올라간다", async (t) => {
+test("a path Git sees as deleted isn't read from disk again: both a file that was untracked and gitignored and a file beyond a folder turned into a link go up only as deleted", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
   const { git, folder } = world.repo;
@@ -329,7 +332,7 @@ test("Git이 지웠다고 보는 경로는 디스크를 다시 읽지 않는다:
   world.github.grant("alice");
   const alice = await world.login("alice");
 
-  // 기본 브랜치에 있던 두 파일
+  // Two files that were on the default branch
   await write("config/local.json", "{}\n");
   await write("docs/notes.md", "notes\n");
   await git("add", ".");
@@ -337,11 +340,11 @@ test("Git이 지웠다고 보는 경로는 디스크를 다시 읽지 않는다:
   await git("update-ref", "refs/remotes/origin/main", "HEAD");
   await git("switch", "--create", "feat");
 
-  // 추적을 끊고 gitignore한 뒤 로컬 판에 비밀을 둔다.
+  // After untracking and gitignoring, put a secret in the local version.
   await git("rm", "--cached", "--quiet", "config/local.json");
   await write(".gitignore", "config/local.json\n");
   await write("config/local.json", "IGNORED-SECRET\n");
-  // 추적하던 폴더를 레포 밖을 가리키는 링크로 바꾼다.
+  // Change a folder that was tracked into a link pointing outside the repo.
   const outside = await realpath(await mkdtemp(join(tmpdir(), "omagari-outside-")));
   t.after(() => rm(outside, { recursive: true, force: true }));
   await writer(outside)("notes.md", "OUTSIDE-REPO\n");

@@ -1,10 +1,10 @@
-// 가짜 Codex CLI. 테스트가 PATH 맨 앞에 두어 러너의 실제 `codex` 실행기가 이것을 부른다(harness의 `fakeCodex`).
-// 문서의 JSONL(Codex 비대화 모드)을 낸다: `thread.started`(`thread_id`), `item.completed`(`agent_message`의 `text`), `turn.completed`.
-// 받은 인자, 표준 입력, 작업 폴더를 `FAKE_CODEX_CALLS`(JSONL)에 한 줄씩 적는다.
-// 답은 받은 글의 마지막 줄 앞에 "Codex: "를 붙인 것이다. 마지막 줄이 "실패"면 `turn.failed`를 내고 1로 끝난다.
-// `codex login status`는 `$CODEX_HOME/auth.json`이 있을 때만 로그인한 것이다(실제 codex처럼 없으면 1로 끝난다).
-// `codex mcp list --json`은 `FAKE_CODEX_MCP`(쉼표로 이은 이름)의 서버를 켜진 것으로 낸다.
-// `codex app-server`는 JSON-RPC로 `initialize`와 `model/list`에 답한다(숨긴 모델 하나와 기본 모델 하나가 섞여 있다).
+// Fake Codex CLI. Tests put it first on PATH so the runner's real `codex` executor calls it (the harness's `fakeCodex`).
+// Prints the documented JSONL (Codex non-interactive mode): `thread.started` (`thread_id`), `item.completed` (`text` of `agent_message`), `turn.completed`.
+// It appends the args, stdin, and working folder to `FAKE_CODEX_CALLS` (JSONL), one line per call.
+// The answer is the last line of the input with "Codex: " in front. If the last line is "fail", it prints `turn.failed` and exits with 1.
+// `codex login status` counts as logged in only when `$CODEX_HOME/auth.json` exists (like the real codex, it exits with 1 if not).
+// `codex mcp list --json` reports the servers in `FAKE_CODEX_MCP` (comma-separated names) as enabled.
+// `codex app-server` answers `initialize` and `model/list` over JSON-RPC (one hidden model and one default model are mixed in).
 import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -22,7 +22,7 @@ if (args[0] === "login" && args[1] === "status") {
     process.exitCode = 1;
   }
 } else if (args.join(" ") === "mcp list --json") {
-  // 주인이 설정한 MCP 서버. 테스트가 `FAKE_CODEX_MCP`에 이름을 쉼표로 이어 준다.
+  // MCP servers the owner set up. Tests pass the names to `FAKE_CODEX_MCP` joined with commas.
   const names = process.env.FAKE_CODEX_MCP?.split(",").filter(Boolean) ?? [];
   console.log(JSON.stringify(names.map((name) => ({ name, enabled: true }))));
 } else if (args[0] === "app-server") {
@@ -65,12 +65,12 @@ if (args[0] === "login" && args[1] === "status") {
   const last = input.trimEnd().split("\n").at(-1) ?? "";
   say({ type: "thread.started", thread_id: thread });
   say({ type: "turn.started" });
-  if (last === "실패") {
+  if (last === "fail") {
     say({ type: "error", message: "Reconnecting... 1/5" });
-    say({ type: "turn.failed", error: { message: "사용량 한도에 걸렸다" } });
+    say({ type: "turn.failed", error: { message: "usage limit reached" } });
     process.exitCode = 1;
   } else {
-    say({ type: "item.completed", item: { id: "item_0", type: "reasoning", text: "생각" } });
+    say({ type: "item.completed", item: { id: "item_0", type: "reasoning", text: "thinking" } });
     say({
       type: "item.completed",
       item: { id: "item_1", type: "agent_message", text: `Codex: ${last}` },
@@ -81,6 +81,6 @@ if (args[0] === "login" && args[1] === "status") {
     });
   }
 } else {
-  console.error(`가짜 codex가 모르는 명령이다: ${args.join(" ")}`);
+  console.error(`fake codex doesn't know this command: ${args.join(" ")}`);
   process.exitCode = 2;
 }

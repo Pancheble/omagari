@@ -7,7 +7,7 @@ import { dependencyProblem, NO_SECCOMP } from "@omagari/runner";
 import { CHECK_LIMITS, checkWork, osSandbox } from "../packages/runner/src/check.ts";
 import { fakeSandbox, startWorld, tempRepo, writer } from "./harness.ts";
 
-/** 기본 브랜치(origin/main)에 파일들을 커밋해 머지된 것처럼 둔다. 지금 브랜치가 main이어야 한다. */
+/** Commits the files to the default branch (origin/main) so they look merged. The current branch must be main. */
 async function merge(
   repo: { folder: string; git: (...args: string[]) => Promise<string> },
   files: Record<string, string>,
@@ -21,7 +21,7 @@ async function merge(
 
 const config = (value: object) => `${JSON.stringify(value)}\n`;
 
-test("omagari runner check가 내 작업을 커밋하지 않은 변경까지 임시 워크트리에 옮겨 기본 브랜치의 검사 명령을 샌드박스 안에서 돌리고, 실행 기록에 남긴다", async (t) => {
+test("omagari runner check carries my work, even uncommitted changes, into a temporary worktree, runs the default branch's check command inside the sandbox, and leaves it in the run log", async (t) => {
   const fake = fakeSandbox();
   const world = await startWorld({ sandbox: fake.sandbox });
   t.after(world.stop);
@@ -37,18 +37,18 @@ test("omagari runner check가 내 작업을 커밋하지 않은 변경까지 임
   await merge(repo, {
     ".omagari.json": config({ check: "sh check.sh" }),
     "check.sh": "test ! -e gone.txt\n",
-    "gone.txt": "지울 파일\n",
+    "gone.txt": "file to delete\n",
   });
   await repo.git("switch", "--create", "feat");
-  // 내 브랜치와 작업 폴더에서 설정 파일을 바꿔도 기본 브랜치의 명령이 돈다.
+  // Even if I change the config file on my branch and in my working folder, the default branch's command runs.
   await write(".omagari.json", config({ check: "exit 0" }));
-  await repo.git("commit", "--all", "--message=내 브랜치의 설정");
+  await repo.git("commit", "--all", "--message=my branch config");
   await write(".omagari.json", config({ check: "true" }));
 
-  // 커밋하지 않은 지움과, 추적하지 않는 새 파일이 옮겨진다.
+  // An uncommitted deletion and an untracked new file are carried over.
   await rm(join(repo.folder, "gone.txt"));
-  await write("check.sh", 'test ! -e gone.txt && test "$(cat new.txt)" = "새 파일"\n');
-  await write("new.txt", "새 파일\n");
+  await write("check.sh", 'test ! -e gone.txt && test "$(cat new.txt)" = "new file"\n');
+  await write("new.txt", "new file\n");
   const passed = await world.cli("runner", "check");
   assert.equal(passed.code, 0, passed.stderr);
   assert.match(
@@ -58,16 +58,16 @@ test("omagari runner check가 내 작업을 커밋하지 않은 변경까지 임
   assert.match(passed.stdout, /Verdict: Pass \(\d+\.\ds\)/);
   assert.doesNotMatch(passed.stdout, /End of output/);
 
-  // 샌드박스에 넘긴 것: 임시 워크트리에서, 바깥 네트워크를 막고, 쓰기는 임시 워크트리와 임시 폴더만, 홈 폴더 읽기를 막는다.
+  // What was handed to the sandbox: in the temporary worktree, outside network blocked, writes only to the temporary worktree and temporary folder, reading the home folder blocked.
   assert.equal(fake.calls.length, 1);
   const [call] = fake.calls;
   assert.ok(call);
   assert.notEqual(call.folder, repo.folder);
   const temp = call.env.TMPDIR;
   assert.ok(temp);
-  // sandbox-runtime이 감쌀 때 TMPDIR을 /tmp/claude로 덮으므로(#146), 명령 앞에서 러너가 준 임시 폴더로 되돌린다.
+  // sandbox-runtime overrides TMPDIR to /tmp/claude when it wraps, so before the command the runner's temporary folder is restored.
   assert.equal(call.command, `export TMPDIR='${temp}'; sh check.sh`);
-  // 유닉스 소켓은 임시 워크트리와 임시 폴더 아래에서만 열고 붙는다(ADR-0037). 임시 폴더는 짧아, 그 안의 소켓 경로가 macOS 104바이트 상한을 넘지 않는다.
+  // Unix sockets are opened and attached only under the temporary worktree and temporary folder (ADR-0037). The temporary folder is short, so socket paths in it don't exceed macOS's 104-byte limit.
   assert.deepEqual(call.policy.network, {
     allowedDomains: [],
     deniedDomains: [],
@@ -78,30 +78,30 @@ test("omagari runner check가 내 작업을 커밋하지 않은 변경까지 임
   assert.deepEqual(call.policy.filesystem.allowWrite?.slice(0, 2), [call.folder, temp]);
   assert.deepEqual(call.policy.filesystem.denyRead, [homedir()]);
   assert.deepEqual(call.policy.filesystem.allowRead?.slice(0, 2), [call.folder, temp]);
-  // 환경 변수는 정해 둔 것만 넘어간다. 토큰과 키가 든 변수는 넘어가지 않는다.
+  // Only chosen environment variables are passed on. Variables holding tokens and keys are not.
   assert.equal(call.env.PATH, process.env.PATH);
   assert.equal(call.env.HOME, temp);
   for (const [key, value] of Object.entries(call.env)) {
     assert.match(key, /^(PATH|LANG|LANGUAGE|TERM|TZ|USER|LOGNAME|SHELL|HOME|TMPDIR|LC_\w+)$/);
     assert.doesNotMatch(value, /secret/);
   }
-  // 임시 워크트리는 레포의 Git 폴더 아래에 있어, 내 폴더의 워크트리 목록에 나타나지 않는다.
+  // The temporary worktree is under the repo's Git folder, so it doesn't show up in my folder's worktree list.
   assert.ok(call.folder.startsWith(await realpath(join(repo.folder, ".git"))));
   assert.equal((await repo.git("worktree", "list")).split("\n").length, 1);
   assert.equal(
     await repo.git("status", "--porcelain"),
-    "M .omagari.json\n M check.sh\n D gone.txt\n?? new.txt", // 앞의 빈칸 하나는 잘린다
+    "M .omagari.json\n M check.sh\n D gone.txt\n?? new.txt", // the one leading space is trimmed
   );
 
-  // 깨지면 종료 코드대로 깨짐이고, 출력의 끝부분(끝 25줄)을 보인다.
-  await write("check.sh", "seq 1 40 >&2\necho 실패한 테스트 >&2\nexit 3\n");
+  // If it breaks, it is Broken by exit code, and the tail of the output (last 25 lines) is shown.
+  await write("check.sh", "seq 1 40 >&2\necho failing test >&2\nexit 3\n");
   const broken = await world.cli("runner", "check");
   assert.equal(broken.code, 1);
   assert.match(broken.stdout, /Verdict: Broken \(\d+\.\ds\)\nEnd of output:\n {2}17\n/);
-  assert.match(broken.stdout, / {2}40\n {2}실패한 테스트\n/);
+  assert.match(broken.stdout, / {2}40\n {2}failing test\n/);
   assert.doesNotMatch(broken.stdout, / {2}16\n/);
 
-  // 돌린 것이 실행 기록에 남는다: 검사 명령, 판정, 걸린 시간.
+  // What ran is left in the run log: the check command, the verdict, the time taken.
   const log = await world.cli("runner", "log");
   const lines = log.stdout.trimEnd().split("\n");
   assert.equal(lines.length, 2);
@@ -115,7 +115,7 @@ test("omagari runner check가 내 작업을 커밋하지 않은 변경까지 임
   );
 });
 
-test("설정 파일이 없거나 읽지 못하거나 샌드박스를 쓸 수 없으면 돌리지 않고 까닭과 고치는 법을 보인다", async (t) => {
+test("when the config file is missing, unreadable, or the sandbox can't be used, it doesn't run and shows why and how to fix it", async (t) => {
   const fake = fakeSandbox();
   const world = await startWorld({ sandbox: fake.sandbox });
   t.after(world.stop);
@@ -128,7 +128,7 @@ test("설정 파일이 없거나 읽지 못하거나 샌드박스를 쓸 수 없
     none.stdout,
     /The default branch \(origin\/main\) has no \.omagari\.json\. How to set it: /,
   );
-  // 작업 폴더에만 있는 설정은 읽지 않는다.
+  // A config that exists only in the working folder is not read.
   await writer(repo.folder)(".omagari.json", config({ check: "true" }));
   assert.match((await world.cli("runner", "check")).stdout, /has no \.omagari\.json/);
   await rm(join(repo.folder, ".omagari.json"));
@@ -142,19 +142,19 @@ test("설정 파일이 없거나 읽지 못하거나 샌드박스를 쓸 수 없
   );
 
   await merge(repo, { ".omagari.json": config({ check: "true" }) });
-  fake.unavailable = "샌드박스 도구가 없다: bubblewrap. 까는 법: sudo apt install bubblewrap";
+  fake.unavailable = "Sandbox tool missing: bubblewrap. To install: sudo apt install bubblewrap";
   const unsandboxed = await world.cli("runner", "check");
   assert.equal(unsandboxed.code, 1);
   assert.match(
     unsandboxed.stdout,
-    /Verdict: Couldn't run \(\d+\.\ds\)\n {2}샌드박스 도구가 없다: bubblewrap\. 까는 법: /,
+    /Verdict: Couldn't run \(\d+\.\ds\)\n {2}Sandbox tool missing: bubblewrap\. To install: /,
   );
-  // 가두지 않고 돌리는 길이 없다.
+  // There is no way to run without confining it.
   assert.equal(fake.calls.length, 0);
   assert.equal((await repo.git("worktree", "list")).split("\n").length, 1);
 });
 
-test("준비 명령은 검사 명령 앞에 돌고, 실패하거나 상한을 넘으면 끊고 돌리지 못함이다", async (t) => {
+test("the setup command runs before the check command, and if it fails or goes over the limit it is cut off and is Couldn't run", async (t) => {
   const fake = fakeSandbox();
   const limitMs = 2000;
   const world = await startWorld({
@@ -163,7 +163,7 @@ test("준비 명령은 검사 명령 앞에 돌고, 실패하거나 상한을 �
   });
   t.after(world.stop);
   const { repo } = world;
-  // TMPDIR 되돌리기 앞가지(#146)는 떼고 본다. 그 앞가지는 첫 테스트가 따로 확인한다.
+  // Strip the TMPDIR-restore prefix (#146) before looking. That prefix is checked separately in the first test.
   const commands = () =>
     fake.calls.splice(0).map((call) => call.command.replace(/^export TMPDIR='[^']*'; /, ""));
 
@@ -177,21 +177,24 @@ test("준비 명령은 검사 명령 앞에 돌고, 실패하거나 상한을 �
   assert.equal(prepared.code, 0, prepared.stdout);
   assert.match(prepared.stdout, /Setup command: touch prepared\nVerdict: Pass/);
   assert.deepEqual(commands(), ["touch prepared", "test -f prepared"]);
-  // 준비 명령이 임시 워크트리에 만든 것은 내 폴더에 남지 않는다.
+  // What the setup command made in the temporary worktree doesn't stay in my folder.
   await assert.rejects(access(join(repo.folder, "prepared")));
 
   await merge(repo, {
-    ".omagari.json": config({ check: "true", setup: "echo 준비 실패; exit 2" }),
+    ".omagari.json": config({
+      check: "true",
+      setup: "echo setup failed; exit 2",
+    }),
   });
   const failed = await world.cli("runner", "check");
   assert.equal(failed.code, 1);
   assert.match(
     failed.stdout,
-    /Verdict: Couldn't run \(.+\)\n {2}The setup command failed \(exit code 2\)\nEnd of output:\n {2}준비 실패/,
+    /Verdict: Couldn't run \(.+\)\n {2}The setup command failed \(exit code 2\)\nEnd of output:\n {2}setup failed/,
   );
-  assert.deepEqual(commands(), ["echo 준비 실패; exit 2"]);
+  assert.deepEqual(commands(), ["echo setup failed; exit 2"]);
 
-  // 끊는 것은 명령이 띄운 것까지다. 상한을 넘긴 만큼 기다리지 않는다.
+  // What gets cut is up to what the command started. It doesn't wait out the amount past the limit.
   await merge(repo, {
     ".omagari.json": config({ check: "true", setup: "sleep 30 & wait" }),
   });
@@ -203,17 +206,17 @@ test("준비 명령은 검사 명령 앞에 돌고, 실패하거나 상한을 �
   assert.ok(Number(/\((\d+\.\d)s\)/.exec(slowSetup.stdout)?.[1]) < 10);
 
   await merge(repo, {
-    ".omagari.json": config({ check: "echo 시작; sleep 30" }),
+    ".omagari.json": config({ check: "echo start; sleep 30" }),
   });
   const slow = await world.cli("runner", "check");
   assert.equal(slow.code, 1);
   assert.match(
     slow.stdout,
-    /Verdict: Couldn't run \(.+\)\n {2}The check command was cut off at the 2 s limit\. A cut-off run doesn't count as a pass\nEnd of output:\n {2}시작/,
+    /Verdict: Couldn't run \(.+\)\n {2}The check command was cut off at the 2 s limit\. A cut-off run doesn't count as a pass\nEnd of output:\n {2}start/,
   );
 
   await merge(repo, {
-    ".omagari.json": config({ check: "yes 출력 | head -c 100000; true" }),
+    ".omagari.json": config({ check: "yes output | head -c 100000; true" }),
   });
   const loud = await world.cli("runner", "check");
   assert.equal(loud.code, 1);
@@ -229,17 +232,17 @@ test("준비 명령은 검사 명령 앞에 돌고, 실패하거나 상한을 �
   );
 });
 
-// 러너를 CLI로 다섯 번 켜고 끈다.
-test("러너를 켤 때 검사 명령과 샌드박스 안에서 돈다는 것을 알리고, --merge-check로 끄고 켠 것이 그 레포에 남는다", {
+// Start and stop the runner five times with the CLI.
+test("when the runner starts it announces that the check command runs inside the sandbox, and what --merge-check turned off or on stays in that repo", {
   timeout: 60_000,
 }, async (t) => {
   const world = await startWorld();
   t.after(world.stop);
   world.github.grant("alice");
-  const desk = await tempRepo(); // alice가 레포를 받은 폴더
+  const desk = await tempRepo(); // a folder where alice got the repo
   t.after(desk.remove);
 
-  /** alice의 러너를 `omagari runner <args>`로 켜고, 켤 때의 알림까지 나오면 끈다. 처음이면 기기 인증으로 로그인한다. */
+  /** Starts alice's runner with `omagari runner <args>` and stops it once the start notice has appeared. If it is the first time, it logs in with device auth. */
   const notice = async (...args: string[]) => {
     const runner = world.launchCliIn(desk.folder, "runner", ...args);
     t.after(() => runner.stop("SIGKILL"));
@@ -270,13 +273,13 @@ test("러너를 켤 때 검사 명령과 샌드박스 안에서 돈다는 것을
   );
   assert.match(on, /To turn it off: omagari runner --merge-check off\./);
 
-  // 명령이 바뀐 뒤 다시 켜면 바뀐 명령을 다시 알린다.
+  // If it is started again after the command changed, it announces the changed command again.
   await merge(desk, { ".omagari.json": config({ check: "npm run check" }) });
   const changed = await notice();
   assert.match(changed, /\n {2}Check command: npm run check\n/);
   assert.doesNotMatch(changed, /Setup command/);
 
-  // 끈 것은 다시 켜도 남는다.
+  // What was turned off stays even when started again.
   assert.match(
     await notice("--merge-check", "off"),
     /^Merge run \(off\): this machine doesn't run check commands\. To turn it on: omagari runner --merge-check on\./,
@@ -292,35 +295,35 @@ test("러너를 켤 때 검사 명령과 샌드박스 안에서 돈다는 것을
   assert.match(wrong.stderr, /Merge run must be one of on, off: maybe/);
 });
 
-test("임시 워크트리는 레포의 Git 폴더 아래에서 다시 쓰이고, 내 폴더의 의존성이 이어지되 워크스페이스 패키지는 임시 워크트리 안을 가리킨다", async (t) => {
+test("the temporary worktree is reused under the repo's Git folder, and my folder's dependencies are linked, but workspace packages point inside the temporary worktree", async (t) => {
   const fake = fakeSandbox();
   const world = await startWorld({ sandbox: fake.sandbox });
   t.after(world.stop);
   const { repo } = world;
   const write = writer(repo.folder);
 
-  // 워크스페이스 패키지 둘과, 설치된 의존성: 최상위와 한 단계 아래의 node_modules, 워크스페이스 링크, 범위 폴더.
+  // Two workspace packages, and installed dependencies: node_modules at the top and one level down, a workspace link, a scope folder.
   await merge(repo, {
     ".gitignore": "node_modules/\ndist/\n",
     ".omagari.json": config({ check: "sh check.sh" }),
     "check.sh": [
-      'test "$(cat node_modules/dep/index.txt)" = "설치된 것"',
-      'test "$(cat packages/app/node_modules/inner/index.txt)" = "안쪽 것"',
-      "echo 임시에서만 > packages/lib/code.txt",
-      'test "$(cat node_modules/@ws/lib/code.txt)" = "임시에서만"',
+      'test "$(cat node_modules/dep/index.txt)" = "installed one"',
+      'test "$(cat packages/app/node_modules/inner/index.txt)" = "inner one"',
+      "echo temp only > packages/lib/code.txt",
+      'test "$(cat node_modules/@ws/lib/code.txt)" = "temp only"',
       'test "$(git status --porcelain)" = " M packages/lib/code.txt"',
       "mkdir -p dist && echo built > dist/out.txt",
-      "echo 새 파일 > leftover.txt",
+      "echo new file > leftover.txt",
       "",
     ].join("\n"),
-    "packages/lib/code.txt": "합친 코드\n",
+    "packages/lib/code.txt": "merged code\n",
     "packages/app/package.json": "{}\n",
   });
-  await write("packages/lib/code.txt", "내 작업의 코드\n");
-  await write("node_modules/dep/index.txt", "설치된 것");
-  await write("packages/app/node_modules/inner/index.txt", "안쪽 것");
+  await write("packages/lib/code.txt", "my work's code\n");
+  await write("node_modules/dep/index.txt", "installed one");
+  await write("packages/app/node_modules/inner/index.txt", "inner one");
   await mkdir(join(repo.folder, "node_modules/@ws"), { recursive: true });
-  // 워크스페이스 링크는 npm처럼 상대 링크다. 이 링크는 내 폴더의 packages/lib를 가리킨다(여기서는 내 작업의 코드가 든 같은 파일을 읽는다).
+  // A workspace link is a relative link, like npm. This link points to my folder's packages/lib (here it reads the same file that holds my work's code).
   await symlink("../../packages/lib", join(repo.folder, "node_modules/@ws/lib"));
   const before = await repo.git("status", "--porcelain");
 
@@ -329,7 +332,7 @@ test("임시 워크트리는 레포의 Git 폴더 아래에서 다시 쓰이고,
   const second = await world.cli("runner", "check");
   assert.match(second.stdout, /Verdict: Pass/, second.stdout);
 
-  // 레포의 Git 폴더 아래에서 돌고, 돌림마다 자리를 옮긴다(#150). 끝나면 쉬는 자리로 돌아간다. 내 폴더의 git status와 워크트리 목록에는 나타나지 않는다.
+  // It runs under the repo's Git folder, and moves its place each run (#150). When it ends it goes back to the resting place. It doesn't show in my folder's git status or worktree list.
   const [one, two] = fake.calls;
   assert.ok(one && two);
   assert.notEqual(one.folder, two.folder);
@@ -344,30 +347,30 @@ test("임시 워크트리는 레포의 Git 폴더 아래에서 다시 쓰이고,
   assert.equal(await repo.git("status", "--porcelain"), before);
   assert.equal((await repo.git("worktree", "list")).split("\n").length, 1);
 
-  // 샌드박스가 읽을 수 있는 것: 개체 폴더와 이은 의존성 폴더뿐이다. 레포의 Git 폴더(원격 URL의 토큰이 든 config)는 열지 않는다.
+  // What the sandbox can read: only the object folder and the linked dependency folders. The repo's Git folder (the config that holds the remote URL's token) is not opened.
   const read = one.policy.filesystem.allowRead ?? [];
   assert.ok(read.includes(join(gitDir, "objects")));
   assert.ok(read.includes(await realpath(join(repo.folder, "node_modules"))));
   assert.ok(!read.includes(gitDir));
 
-  // 돌린 뒤: 추적하는 파일은 되돌려지고, 새 파일과 이은 링크는 없어지고, 무시되는 빌드 산출물은 남는다.
-  assert.equal(await readFile(join(rest, "packages/lib/code.txt"), "utf8"), "내 작업의 코드\n");
+  // After running: tracked files are restored, new files and linked links are gone, and ignored build outputs stay.
+  assert.equal(await readFile(join(rest, "packages/lib/code.txt"), "utf8"), "my work's code\n");
   await assert.rejects(access(join(rest, "leftover.txt")));
   await assert.rejects(access(join(rest, "node_modules")));
   assert.equal(await readFile(join(rest, "dist/out.txt"), "utf8"), "built\n");
-  // 내 폴더는 그대로다(명령이 쓴 것은 임시 워크트리에만 간다).
+  // My folder is unchanged (what the command wrote goes only to the temporary worktree).
   assert.equal(
     await readFile(join(repo.folder, "packages/lib/code.txt"), "utf8"),
-    "내 작업의 코드\n",
+    "my work's code\n",
   );
 });
 
-test("검사 명령이 임시 워크트리의 Git 설정과 훅을 바꿔 둬도 러너가 샌드박스 밖에서 부르는 git은 그것을 돌리지 않는다(#144)", async (t) => {
+test("even if the check command changes the temporary worktree's Git config and hooks, the git the runner calls outside the sandbox doesn't run them (#144)", async (t) => {
   const fake = fakeSandbox();
   const world = await startWorld({ sandbox: fake.sandbox });
   t.after(world.stop);
   const { repo } = world;
-  // 샌드박스 밖에서 무언가 돌면 이 폴더에 표지가 생긴다. 가짜 샌드박스는 가두지 않으므로, 검사 명령은 실제 샌드박스가 여는 곳(임시 워크트리와 그 안의 git)에만 쓴다.
+  // If something runs outside the sandbox, a marker appears in this folder. The fake sandbox doesn't confine, so the check command writes only where the real sandbox opens (the temporary worktree and the git inside it).
   const marks = await mkdtemp(join(tmpdir(), "omagari-escape-"));
   t.after(() => rm(marks, { recursive: true, force: true }));
   const touch = (name: string) => `touch '${join(marks, name)}'`;
@@ -390,32 +393,32 @@ test("검사 명령이 임시 워크트리의 Git 설정과 훅을 바꿔 둬도
     ].join("\n"),
   });
 
-  // 두 번 돌린다. 첫 번째 뒤의 되돌리기와 두 번째의 마련이 모두 샌드박스 밖의 git이다.
+  // It runs twice. The restore after the first and the preparation of the second are both git outside the sandbox.
   for (let round = 0; round < 2; round++) {
     const ran = await world.cli("runner", "check");
     assert.match(ran.stdout, /Verdict: Pass/, ran.stdout);
   }
   assert.deepEqual(await readdir(marks), []);
-  // 샌드박스 안의 git이 쓰는 Git 폴더는 쓸 수 있게 열린다.
+  // The Git folder that the git inside the sandbox uses is opened for writing.
   const [call] = fake.calls;
   assert.ok(call);
   assert.equal(call.policy.filesystem.allowWrite?.length, 3);
 });
 
-test("검사가 끝난 뒤 남은 프로세스나 검사 명령이 임시 워크트리의 의존성 자리를 바깥을 가리키는 링크로 바꿔 둬도, 러너는 샌드박스 밖에 쓰거나 지우지 않는다(#150)", async (t) => {
+test("even if a leftover process after the check, or the check command, swaps the temporary worktree's dependency places for links that point outside, the runner doesn't write or delete outside the sandbox (#150)", async (t) => {
   const fake = fakeSandbox();
   const world = await startWorld({ sandbox: fake.sandbox });
   t.after(world.stop);
   const { repo } = world;
   const write = writer(repo.folder);
-  // 바깥: 남은 프로세스가 node_modules를 이쪽으로 돌려 두는 빈 폴더와, 검사 명령이 packages/app을 이쪽으로 돌려 두는 폴더.
+  // Outside: an empty folder where the leftover process turns node_modules, and a folder where the check command turns packages/app.
   const outside = await mkdtemp(join(tmpdir(), "omagari-outside-"));
   t.after(() => rm(outside, { recursive: true, force: true }));
   await mkdir(join(outside, "empty"));
   await mkdir(join(outside, "app/node_modules/keep"), { recursive: true });
   const done = join(outside, "leftover-done");
-  // 남은 프로세스는 프로세스 그룹을 벗어나(detached) 검사가 끝나기를 기다렸다가, 받은 임시 워크트리 경로에 링크를 건다.
-  // 실제 샌드박스처럼 받은 경로 안에만 쓴다. 다 하면(실패해도) 표지를 남긴다(테스트가 기다리는 데만 쓴다).
+  // The leftover process leaves its process group (detached), waits for the check to end, and then puts a link at the temporary worktree path it was handed.
+  // Like the real sandbox, it writes only inside the path it was handed. When done (even on failure) it leaves a marker (used only for the test to wait on).
   const leftover = [
     'W="$PWD"',
     `for i in $(seq 1 400); do [ -e "$W/node_modules" ] || break; sleep 0.05; done`,
@@ -423,7 +426,7 @@ test("검사가 끝난 뒤 남은 프로세스나 검사 명령이 임시 워크
   ].join("; ");
   const spawnLeftover = `require("node:child_process").spawn("sh", ["-c", process.argv[1]], { detached: true, stdio: "ignore" }).unref()`;
   await merge(repo, {
-    // 끝에 /가 없으면 링크도 무시되어 되돌리기(git clean)에서 지워지지 않는다.
+    // Without a trailing /, the link is also ignored, so the restore (git clean) doesn't remove it.
     ".gitignore": "node_modules\n",
     ".omagari.json": config({ check: "sh check.sh" }),
     "check.sh": [
@@ -433,8 +436,8 @@ test("검사가 끝난 뒤 남은 프로세스나 검사 명령이 임시 워크
     ].join("\n"),
     "packages/app/package.json": "{}\n",
   });
-  await write("node_modules/dep/index.txt", "설치된 것");
-  await write("packages/app/node_modules/inner/index.txt", "안쪽 것");
+  await write("node_modules/dep/index.txt", "installed one");
+  await write("packages/app/node_modules/inner/index.txt", "inner one");
 
   const first = await world.cli("runner", "check");
   assert.match(first.stdout, /Verdict: Pass/, first.stdout);
@@ -452,7 +455,7 @@ test("검사가 끝난 뒤 남은 프로세스나 검사 명령이 임시 워크
   const second = await world.cli("runner", "check");
   assert.match(second.stdout, /Verdict: Pass/, second.stdout);
 
-  // 남은 프로세스가 돌려 둔 링크를 따라 바깥에 의존성을 잇지 않았고, packages/app 링크를 따라 바깥의 node_modules를 지우지 않았다.
+  // The leftover process didn't link dependencies outside by following the link it turned, and didn't delete the outside node_modules by following the packages/app link.
   assert.deepEqual(await readdir(join(outside, "app/node_modules")), ["keep"]);
   assert.deepEqual(await readdir(join(outside, "empty")), []);
 });
@@ -464,7 +467,7 @@ const WSL_MOUNTS = [
   "drivers /usr/lib/wsl/drivers 9p ro 0 0",
 ].join("\n");
 
-test("WSL2의 마운트 목록에서 Windows 드라이브가 걸린 자리를 읽지 못하게 막고, 아닌 기기의 막기는 바꾸지 않는다", async (t) => {
+test("it blocks reading the places where Windows drives are mounted in WSL2's mount list, and doesn't change the blocking on other machines", async (t) => {
   const repo = await tempRepo();
   t.after(repo.remove);
   await merge(repo, { ".omagari.json": config({ check: "true" }) });
@@ -482,7 +485,7 @@ test("WSL2의 마운트 목록에서 Windows 드라이브가 걸린 자리를 �
   };
   const wsl = await policyOf(WSL_MOUNTS);
   assert.deepEqual(wsl?.denyRead, [homedir(), "/mnt/c", "/win/d x"]);
-  // 임시 워크트리는 가려진 자리 위에서도 다시 열려 있다.
+  // The temporary worktree is reopened even on top of a hidden place.
   assert.ok(
     wsl?.allowRead?.some((p) =>
       String(typeof p === "string" ? p : p.path).includes("omagari-check-"),
@@ -491,7 +494,7 @@ test("WSL2의 마운트 목록에서 Windows 드라이브가 걸린 자리를 �
   assert.deepEqual((await policyOf(undefined))?.denyRead, [homedir()]);
 });
 
-test("Windows 그대로에서는 돌리지 못함의 까닭이 WSL2 안내다", async () => {
+test("on plain Windows, the reason for Couldn't run is the WSL2 guidance", async () => {
   const platform = Object.getOwnPropertyDescriptor(process, "platform");
   Object.defineProperty(process, "platform", { value: "win32" });
   try {
@@ -501,7 +504,7 @@ test("Windows 그대로에서는 돌리지 못함의 까닭이 WSL2 안내다", 
   }
 });
 
-test("Linux에서 혼자 돌린 것이 유닉스 소켓 막기로 깨진 것으로 보이면 까닭이 붙고, 소켓과 상관없이 깨졌거나 소켓을 막지 않는 기기면 붙지 않는다", async (t) => {
+test("when a solo run on Linux looks broken by the Unix socket block, a reason is added; when it broke regardless of sockets or the machine doesn't block sockets, it isn't added", async (t) => {
   const fake = fakeSandbox();
   fake.blocksUnixSockets = true;
   const world = await startWorld({ sandbox: fake.sandbox });
@@ -516,30 +519,38 @@ test("Linux에서 혼자 돌린 것이 유닉스 소켓 막기로 깨진 것으�
     /Verdict: Broken \(\d+\.\ds\)\n {2}On this machine \(Linux\) the sandbox blocks Unix sockets/,
   );
 
-  await merge(repo, { ".omagari.json": config({ check: "echo 단언 실패; exit 1" }) });
+  await merge(repo, {
+    ".omagari.json": config({ check: "echo assertion failed; exit 1" }),
+  });
   assert.doesNotMatch((await world.cli("runner", "check")).stdout, /Unix sockets/);
 
-  // 소켓을 막지 않는 기기(macOS)에서는 같은 출력이어도 붙지 않는다.
+  // On a machine that doesn't block sockets (macOS), it isn't added even for the same output.
   await merge(repo, { ".omagari.json": config({ check: socketFail }) });
   fake.blocksUnixSockets = false;
   assert.doesNotMatch((await world.cli("runner", "check")).stdout, /blocks Unix sockets/);
 });
 
-test("seccomp 도우미가 없다는 경고가 나오면 샌드박스를 쓸 수 없는 기기이고, 다른 경고는 막지 않는다", () => {
+test("when the warning that the seccomp helper is missing appears, the machine can't use the sandbox, and other warnings don't block it", () => {
   const seccomp = "seccomp not available - unix socket access not restricted";
   assert.equal(dependencyProblem({ errors: [], warnings: [seccomp] }), NO_SECCOMP);
   assert.match(NO_SECCOMP, /To fix it: /);
   assert.equal(
-    dependencyProblem({ errors: [], warnings: ["bubblewrap 0.4.1 is older than 0.5.0"] }),
+    dependencyProblem({
+      errors: [],
+      warnings: ["bubblewrap 0.4.1 is older than 0.5.0"],
+    }),
     undefined,
   );
   assert.match(
-    dependencyProblem({ errors: ["socat not installed"], warnings: [seccomp] }) ?? "",
+    dependencyProblem({
+      errors: ["socat not installed"],
+      warnings: [seccomp],
+    }) ?? "",
     /socat/,
   );
 });
 
-test("관측이 늘 빼는 .env와 .env.*는 검사 트리에도 담지 않아, 검사 명령의 출력으로 나가지 못한다", async (t) => {
+test("the .env and .env.* that observation always leaves out are not put into the check tree either, so they can't leave through the check command's output", async (t) => {
   const fake = fakeSandbox();
   const world = await startWorld({ sandbox: fake.sandbox });
   t.after(world.stop);
@@ -551,11 +562,11 @@ test("관측이 늘 빼는 .env와 .env.*는 검사 트리에도 담지 않아, 
     ".env.example": "KEY=\n",
   });
   const write = writer(repo.folder);
-  await write(".env", "KEY=DUMMY-SECRET\n"); // 추적하지 않고 gitignore하지도 않은 것
+  await write(".env", "KEY=DUMMY-SECRET\n"); // untracked and not gitignored
   await write("config/.env.local", "KEY=DUMMY-SECRET\n");
 
   const checked = await world.cli("runner", "check");
   assert.match(checked.stdout, /Verdict: Pass/);
-  // 내 폴더의 파일은 그대로다.
+  // Files in my folder are unchanged.
   assert.equal(await readFile(join(repo.folder, ".env"), "utf8"), "KEY=DUMMY-SECRET\n");
 });

@@ -1,4 +1,4 @@
-// 서버는 레포와 사람을 이름이 아니라 GitHub 숫자 id로 알아본다(#315). 이름이 다른 레포나 사람에게 넘어가도 옛 것이 이어지지 않는다.
+// The server recognizes repos and people by their GitHub numeric id, not by name (#315). When a name passes to a different repo or person, the old one's data doesn't carry over.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { api, type ContractFailure, call } from "@omagari/contract";
@@ -6,7 +6,7 @@ import { eventually, REPO, REPO2, startWorld } from "./harness.ts";
 
 const refused = (code: string) => (error: ContractFailure) => error.code === code;
 
-test("같은 이름으로 새로 만든 레포로는 옛 레포의 것이 보이지 않고, 뺀 뒤 다시 넣지도 못한다", async (t) => {
+test("a new repo with the same name doesn't show the old repo's data, and a removed repo can't be added back", async (t) => {
   const world = await startWorld({ recheckMs: 50 });
   t.after(world.stop);
   const { owner } = world;
@@ -14,7 +14,7 @@ test("같은 이름으로 새로 만든 레포로는 옛 레포의 것이 보이
   world.github.grant("owner", REPO2);
   await call(owner, api.addRepo, { repo: REPO2 });
 
-  // 뺀 REPO2가 GitHub에서 지워지고 같은 이름으로 새로 생겼다. 그 Admin이 다시 넣어도 옛 REPO2의 것이 이어지지 않는다.
+  // The removed REPO2 was deleted on GitHub and a new one was created with the same name. Even if that Admin adds it again, the old REPO2's data doesn't carry over.
   await call(owner, api.removeRepo, { repo: REPO2 });
   world.github.recreate(REPO2);
   world.github.admin("owner", REPO2);
@@ -22,7 +22,7 @@ test("같은 이름으로 새로 만든 레포로는 옛 레포의 것이 보이
   await assert.rejects(call(owner, api.addRepo, { repo: REPO2 }), refused("forbidden"));
   assert.deepEqual((await call(owner, api.me)).repos, [REPO]);
 
-  // 워크스페이스에 든 REPO가 지워지고 같은 이름으로 새로 생겼다. 그 레포에 push 권한이 있어도 옛 REPO의 것은 보이지 않는다.
+  // The REPO in the workspace was deleted and a new one was created with the same name. Even with push access to that repo, the old REPO's data isn't visible.
   world.github.grant("alice");
   const alice = await world.login("alice");
   assert.deepEqual((await call(alice, api.me)).repos, [REPO]);
@@ -32,7 +32,7 @@ test("같은 이름으로 새로 만든 레포로는 옛 레포의 것이 보이
   await assert.rejects(world.login("alice"), refused("forbidden"));
 });
 
-test("GitHub 이름을 바꾼 사람의 옛 이름을 가져간 다른 계정은 들어오지 못하고, 이름을 바꾼 사람은 새 이름으로 들어온다", async (t) => {
+test("another account that took the old name of someone who renamed on GitHub can't get in, and the one who renamed gets in with the new name", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
   world.github.grant("alice");

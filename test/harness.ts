@@ -1,6 +1,6 @@
-// 테스트 경계의 틀. 실제 서버와 실제 러너를 임시 Git 레포 위에 띄운다.
-// 조작과 확인은 서버 API(`call`)와 CLI·훅 실행 파일의 입출력으로만 한다.
-// 가짜는 바깥 세 곳에만 꽂는다: GitHub(서버), 에이전트 실행기(러너), 검사 명령을 가두는 샌드박스(러너).
+// Frame for the test boundary. Starts a real server and a real runner on a temporary Git repo.
+// Drive and check them only through the server API (`call`) and the input and output of the CLI and hook binaries.
+// Fakes plug in at three outside places only: GitHub (server), the agent executor (runner), and the sandbox that confines check commands (runner).
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
@@ -46,36 +46,41 @@ const HOOK = executable("../packages/hooks/src/main.ts");
 const FAKE_CODEX = executable("./fake-codex.ts");
 const FAKE_CLAUDE = executable("./fake-claude.ts");
 
-/** `bin` 폴더에 `name` 명령을 둔다. 부르면 가짜 CLI 스크립트(`script`)가 돈다. */
+/** Puts a `name` command in the `bin` folder. Calling it runs a fake CLI script (`script`). */
 const shim = (bin: string, name: string, script: string) =>
   writeFile(join(bin, name), `#!/bin/sh\nexec '${process.execPath}' '${script}' "$@"\n`, {
     mode: 0o755,
   });
 
-// 러너와 CLI가 부르는 Git도 기기의 Git 설정(전역 gitignore 등)을 읽지 않는다.
+// The Git that the runner and CLI call also doesn't read the machine's Git config (global gitignore and so on).
 process.env.GIT_CONFIG_GLOBAL = devNull;
 process.env.GIT_CONFIG_NOSYSTEM = "1";
-// Claude Code 안에서 테스트를 돌려도 CLI가 자기를 Claude Code 안이라고 여기지 않게 한다(CI와 같게).
+// Even when tests run inside Claude Code, the CLI doesn't think it is inside Claude Code (same as CI).
 delete process.env.CLAUDECODE;
 
-/** 워크스페이스의 레포. `tempRepo`의 origin이 이 레포를 가리킨다. */
+/** The workspace's repo. The origin of `tempRepo` points to this repo. */
 /** The sentence a status line carries (`text`), or undefined for a `files` line, which carries parts. */
 export const textOf = (line: { source: string } | null | undefined) =>
   line && "text" in line ? (line.text as string) : undefined;
 
 export const REPO = "omagari-test/space";
-/** 같은 계정의 두 번째 레포(ADR-0043). 가짜 GitHub에서 PR, 이슈, 라벨을 `REPO`와 함께 쓴다. */
+/** A second repo of the same account (ADR-0043). Uses PRs, issues, and labels in the fake GitHub alongside `REPO`. */
 export const REPO2 = "omagari-test/other";
-/** 다른 계정의 레포(ADR-0043). 서버가 두 계정을 받으면 `REPO`와 다른 워크스페이스가 된다. */
+/** A repo of another account (ADR-0043). If the server takes both accounts, this becomes a different workspace from `REPO`. */
 export const REPO3 = "other-team/code";
-/** 가짜 GitHub에 있는 레포들. */
+/** The repos in the fake GitHub. */
 const REPOS = new Set([REPO, REPO2, REPO3]);
 
-/** 실행 파일 하나를 돌리고 종료 코드와 출력을 돌려준다. 0이 아닌 종료도 결과다. */
+/** Runs one executable and returns the exit code and output. A non-zero exit is a result too. */
 function run(
   file: string,
   args: string[],
-  options: { cwd: string; stdin?: string; keepStdinOpen?: boolean; env?: object },
+  options: {
+    cwd: string;
+    stdin?: string;
+    keepStdinOpen?: boolean;
+    env?: object;
+  },
 ) {
   return new Promise<{ code: number; stdout: string; stderr: string }>((resolve, reject) => {
     const child = execFile(
@@ -84,38 +89,45 @@ function run(
       { cwd: options.cwd, env: { ...process.env, ...options.env } },
       (error, stdout, stderr) => {
         if (child.exitCode === null)
-          reject(error); // 뜨지 못했거나 신호로 죽었다
+          reject(error); // it didn't start, or it was killed by a signal
         else resolve({ code: child.exitCode, stdout, stderr });
       },
     );
-    // 입력을 읽지 않고 먼저 끝나는 실행 파일(git 등)에 쓰면 EPIPE가 난다. 그것은 실패가 아니다.
-    // 듣는 곳이 없으면 잡히지 않은 예외가 되어, 그때 돌던 테스트를 실패시키고 그 테스트의 정리를 건너뛴다.
+    // Writing to an executable (git, etc.) that exits without reading its input gives EPIPE. That is not a failure.
+    // With no listener it becomes an uncaught exception, which fails the test running at the time and skips that test's cleanup.
     child.stdin?.on("error", () => {});
     if (options.keepStdinOpen) child.stdin?.write(options.stdin ?? "");
     else child.stdin?.end(options.stdin ?? "");
   });
 }
 
-/** 끝나지 않는 실행 파일(러너처럼)을 띄운다. 나온 글을 기다리고, 신호를 보내 끝낸다. */
+/** Starts an executable that doesn't end (like the runner). Waits for output, and ends it by sending a signal. */
 function launch(file: string, args: string[], options: { cwd: string; env?: object }) {
-  const child = spawn(file, args, { cwd: options.cwd, env: { ...process.env, ...options.env } });
+  const child = spawn(file, args, {
+    cwd: options.cwd,
+    env: { ...process.env, ...options.env },
+  });
   let stdout = "";
   let stderr = "";
   child.stdout.setEncoding("utf8").on("data", (chunk) => (stdout += chunk));
   child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
-  const exited = once(child, "exit").then(([code]) => ({ code, stdout, stderr }));
+  const exited = once(child, "exit").then(([code]) => ({
+    code,
+    stdout,
+    stderr,
+  }));
   return {
-    /** 스스로 끝났을 때의 종료 코드와 출력. */
+    /** Exit code and output when it ended by itself. */
     exited,
-    /** stdout에 `pattern`이 나올 때까지 기다리고 맞은 것을 돌려준다. */
+    /** Waits until `pattern` appears in stdout and returns the match. */
     output: (pattern: RegExp) =>
       eventually(() => {
         const match = pattern.exec(stdout);
         if (!match)
-          throw new Error(`아직 나오지 않았다: ${pattern}\nstdout: ${stdout}\nstderr: ${stderr}`);
+          throw new Error(`Hasn't appeared yet: ${pattern}\nstdout: ${stdout}\nstderr: ${stderr}`);
         return match;
       }),
-    /** 신호를 보내고 끝나기를 기다린다. */
+    /** Sends a signal and waits for it to end. */
     stop: (signal: NodeJS.Signals = "SIGINT") => {
       if (child.exitCode === null) child.kill(signal);
       return exited;
@@ -124,19 +136,19 @@ function launch(file: string, args: string[], options: { cwd: string; env?: obje
 }
 
 /**
- * 채널에 선 것 하나를 글로: 사람이 쓴 글은 그대로, 공개된 문답은 "문답: <질문>", 알림은 "알림: <두 작업>",
- * 결정 PR의 줄은 "결정 <일>: <제목>"(막혔으면 뒤에 " (<까닭>)")이다.
+ * One entry in a channel as text: a message a person wrote as is, a public Q&A as "QA: <question>", an alert as "Alert: <two works>",
+ * a decision PR line as "Decision <event>: <title>" (with " (<reason>)" after it if blocked).
  */
 export const said = (m: ChannelMessage) =>
   m.kind === "text"
     ? m.text
     : m.kind === "qa"
-      ? `문답: ${m.qa.question}`
+      ? `QA: ${m.qa.question}`
       : m.kind === "decision"
-        ? `결정 ${m.event}: ${m.decision.title}${m.reason ? ` (${m.reason})` : ""}`
-        : `알림: ${m.alert.works.map((w) => `${w.login}/${w.branch}`).join(" ")}`;
+        ? `Decision ${m.event}: ${m.decision.title}${m.reason ? ` (${m.reason})` : ""}`
+        : `Alert: ${m.alert.works.map((w) => `${w.login}/${w.branch}`).join(" ")}`;
 
-/** `check`가 던지지 않을 때까지 되풀이한다. 기다려야 보이는 것(연결, 재확인)을 확인할 때 쓴다. */
+/** Repeats until `check` stops throwing. Use it to check things you have to wait for (connections, rechecks). */
 export async function eventually<T>(check: () => T | Promise<T>, timeoutMs = 10_000): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -149,13 +161,13 @@ export async function eventually<T>(check: () => T | Promise<T>, timeoutMs = 10_
   }
 }
 
-/** 폴더에 파일을 쓰는 함수를 돌려준다. 폴더가 없으면 만든다. */
+/** Returns a function that writes files into a folder. Creates the folder if it's missing. */
 export const writer = (folder: string) => async (path: string, content: string | Uint8Array) => {
   await mkdir(dirname(join(folder, path)), { recursive: true });
   await writeFile(join(folder, path), content);
 };
 
-/** 레포 밖에 연결된 워크트리를 둘 임시 폴더. 테스트가 끝나면 지운다. 이름을 받아 그 안의 경로를 돌려주는 함수를 준다. */
+/** Temp folder to hold worktrees linked from outside the repo. Removed when the test ends. Takes a name and returns the path inside it. */
 export async function place(t: { after: (fn: () => Promise<void>) => void }) {
   const folder = await realpath(await mkdtemp(join(tmpdir(), "omagari-worktrees-")));
   t.after(() => rm(folder, { recursive: true, force: true }));
@@ -163,11 +175,11 @@ export async function place(t: { after: (fn: () => Promise<void>) => void }) {
 }
 
 /**
- * 커밋 하나가 있는 실제 Git 레포를 임시 폴더에 만든다. origin은 `repo`(GitHub)를 가리킨다. 기기의 Git 설정은 읽지 않는다.
- * 받은(clone) 레포처럼 기본 브랜치 main이 원격 추적 브랜치 origin/main과 origin/HEAD로 있다. 푸시는 `git update-ref`로 흉내 낸다.
+ * Makes a real Git repo with one commit in a temp folder. Its origin points to `repo` (GitHub). It doesn't read the machine's Git config.
+ * Like a cloned repo, the default branch main exists as the remote-tracking branch origin/main and origin/HEAD. A push is imitated with `git update-ref`.
  */
 export async function tempRepo(repo = REPO) {
-  // macOS의 임시 폴더는 심볼릭 링크다. Git이 내는 최상위 폴더와 같게 실제 경로로 둔다.
+  // The temp folder on macOS is a symlink. Use the real path so it matches the top-level folder Git reports.
   const folder = await realpath(await mkdtemp(join(tmpdir(), "omagari-")));
   const env = {
     GIT_CONFIG_GLOBAL: devNull,
@@ -187,33 +199,37 @@ export async function tempRepo(repo = REPO) {
   await git("remote", "add", "origin", `https://github.com/${repo}.git`);
   await git("update-ref", "refs/remotes/origin/main", "HEAD");
   await git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
-  return { folder, git, remove: () => rm(folder, { recursive: true, force: true }) };
+  return {
+    folder,
+    git,
+    remove: () => rm(folder, { recursive: true, force: true }),
+  };
 }
 
 /**
- * 가짜 GitHub. 기기 인증은 사람이 코드를 넣는 대신 `approve`로 끝내고,
- * push 권한은 `grant`와 `revoke`로 준다. 내준 GitHub 토큰은 `tokens`에 남는다.
- * 프로필 이름은 `names`에 적은 사람만 있다.
- * 브랜치의 PR은 `openPull`로 열고, 돌려받은 PR을 고치거나 `merge`해 바꾼다.
- * 레포의 파일은 브랜치마다 `files`에 있다. 기본 브랜치는 main이고, 커밋은 브랜치 이름을 그대로 쓴다.
- * 서버가 연 PR(결정 PR)도 `pulls`에 쌓이고, 연 토큰의 주인이 `author`다. `block`으로 머지를 막고, `review`로 리뷰를 단다.
- * 서버가 연 이슈(포스트의 이슈)는 `issues`에 쌓이고, 사람이 GitHub에서 하는 일은 그 이슈를 고치거나 `comment`로 댓글을 단다.
- * 토큰을 무효로 하려면 `tokens`에서 지운다.
+ * Fake GitHub. Device login is finished with `approve` instead of a person entering the code,
+ * push access is given with `grant` and `revoke`. The GitHub tokens it hands out stay in `tokens`.
+ * Only people listed in `names` have a profile name.
+ * Open a branch's PR with `openPull`, and change the returned PR by editing it or with `merge`.
+ * A repo's files are in `files` per branch. The default branch is main, and a commit uses the branch name as is.
+ * PRs the server opened (decision PRs) also pile up in `pulls`, and the owner of the token that opened them is `author`. `block` blocks merging and `review` adds a review.
+ * Issues the server opened (a post's issue) pile up in `issues`; what a person does on GitHub is editing the issue or adding a comment with `comment`.
+ * To invalidate a token, remove it from `tokens`.
  */
 export function fakeGitHub() {
-  /** push 권한과 Admin. `레포 로그인`이다. */
+  /** Push access and Admin. `repo login`. */
   const pushers = new Set<string>();
   const gates = new Map<string, Promise<void>>();
   const admins = new Set<string>();
-  /** 이 가짜에 있는 레포와 옮겨진 레포의 옛 이름(`move`). GitHub처럼 옛 이름은 새 레포로 넘어간다. */
+  /** Repos in this fake and the old names of moved repos (`move`). Like GitHub, an old name redirects to the new repo. */
   const known = new Set(REPOS);
   const moves = new Map<string, string>();
   const exists = (repo: string) => known.has(moves.get(repo) ?? repo);
-  /** 레포와 사람의 GitHub 숫자 id. 처음 볼 때 붙고, 옮기거나 이름을 바꿔도 따라간다(`move`, `rename`). */
+  /** GitHub numeric ids of repos and people. Assigned when first seen, and they follow a move or rename (`move`, `rename`). */
   const ids = new Map<string, number>();
   let nextId = 1;
   const idOf = (key: string) => ids.get(key) ?? (ids.set(key, nextId++), nextId - 1);
-  /** 계정의 종류와 아바타(`account`로 바꾼다). 없으면 아바타 없는 조직이다. */
+  /** Account type and avatar (changed with `account`). Without it, it's an organization with no avatar. */
   const accounts = new Map<string, Account>();
   const pulls: (Pull & {
     branch: string;
@@ -233,7 +249,7 @@ export function fakeGitHub() {
     comments: { id: number; login: string; body: string }[];
   }[] = [];
   let commentId = 1000;
-  /** 레포의 라벨. 이슈에 없는 라벨을 붙이면 GitHub처럼 만든다. */
+  /** A repo's labels. Adding a label the issue doesn't have creates it, like GitHub. */
   const labels: RepoLabel[] = [];
   let labelId = 5000;
   const labelOf = (name: string) =>
@@ -246,11 +262,16 @@ export function fakeGitHub() {
     if (!found) throw new Error("HTTP 404 Not Found");
     return found;
   };
-  const commits: { branch: string; message: string; author: string; paths: string[] }[] = [];
+  const commits: {
+    branch: string;
+    message: string;
+    author: string;
+    paths: string[];
+  }[] = [];
   let blocked: string | undefined;
-  /** PR 번호마다 리뷰어의 마지막 리뷰 상태. */
+  /** Each reviewer's last review state per PR number. */
   const reviews = new Map<number, Map<string, "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED">>();
-  /** 토큰이 이 레포에 쓸 수 있으면 그 주인. 아니면 GitHub처럼 던진다. */
+  /** The owner if the token can write to this repo. Otherwise throws, like GitHub. */
   const owner = (token: string, repo: string) => {
     const login = tokens.get(token);
     if (!exists(repo) || !login) throw new Error("HTTP 401 Bad credentials");
@@ -264,7 +285,7 @@ export function fakeGitHub() {
   const devices = new Map<string, { userCode: string; login?: string }>();
   const tokens = new Map<string, string>();
   const names = new Map<string, string>();
-  /** 사람의 GitHub 프로필 사진 주소. 적은 사람만 있다. */
+  /** URL of a person's GitHub profile picture. Only people listed have one. */
   const avatars = new Map<string, string>();
   const github: GitHub = {
     async startDevice() {
@@ -289,7 +310,7 @@ export function fakeGitHub() {
     },
     async user(token) {
       const login = tokens.get(token);
-      if (!login) throw new Error("모르는 토큰이다");
+      if (!login) throw new Error("Unknown token");
       return {
         id: idOf(`user ${login}`),
         login,
@@ -299,7 +320,7 @@ export function fakeGitHub() {
     },
     async canPush(token, asked) {
       await gates.get(`${asked} ${tokens.get(token)}`);
-      // GitHub처럼 옮겨진 레포의 옛 이름은 새 레포로 넘겨 준다.
+      // Like GitHub, the old name of a moved repo redirects to the new repo.
       const repo = moves.get(asked) ?? asked;
       if (!known.has(repo)) return { push: false, name: asked };
       const owner = repo.split("/")[0] as string;
@@ -331,7 +352,12 @@ export function fakeGitHub() {
       if (!exists(repo) || !tokens.has(token)) return undefined;
       return pulls
         .filter((pull) => pull.branch === branch)
-        .map(({ title, draft, open, mergedAt }) => ({ title, draft, open, mergedAt }));
+        .map(({ title, draft, open, mergedAt }) => ({
+          title,
+          draft,
+          open,
+          mergedAt,
+        }));
     },
     async defaultBranch(token, repo) {
       owner(token, repo);
@@ -355,13 +381,27 @@ export function fakeGitHub() {
         branch,
         new Map([...tree(base), ...changed.map((f) => [f.path, f.content] as const)]),
       );
-      commits.push({ branch, message, author, paths: changed.map((f) => f.path) });
+      commits.push({
+        branch,
+        message,
+        author,
+        paths: changed.map((f) => f.path),
+      });
     },
     async openPull(token, repo, { head, base, title, body }) {
       const author = owner(token, repo);
       tree(head);
       const number = pulls.length + 1;
-      pulls.push({ branch: head, base, title, body, author, number, draft: false, open: true });
+      pulls.push({
+        branch: head,
+        base,
+        title,
+        body,
+        author,
+        number,
+        draft: false,
+        open: true,
+      });
       return { number, url: `https://github.com/${REPO}/pull/${number}` };
     },
     async pull(token, repo, number) {
@@ -380,7 +420,12 @@ export function fakeGitHub() {
       const author = owner(token, repo);
       const head = tree(branch);
       for (const f of changed) head.set(f.path, f.content);
-      commits.push({ branch, message, author, paths: changed.map((f) => f.path) });
+      commits.push({
+        branch,
+        message,
+        author,
+        paths: changed.map((f) => f.path),
+      });
     },
     async closePull(token, repo, number) {
       owner(token, repo);
@@ -404,16 +449,30 @@ export function fakeGitHub() {
     },
     async openIssue(token, repo, { title, body, labels }) {
       const author = owner(token, repo);
-      // GitHub은 PR과 이슈가 번호를 함께 쓰지만, 가짜는 PR 번호가 테스트에 박혀 있어 이슈를 101부터 따로 센다.
+      // On GitHub, PRs and issues share numbers, but in the fake the PR numbers are hard-coded in tests, so issues are counted separately from 101.
       const number = 101 + issues.length;
       for (const label of labels) ensureLabel(label);
-      issues.push({ number, title, body, labels, open: true, author, comments: [] });
+      issues.push({
+        number,
+        title,
+        body,
+        labels,
+        open: true,
+        author,
+        comments: [],
+      });
       return { number, url: `https://github.com/${REPO}/issues/${number}` };
     },
     async issue(token, repo, number) {
       if (!exists(repo) || !tokens.has(token)) return undefined;
       const found = issues.find((issue) => issue.number === number);
-      return found && { title: found.title, labels: [...found.labels], open: found.open };
+      return (
+        found && {
+          title: found.title,
+          labels: [...found.labels],
+          open: found.open,
+        }
+      );
     },
     async comments(token, repo, number) {
       if (!exists(repo) || !tokens.has(token)) return undefined;
@@ -455,14 +514,14 @@ export function fakeGitHub() {
       owner(token, repo);
       const found = labelOf(name);
       if (!found) throw new Error("HTTP 404 Not Found");
-      // GitHub처럼 이슈에 붙은 라벨의 이름도 바뀐다.
+      // Like GitHub, the name of the label on an issue changes too.
       for (const issue of issues)
         issue.labels = issue.labels.map((l) => (l === found.name ? label.name : l));
       Object.assign(found, label);
       return { ...found };
     },
   };
-  /** 열린 PR을 머지한다. 그 브랜치의 파일이 있으면 main에 들어간다. */
+  /** Merges an open PR. If that branch has files, they go into main. */
   const merge = (pull: Pull & { branch?: string }) => {
     Object.assign(pull, { open: false, mergedAt: new Date().toISOString() });
     for (const [path, content] of files.get(pull.branch ?? "") ?? [])
@@ -473,13 +532,13 @@ export function fakeGitHub() {
     tokens,
     names,
     avatars,
-    /** 사람이 브라우저에서 `userCode`를 넣고 `login` 계정으로 승인했다. */
+    /** A person entered `userCode` in the browser and approved it with the `login` account. */
     approve(userCode: string, login: string) {
       const device = [...devices.values()].find((d) => d.userCode === userCode);
-      if (!device) throw new Error(`모르는 코드다: ${userCode}`);
+      if (!device) throw new Error(`Unknown code: ${userCode}`);
       device.login = login;
     },
-    /** 사람이 GitHub에서 레포 `from`을 `to`로 옮겼다(다른 계정으로 옮기기나 이름 바꾸기). 권한이 따라가고 옛 이름은 새 레포로 넘어간다. */
+    /** A person moved repo `from` to `to` on GitHub (moved to another account, or renamed). Access follows and the old name redirects to the new repo. */
     move(from: string, to: string) {
       known.delete(from);
       known.add(to);
@@ -493,7 +552,7 @@ export function fakeGitHub() {
             set.add(key.replace(from, to));
           }
     },
-    /** 레포 `repo`가 GitHub에서 지워지고 누군가 같은 이름으로 새로 만들었다. id가 새로 붙고 옛 권한과 옛 이름 넘겨 주기는 없다. */
+    /** Repo `repo` was deleted on GitHub and someone created a new one with the same name. It gets a new id, and there is no old access and no redirect from the old name. */
     recreate(repo: string) {
       known.add(repo);
       moves.delete(repo);
@@ -501,7 +560,7 @@ export function fakeGitHub() {
       for (const set of [pushers, admins])
         for (const key of [...set]) if (key.startsWith(`${repo} `)) set.delete(key);
     },
-    /** 사람이 GitHub 이름을 `from`에서 `to`로 바꿨다. id와 토큰과 권한이 따라가고, 옛 이름은 다른 사람이 가져갈 수 있다. */
+    /** A person renamed their GitHub name from `from` to `to`. The id, token, and access follow, and someone else can take the old name. */
     rename(from: string, to: string) {
       ids.set(`user ${to}`, idOf(`user ${from}`));
       ids.delete(`user ${from}`);
@@ -513,7 +572,7 @@ export function fakeGitHub() {
             set.add(key.replace(/ [^ ]+$/, ` ${to}`));
           }
     },
-    /** `login`의 `repo` 권한 확인을 돌려받은 `release`를 부를 때까지 붙든다. 재확인이 중간에 멈춘 때를 만든다. */
+    /** Holds the access check of `login` for `repo` until `release` is called. Creates the case where a recheck stops midway. */
     hold(login: string, repo: string) {
       const gate = Promise.withResolvers<void>();
       gates.set(`${repo} ${login}`, gate.promise);
@@ -521,51 +580,51 @@ export function fakeGitHub() {
     },
     grant: (login: string, repo = REPO) => pushers.add(`${repo} ${login}`),
     revoke: (login: string, repo = REPO) => pushers.delete(`${repo} ${login}`),
-    /** GitHub에 레포 `repo`를 새로 만든다(워크스페이스에 넣기 전의 레포). */
+    /** Creates repo `repo` in GitHub (a repo before it is put into the workspace). */
     create: (repo: string) => known.add(repo),
-    /** 계정 `owner`의 종류와 아바타를 둔다(GitHub에서 개인 계정이거나 아바타가 있는 계정). */
+    /** Sets the type and avatar of account `owner` (on GitHub, a personal account or an account with an avatar). */
     account: (owner: string, account: Account) => accounts.set(owner, account),
-    /** `login`을 `repo`의 Admin으로 둔다. */
+    /** Makes `login` an Admin of `repo`. */
     admin: (login: string, repo = REPO) => admins.add(`${repo} ${login}`),
-    /** `branch`를 head로 하는 PR을 연다. 기본은 초안이다. */
+    /** Opens a PR with `branch` as head. A draft by default. */
     openPull(branch: string, title: string, draft = true) {
       const pull = { branch, title, draft, open: true };
       pulls.push(pull);
       return pull;
     },
-    /** 열린 PR을 머지한다. 사람이 GitHub에서 머지한 것과 같다. */
+    /** Merges an open PR. Same as a person merging on GitHub. */
     merge,
-    /** 열린 PR을 머지하지 않고 닫는다. */
+    /** Closes an open PR without merging. */
     close(pull: Pull) {
       pull.open = false;
     },
-    /** 레포의 파일. 브랜치 이름마다 경로와 내용이다. */
+    /** A repo's files. Path and content per branch name. */
     files,
-    /** 서버가 만든 커밋. */
+    /** Commits the server made. */
     commits,
-    /** 서버가 연 PR까지 모든 PR. */
+    /** All PRs, including those the server opened. */
     pulls,
-    /** `login`이 PR `number`에 리뷰를 단다. 변경 요청, 승인, 또는 변경 요청의 해제다. */
+    /** `login` adds a review to PR `number`: request changes, approve, or dismiss a change request. */
     review(number: number, login: string, state: "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED") {
       const found = reviews.get(number) ?? new Map();
       found.set(login, state);
       reviews.set(number, found);
     },
-    /** 서버가 연 이슈. 제목, 라벨, 열림을 고치면 사람이 GitHub에서 고친 것과 같다. */
+    /** Issues the server opened. Editing the title, labels, or open state is the same as a person editing on GitHub. */
     issues,
-    /** 레포의 라벨. 고치거나 넣고 빼면 사람이 GitHub에서 한 것과 같다(이슈에 붙은 이름은 따로 고친다). */
+    /** A repo's labels. Editing, adding, or removing is the same as a person doing it on GitHub (names on issues are edited separately). */
     labels,
-    /** 사람이 GitHub에서 라벨을 만든다. */
+    /** A person creates a label on GitHub. */
     createLabel(name: string, color = "ededed", description = "") {
       const made = { id: labelId++, name, color, description };
       labels.push(made);
       return made;
     },
-    /** `login`이 GitHub에서 이슈 `number`에 댓글을 단다. */
+    /** `login` adds a comment to issue `number` on GitHub. */
     comment(number: number, login: string, body: string) {
       issueOf(number).comments.push({ id: commentId++, login, body });
     },
-    /** GitHub이 머지를 막는다(리뷰 필수 등). 까닭을 주지 않으면 막지 않는다. */
+    /** GitHub blocks merging (required review, etc.). Without a reason, it doesn't block. */
     block(reason?: string) {
       blocked = reason;
     },
@@ -575,19 +634,19 @@ export function fakeGitHub() {
 type ExecutorInput = Parameters<Executor>[0];
 
 /**
- * 가짜 샌드박스. 받은 명령, 폴더, 환경 변수, 막는 설정을 `calls`에 적고, 가두지 않고 명령을 그대로 돌린다(`sh -c`).
- * `unavailable`에 까닭을 넣으면 샌드박스를 쓸 수 없는 기기다. 실제 샌드박스는 CI에서 돌지 않을 수 있어 손 점검으로 본다(ADR-0033).
+ * Fake sandbox. Records the received command, folder, environment variables, and blocking settings in `calls`, and runs the command as is without confining it (`sh -c`).
+ * Putting a reason in `unavailable` makes it a machine where the sandbox can't be used. The real sandbox may not run in CI, so it is checked by hand (ADR-0033).
  */
 /**
- * 가짜 GIPHY(ADR-0044): 진짜 `realGiphy`가 묻는 HTTP 서버. 받은 요청의 주소를 `asked`에 쌓고 `answer`가 주는 GIF 목록을 GIPHY 모양으로 돌려준다.
- * 진짜 GIPHY는 손 점검으로 본다.
+ * Fake GIPHY (ADR-0044): an HTTP server the real `realGiphy` asks. Piles the requested URLs in `asked` and returns the GIF list from `answer` in GIPHY's shape.
+ * The real GIPHY is checked by hand.
  */
 export async function fakeGiphy(t: { after: (fn: () => Promise<void>) => void }) {
   const asked: URL[] = [];
   const fake = {
     asked,
     url: "",
-    /** 받은 요청에 줄 GIPHY의 `data`. 바꿔 쓴다. */
+    /** The GIPHY `data` to give for a request. Overwrite it. */
     answer: (_url: URL): unknown[] => [],
   };
   const server = createServer((request, response) => {
@@ -610,7 +669,7 @@ export function fakeSandbox() {
   const fake: {
     calls: SandboxInput[];
     unavailable?: string;
-    /** Linux처럼 유닉스 소켓을 모두 막는 기기인 척한다. */
+    /** Pretends to be a machine like Linux that blocks all Unix sockets. */
     blocksUnixSockets?: boolean;
     sandbox: Sandbox;
   } = {
@@ -629,30 +688,30 @@ export function fakeSandbox() {
   return fake;
 }
 
-/** 쓸 수 없는 샌드박스. 가짜를 넘기지 않은 러너에 실제 샌드박스 대신 꽂는다. 테스트가 이 기기의 샌드박스 도구에 따라 바뀌지 않게 한다. */
+/** An unusable sandbox. Plugged into a runner that wasn't given a fake, in place of the real sandbox. Keeps tests from changing with this machine's sandbox tools. */
 const noSandbox: Sandbox = {
-  unavailable: async () => "가짜 샌드박스를 넘기지 않았다",
-  wrap: () => Promise.reject(new Error("가짜 샌드박스를 넘기지 않았다")),
+  unavailable: async () => "No fake sandbox was passed",
+  wrap: () => Promise.reject(new Error("No fake sandbox was passed")),
 };
 
 /**
- * 직접 `startRunner`를 부르는 테스트가 꽂는 것: 실제 Claude Code·Codex를 띄워 고를 거리를 묻지 않고 실제 샌드박스를 살피지 않는다.
- * 그것들은 느리고 부하 아래에서 몇 초씩 걸려 시간 초과의 원인이 된다.
+ * What tests that call `startRunner` directly plug in: don't launch the real Claude Code or Codex to ask what to pick, and don't inspect the real sandbox.
+ * Those are slow and take seconds under load, which causes timeouts.
  */
 export const stubbed = () => ({
   executors: { "claude-code": noExecutor },
   sandbox: noSandbox,
 });
 
-/** 늘 실패하는 실행기. 가짜를 넘기지 않은 러너에 실제 실행기 대신 꽂는다. 이 기기에 깔린 Claude Code나 Codex에 따라 결과가 바뀌지 않게 한다. */
-const noExecutor: Executor = () => Promise.reject(new Error("가짜 실행기를 넘기지 않았다"));
+/** An executor that always fails. Plugged into a runner that wasn't given a fake, in place of the real executor. Keeps results from changing with the Claude Code or Codex installed on this machine. */
+const noExecutor: Executor = () => Promise.reject(new Error("No fake executor was passed"));
 
 /**
- * 가짜 에이전트 실행기. 받은 입력과 옵션을 `calls`에 적고 `answer`가 정한 답을 낸다.
- * 이어 갈 세션이 없으면 `session-<몇 번째 부름>`으로 새 세션을 띄운다.
+ * Fake agent executor. Records the received input and options in `calls` and gives the answer `answer` decides.
+ * If there is no session to continue, it starts a new one as `session-<call number>`.
  */
 export function fakeExecutor(
-  answer: (input: ExecutorInput) => string | Promise<string> = () => "가짜 답",
+  answer: (input: ExecutorInput) => string | Promise<string> = () => "fake answer",
 ) {
   const calls: ExecutorInput[] = [];
   const executor: Executor = async (input) => {
@@ -663,7 +722,7 @@ export function fakeExecutor(
   return { executor, calls };
 }
 
-/** 문답마다 `release(message)`로 풀어 줄 때까지 답하지 않는 가짜 실행기. 동시에 돈 턴의 최대 수를 센다. */
+/** A fake executor that doesn't answer until each Q&A is released with `release(message)`. Counts the most turns that ran at once. */
 export function gatedExecutor() {
   const gates = new Map<string, PromiseWithResolvers<string>>();
   const gate = (message: string) => {
@@ -682,14 +741,14 @@ export function gatedExecutor() {
   });
   return {
     ...fake,
-    release: (message: string) => gate(message).resolve(`답: ${message}`),
+    release: (message: string) => gate(message).resolve(`Answer: ${message}`),
     most: () => most,
   };
 }
 
 /**
- * 가짜 CLI(`script`)를 `name` 명령으로 이 테스트 파일의 PATH 맨 앞에 둔다. 테스트 파일마다 프로세스가 따로라 다른 파일은 모른다.
- * 가짜는 한 턴마다 받은 인자, 입력, 작업 폴더를 `callsEnv`가 가리키는 파일에 적는다. `calls()`가 그것이다.
+ * Puts a fake CLI (`script`) as the `name` command at the very front of this test file's PATH. Each test file is its own process, so other files don't know about it.
+ * On each turn the fake writes the received args, input, and working folder to the file `callsEnv` points to. `calls()` reads that.
  */
 async function fakeCli(
   t: { after: (fn: () => Promise<void>) => void },
@@ -713,28 +772,28 @@ async function fakeCli(
 }
 
 /**
- * 가짜 Codex CLI(`test/fake-codex.ts`)를 PATH 맨 앞에 둔다. 러너의 실제 `codex` 실행기와 CLI가 띄운 러너가 이것을 부른다.
- * `calls()`는 `codex exec`가 받은 인자, 입력, 작업 폴더다.
+ * Puts the fake Codex CLI (`test/fake-codex.ts`) at the very front of PATH. The runner's real `codex` executor and the runner started by the CLI call this.
+ * `calls()` is the args, input, and working folder `codex exec` received.
  */
 export const fakeCodex = (t: { after: (fn: () => Promise<void>) => void }) =>
   fakeCli(t, "codex", FAKE_CODEX, "FAKE_CODEX_CALLS");
 
 /**
- * 가짜 Claude Code CLI(`test/fake-claude.ts`)를 PATH 맨 앞에 둔다. 러너의 실제 `claudeCode` 실행기가 이것을 부른다.
- * `calls()`는 한 턴(`claude -p`)이 받은 인자, 입력, 작업 폴더다. 고를 거리를 묻는 것은 적지 않는다.
+ * Puts the fake Claude Code CLI (`test/fake-claude.ts`) at the very front of PATH. The runner's real `claudeCode` executor calls this.
+ * `calls()` is the args, input, and working folder one turn (`claude -p`) received. It doesn't record the one that asks what to pick.
  */
 export const fakeClaude = (t: { after: (fn: () => Promise<void>) => void }) =>
   fakeCli(t, "claude", FAKE_CLAUDE, "FAKE_CLAUDE_CALLS");
 
 /**
- * 서버 하나, 레포 하나, 그 레포에 push 권한이 있는 `owner`와 owner의 러너 하나.
- * 가짜 실행기를 넘기지 않으면 늘 실패하는 것이 꽂힌다.
+ * One server, one repo, an `owner` with push access to that repo, and one runner for the owner.
+ * If no fake executor is passed, an always-failing one is plugged in.
  */
 export async function startWorld(
   options: {
-    /** owner 러너의 Claude Code 실행기 */
+    /** The owner runner's Claude Code executor */
     executor?: Executor;
-    /** owner 러너의 실행기들. 주면 `executor` 대신 이것을 쓴다. */
+    /** The owner runner's executors. If given, used instead of `executor`. */
     executors?: Partial<Record<ExecutorId, Executor>>;
     recheckMs?: number;
     heartbeatMs?: number;
@@ -743,42 +802,42 @@ export async function startWorld(
     share?: ShareLevel;
     followMs?: number;
     forgetMs?: number;
-    /** 편지함의 소식을 남겨 두는 시간. 줄여서 만료를 본다. 만료는 `followMs`마다 치운다. */
+    /** How long to keep inbox news. Shorten it to see expiry. Expiry is cleared every `followMs`. */
     inboxMs?: number;
-    /** 고른 접속 상태가 온라인으로 돌아오기까지의 시간. 줄여서 만료를 본다. */
+    /** Time until a chosen presence returns to online. Shorten it to see expiry. */
     presenceDurations?: Partial<Record<PresenceDuration, number>>;
-    /** 결정 PR의 이의 창에서 한 시간의 길이. 줄여서 창이 닫히는 것을 본다. */
+    /** Length of one hour in a decision PR's objection window. Shorten it to see the window close. */
     hourMs?: number;
-    /** 토론의 라운드 수. 주지 않으면 서버의 기본(세 라운드)이다. */
+    /** Number of debate rounds. If not given, the server's default (three rounds). */
     debateRounds?: number;
-    /** 토론이 만료되기까지의 시간. 줄여서 만료를 본다. 만료는 `followMs`마다 본다. */
+    /** Time until a debate expires. Shorten it to see expiry. Expiry is checked every `followMs`. */
     debateMs?: number;
-    /** 서버가 처음 뜨기 전에 DB에 넣을 SQL. 예전 판이 만든 DB로 띄울 때 쓴다. */
+    /** SQL to put into the DB before the server first starts. Used to start from a DB an older version made. */
     seed?: string;
-    /** owner 러너의 샌드박스. 주지 않으면 쓸 수 없는 것이 꽂힌다. */
+    /** The owner runner's sandbox. If not given, an unusable one is plugged in. */
     sandbox?: Sandbox;
-    /** owner 러너의 검사 명령 상한. 줄여서 끊기는 것을 본다. */
+    /** Cap on the owner runner's check command. Shorten it to see it cut off. */
     checkLimits?: { checkMs?: number; setupMs?: number; outputBytes?: number };
-    /** owner 러너가 합쳐 돌려 보기 전에 기다리는 잠잠한 시간. 줄여서 본다. */
+    /** The quiet time the owner runner waits before a merge run. Shorten it to see it. */
     quietMs?: number;
-    /** owner 러너의 합쳐 돌려 보기. 기본은 켜짐이다. */
+    /** The owner runner's merge run. On by default. */
     mergeCheck?: "on" | "off";
-    /** 서버가 API와 같은 주소에서 낼 빌드한 웹 화면 폴더. */
+    /** The built web screen folder the server serves at the same address as the API. */
     webDir?: string;
-    /** hello를 마치기까지의 시간. 줄여서 끊기는 것을 본다. */
+    /** Time to finish hello. Shorten it to see it cut off. */
     helloMs?: number;
-    /** Fly 위에서 도는 서버인 척한다(Fly-Client-IP를 믿는다). */
+    /** Pretends to be a server running on Fly (trusts Fly-Client-IP). */
     behindFly?: boolean;
-    /** 서버가 받을 계정과 켤 때 넣을 레포(`OMAGARI_REPO`). 주지 않으면 `REPO` 하나다. */
+    /** Accounts the server accepts and repos to put in at startup (`OMAGARI_REPO`). If not given, just `REPO`. */
     accept?: string[];
-    /** GIF 찾기. 주지 않으면 GIPHY 키가 없는 서버다. 테스트는 가짜 GIPHY(`fakeGiphy`)에 대고 진짜 `realGiphy`를 꽂는다. */
+    /** GIF search. If not given, a server with no GIPHY key. Tests plug the real `realGiphy` in against the fake GIPHY (`fakeGiphy`). */
     giphy?: Giphy;
     /** Fills the fake GitHub before the server first starts (labels and issues an older server left behind). */
     setup?: (github: ReturnType<typeof fakeGitHub>) => void;
   } = {},
 ) {
   const repo = await tempRepo();
-  const data = await mkdtemp(join(tmpdir(), "omagari-server-")); // 서버의 DB와 CLI의 설정
+  const data = await mkdtemp(join(tmpdir(), "omagari-server-")); // the server's DB and the CLI's config
   const cleanup = () => Promise.all([repo.remove(), rm(data, { recursive: true, force: true })]);
   const fake = fakeGitHub();
   options.setup?.(fake);
@@ -810,16 +869,18 @@ export async function startWorld(
     await cleanup();
     throw error;
   });
-  /** `stopServer`로 서버만 꺼 둔 채다. */
+  /** Only the server was shut down with `stopServer`. */
   let serverDown = false;
 
-  /** API로 기기 인증을 마치고 그 계정의 세션으로 부를 상대를 돌려준다. */
+  /** Finishes device login through the API and returns a peer to call with that account's session. */
   const login = async (name: string) => {
     const started = await call(server, api.login);
     fake.approve(started.userCode, name);
     for (;;) {
       await sleep(started.intervalMs);
-      const polled = await call(server, api.loginPoll, { device: started.device });
+      const polled = await call(server, api.loginPoll, {
+        device: started.device,
+      });
       if ("session" in polled) return { url: server.url, session: polled.session, login: name };
     }
   };
@@ -834,8 +895,10 @@ export async function startWorld(
     serverUrl: server.url,
     folder: repo.folder,
     session: owner.session,
-    // 넘긴 가짜가 없으면 실제 실행기 대신 늘 실패하는 것을 꽂는다.
-    executors: options.executors ?? { "claude-code": options.executor ?? noExecutor },
+    // If no fake was passed, plug in an always-failing one instead of the real executor.
+    executors: options.executors ?? {
+      "claude-code": options.executor ?? noExecutor,
+    },
     turnTimeoutMs: options.turnTimeoutMs,
     observeMs: options.observeMs,
     share: options.share,
@@ -848,9 +911,9 @@ export async function startWorld(
     await cleanup();
     throw error;
   });
-  // CLI가 깔거나 읽는 Claude Code와 Codex의 사용자 설정도 임시 폴더에 둔다. 테스트가 이 기기의 ~/.claude, ~/.codex를 건드리지 않는다.
-  // CLI로 켠 러너도 이 Codex 설정을 읽어, 로그인이 없으니 Codex를 붙이지 않는다.
-  // CLI로 켠 러너는 실제 Claude Code 실행기를 쓰고 켤 때 고를 거리를 묻는다. 이 기기의 claude 대신 가짜를 부르게 PATH 앞에 둔다.
+  // The user settings of Claude Code and Codex that the CLI installs or reads are also put in a temp folder. Tests don't touch this machine's ~/.claude and ~/.codex.
+  // A runner started by the CLI also reads this Codex config, and with no login it doesn't attach Codex.
+  // A runner started by the CLI uses the real Claude Code executor and asks what to pick when it starts. Put a fake at the front of PATH so it calls that instead of this machine's claude.
   const bin = join(data, "bin");
   await mkdir(bin);
   await shim(bin, "claude", FAKE_CLAUDE);
@@ -871,18 +934,18 @@ export async function startWorld(
     owner,
     runner,
     login,
-    /** CLI가 세션을 남기는 폴더. */
+    /** Folder where the CLI keeps sessions. */
     config: join(data, "config"),
-    /** 이 기기의 Claude Code 사용자 설정 폴더(`~/.claude` 자리). `omagari setup`이 여기에 깐다. */
+    /** This machine's Claude Code user config folder (where `~/.claude` would be). `omagari setup` installs here. */
     claude: join(data, "claude"),
-    /** 이 기기의 Codex 사용자 설정 폴더(`~/.codex` 자리). `omagari setup`이 여기에 깐다. */
+    /** This machine's Codex user config folder (where `~/.codex` would be). `omagari setup` installs here. */
     codex: join(data, "codex"),
-    /** 이 기기의 CLI가 owner로 로그인해 둔 채 `omagari setup`을 돌린다(로그인 흐름은 login.test가 본다). */
+    /** Runs `omagari setup` as if this machine's CLI had logged in as owner. The login flow is covered by login.test. */
     async setup(...args: string[]) {
       await this.signInCli(owner);
       return this.cli("setup", ...args);
     },
-    /** 이 기기의 CLI가 `as`로 로그인해 둔 것처럼 세션을 남긴다. CLI로 로그인하는 흐름은 login.test가 본다. */
+    /** Keeps a session as if this machine's CLI had logged in as `as`. The flow of logging in through the CLI is covered by login.test. */
     async signInCli(as: { session: string }) {
       await mkdir(join(data, "config", "omagari"), { recursive: true });
       await writeFile(
@@ -891,8 +954,8 @@ export async function startWorld(
       );
     },
     /**
-     * 멤버 `as`의 눈으로 본 멤버마다의 에이전트 상태 하나. 붙은 에이전트가 있으면 그 상태,
-     * 없으면(러너를 켠 적이 없어 에이전트가 없어도) offline이다.
+     * One agent state per member, as seen by member `as`. If an agent is attached, its state;
+     * if not (even if the runner was never started so there is no agent), offline.
      */
     agents: async (as: { url: string; session: string }) =>
       Object.fromEntries(
@@ -901,12 +964,12 @@ export async function startWorld(
           member.agents.find((agent) => agent.state !== "offline")?.state ?? "offline",
         ]),
       ),
-    /** `as`가 채팅 채널을 만들고 그 id를 돌려준다. */
+    /** `as` creates a chat channel and returns its id. */
     channel: async (as: { url: string; session: string }, name = "일반") =>
       (await call(as, api.createChannel, { name })).channel.id,
     /**
-     * `as`가 채널에서 자기 에이전트(기본은 Claude Code)에게 DM으로 묻는다. 답을 기다리는 문답이 돌아온다.
-     * `pick`은 고른 모델과 effort다. 주지 않으면 "기본"이다.
+     * `as` asks their own agent (Claude Code by default) by DM in a channel. Returns the Q&A that is waiting for an answer.
+     * `pick` is the chosen model and effort. If not given, it's "default".
      */
     ask: async (
       as: { url: string; session: string; login: string },
@@ -914,21 +977,30 @@ export async function startWorld(
       message: string,
       executor: ExecutorId = "claude-code",
       pick: ModelPick = {},
-    ) => (await call(as, api.ask, { agent: as.login, executor, channel, message, ...pick })).qa,
-    /** `as`의 DM에서 문답 `qa`에 답이 오거나 실패할 때까지 기다리고 그 문답을 돌려준다. */
+    ) =>
+      (
+        await call(as, api.ask, {
+          agent: as.login,
+          executor,
+          channel,
+          message,
+          ...pick,
+        })
+      ).qa,
+    /** Waits until the Q&A `qa` in `as`'s DM gets an answer or fails, and returns that Q&A. */
     settled: (as: { url: string; session: string }, qa: Qa, timeoutMs?: number) =>
       eventually(async () => {
         const { qas } = await call(as, api.dms, { channel: qa.channel });
         const found = qas.find((other) => other.id === qa.id);
-        assert.ok(found && found.answer.state !== "pending", "아직 답을 기다린다");
+        assert.ok(found && found.answer.state !== "pending", "Still waiting for an answer");
         return found;
       }, timeoutMs),
-    /** 멤버 `as`의 눈으로 본 작업마다의 관측. */
+    /** Observations per work, as seen by member `as`. */
     works: async (as: { url: string; session: string }) => (await call(as, api.works)).works,
     /**
-     * 웹이 하듯 `as`의 세션으로 실시간 연결을 열고 hello를 보낸다. 서버가 처음 보낸 것(welcome이나 거절)을 받으면 돌려준다.
-     * `after`를 주면 그 번호 뒤의 메시지를 이어 받는다. `on`은 받을 워크스페이스나 레포다(주지 않으면 첫 워크스페이스).
-     * 받은 것은 모두 `received`에 쌓인다.
+     * Opens a live connection with `as`'s session as the web does and sends hello. Returns the first thing the server sent (welcome or a refusal).
+     * With `after`, it continues receiving messages after that number. `on` is the workspace or repo to receive (the first workspace if not given).
+     * Everything received piles up in `received`.
      */
     async live(
       as: { session: string },
@@ -946,22 +1018,24 @@ export async function startWorld(
       socket.addEventListener("message", ({ data }) => {
         const decoded = decode(serverToWeb, data);
         if ("error" in decoded)
-          throw new Error(`계약과 다른 것을 받았다: ${decoded.error.message}`);
+          throw new Error(
+            `Received something that differs from the contract: ${decoded.error.message}`,
+          );
         received.push(decoded.message);
       });
       socket.addEventListener("close", ({ code }) => closed.resolve(code));
       await eventually(() => assert(received.length > 0 || socket.readyState === WebSocket.CLOSED));
       return {
         received,
-        /** 받은 채널 메시지만, 받은 순서대로. */
+        /** Only channel messages received, in the order received. */
         messages: () => received.flatMap((m) => (m.kind === "message" ? [m.payload] : [])),
-        /** 마지막으로 받은 멤버 목록. 아직 없으면 던진다. `eventually`로 기다린다. */
+        /** The last member list received. Throws if none yet. Wait for it with `eventually`. */
         members() {
           const last = received.findLast((m) => m.kind === "members");
-          if (!last) throw new Error("아직 받은 멤버 목록이 없다");
+          if (!last) throw new Error("No member list received yet");
           return last.payload.members;
         },
-        /** 닫힌 코드. 서버가 거절하면 1008이다. */
+        /** The closed code. 1008 if the server refuses. */
         closed: closed.promise,
         close() {
           socket.close();
@@ -969,12 +1043,12 @@ export async function startWorld(
         },
       };
     },
-    /** 서버만 끈다. 러너들은 켜진 채 다시 붙으려 한다. `restartServer`로 다시 띄운다. */
+    /** Shuts down only the server. Runners stay on and try to reconnect. Restart with `restartServer`. */
     async stopServer() {
       serverDown = true;
       await server.stop();
     },
-    /** 서버를 끄고 같은 포트, 같은 DB로 다시 띄운다. 배포로 서버가 다시 뜨는 것과 같다. */
+    /** Shuts down the server and restarts it on the same port with the same DB. Same as the server restarting on a deploy. */
     async restartServer() {
       const { port } = new URL(server.url);
       if (!serverDown) await server.stop();
@@ -982,13 +1056,15 @@ export async function startWorld(
       serverDown = false;
     },
     /**
-     * 멤버 `as`의 레포 폴더 하나와 그 폴더에서 켠 러너. 멤버마다 기기가 따로다. 관측은 짧게 돈다.
-     * `executors`를 주지 않으면 늘 실패하는 Claude Code 실행기가 꽂힌다. `extra`는 러너에 더 넘길 것(샌드박스, 잠잠한 시간)과 폴더의 원격 레포다.
+     * One repo folder of member `as` and the runner started in that folder. Each member has their own machine. Observation runs briefly.
+     * If `executors` isn't given, an always-failing Claude Code executor is plugged in. `extra` is what else to pass to the runner (sandbox, quiet time) and the folder's remote repo.
      */
     async desk(
       as: { session: string },
       share?: ShareLevel,
-      executors: Partial<Record<ExecutorId, Executor>> = { "claude-code": noExecutor },
+      executors: Partial<Record<ExecutorId, Executor>> = {
+        "claude-code": noExecutor,
+      },
       {
         repo: on,
         ...extra
@@ -996,7 +1072,7 @@ export async function startWorld(
         sandbox?: Sandbox;
         quietMs?: number;
         mergeCheck?: "on" | "off";
-        /** 폴더의 원격 레포. 주지 않으면 `REPO`다. */
+        /** The folder's remote repo. If not given, `REPO`. */
         repo?: string;
       } = {},
     ) {
@@ -1025,42 +1101,49 @@ export async function startWorld(
       };
     },
     /**
-     * owner 레포에 `branch`를 새로 딴 연결된 워크트리를 하나 더 만들고 그 폴더를 돌려준다. owner의 러너 하나가 함께 관측한다.
-     * 한 사람이 브랜치마다 세션을 따로 돌리는 모습이다(ADR-0041). 서버의 임시 폴더 안에 두어 함께 지워진다.
+     * Makes one more linked worktree of the owner repo with a new `branch`, and returns that folder. One of the owner's runners observes along with it.
+     * It's one person running a separate session per branch (ADR-0041). Put inside the server's temp folder so it's removed with it.
      */
     async worktree(branch: string) {
       const folder = join(await realpath(data), "trees", branch);
       await repo.git("worktree", "add", "-b", branch, folder);
       return folder;
     },
-    /** `omagari <args>`를 레포 폴더에서 돌린다. */
+    /** Runs `omagari <args>` in the repo folder. */
     cli: (...args: string[]) =>
-      run(process.execPath, [CLI, ...args], { cwd: repo.folder, env: cliEnv() }),
-    /** `omagari <args>`를 `cwd`에서 돌린다. */
+      run(process.execPath, [CLI, ...args], {
+        cwd: repo.folder,
+        env: cliEnv(),
+      }),
+    /** Runs `omagari <args>` in `cwd`. */
     cliIn: (cwd: string, ...args: string[]) =>
       run(process.execPath, [CLI, ...args], { cwd, env: cliEnv() }),
-    /** `omagari <args>`를 OMAGARI_SERVER 없이 레포 폴더에서 돌린다. 저장된 서버 주소로만 서버를 찾는다. */
+    /** Runs `omagari <args>` in the repo folder without OMAGARI_SERVER. It finds the server only through the saved server address. */
     cliBare: (...args: string[]) =>
       run(process.execPath, [CLI, ...args], {
         cwd: repo.folder,
         env: { ...cliEnv(), OMAGARI_SERVER: undefined },
       }),
-    /** 끝나기 전에 출력을 봐야 하는 `omagari <args>`를 OMAGARI_SERVER 없이 띄운다(setup의 로그인). */
+    /** Starts `omagari <args>` without OMAGARI_SERVER when its output must be read before it ends (the login in setup). */
     launchBare: (...args: string[]) =>
       launch(process.execPath, [CLI, ...args], {
         cwd: repo.folder,
         env: { ...cliEnv(), OMAGARI_SERVER: undefined },
       }),
-    /** 끝나지 않는 `omagari <args>`(러너)를 `cwd`에서 띄운다. */
+    /** Starts `omagari <args>` (the runner), which doesn't end, in `cwd`. */
     launchCliIn: (cwd: string, ...args: string[]) =>
       launch(process.execPath, [CLI, ...args], { cwd, env: cliEnv() }),
-    /** 에이전트가 하듯 설정에 적힌 훅 명령 한 줄을 `sh -c`로 `cwd`에서 돌리고 입력(JSON)을 넣는다. */
+    /** Like an agent does, runs one hook command line written in the config with `sh -c` in `cwd` and feeds it input (JSON). */
     shell: (command: string, stdin: string, cwd = repo.folder) =>
       run("sh", ["-c", command], { cwd, stdin }),
-    /** 실행기(기본은 Claude Code)에 깔린 훅 실행 파일에 에이전트가 주는 입력(JSON)을 넣어 돌린다. */
+    /** Feeds the input (JSON) an agent gives to the installed hook executable of the executor (Claude Code by default) and runs it. */
     hook: (
       stdin: string,
-      options: { keepStdinOpen?: boolean; executor?: ExecutorId; cwd?: string } = {},
+      options: {
+        keepStdinOpen?: boolean;
+        executor?: ExecutorId;
+        cwd?: string;
+      } = {},
     ) =>
       run(process.execPath, [HOOK, options.executor ?? "claude-code"], {
         cwd: options.cwd ?? repo.folder,

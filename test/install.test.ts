@@ -17,8 +17,8 @@ const readSettings = async (world: World): Promise<Settings> =>
   JSON.parse(await readFile(settingsFile(world), "utf8"));
 
 /**
- * Claude Code가 하듯 설정에서 `event`의 훅 가운데 `value`(도구 이름, 세션이 시작된 까닭)에 걸리는 명령을 고른다.
- * matcher가 없거나 "*"면 모두에 걸리고, 이름을 `|`로 이은 것이면 그 이름들에 걸린다. 이 테스트의 설정에 다른 꼴은 없다.
+ * Like Claude Code, pick the commands of the hooks for `event` in the settings that match `value` (the tool name, or why the session started).
+ * A missing matcher or "*" matches everything; names joined with `|` match those names. This test's settings have no other shape.
  */
 function matching(settings: Settings, event: string, value: string) {
   return (settings.hooks[event] ?? [])
@@ -41,11 +41,15 @@ const editInput = (cwd: string, file: string) => ({
   permission_mode: "default",
   hook_event_name: "PreToolUse",
   tool_name: "Edit",
-  tool_input: { file_path: join(cwd, file), old_string: "pay", new_string: "pay()" },
+  tool_input: {
+    file_path: join(cwd, file),
+    old_string: "pay",
+    new_string: "pay()",
+  },
   tool_use_id: "toolu_01",
 });
 
-/** 깔린 명령을 에이전트처럼 돌리고 넣은 글을 돌려준다. 훅은 0으로 끝나고 stderr에 쓰지 않는다. */
+/** Run the installed command like an agent and return the text it adds. The hook exits 0 and writes nothing to stderr. */
 async function runInstalled(world: World, command: string, input: object, event: string) {
   const { code, stdout, stderr } = await world.shell(command, JSON.stringify(input));
   assert.deepEqual({ code, stderr }, { code: 0, stderr: "" });
@@ -55,7 +59,7 @@ async function runInstalled(world: World, command: string, input: object, event:
   return hookSpecificOutput.additionalContext as string;
 }
 
-test("omagari install 하나로 Claude Code에 두 훅과 상태 한 줄 스킬이 깔리고, 새 작업 세션에서 깔린 두 훅이 돈다", async (t) => {
+test("one omagari install sets up the two hooks and the status-line skill in Claude Code, and both hooks run in a new work session", async (t) => {
   const world = await startWorld({ observeMs: 50 });
   t.after(world.stop);
   world.github.grant("alice");
@@ -74,7 +78,7 @@ test("omagari install 하나로 Claude Code에 두 훅과 상태 한 줄 스킬�
   );
   assert.ok(installed.stdout.includes(skillFile), installed.stdout);
 
-  // 새 세션의 Claude Code가 읽는 설정. 세션 시작은 어떻게 시작했든(비우기와 컴팩트도) 걸리고, 편집 전 훅은 파일을 고치는 도구와 셸 명령에만 걸린다.
+  // The settings a new Claude Code session reads. Session start matches however it started (clear and compact too); the before-edit hook matches only file-editing tools and shell commands.
   const settings = await readSettings(world);
   for (const source of ["startup", "resume", "clear", "compact"]) {
     assert.equal(matching(settings, "SessionStart", source).length, 1, source);
@@ -99,7 +103,7 @@ test("omagari install 하나로 Claude Code에 두 훅과 상태 한 줄 스킬�
     /^Omagari: other Work is also changing the file you're about to edit, "pay\.ts"[\s\S]*<omagari-nearby>\n- alice · branch "main" · /,
   );
 
-  // 스킬의 설명은 늘 에이전트의 맥락에 있고, 본문은 에이전트가 스킬을 쓸 때 읽는다.
+  // The skill's description is always in the agent's context; the body is read when the agent uses the skill.
   const skill = await readFile(skillFile, "utf8");
   const [, frontmatter = "", body = ""] = skill.split(/^---\n/m);
   assert.match(frontmatter, /^name: omagari-status$/m);
@@ -114,11 +118,11 @@ test("omagari install 하나로 Claude Code에 두 훅과 상태 한 줄 스킬�
     "omagari ask",
     "omagari wait",
   ]) {
-    assert.ok(description.includes(said), `설명에 ${said}가 없다: ${description}`);
+    assert.ok(description.includes(said), `description is missing ${said}: ${description}`);
   }
   assert.match(body, /\*\*When you finish\*\*: write `Done: <summary>`/);
   assert.match(body, /^omagari status set "Done: .+"$/m);
-  // 묻기와 기다리기: 언제 묻고 언제 기다리는지, 답 없음은 답이나 승인이 아니다.
+  // Asking and waiting: when to ask, when to wait, and no answer is not an answer or approval.
   assert.match(body, /^## Asking and waiting$/m);
   assert.match(body, /\*\*When to ask\*\*/);
   assert.match(body, /\*\*When to wait\*\*/);
@@ -127,10 +131,10 @@ test("omagari install 하나로 Claude Code에 두 훅과 상태 한 줄 스킬�
   assert.match(body, /^omagari wait \d+$/m);
 });
 
-test("이미 있는 설정과 훅은 그대로 두고 Omagari 훅만 더하며, 두 번 깔아도 경로가 바뀌어 다시 깔아도 하나만 남는다", async (t) => {
+test("existing settings and hooks stay as they are and only the Omagari hook is added; installing twice leaves one even if the path changed", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
-  // 이 레포가 쓰는 실제 설정(git-guardrails, Impeccable 훅)에 다른 설정과 예전에 다른 경로로 깐 Omagari 훅을 더한 것.
+  // The real settings this repo uses (git-guardrails, Impeccable hook), plus other settings and an Omagari hook installed earlier with a different path.
   const repo: Settings = JSON.parse(
     await readFile(new URL("../.claude/settings.json", import.meta.url), "utf8"),
   );
@@ -155,7 +159,7 @@ test("이미 있는 설정과 훅은 그대로 두고 Omagari 훅만 더하며, 
   assert.equal((await world.setup()).code, 0);
   const first = await readFile(settingsFile(world), "utf8");
   const { SessionStart = [], PreToolUse = [], ...others } = (await readSettings(world)).hooks;
-  // 원래 있던 것은 그대로다. 예전 Omagari 훅만 빠졌다(그것만 든 묶음은 묶음째).
+  // What was there stays. Only the old Omagari hook is gone (a group holding only that goes whole).
   assert.deepEqual(
     {
       ...(await readSettings(world)),
@@ -174,7 +178,7 @@ test("이미 있는 설정과 훅은 그대로 두고 Omagari 훅만 더하며, 
       },
     },
   );
-  // 새 Omagari 훅은 이벤트마다 맨 뒤에 하나다. 이 기기의 Node로 이 레포의 훅을 돌리고, 실행기를 넘긴다.
+  // The new Omagari hook is last for each event. Run this repo's hook with this machine's Node and pass the runner.
   const command = SessionStart.at(-1)?.hooks[0]?.command ?? "";
   assert.ok(command.startsWith(`'${process.execPath}' '`), command);
   assert.match(command, /\/packages\/hooks\/src\/main\.ts' claude-code$/);
@@ -184,10 +188,14 @@ test("이미 있는 설정과 훅은 그대로 두고 Omagari 훅만 더하며, 
   assert.deepEqual(PreToolUse.at(-1), { matcher: EDIT_MATCHER, hooks: [ours] });
 
   assert.equal((await world.setup()).code, 0);
-  assert.equal(await readFile(settingsFile(world), "utf8"), first, "두 번째는 바꾸는 것이 없다");
+  assert.equal(
+    await readFile(settingsFile(world), "utf8"),
+    first,
+    "the second run changes nothing",
+  );
 });
 
-test("읽을 수 없는 설정 파일은 건드리지 않고 멈춘다", async (t) => {
+test("an unreadable settings file is left alone and the install stops", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
   await mkdir(world.claude, { recursive: true });
@@ -204,7 +212,7 @@ test("읽을 수 없는 설정 파일은 건드리지 않고 멈춘다", async (
   }
 });
 
-test("이 기기의 모든 레포에서 돌지만, Omagari 러너를 켠 적 없는 Git 레포에서는 두 훅이 아무것도 넣지도 남기지도 않는다", async (t) => {
+test("hooks run in every repo on this machine, but in a Git repo that never ran the Omagari runner they add and leave nothing", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
   const other = await tempRepo();
@@ -231,7 +239,7 @@ test("이 기기의 모든 레포에서 돌지만, Omagari 러너를 켠 적 없
   await assert.rejects(access(join(other.folder, ".git", "omagari")));
 });
 
-test("omagari setup <주소>는 깨끗한 홈에서 로그인하고 훅을 깔고 주소를 남겨, OMAGARI_SERVER 없이도 status가 그 서버에 닿는다", async (t) => {
+test("omagari setup <address> logs in on a clean home, installs the hooks and keeps the address, so status reaches that server even without OMAGARI_SERVER", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
   world.github.grant("alice");
@@ -250,7 +258,7 @@ test("omagari setup <주소>는 깨끗한 홈에서 로그인하고 훅을 깔�
   assert.equal(status.code, 0, status.stderr);
   assert.match(status.stdout, /alice|owner/);
 
-  // 한 번 더: 바뀌는 것이 없고, 다시 로그인하지 않으며, 훅은 하나다.
+  // Once more: nothing changes, it doesn't log in again, and there is one hook.
   const before = await readFile(settingsFile(world), "utf8");
   const again = await world.cliBare("setup");
   assert.equal(again.code, 0, again.stderr);
@@ -258,7 +266,7 @@ test("omagari setup <주소>는 깨끗한 홈에서 로그인하고 훅을 깔�
   assert.equal(await readFile(settingsFile(world), "utf8"), before);
 });
 
-test("omagari uninstall은 훅과 스킬을 빼서 에이전트 설정을 setup 전으로 되돌리고, --sign-out이 있어야 세션을 지운다", async (t) => {
+test("omagari uninstall removes the hooks and skills and puts the agent config back to before setup, and only --sign-out deletes the session", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
   await mkdir(world.claude, { recursive: true });
@@ -279,7 +287,7 @@ test("omagari uninstall은 훅과 스킬을 빼서 에이전트 설정을 setup 
   assert.equal(removed.code, 0, removed.stderr);
   assert.equal(await readFile(settingsFile(world), "utf8"), `${seed}\n`);
   await assert.rejects(access(join(world.claude, "skills", "omagari-status")));
-  // 설정 파일이 없던 Codex는 파일도 남지 않는다.
+  // Codex, which had no config file, is left with no file either.
   await assert.rejects(access(join(world.codex, "hooks.json")));
   const sessions = join(world.config, "omagari", "sessions.json");
   assert.ok((await readFile(sessions, "utf8")).includes(world.server.url));

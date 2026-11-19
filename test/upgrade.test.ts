@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { api, call } from "@omagari/contract";
 import { eventually, fakeExecutor, said, startWorld } from "./harness.ts";
 
-test("v0.1.0이 만든 DB로도 뜨고, 예전 메시지는 그대로 읽히며, 문답을 글과 함께 올린다", async (t) => {
+test("boots from a DB made by v0.1.0, reads old messages as they were, and posts a Q&A with text", async (t) => {
   const world = await startWorld({
     executor: fakeExecutor().executor,
     seed: await readFile(new URL("./v0.1.0.sql", import.meta.url), "utf8"),
@@ -13,40 +13,46 @@ test("v0.1.0이 만든 DB로도 뜨고, 예전 메시지는 그대로 읽히며,
   world.github.grant("alice");
   const alice = await world.login("alice");
 
-  // 예전 글과, 글 없이 올라간 예전 문답이 그대로다.
+  // The old post and the old Q&A posted without text are unchanged.
   const before = (await call(alice, api.history, { channel: "c0" })).messages;
-  assert.deepEqual(before.map(said), ["예전 글", "문답: 예전에 올린 질문"]);
+  assert.deepEqual(before.map(said), ["예전 글", "QA: 예전에 올린 질문"]);
   assert.equal("text" in (before[1] ?? {}), false);
 
-  const qa = await world.settled(world.owner, await world.ask(world.owner, "c0", "새 질문"));
-  const { message } = await call(world.owner, api.postQa, { qa: qa.id, text: "같이 봐 주세요" });
-  assert.equal(message.kind === "qa" && message.text, "같이 봐 주세요");
+  const qa = await world.settled(world.owner, await world.ask(world.owner, "c0", "New question"));
+  const { message } = await call(world.owner, api.postQa, {
+    qa: qa.id,
+    text: "Please take a look together",
+  });
+  assert.equal(message.kind === "qa" && message.text, "Please take a look together");
   assert.deepEqual((await call(alice, api.history, { channel: "c0" })).messages, [
     ...before,
     message,
   ]);
-  // 그 판 뒤에 더한 상태 메시지의 이모지도 쓴다.
-  assert.deepEqual(await call(alice, api.setStatusMessage, { message: "회의 중", emoji: "📅" }), {
-    message: "회의 중",
-    emoji: "📅",
-  });
+  // Also use the emoji of a status message added after that version.
+  assert.deepEqual(
+    await call(alice, api.setStatusMessage, { message: "In a meeting", emoji: "📅" }),
+    {
+      message: "In a meeting",
+      emoji: "📅",
+    },
+  );
 
-  // 다시 떠도(이미 고친 DB) 그대로다. 꺼진 서버와의 연결이 끊긴 채 남아 있어 첫 요청이 실패할 수 있다.
+  // It stays the same after another restart (the already-fixed DB). The first request may fail because the connection to the stopped server is left broken.
   await world.restartServer();
   await eventually(async () =>
     assert.deepEqual((await call(alice, api.history, { channel: "c0" })).messages.at(-1), message),
   );
 });
 
-test("라벨이 없던 판의 포스트에 종류 라벨과 확인됨이 붙고, 이미 열린 이슈는 참고가 되어도 닫히지 않는다. 부딪힘 포럼은 논의 포럼이 된다", async (t) => {
+test("posts in a DB without labels get a kind label and Confirmed, an already open issue is not closed when it becomes reference, and the conflict forum becomes the discuss forum", async (t) => {
   const world = await startWorld({
     followMs: 50,
     seed: await readFile(new URL("./contract32.sql", import.meta.url), "utf8"),
   });
   t.after(world.stop);
   for (const [number, title, labels] of [
-    [101, "pay.ts 직접 충돌", ["직접 충돌"]],
-    [102, "pay 간접 충돌", ["간접 충돌", "확인됨"]],
+    [101, "pay.ts direct conflict", ["직접 충돌"]],
+    [102, "pay indirect conflict", ["간접 충돌", "확인됨"]],
   ] as const)
     world.github.issues.push({
       number,
@@ -66,7 +72,7 @@ test("라벨이 없던 판의 포스트에 종류 라벨과 확인됨이 붙고,
       [["Indirect conflict", "Confirmed"], "discuss"],
     ],
   );
-  // 이슈 맞추기가 여러 번 돌아도 참고 포스트의 이슈는 열린 채다.
+  // Even if issue syncing runs several times, the issue of a reference post stays open.
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.deepEqual(
     world.github.issues.map((issue) => [issue.number, issue.open, issue.labels]),
@@ -79,7 +85,7 @@ test("라벨이 없던 판의 포스트에 종류 라벨과 확인됨이 붙고,
     (await call(world.owner, api.posts)).posts.map((post) => post.issue?.open),
     [true, true],
   );
-  // 예전 "부딪힘" 포럼(f0)은 "논의"로 거르는 "논의" 포럼이 되고, "참고" 포럼이 생긴다(ADR-0039). 포스트는 중요도대로 보인다.
+  // The old "conflict" forum (f0) becomes the "Discuss" forum, which filters by "discuss", and a "FYI" forum is created (ADR-0039). Posts are shown by importance.
   const { channels } = await call(world.owner, api.channels);
   const reference = channels.find((c) => c.name === "FYI");
   assert.deepEqual(channels, [

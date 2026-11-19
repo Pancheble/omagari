@@ -1,26 +1,26 @@
-// 실제 GitHub 손 점검(이슈 #124). 서버의 진짜 `GitHub`(`realGitHub`)가 실제 GitHub에서 결정 PR(#83)과
-// 포스트 이슈(#122)에 필요한 일을 하는지 본다. 가짜 GitHub(`test/harness.ts`)는 우리가 생각한 GitHub이라 대신 못 한다.
-// 시험용 레포에 대고 사람이 돌린다. 이름이 *.test.ts가 아니라 CI(`npm test`)는 돌리지 않는다.
-// 돌리는 법과 읽는 법: docs/github-check.md
+// Manual check against real GitHub (issue #124). Checks that the server's real `GitHub` (`realGitHub`) does what the decision PR (#83) and
+// the post issue (#122) need on real GitHub. The fake GitHub (`test/harness.ts`) is the GitHub we imagined, so it can't stand in for this.
+// A person runs it against a test repo. It isn't named *.test.ts, so CI (`npm test`) doesn't run it.
+// How to run and read it: docs/github-check.md
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { parseArgs } from "node:util";
 import { realGitHub } from "@omagari/server";
 
-const USAGE = `쓰는 법: node test/real-github.ts --repo owner/name
-필요한 것:
-  --repo owner/name        점검에 쓸 시험용 레포. 브랜치, PR, 이슈를 만들고 머지한다. 쓰던 레포는 안 된다.
-  토큰                     환경 변수 GITHUB_TOKEN, 없으면 \`gh auth token\`. 레포에 push할 수 있어야 한다.
-  (선택) 환경 변수 GITHUB_REVIEWER_TOKEN  다른 계정의 토큰. 있으면 그 계정으로 변경 요청 리뷰를 단다.`;
+const USAGE = `Usage: node test/real-github.ts --repo owner/name
+What you need:
+  --repo owner/name        A test repo for the check. It creates branches, PRs and issues and merges them. Don't use a repo you work in.
+  token                    The GITHUB_TOKEN environment variable, or \`gh auth token\` if unset. It must be able to push to the repo.
+  (optional) env GITHUB_REVIEWER_TOKEN  A token for another account. If set, that account posts a changes-requested review.`;
 
 const { values } = parseArgs({ options: { repo: { type: "string" } } });
 const repo = values.repo ?? "";
 if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
-  console.error(`--repo owner/name이 필요하다.\n${USAGE}`);
+  console.error(`--repo owner/name is required.\n${USAGE}`);
   process.exit(2);
 }
 
-/** 토큰은 환경 변수, 없으면 gh. 값은 어디에도 찍지 않는다. */
+/** The token comes from the environment variable, or gh if unset. The value is never printed anywhere. */
 function ghToken() {
   try {
     return execFileSync("gh", ["auth", "token"], {
@@ -33,12 +33,12 @@ function ghToken() {
 }
 const token = process.env.GITHUB_TOKEN || ghToken();
 if (!token) {
-  console.error(`토큰이 없다. GITHUB_TOKEN을 두거나 \`gh auth login\`을 하라.\n${USAGE}`);
+  console.error(`No token. Set GITHUB_TOKEN or run \`gh auth login\`.\n${USAGE}`);
   process.exit(2);
 }
 const reviewerToken = process.env.GITHUB_REVIEWER_TOKEN || undefined;
 
-const github = realGitHub(""); // 클라이언트 id는 기기 인증에만 쓴다
+const github = realGitHub(""); // the client id is used only for device auth
 const id = randomBytes(3).toString("hex");
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 const progress = (line: string) =>
@@ -48,7 +48,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 type Check = { name: string; status: "pass" | "fail" | "skip"; detail: string };
 const checks: Check[] = [];
 
-/** 점검 하나. 던지면 실패로 적고 다음으로 간다. 돌려준 글이 자세한 내용이다. */
+/** One check. If it throws, it is recorded as a failure and we move on. The text it returns is the detail. */
 async function attempt<T>(name: string, run: () => Promise<{ detail: string; value?: T }>) {
   progress(`  ${name}`);
   try {
@@ -64,7 +64,7 @@ const skip = (name: string, detail: string) => checks.push({ name, status: "skip
 function expect(ok: unknown, what: string): asserts ok {
   if (!ok) throw new Error(what);
 }
-/** 방금 쓴 것이 읽히기까지 GitHub이 조금 걸릴 수 있어 몇 번 다시 본다. */
+/** What was just written can take GitHub a moment to become readable, so look a few times. */
 async function eventually<T>(read: () => Promise<T | undefined>, ok: (value: T) => boolean) {
   let last: T | undefined;
   for (let i = 0; i < 6; i++) {
@@ -72,10 +72,10 @@ async function eventually<T>(read: () => Promise<T | undefined>, ok: (value: T) 
     if (last !== undefined && ok(last)) return last;
     await sleep(1000);
   }
-  throw new Error(`6초 안에 읽히지 않았다: ${JSON.stringify(last)}`);
+  throw new Error(`not readable within 6 seconds: ${JSON.stringify(last)}`);
 }
 
-/** 인터페이스에 없는 일(리뷰, 브랜치와 라벨 지우기)을 위한 날 요청. 점검 준비와 정리에만 쓴다. */
+/** A raw request for things the interface doesn't have (reviews, deleting branches and labels). Used only for setup and cleanup of the check. */
 const raw = (path: string, who: string, method: string, body?: object) =>
   fetch(`https://api.github.com${path}`, {
     method,
@@ -88,53 +88,65 @@ const raw = (path: string, who: string, method: string, body?: object) =>
     signal: AbortSignal.timeout(10_000),
   });
 
-const opened = { pulls: [] as number[], issues: [] as number[], branches: [] as string[] };
+const opened = {
+  pulls: [] as number[],
+  issues: [] as number[],
+  branches: [] as string[],
+};
 const label = `omagari-check-${id}`;
-const file = (n: number) => ({ path: `omagari-check/${id}.txt`, content: `점검 ${id} 판 ${n}\n` });
+const file = (n: number) => ({
+  path: `omagari-check/${id}.txt`,
+  content: `check ${id} version ${n}\n`,
+});
 
-progress(`${repo} 점검 ${id}`);
+progress(`${repo} check ${id}`);
 const login = await attempt("user", async () => {
   const me = await github.user(token);
-  expect(me.login, "로그인 이름이 없다");
-  return { detail: `${me.login}(이름 ${me.name ?? "없음"})`, value: me.login };
+  expect(me.login, "no login name");
+  return { detail: `${me.login}(name ${me.name ?? "none"})`, value: me.login };
 });
 await attempt("canPush", async () => {
   const found = await github.canPush(token, repo);
-  expect(found?.push === true, `push 권한이 있다고 답하지 않았다: ${JSON.stringify(found)}`);
-  return { detail: `true(GitHub의 이름 ${found?.name})` };
+  expect(found?.push === true, `didn't answer that push access exists: ${JSON.stringify(found)}`);
+  return { detail: `true(GitHub's name ${found?.name})` };
 });
 await attempt("canAdmin", async () => {
   const admin = await github.canAdmin(token, repo);
-  expect(typeof admin === "boolean", `Admin인지 답하지 않았다: ${admin}`);
+  expect(typeof admin === "boolean", `didn't answer whether Admin: ${admin}`);
   return { detail: String(admin) };
 });
 await attempt("adminRepos", async () => {
   const found = await github.adminRepos(token, repo.split("/")[0] as string);
-  expect(Array.isArray(found), `Admin인 레포를 읽지 못했다: ${found}`);
-  return { detail: found?.map((r) => `${r.name}(${r.pushers})`).join(", ") || "없음" };
+  expect(Array.isArray(found), `couldn't read the Admin repos: ${found}`);
+  return {
+    detail: found?.map((r) => `${r.name}(${r.pushers})`).join(", ") || "none",
+  };
 });
 const base = await attempt("defaultBranch", async () => {
   const b = await github.defaultBranch(token, repo);
-  expect(b.name && /^[0-9a-f]{40}$/.test(b.sha), `이름이나 sha가 이상하다: ${JSON.stringify(b)}`);
+  expect(
+    b.name && /^[0-9a-f]{40}$/.test(b.sha),
+    `the name or sha looks wrong: ${JSON.stringify(b)}`,
+  );
   return { detail: `${b.name} ${b.sha.slice(0, 7)}`, value: b };
 });
 
-// 결정 PR(#83)
-/** 새 브랜치에 커밋 하나를 올리고 PR을 연다. */
+// Decision PR (#83)
+/** Pushes one commit on a new branch and opens a PR. */
 async function newPull(b: { name: string; sha: string }, suffix: string) {
   const branch = `check/${id}-${suffix}`;
   await github.commit(token, repo, {
     branch,
     base: b.sha,
-    message: `점검 ${id} ${suffix}`,
+    message: `check ${id} ${suffix}`,
     files: [file(1)],
   });
   opened.branches.push(branch);
   const pull = await github.openPull(token, repo, {
     head: branch,
     base: b.name,
-    title: `점검 ${id} ${suffix}`,
-    body: "omagari의 실제 GitHub 점검(test/real-github.ts)이 연 PR이다. 점검이 끝나면 닫힌다.",
+    title: `check ${id} ${suffix}`,
+    body: "A PR opened by omagari's real GitHub check (test/real-github.ts). It is closed when the check ends.",
   });
   opened.pulls.push(pull.number);
   return { branch, ...pull };
@@ -145,7 +157,7 @@ if (base) {
     const pull = await newPull(base, "a");
     expect(
       pull.number > 0 && pull.url.startsWith("https://"),
-      `PR이 이상하다: ${JSON.stringify(pull)}`,
+      `the PR looks wrong: ${JSON.stringify(pull)}`,
     );
     return { detail: `#${pull.number} ${pull.url}`, value: pull };
   });
@@ -157,86 +169,94 @@ if (base) {
       );
       expect(
         list[0].open && !list[0].draft && !list[0].mergedAt,
-        `열린 PR이어야 한다: ${JSON.stringify(list[0])}`,
+        `it should be an open PR: ${JSON.stringify(list[0])}`,
       );
       const one = await github.pull(token, repo, m.number);
-      expect(one?.title === `점검 ${id} a`, `번호로 읽은 제목이 다르다: ${JSON.stringify(one)}`);
-      return { detail: `브랜치로 1개, 번호로 읽은 제목 "${one.title}"` };
+      expect(
+        one?.title === `check ${id} a`,
+        `the title read by number differs: ${JSON.stringify(one)}`,
+      );
+      return { detail: `1 by branch, title read by number "${one.title}"` };
     });
     await attempt("read + list", async () => {
       const f = file(1);
       const text = await github.read(token, repo, m.branch, f.path);
-      expect(text === f.content, `파일 내용이 다르다: ${JSON.stringify(text)}`);
+      expect(text === f.content, `the file content differs: ${JSON.stringify(text)}`);
       const names = await github.list(token, repo, m.branch, "omagari-check");
-      expect(names.includes(`${id}.txt`), `폴더 목록에 없다: ${JSON.stringify(names)}`);
-      const none = await github.read(token, repo, m.branch, `omagari-check/없는-${id}.txt`);
-      expect(none === null, `없는 파일은 null이어야 한다: ${JSON.stringify(none)}`);
-      return { detail: "파일 내용, 폴더 목록, 없는 파일 null" };
+      expect(names.includes(`${id}.txt`), `not in the folder listing: ${JSON.stringify(names)}`);
+      const none = await github.read(token, repo, m.branch, `omagari-check/missing-${id}.txt`);
+      expect(none === null, `a missing file should be null: ${JSON.stringify(none)}`);
+      return { detail: "file content, folder listing, missing file null" };
     });
     await attempt("addCommit", async () => {
       const f = file(2);
       await github.addCommit(token, repo, {
         branch: m.branch,
-        message: `점검 ${id} a2`,
+        message: `check ${id} a2`,
         files: [f],
       });
       const text = await github.read(token, repo, m.branch, f.path);
-      expect(text === f.content, `고쳐 올린 내용이 읽히지 않는다: ${JSON.stringify(text)}`);
-      return { detail: "브랜치 끝에 커밋을 더해 내용이 바뀌었다" };
+      expect(text === f.content, `the updated content can't be read: ${JSON.stringify(text)}`);
+      return {
+        detail: "added a commit at the branch tip and the content changed",
+      };
     });
-    await attempt("changesRequested (리뷰 없음)", async () => {
+    await attempt("changesRequested (no review)", async () => {
       const who = await github.changesRequested(token, repo, m.number);
-      expect(Array.isArray(who) && who.length === 0, `빈 목록이어야 한다: ${JSON.stringify(who)}`);
+      expect(
+        Array.isArray(who) && who.length === 0,
+        `it should be an empty list: ${JSON.stringify(who)}`,
+      );
       return { detail: "[]" };
     });
     if (reviewerToken && login) {
-      await attempt("changesRequested (변경 요청 리뷰)", async () => {
+      await attempt("changesRequested (changes-requested review)", async () => {
         const reviewer = (await github.user(reviewerToken)).login;
         expect(
           reviewer !== login,
-          "두 번째 토큰이 같은 계정이다. GitHub은 자기 PR에 변경 요청을 못 단다",
+          "the second token is the same account. GitHub can't post a changes request on your own PR",
         );
         const response = await raw(
           `/repos/${repo}/pulls/${m.number}/reviews`,
           reviewerToken,
           "POST",
-          { event: "REQUEST_CHANGES", body: "점검용 변경 요청" },
+          { event: "REQUEST_CHANGES", body: "changes request for the check" },
         );
-        expect(response.ok, `변경 요청 리뷰를 달지 못했다: HTTP ${response.status}`);
+        expect(response.ok, `couldn't post the changes-requested review: HTTP ${response.status}`);
         const who = await eventually(
           () => github.changesRequested(token, repo, m.number),
           (list) => list.length > 0,
         );
         expect(
           who.length === 1 && who[0] === reviewer,
-          `${reviewer}를 돌려줘야 한다: ${JSON.stringify(who)}`,
+          `it should return ${reviewer}: ${JSON.stringify(who)}`,
         );
-        return { detail: `${reviewer}를 돌려줬다` };
+        return { detail: `returned ${reviewer}` };
       });
     } else {
       skip(
-        "changesRequested (변경 요청 리뷰)",
-        "GITHUB_REVIEWER_TOKEN(다른 계정의 토큰)이 없다. GitHub은 자기 PR에 변경 요청을 못 단다",
+        "changesRequested (changes-requested review)",
+        "no GITHUB_REVIEWER_TOKEN (another account's token). GitHub can't post a changes request on your own PR",
       );
     }
     await attempt("merge", async () => {
-      // GitHub이 머지 가능 여부를 계산하는 데 시간이 걸려 먼저 막힐 수 있다. 몇 번 다시 한다.
+      // GitHub takes time to work out whether it can merge, so it may block at first. Retry a few times.
       let result = await github.merge(token, repo, m.number);
       for (let i = 0; i < 5 && "reason" in result; i++) {
         await sleep(2000);
         result = await github.merge(token, repo, m.number);
       }
-      expect("merged" in result, `머지되지 않았다: ${"reason" in result ? result.reason : ""}`);
+      expect("merged" in result, `it wasn't merged: ${"reason" in result ? result.reason : ""}`);
       const one = await eventually(
         () => github.pull(token, repo, m.number),
         (pull) => !pull.open,
       );
-      expect(one.mergedAt, `머지됐는데 mergedAt이 없다: ${JSON.stringify(one)}`);
+      expect(one.mergedAt, `it was merged but there is no mergedAt: ${JSON.stringify(one)}`);
       return { detail: `merged, mergedAt ${one.mergedAt}` };
     });
   }
 
-  const closing = await attempt("openPull (닫을 PR)", async () => {
+  const closing = await attempt("openPull (PR to close)", async () => {
     const pull = await newPull(base, "b");
     return { detail: `#${pull.number}`, value: pull };
   });
@@ -247,23 +267,23 @@ if (base) {
         () => github.pull(token, repo, closing.number),
         (pull) => !pull.open,
       );
-      expect(!one.mergedAt, `머지 없이 닫혀야 한다: ${JSON.stringify(one)}`);
-      return { detail: "머지 없이 닫혔다" };
+      expect(!one.mergedAt, `it should be closed without a merge: ${JSON.stringify(one)}`);
+      return { detail: "closed without a merge" };
     });
   }
 }
 
-// 포스트 이슈(#122)
-const issue = await attempt("openIssue (레포에 없는 라벨)", async () => {
+// Post issue (#122)
+const issue = await attempt("openIssue (label not in the repo)", async () => {
   const made = await github.openIssue(token, repo, {
-    title: `점검 ${id}`,
-    body: "omagari의 실제 GitHub 점검이 연 이슈다. 점검이 끝나면 닫힌다.",
+    title: `check ${id}`,
+    body: "An issue opened by omagari's real GitHub check. It is closed when the check ends.",
     labels: [label],
   });
   opened.issues.push(made.number);
   expect(
     made.number > 0 && made.url.startsWith("https://"),
-    `이슈가 이상하다: ${JSON.stringify(made)}`,
+    `the issue looks wrong: ${JSON.stringify(made)}`,
   );
   return { detail: `#${made.number} ${made.url}`, value: made };
 });
@@ -274,25 +294,33 @@ if (issue) {
       () => true,
     );
     expect(
-      one.title === `점검 ${id}` && one.open,
-      `제목이나 열림이 다르다: ${JSON.stringify(one)}`,
+      one.title === `check ${id}` && one.open,
+      `the title or open state differs: ${JSON.stringify(one)}`,
     );
-    expect(one.labels.includes(label), `없던 라벨이 붙지 않았다: ${JSON.stringify(one.labels)}`);
-    return { detail: `제목 "${one.title}", 라벨 ${JSON.stringify(one.labels)}, 열림` };
+    expect(
+      one.labels.includes(label),
+      `the label that wasn't there was not added: ${JSON.stringify(one.labels)}`,
+    );
+    return {
+      detail: `title "${one.title}", labels ${JSON.stringify(one.labels)}, open`,
+    };
   });
   await attempt("comment + comments", async () => {
-    const body = `점검 댓글 ${id}`;
+    const body = `check comment ${id}`;
     const made = await github.comment(token, repo, issue.number, body);
     const list = await eventually(
       () => github.comments(token, repo, issue.number),
       (comments) => comments.some((c) => c.id === made.id),
     );
     const mine = list.find((c) => c.id === made.id);
-    expect(mine?.body === body && mine.login === login, `댓글이 다르다: ${JSON.stringify(mine)}`);
-    return { detail: `댓글 ${made.id}, 쓴 사람 ${mine.login}` };
+    expect(
+      mine?.body === body && mine.login === login,
+      `the comment differs: ${JSON.stringify(mine)}`,
+    );
+    return { detail: `comment ${made.id}, written by ${mine.login}` };
   });
-  // 판정 맞추기(#134): 서버가 쓰는 "Confirmed" 라벨의 붙이기와 떼기. 거듭해도 던지지 않아야 한다.
-  await attempt("addLabel + removeLabel (Confirmed, 거듭)", async () => {
+  // Matching the verdict (#134): adding and removing the "Confirmed" label the server uses. It must not throw even when repeated.
+  await attempt("addLabel + removeLabel (Confirmed, repeated)", async () => {
     const names = async (want: boolean) =>
       (
         await eventually(
@@ -306,7 +334,9 @@ if (issue) {
     await github.removeLabel(token, repo, issue.number, "Confirmed");
     await github.removeLabel(token, repo, issue.number, "Confirmed");
     const removed = await names(false);
-    return { detail: `붙임 ${JSON.stringify(added)}, 뗌 ${JSON.stringify(removed)}` };
+    return {
+      detail: `added ${JSON.stringify(added)}, removed ${JSON.stringify(removed)}`,
+    };
   });
   await attempt("closeIssue + issue", async () => {
     await github.closeIssue(token, repo, issue.number);
@@ -314,17 +344,17 @@ if (issue) {
       () => github.issue(token, repo, issue.number),
       (i) => !i.open,
     );
-    return { detail: `닫혔다(제목 "${one.title}")` };
+    return { detail: `closed (title "${one.title}")` };
   });
 }
 
-// 레포 라벨(#191): 만들고, 목록에서 읽고, 이름·색·설명을 고친다. 고친 라벨은 정리에서 지운다.
-const renamedLabel = `${label}-고침`;
+// Repo labels (#191): create, read from the list, and edit name, color, and description. The edited label is deleted in cleanup.
+const renamedLabel = `${label}-edited`;
 const repoLabel = await attempt("createLabel + labels", async () => {
   const made = await github.createLabel(token, repo, {
-    name: `${label}-만듦`,
+    name: `${label}-made`,
     color: "ff0000",
-    description: "점검",
+    description: "check",
   });
   const list = await eventually(
     () => github.labels(token, repo),
@@ -332,28 +362,31 @@ const repoLabel = await attempt("createLabel + labels", async () => {
   );
   const mine = list.find((l) => l.id === made.id);
   expect(
-    mine?.name === `${label}-만듦` && mine.color === "ff0000" && mine.description === "점검",
-    `라벨이 다르다: ${JSON.stringify(mine)}`,
+    mine?.name === `${label}-made` && mine.color === "ff0000" && mine.description === "check",
+    `the label differs: ${JSON.stringify(mine)}`,
   );
-  return { detail: `${made.name} (id ${made.id}), 레포 라벨 ${list.length}개`, value: made };
+  return {
+    detail: `${made.name} (id ${made.id}), ${list.length} repo labels`,
+    value: made,
+  };
 });
 if (repoLabel) {
   await attempt("updateLabel", async () => {
     const changed = await github.updateLabel(token, repo, repoLabel.name, {
       name: renamedLabel,
       color: "000000",
-      description: "고침",
+      description: "edited",
     });
     expect(
       changed.id === repoLabel.id && changed.name === renamedLabel && changed.color === "000000",
-      `고친 라벨이 다르다: ${JSON.stringify(changed)}`,
+      `the edited label differs: ${JSON.stringify(changed)}`,
     );
-    return { detail: `${repoLabel.name} → ${changed.name}, id 그대로` };
+    return { detail: `${repoLabel.name} → ${changed.name}, same id` };
   });
 }
 
-// 정리: 아직 열린 PR과 이슈를 닫고, 점검이 만든 브랜치와 라벨을 지운다.
-progress("  정리");
+// Cleanup: close PRs and issues still open, and delete the branches and labels the check made.
+progress("  cleanup");
 const leftovers: string[] = [];
 for (const number of opened.pulls) {
   const one = await github.pull(token, repo, number).catch(() => undefined);
@@ -367,16 +400,16 @@ for (const number of opened.issues) {
   if (one?.open)
     await github
       .closeIssue(token, repo, number)
-      .catch((e) => leftovers.push(`이슈 #${number}: ${messageOf(e)}`));
+      .catch((e) => leftovers.push(`issue #${number}: ${messageOf(e)}`));
 }
 for (const branch of opened.branches) {
   const path = `/repos/${repo}/git/refs/heads/${encodeURIComponent(branch)}`;
   const response = await raw(path, token, "DELETE").catch(() => undefined);
   if (!response?.ok && response?.status !== 422)
-    leftovers.push(`브랜치 ${branch}: HTTP ${response?.status ?? "응답 없음"}`);
+    leftovers.push(`branch ${branch}: HTTP ${response?.status ?? "no response"}`);
 }
-// 없는 라벨로 연 이슈는 GitHub이 라벨을 만들어 둔다. 점검이 만든 것이니 지운다.
-for (const name of [label, `${label}-만듦`, renamedLabel])
+// An issue opened with a label that isn't there makes GitHub create the label. The check made it, so delete it.
+for (const name of [label, `${label}-made`, renamedLabel])
   await raw(`/repos/${repo}/labels/${encodeURIComponent(name)}`, token, "DELETE").catch(
     () => undefined,
   );
@@ -385,19 +418,19 @@ const failed = checks.some((c) => c.status === "fail");
 const mark = { pass: "x", fail: " ", skip: "-" } as const;
 console.log(
   [
-    `#### 실제 GitHub 손 점검 (${new Date().toISOString().slice(0, 10)})`,
+    `#### Real GitHub manual check (${new Date().toISOString().slice(0, 10)})`,
     "",
-    `\`node test/real-github.ts --repo ${repo}\`. 점검 ${id}, Node ${process.version}. 두 번째 계정: ${reviewerToken ? "있음" : "없음"}.`,
+    `\`node test/real-github.ts --repo ${repo}\`. check ${id}, Node ${process.version}. Second account: ${reviewerToken ? "yes" : "no"}.`,
     "",
     ...checks.map((c) =>
       c.status === "skip"
-        ? `- [-] ${c.name}(건너뜀): ${c.detail}`
-        : `- [${mark[c.status]}] ${c.name}${c.status === "fail" ? "(실패)" : ""}: ${c.detail}`,
+        ? `- [-] ${c.name}(skipped): ${c.detail}`
+        : `- [${mark[c.status]}] ${c.name}${c.status === "fail" ? "(failed)" : ""}: ${c.detail}`,
     ),
     "",
     leftovers.length > 0
-      ? `정리하지 못한 것이 있다. 손으로 지워라:\n${leftovers.map((l) => `- ${l}`).join("\n")}`
-      : "만든 PR과 이슈는 닫았고, 점검이 만든 브랜치와 라벨은 지웠다. 머지한 PR의 커밋은 기본 브랜치에 남는다.",
+      ? `Some things were not cleaned up. Delete them by hand:\n${leftovers.map((l) => `- ${l}`).join("\n")}`
+      : "The PRs and issues it made are closed, and the branches and labels the check made are deleted. The merged PR's commit stays on the default branch.",
   ].join("\n"),
 );
 process.exit(failed ? 1 : 0);

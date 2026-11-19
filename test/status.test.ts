@@ -6,18 +6,18 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { api, call } from "@omagari/contract";
 import { eventually, startWorld, textOf } from "./harness.ts";
 
-/** 관측과 GitHub 읽기를 짧게 돈다. 기본값(3초, 1분)이면 단계마다 오래 기다린다. */
+/** Runs observation and GitHub reads on a short cycle. With the defaults (3 seconds, 1 minute) every step would wait a long time. */
 const FAST = { observeMs: 50, followMs: 50 };
-/** 일어나지 않아야 하는 것을 확인할 때 기다리는 시간. 관측과 GitHub 읽기가 여러 번 돈다. */
+/** How long to wait when checking that something does not happen. Observation and GitHub reads run several times. */
 const SETTLE_MS = 400;
 
 type World = Awaited<ReturnType<typeof startWorld>>;
 type Member = { url: string; session: string };
 
-/** `as`의 눈으로 본 `login`의 작업 `branch`. 아직 관측되지 않았으면 던진다. */
+/** `login`'s work on `branch`, as seen through `as`'s eyes. Throws if it hasn't been observed yet. */
 async function workOf(world: World, branch: string, login = "owner", as: Member = world.owner) {
   const work = (await world.works(as)).find((w) => w.login === login && w.branch === branch);
-  if (!work) throw new Error(`${login}의 작업 ${branch}가 아직 없다`);
+  if (!work) throw new Error(`${login}'s work ${branch} is not there yet`);
   return work;
 }
 
@@ -26,40 +26,40 @@ const write = async (folder: string, path: string, content = `${path}\n`) => {
   await writeFile(join(folder, path), content);
 };
 
-test("omagari status set으로 쓴 줄이 쓴 시각과 함께 그 작업의 상태 한 줄로 보이고, 같은 브랜치에 다시 쓰면 나중 것이 남는다", async (t) => {
+test("a line written with omagari status set shows as the work's one-line status with the time it was written, and writing again on the same branch keeps the later one", async (t) => {
   const world = await startWorld(FAST);
   t.after(world.stop);
   world.github.grant("alice");
   const alice = await world.login("alice");
   await world.repo.git("switch", "--create", "payment");
 
-  // 로그인하지 않은 기기에서는 쓰지 못한다.
-  const refused = await world.cli("status", "set", "결제 API 붙이는 중");
+  // You can't write from a device that isn't logged in.
+  const refused = await world.cli("status", "set", "Hooking up the payment API");
   assert.equal(refused.code, 1);
   assert.match(refused.stderr, /Not logged in/);
 
   await world.signInCli(world.owner);
   const before = Date.now();
-  const first = await world.cli("status", "set", "결제 API 붙이는 중");
+  const first = await world.cli("status", "set", "Hooking up the payment API");
   assert.equal(first.code, 0, first.stderr);
-  assert.match(first.stdout, /Wrote the status line for payment: 결제 API 붙이는 중/);
+  assert.match(first.stdout, /Wrote the status line for payment: Hooking up the payment API/);
   const after = Date.now();
 
   const { line } = await eventually(() => workOf(world, "payment", "owner", alice));
   assert.ok(line?.source === "agent");
-  assert.equal(line.text, "결제 API 붙이는 중");
+  assert.equal(line.text, "Hooking up the payment API");
   const at = Date.parse(line.at);
-  assert.ok(before <= at && at <= after, `쓴 시각 ${line.at}`);
+  assert.ok(before <= at && at <= after, `written at ${line.at}`);
 
-  // 두 번째 작업 세션이 같은 브랜치에 쓴다. 줄바꿈과 겹친 공백은 한 줄로 접힌다.
-  const second = await world.cli("status", "set", "결제 실패를", "다시 시도하게\n고치는 중");
+  // A second work session writes on the same branch. Line breaks and repeated spaces fold into one line.
+  const second = await world.cli("status", "set", "Fixing payment failure to", "retry\nagain");
   assert.equal(second.code, 0, second.stderr);
   const later = await workOf(world, "payment", "owner", alice);
   assert.equal(later.line?.source, "agent");
-  assert.equal(later.line?.text, "결제 실패를 다시 시도하게 고치는 중");
+  assert.equal(later.line?.text, "Fixing payment failure to retry again");
 });
 
-test("보이는 줄은 오프라인 → 에이전트가 쓴 줄 → 초안 PR 제목 → 고치는 파일 → 줄 없음 순서로 고른다", async (t) => {
+test("the visible line is picked in this order: offline, a line the agent wrote, draft PR title, files being edited, no line", async (t) => {
   const world = await startWorld(FAST);
   t.after(world.stop);
   await world.signInCli(world.owner);
@@ -67,30 +67,33 @@ test("보이는 줄은 오프라인 → 에이전트가 쓴 줄 → 초안 PR �
   await git("switch", "--create", "payment");
   const lineOf = async () => (await workOf(world, "payment")).line;
 
-  // 바뀐 것이 없으면 줄이 없다.
+  // With nothing changed there is no line.
   await eventually(async () => assert.equal(await lineOf(), null));
 
-  // 고치는 파일. 첫 파일 이름과 나머지 개수다.
+  // Files being edited. The first file name and the count of the rest.
   for (const path of ["payment.ts", "src/cart.ts", "src/order.ts", "test/payment.test.ts"]) {
     await write(folder, path);
   }
   const files = { source: "files", file: "payment.ts", more: 3 };
   await eventually(async () => assert.deepEqual(await lineOf(), files));
 
-  // 초안이 아닌 PR의 제목은 쓰지 않는다. 초안 PR이면 그 제목이다.
-  const pull = world.github.openPull("payment", "결제 모듈 붙이기", false);
+  // The title of a PR that isn't a draft isn't used. If it is a draft PR, that title is used.
+  const pull = world.github.openPull("payment", "Add the payment module", false);
   await sleep(SETTLE_MS);
   assert.deepEqual(await lineOf(), files);
   pull.draft = true;
   await eventually(async () =>
-    assert.deepEqual(await lineOf(), { source: "pull", text: "결제 모듈 붙이기" }),
+    assert.deepEqual(await lineOf(), {
+      source: "pull",
+      text: "Add the payment module",
+    }),
   );
 
-  // 에이전트가 쓴 줄이 초안 PR 제목보다 먼저다.
-  await world.cli("status", "set", "결제 실패 처리 고치는 중");
+  // A line the agent wrote comes before the draft PR title.
+  await world.cli("status", "set", "Fixing payment failure handling");
   await eventually(async () => assert.equal((await lineOf())?.source, "agent"));
 
-  // 오프라인이 맨 앞이다. 그때의 줄과 관측은 떨어진 시각 기준으로 남는다.
+  // Offline comes first. The line and observation at that time are kept as of the moment it dropped.
   const offline = Date.now();
   await world.runner.stop();
   const work = await eventually(async () => {
@@ -100,42 +103,42 @@ test("보이는 줄은 오프라인 → 에이전트가 쓴 줄 → 초안 PR �
   });
   assert.ok(Date.parse(work.offlineSince as string) >= offline);
   assert.equal(work.line?.source, "agent");
-  assert.equal(work.line?.text, "결제 실패 처리 고치는 중");
+  assert.equal(work.line?.text, "Fixing payment failure handling");
   assert.equal(work.files.length, 4);
   assert.equal((await world.agents(world.owner)).owner, "offline");
 });
 
-// ponytail: 러너가 한 번에 한 브랜치만 관측해(#11 전) 두 작업이 동시에 보이지는 않는다. 그래서 브랜치를 오가며 줄이 작업마다 따로인지 본다.
-// #11이 워크트리를 관측하면 워크트리 둘에서 두 줄이 함께 보이는지로 바꾼다.
-test("한 멤버가 여러 브랜치에서 일하면 상태 한 줄은 작업(브랜치)마다 따로다", async (t) => {
+// ponytail: the runner observes only one branch at a time (before #11), so two works can't be seen at once. So switch branches and check that the line is separate per work.
+// Once #11 observes worktrees, change it to check that two lines show together from two worktrees.
+test("when a member works on several branches, the one-line status is separate for each work (branch)", async (t) => {
   const world = await startWorld(FAST);
   t.after(world.stop);
   await world.signInCli(world.owner);
   const { git } = world.repo;
 
   await git("switch", "--create", "payment");
-  await world.cli("status", "set", "결제 붙이는 중");
+  await world.cli("status", "set", "Hooking up payment");
   await git("switch", "--create", "refund", "main");
-  await world.cli("status", "set", "환불 붙이는 중");
+  await world.cli("status", "set", "Hooking up refund");
   await eventually(async () =>
-    assert.equal(textOf((await workOf(world, "refund")).line), "환불 붙이는 중"),
+    assert.equal(textOf((await workOf(world, "refund")).line), "Hooking up refund"),
   );
 
   await git("switch", "payment");
   await eventually(async () =>
-    assert.equal(textOf((await workOf(world, "payment")).line), "결제 붙이는 중"),
+    assert.equal(textOf((await workOf(world, "payment")).line), "Hooking up payment"),
   );
 });
 
-test("그 브랜치가 머지되면 에이전트가 쓴 줄이 지워진다. 머지 뒤에 같은 브랜치에 쓴 줄은 남는다", async (t) => {
+test("when that branch is merged, the line the agent wrote is cleared. A line written on the same branch after the merge stays", async (t) => {
   const world = await startWorld(FAST);
   t.after(world.stop);
   await world.signInCli(world.owner);
   const { git, folder } = world.repo;
   await git("switch", "--create", "payment");
   await write(folder, "payment.ts");
-  const pull = world.github.openPull("payment", "결제 모듈 붙이기");
-  await world.cli("status", "set", "결제 붙이는 중");
+  const pull = world.github.openPull("payment", "Add the payment module");
+  await world.cli("status", "set", "Hooking up payment");
   const lineOf = async () => (await workOf(world, "payment")).line;
   await eventually(async () => assert.equal((await lineOf())?.source, "agent"));
 
@@ -144,14 +147,14 @@ test("그 브랜치가 머지되면 에이전트가 쓴 줄이 지워진다. 머
     assert.deepEqual(await lineOf(), { source: "files", file: "payment.ts", more: 0 }),
   );
 
-  await world.cli("status", "set", "끝: 결제 모듈 붙임");
+  await world.cli("status", "set", "Done: added the payment module");
   await sleep(SETTLE_MS);
   const line = await lineOf();
   assert.equal(line?.source, "agent");
-  assert.equal(line.text, "끝: 결제 모듈 붙임");
+  assert.equal(line.text, "Done: added the payment module");
 });
 
-test("관측된 변경이 있다가 0이 되면 에이전트가 쓴 줄이 지워진다. 처음부터 변경이 없을 때 쓴 줄은 지워지지 않는다", async (t) => {
+test("when there were observed changes and they drop to 0, the line the agent wrote is cleared. A line written when there were no changes from the start is not cleared", async (t) => {
   const world = await startWorld(FAST);
   t.after(world.stop);
   await world.signInCli(world.owner);
@@ -160,24 +163,24 @@ test("관측된 변경이 있다가 0이 되면 에이전트가 쓴 줄이 지�
   await eventually(() => workOf(world, "payment"));
   const lineOf = async () => (await workOf(world, "payment")).line;
 
-  await world.cli("status", "set", "결제 붙이기 시작");
+  await world.cli("status", "set", "Starting to hook up payment");
   await sleep(SETTLE_MS);
-  assert.equal(textOf(await lineOf()), "결제 붙이기 시작");
+  assert.equal(textOf(await lineOf()), "Starting to hook up payment");
 
   await write(folder, "payment.ts");
   await eventually(async () => assert.equal((await workOf(world, "payment")).files.length, 1));
-  assert.equal(textOf(await lineOf()), "결제 붙이기 시작");
+  assert.equal(textOf(await lineOf()), "Starting to hook up payment");
 
   await rm(join(folder, "payment.ts"));
   await eventually(async () => assert.equal(await lineOf(), null));
 });
 
-test("omagari status로 멤버, 작업, 상태 한 줄, 바뀐 파일을 본다. 오프라인인 멤버의 것은 몇 시간 전 기준인지 붙는다", async (t) => {
+test("omagari status shows members, works, the one-line status and changed files. For an offline member it adds how many hours ago that is as of", async (t) => {
   const world = await startWorld(FAST);
   t.after(world.stop);
   for (const name of ["alice", "bob"]) world.github.grant(name);
   const alice = await world.login("alice");
-  await world.login("bob"); // 러너를 켠 적이 없는 멤버
+  await world.login("bob"); // a member who never started a runner
   await world.signInCli(world.owner);
 
   const { git, folder } = world.repo;
@@ -188,13 +191,13 @@ test("omagari status로 멤버, 작업, 상태 한 줄, 바뀐 파일을 본다.
   await git("switch", "--create", "payment");
   await write(folder, "payment.ts");
   await rm(join(folder, "gone.ts"));
-  await world.cli("status", "set", "결제 붙이는 중");
+  await world.cli("status", "set", "Hooking up payment");
 
   const desk_ = await world.desk(alice);
   t.after(desk_.remove);
   await desk_.git("switch", "--create", "refund");
   await write(desk_.folder, "refund.ts");
-  // 바뀐 파일이 관측에 올라온 뒤에 멈춘다. 그 전에 멈추면 "바뀐 것 없음"으로 남는다.
+  // Stop after the changed files show up in the observation. Stopping before that leaves "nothing changed".
   await eventually(async () =>
     assert.equal((await workOf(world, "refund", "alice")).files.length, 1),
   );
@@ -216,7 +219,7 @@ test("omagari status로 멤버, 작업, 상태 한 줄, 바뀐 파일을 본다.
       "bob · no agents",
       "  no Work",
       "owner · Claude Code online",
-      '  "payment": "결제 붙이는 중" (just now)',
+      '  "payment": "Hooking up payment" (just now)',
       '    "gone.ts" (deleted)',
       '    "payment.ts"',
       "",
@@ -224,7 +227,7 @@ test("omagari status로 멤버, 작업, 상태 한 줄, 바뀐 파일을 본다.
   );
 });
 
-test("오프라인이 되면 마지막 관측과 상태 한 줄이 떨어진 시각 기준으로 남는다. 서버가 다시 떠도 그 시각은 그대로고, 다시 붙으면 지금 것이 된다", async (t) => {
+test("when it goes offline, the last observation and one-line status are kept as of the moment it dropped. Even when the server comes back up, that time stays, and when it reattaches it becomes the current one", async (t) => {
   const world = await startWorld(FAST);
   t.after(world.stop);
   world.github.grant("alice");
@@ -233,7 +236,10 @@ test("오프라인이 되면 마지막 관측과 상태 한 줄이 떨어진 시
   t.after(desk_.remove);
   await desk_.git("switch", "--create", "refund");
   await write(desk_.folder, "refund.ts");
-  await call(alice, api.setStatus, { branch: "refund", text: "환불 붙이는 중" });
+  await call(alice, api.setStatus, {
+    branch: "refund",
+    text: "Hooking up refund",
+  });
   const refund = () => workOf(world, "refund", "alice");
   await eventually(async () => assert.equal((await refund()).files.length, 1));
 
@@ -246,12 +252,12 @@ test("오프라인이 되면 마지막 관측과 상태 한 줄이 떨어진 시
   });
   assert.ok(Date.parse(offlineSince as string) >= stopped);
   const kept = await refund();
-  assert.equal(textOf(kept.line), "환불 붙이는 중");
+  assert.equal(textOf(kept.line), "Hooking up refund");
   assert.deepEqual(kept.files, [{ path: "refund.ts", content: "refund.ts\n" }]);
 
-  // 서버가 다시 떠도 떨어진 시각은 그대로다. 붙어 있던 owner의 러너는 다시 붙는다.
+  // Even when the server comes back up, the drop time stays. owner's runner that was attached reattaches.
   await world.restartServer();
-  // 꺼진 서버와의 연결이 끊긴 채 남아 있어 첫 요청이 실패할 수 있다.
+  // The first request can fail because the connection to the stopped server is left cut.
   await eventually(async () => assert.equal((await refund()).offlineSince, offlineSince));
   await eventually(async () => assert.equal((await world.agents(alice)).owner, "online"));
   assert.equal((await workOf(world, "main")).offlineSince, null);
@@ -260,8 +266,8 @@ test("오프라인이 되면 마지막 관측과 상태 한 줄이 떨어진 시
   await eventually(async () => assert.equal((await refund()).offlineSince, null));
 });
 
-test("7일 동안 오프라인이면 그 멤버의 관측과 상태 한 줄이 지워진다", async (t) => {
-  // 7일 대신 1초로 줄인다.
+test("after 7 days offline, that member's observation and one-line status are erased", async (t) => {
+  // Cut 7 days down to 1 second.
   const world = await startWorld({ ...FAST, forgetMs: 1000 });
   t.after(world.stop);
   world.github.grant("alice");
@@ -270,7 +276,10 @@ test("7일 동안 오프라인이면 그 멤버의 관측과 상태 한 줄이 �
   t.after(desk_.remove);
   await desk_.git("switch", "--create", "refund");
   await write(desk_.folder, "refund.ts");
-  await call(alice, api.setStatus, { branch: "refund", text: "환불 붙이는 중" });
+  await call(alice, api.setStatus, {
+    branch: "refund",
+    text: "Hooking up refund",
+  });
   const refund = () => workOf(world, "refund", "alice");
   await eventually(async () => assert.equal((await refund()).files.length, 1));
 
@@ -279,11 +288,11 @@ test("7일 동안 오프라인이면 그 멤버의 관측과 상태 한 줄이 �
   await eventually(async () =>
     assert.deepEqual(
       (await world.works(world.owner)).map((work) => work.login),
-      ["owner"], // 붙어 있는 멤버의 것은 남는다
+      ["owner"], // an attached member's stays
     ),
   );
 
-  // 다시 붙으면 관측은 새로 올라오지만 지워진 상태 한 줄은 돌아오지 않는다.
+  // After reattaching, the observation comes up fresh but the erased one-line status doesn't come back.
   await desk_.start();
   await eventually(async () =>
     assert.deepEqual((await refund()).line, { source: "files", file: "refund.ts", more: 0 }),
