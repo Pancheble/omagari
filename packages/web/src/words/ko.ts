@@ -1,4 +1,7 @@
 import type { Words } from "../i18n.ts";
+import { channelsKo } from "./channels.ko.ts";
+import { conversationKo } from "./conversation.ko.ts";
+import { dmKo } from "./dm.ko.ts";
 
 /** Korean screen text. Same keys as `en.ts`; the `Words` type catches a missing one. 해요체, DESIGN.md "Writing". */
 export const ko: Words = {
@@ -116,4 +119,10 @@ export const ko: Words = {
       create: "만들기",
     },
   },
+
+  channels: channelsKo,
+
+  conversation: conversationKo,
+
+  dm: dmKo,
 };

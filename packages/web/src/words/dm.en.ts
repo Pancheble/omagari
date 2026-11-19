@@ -1,0 +1,60 @@
+const rules = new Intl.PluralRules("en");
+const plural = (n: number, one: string, other: string) =>
+  `${n} ${rules.select(n) === "one" ? one : other}`;
+
+/** English text of the DM panel and the Q&A lines and cards in the channel (`dm.tsx`). */
+export const dmEn = {
+  myAgents: "My agents",
+  onlyYou: "Only you can see this",
+  thisPost: "this post",
+  askAgent: "Agent to ask",
+  answering: "Answering…",
+  idle: "Idle",
+  askOffline: (agent: string) => `The ${agent} runner is off, so you can't ask right now`,
+  askFailed: "Couldn't send that question. Try again in a bit?",
+  loading: "Loading Q&As",
+  loadFailed: "Couldn't load your Q&As",
+  loadFailedBody: "Looks like you're offline. Check your connection?",
+  retry: "Try again",
+  log: (channel: string) => `My Q&As in # ${channel}`,
+  notAskedYet: (agent: string) => `You haven't asked ${agent} yet`,
+  notAskedBody:
+    "It reads this channel's conversation and the repo in your folder to answer. Only you see these Q&As.",
+  askLabel: (agent: string) => `Ask ${agent}`,
+  noAgent: "No agents connected",
+  noAgentBody: "Turn on the runner on this device and you can ask here.",
+  chips: {
+    model: "Model",
+    defaultModel: "Default model",
+    effort: (effort: string | undefined) => `effort ${effort ?? "Default"}`,
+    default: "Default",
+    fromSettings: "From settings",
+    older: (n: number) => plural(n, "older model", "older models"),
+  },
+  failed: {
+    turn_timeout: "Stopped the answer after 10 minutes",
+    runner_offline: "The runner turned off before it answered",
+  } satisfies Record<string, string>,
+  couldntAnswer: (agent: string) => `${agent} couldn't answer`,
+  pending: (agent: string) => `${agent} is answering…`,
+  aiBadge: "Written by AI",
+  agentOf: (name: string, agent: string) => `${name}'s ${agent}`,
+  /** The name shown before `postedBy`: "Minsu posted". */
+  postedName: (name: string) => name,
+  postedBy: "posted",
+  public: "Public",
+  expand: "Expand",
+  collapse: "Collapse",
+  codeRead: "Code it read",
+  noBranch: "No branch",
+  dirty: "Includes uncommitted changes",
+  modelAnswered: "Model that answered",
+  calledIn: (where: string) => `Asked with @call in ${where}`,
+  postedIn: (where: string) => `Posted in ${where}`,
+  show: "View",
+  attachedPost: "Added to the post composer",
+  attachedChannel: "Added to the channel composer",
+  toPost: "Add to post",
+  toChannel: "Post to channel",
+  askAgain: "Ask again",
+};
