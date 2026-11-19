@@ -3,7 +3,7 @@
 // It doesn't call the server. It reads only the situation the runner on the same machine has already received from the server (implementation doc, section 4).
 // The Session-start hook (SessionStart) injects the team's current situation. The Pre-edit hook (PreToolUse) injects the Nearby work and other people's Claims for the file you're about to edit.
 // Both put the pending news from this work's Inbox first. The Pre-edit hook also runs on shell commands to hand over the Inbox (it doesn't inject Nearby work there).
-// `omagari install` sets it up for each executor and passes that executor as the first argument (`omagari-hook claude-code`, ADR-0015).
+// `omagari setup` sets it up for each executor and passes that executor as the first argument (`omagari-hook claude-code`, ADR-0015).
 // It runs in every repo on this machine, so in a repo where no runner has ever been started it does nothing (ADR-0016).
 import { execFile } from "node:child_process";
 import { access, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
@@ -11,7 +11,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import { text } from "node:stream/consumers";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
-import { ago, ExecutorId, type NearbyWork, type WorkView } from "@omagari/contract";
+import { ago, ExecutorId, filesText, type NearbyWork, type WorkView } from "@omagari/contract";
 import { callRunner, claimOwner, claimPlace, inboxNotice, runnerPaths } from "@omagari/runner";
 
 /** Upper limit on the injected text. Claude Code sends anything longer to a file and shows only the first 2,000 characters (ADR-0005). */
@@ -123,7 +123,7 @@ function workLine(work: WorkView & { line: NonNullable<WorkView["line"]> }, same
       ? `${quote(line.text)} (written by the agent, ${ago(line.at)})`
       : line.source === "pull"
         ? `${quote(line.text)} (draft PR title)`
-        : `${quote(line.text)} (made from the changed files)`,
+        : `${quote(filesText(line))} (made from the changed files)`,
   );
   if (same.length > 0) {
     const named = same.slice(0, SAME_FILES_SHOWN).map(quote).join(", ");

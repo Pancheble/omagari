@@ -145,7 +145,11 @@ export function WorkItem({
       {agent ? <AgentMark name={member.name} agent={agent} /> : <span className="agent-space" />}
       <div className="work-body">
         <p className={line ? "work-line" : "work-line none"}>
-          {line?.text ?? t.profile.members.noStatusLine}
+          {!line
+            ? t.profile.members.noStatusLine
+            : line.source === "files"
+              ? t.profile.members.editing(line.file, line.more)
+              : line.text}
         </p>
         <p className="work-meta">
           <span className="branch">{work.branch}</span>

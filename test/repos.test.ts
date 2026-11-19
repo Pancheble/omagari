@@ -5,7 +5,7 @@ import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 import { api, type ContractFailure, call } from "@omagari/contract";
-import { eventually, REPO, REPO2, startWorld, writer } from "./harness.ts";
+import { eventually, REPO, REPO2, startWorld, textOf, writer } from "./harness.ts";
 
 type As = { url: string; session: string };
 /** `as`가 `repo`로 부른다. */
@@ -180,7 +180,7 @@ test("레포가 하나이던 판의 DB로 켜도 있던 것이 그 레포에 그
   const owner = await world.login("owner");
   const [work] = (await call(owner, api.works)).works;
   assert.deepEqual(
-    [work?.login, work?.branch, work?.line?.text],
+    [work?.login, work?.branch, textOf(work?.line)],
     ["alice", "payment", "결제 고치는 중"],
   );
   const { posts } = await call(owner, api.posts);
@@ -236,7 +236,7 @@ test("GitHub에서 레포를 다른 계정으로 옮기면 그 레포의 것이 
   const seen = async (as: As) => ({
     works: (await call(as, api.works)).works
       .filter((w) => w.login === "alice")
-      .map((w) => [w.login, w.branch, w.line?.text]),
+      .map((w) => [w.login, w.branch, textOf(w.line)]),
     posts: (await call(as, api.posts)).posts.map((p) => [p.channel, p.labels, p.importance]),
     decisions: (await call(as, api.decisions)).decisions.map((d) => [d.id, d.title]),
     discuss: (await call(as, api.labels)).labels
