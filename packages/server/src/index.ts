@@ -934,8 +934,23 @@ export async function startServer(options: {
       db.prepare("UPDATE settings SET key = ? WHERE key = 'check'").run(`check ${legacy}`);
     db.exec("COMMIT");
   }
+  // 옮겨지거나 이름이 바뀐 레포(ADR-0043). 옛 이름으로 오는 설정, 원격, 머리말은 새 이름으로 읽는다.
+  db.exec(`CREATE TABLE IF NOT EXISTS repo_moves (
+    old TEXT PRIMARY KEY COLLATE NOCASE,
+    new TEXT NOT NULL
+  ) STRICT`);
+  /** 옮겨진 레포면 지금 이름, 아니면 그대로다. */
+  const current = (repo: string) =>
+    (
+      db.prepare("SELECT new FROM repo_moves WHERE old = ?").get(repo) as
+        | { new: string }
+        | undefined
+    )?.new ?? repo;
   for (const repo of seeds)
-    db.prepare("INSERT OR IGNORE INTO repos (name, at) VALUES (?, ?)").run(repo, Date.now());
+    db.prepare("INSERT OR IGNORE INTO repos (name, at) VALUES (?, ?)").run(
+      current(repo),
+      Date.now(),
+    );
   // 레포가 하나이던 판의 세션은 그 레포에 push 권한이 있는 것으로 들어왔다. 다시 확인할 때까지 그대로 본다.
   if (!hadAccess && legacy !== undefined)
     db.prepare("INSERT OR IGNORE INTO access (login, repo) SELECT login, ? FROM sessions").run(
@@ -1012,6 +1027,66 @@ export async function startServer(options: {
     if (!adopted) seedForums(id);
   };
   for (const repo of allRepos()) ensureWorkspace(repo);
+  /**
+   * GitHub에서 옮겨지거나 이름이 바뀐 레포 `from`의 것을 모두 새 이름 `to` 아래로 옮긴다(ADR-0043). `repo` 열이 있는 표 모두,
+   * 레포의 채널(다른 계정으로 갔으면 그 워크스페이스로), 같은 워크스페이스 포럼의 거르기, 검사 명령, 이어진 러너와 웹이다.
+   * 받을 계정 밖으로 갔거나 새 이름이 이미 워크스페이스에 있으면 옮기지 않고 옛 이름으로 둔다(GitHub이 옛 이름을 넘겨 주어 그대로 돈다).
+   */
+  const moveRepo = (from: string, to: string) => {
+    if (!accounts.has(ownerOf(to))) {
+      console.warn(`${from}이 ${to}로 옮겨졌지만 받을 계정(OMAGARI_REPO) 밖이라 옛 이름으로 둔다`);
+      return false;
+    }
+    if (
+      to.toLowerCase() !== from.toLowerCase() &&
+      allRepos().some((r) => r.toLowerCase() === to.toLowerCase())
+    ) {
+      console.warn(
+        `${from}이 ${to}로 옮겨졌지만 ${to}가 이미 워크스페이스에 있어 옛 이름으로 둔다`,
+      );
+      return false;
+    }
+    const tables = (
+      db
+        .prepare(
+          "SELECT m.name FROM sqlite_master m JOIN pragma_table_info(m.name) p WHERE m.type = 'table' AND p.name = 'repo'",
+        )
+        .all() as { name: string }[]
+    ).map((row) => row.name);
+    db.exec("BEGIN");
+    try {
+      db.prepare("UPDATE repos SET name = ? WHERE name = ?").run(to, from);
+      for (const table of tables)
+        db.prepare(`UPDATE ${table} SET repo = ? WHERE repo = ?`).run(to, from);
+      db.prepare("UPDATE channels SET workspace = ? WHERE repo = ?").run(ownerOf(to), to);
+      for (const forum of db
+        .prepare("SELECT id, filter FROM channels WHERE kind = 'forum' AND workspace = ?")
+        .all(ownerOf(to)) as { id: string; filter: string | null }[]) {
+        const filter = JSON.parse(forum.filter ?? "{}") as { repos?: string[] };
+        if (!filter.repos?.includes(from)) continue;
+        filter.repos = filter.repos.map((r) => (r === from ? to : r));
+        db.prepare("UPDATE channels SET filter = ? WHERE id = ?").run(
+          JSON.stringify(filter),
+          forum.id,
+        );
+      }
+      db.prepare("UPDATE settings SET key = ? WHERE key = ?").run(`check ${to}`, `check ${from}`);
+      db.prepare("UPDATE repo_moves SET new = ? WHERE new = ?").run(to, from);
+      db.prepare("INSERT OR REPLACE INTO repo_moves (old, new) VALUES (?, ?)").run(from, to);
+      db.prepare("DELETE FROM repo_moves WHERE old = new").run();
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      console.error(`${from}을 ${to}로 옮기지 못했다:`, error);
+      return false;
+    }
+    ensureWorkspace(to);
+    for (const runner of runners.values()) if (runner.repo === from) runner.repo = to;
+    for (const watcher of watchers.values())
+      if (watcher.repo === from) Object.assign(watcher, { repo: to, workspace: ownerOf(to) });
+    console.log(`${from}이 GitHub에서 ${to}로 옮겨져 따라갔다`);
+    return true;
+  };
   // 채팅 채널은 레포나 워크스페이스에 속한다(ADR-0043). 그 전부터 있던 채팅 채널은 그 워크스페이스의 첫 레포의 채널이 된다.
   // 한 번만 한다: 그 뒤에 만든 워크스페이스 채널(레포 없음)을 다시 옮기지 않으려고 표시를 남긴다.
   if (!db.prepare("SELECT 1 FROM settings WHERE key = 'channels by repo'").get()) {
@@ -2602,11 +2677,12 @@ export async function startServer(options: {
   const readAccess = async (login: string, token: string) => {
     const push: string[] = [];
     const unknown: string[] = [];
-    for (const repo of allRepos()) {
+    for (let repo of allRepos()) {
       const can = await github.canPush(token, repo);
       if (stopped) break;
+      if (can && can.name !== repo && moveRepo(repo, can.name)) repo = can.name;
       if (can === undefined) unknown.push(repo);
-      else if (can) {
+      else if (can.push) {
         push.push(repo);
         db.prepare("INSERT OR IGNORE INTO access (login, repo) VALUES (?, ?)").run(login, repo);
       } else db.prepare("DELETE FROM access WHERE login = ? AND repo = ?").run(login, repo);
@@ -2624,7 +2700,7 @@ export async function startServer(options: {
     const mine = reposOf(login).filter((repo) => !wantedSpace || ownerOf(repo) === wantedSpace);
     const wanted = (c.req.header(REPO_HEADER) ?? "")
       .split(",")
-      .map((repo) => repo.trim().toLowerCase())
+      .map((repo) => current(repo.trim()).toLowerCase())
       .filter(Boolean);
     const found =
       wanted.length === 0
@@ -2658,7 +2734,7 @@ export async function startServer(options: {
     const mine = reposOf(login);
     const named = (c.req.header(REPO_HEADER) ?? "")
       .split(",")
-      .map((repo) => repo.trim().toLowerCase())
+      .map((repo) => current(repo.trim()).toLowerCase())
       .filter(Boolean)
       .flatMap((w) => mine.find((repo) => repo.toLowerCase() === w) ?? []);
     const found = named[0] ?? mine[0];
@@ -4267,8 +4343,9 @@ export async function startServer(options: {
           }
           // 원격 가운데 워크스페이스에 있는 레포(ADR-0043). 한 레포는 워크스페이스 하나에만 있다.
           const workspace = allRepos();
+          // 옮겨진 레포의 옛 원격도 새 이름으로 읽는다(GitHub이 옛 주소를 넘겨 준다).
           const inWorkspace = repos.flatMap(
-            (r) => workspace.find((w) => w.toLowerCase() === r.toLowerCase()) ?? [],
+            (r) => workspace.find((w) => w.toLowerCase() === current(r).toLowerCase()) ?? [],
           );
           const repo = inWorkspace.find((r) => sees(login, r));
           if (!repo) {

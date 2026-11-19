@@ -191,6 +191,10 @@ export function fakeGitHub() {
   /** push 권한과 Admin. `레포 로그인`이다. */
   const pushers = new Set<string>();
   const admins = new Set<string>();
+  /** 이 가짜에 있는 레포와 옮겨진 레포의 옛 이름(`move`). GitHub처럼 옛 이름은 새 레포로 넘어간다. */
+  const known = new Set(REPOS);
+  const moves = new Map<string, string>();
+  const exists = (repo: string) => known.has(moves.get(repo) ?? repo);
   const pulls: (Pull & {
     branch: string;
     number?: number;
@@ -229,7 +233,7 @@ export function fakeGitHub() {
   /** 토큰이 이 레포에 쓸 수 있으면 그 주인. 아니면 GitHub처럼 던진다. */
   const owner = (token: string, repo: string) => {
     const login = tokens.get(token);
-    if (!REPOS.has(repo) || !login) throw new Error("HTTP 401 Bad credentials");
+    if (!exists(repo) || !login) throw new Error("HTTP 401 Bad credentials");
     return login;
   };
   const tree = (ref: string) => {
@@ -266,11 +270,14 @@ export function fakeGitHub() {
       if (!login) throw new Error("모르는 토큰이다");
       return { login, name: names.get(login) ?? null };
     },
-    async canPush(token, repo) {
-      return pushers.has(`${repo} ${tokens.get(token)}`);
+    async canPush(token, asked) {
+      // GitHub처럼 옮겨진 레포의 옛 이름은 새 레포로 넘겨 준다.
+      const repo = moves.get(asked) ?? asked;
+      if (!known.has(repo)) return { push: false, name: asked };
+      return { push: pushers.has(`${repo} ${tokens.get(token)}`), name: repo };
     },
     async canAdmin(token, repo) {
-      return admins.has(`${repo} ${tokens.get(token)}`);
+      return admins.has(`${moves.get(repo) ?? repo} ${tokens.get(token)}`);
     },
     async adminRepos(token, owner) {
       const login = tokens.get(token);
@@ -287,7 +294,7 @@ export function fakeGitHub() {
         }));
     },
     async pulls(token, repo, branch) {
-      if (!REPOS.has(repo) || !tokens.has(token)) return undefined;
+      if (!exists(repo) || !tokens.has(token)) return undefined;
       return pulls
         .filter((pull) => pull.branch === branch)
         .map(({ title, draft, open, mergedAt }) => ({ title, draft, open, mergedAt }));
@@ -324,7 +331,7 @@ export function fakeGitHub() {
       return { number, url: `https://github.com/${REPO}/pull/${number}` };
     },
     async pull(token, repo, number) {
-      if (!REPOS.has(repo) || !tokens.has(token)) return undefined;
+      if (!exists(repo) || !tokens.has(token)) return undefined;
       const found = pulls.find((pull) => pull.number === number);
       return (
         found && {
@@ -348,13 +355,13 @@ export function fakeGitHub() {
       found.open = false;
     },
     async changesRequested(token, repo, number) {
-      if (!REPOS.has(repo) || !tokens.has(token)) return undefined;
+      if (!exists(repo) || !tokens.has(token)) return undefined;
       return [...(reviews.get(number) ?? [])]
         .filter(([, state]) => state === "CHANGES_REQUESTED")
         .map(([login]) => login);
     },
     async merge(token, repo, number) {
-      if (!REPOS.has(repo) || !tokens.has(token)) return { reason: "HTTP 401 Bad credentials" };
+      if (!exists(repo) || !tokens.has(token)) return { reason: "HTTP 401 Bad credentials" };
       if (blocked) return { reason: blocked };
       const found = pulls.find((pull) => pull.number === number && pull.open);
       if (!found) return { reason: "HTTP 405 Pull Request is not mergeable" };
@@ -370,12 +377,12 @@ export function fakeGitHub() {
       return { number, url: `https://github.com/${REPO}/issues/${number}` };
     },
     async issue(token, repo, number) {
-      if (!REPOS.has(repo) || !tokens.has(token)) return undefined;
+      if (!exists(repo) || !tokens.has(token)) return undefined;
       const found = issues.find((issue) => issue.number === number);
       return found && { title: found.title, labels: [...found.labels], open: found.open };
     },
     async comments(token, repo, number) {
-      if (!REPOS.has(repo) || !tokens.has(token)) return undefined;
+      if (!exists(repo) || !tokens.has(token)) return undefined;
       return issues.find((issue) => issue.number === number)?.comments.map((c) => ({ ...c }));
     },
     async comment(token, repo, number, body) {
@@ -400,7 +407,7 @@ export function fakeGitHub() {
       found.labels = found.labels.filter((l) => l !== label);
     },
     async labels(token, repo) {
-      if (!REPOS.has(repo) || !tokens.has(token)) return undefined;
+      if (!exists(repo) || !tokens.has(token)) return undefined;
       return labels.map((label) => ({ ...label }));
     },
     async createLabel(token, repo, label) {
@@ -436,6 +443,18 @@ export function fakeGitHub() {
       const device = [...devices.values()].find((d) => d.userCode === userCode);
       if (!device) throw new Error(`모르는 코드다: ${userCode}`);
       device.login = login;
+    },
+    /** 사람이 GitHub에서 레포 `from`을 `to`로 옮겼다(다른 계정으로 옮기기나 이름 바꾸기). 권한이 따라가고 옛 이름은 새 레포로 넘어간다. */
+    move(from: string, to: string) {
+      known.delete(from);
+      known.add(to);
+      moves.set(from, to);
+      for (const set of [pushers, admins])
+        for (const key of [...set])
+          if (key.startsWith(`${from} `)) {
+            set.delete(key);
+            set.add(key.replace(from, to));
+          }
     },
     grant: (login: string, repo = REPO) => pushers.add(`${repo} ${login}`),
     revoke: (login: string, repo = REPO) => pushers.delete(`${repo} ${login}`),
