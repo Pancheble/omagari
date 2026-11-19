@@ -2113,6 +2113,8 @@ export const api = {
     method: "GET",
     path: "/api/settings",
     response: z.strictObject({
+      /** This server's version (`git describe --tags`), shown under Info in the settings window. */
+      version: z.string(),
       askSwitch: z.boolean(),
       answered: z.strictObject({
         count: z.number(),
