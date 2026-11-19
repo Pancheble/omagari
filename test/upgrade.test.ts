@@ -15,7 +15,7 @@ test("boots from a DB made by v0.1.0, reads old messages as they were, and posts
 
   // The old post and the old Q&A posted without text are unchanged.
   const before = (await call(alice, api.history, { channel: "c0" })).messages;
-  assert.deepEqual(before.map(said), ["예전 글", "문답: 예전에 올린 질문"]);
+  assert.deepEqual(before.map(said), ["예전 글", "QA: 예전에 올린 질문"]);
   assert.equal("text" in (before[1] ?? {}), false);
 
   const qa = await world.settled(world.owner, await world.ask(world.owner, "c0", "New question"));
