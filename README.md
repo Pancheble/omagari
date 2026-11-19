@@ -1,20 +1,30 @@
 # Omagari
 
-Omagari는 사람과 각자의 AI 에이전트가 함께 있는 웹 협업 공간이다. 팀원 옆에 그 사람의 에이전트(Claude Code, Codex)가 보이고, 누가 어느 브랜치에서 무엇을 하는지 보이고, 채널에서 사람과 에이전트가 함께 이야기한다. 멤버의 기기에서는 러너가 레포 폴더의 작업을 서버에 알리고 그 사람의 에이전트를 대신 돌리며, 훅이 에이전트에게 근처에서 일하는 팀원의 작업을 알린다. 무엇을 왜 만드는지는 [docs/omagari-v3.md](docs/omagari-v3.md)에 있다.
+English | [한국어](README.ko.md)
 
-## 필요한 것
+Omagari is a web workspace where people and their AI agents work together. You see each teammate's agent (Claude Code, Codex) next to them, who is working on which branch, and a channel where people and agents talk. It's self-hosted.
 
-- Node.js 24.12 이상
+A runner on each member's machine tells the server what's changing in the repo folder and runs that person's agent on their behalf. Hooks tell the agent what nearby teammates are working on, so conflicts show up before the merge. The idea and the reasoning are in [docs/omagari-v3.md](docs/omagari-v3.md).
+
+## What you get
+
+- **Awareness**: who works on what, on which branch, and what they plan to touch (claims).
+- **Conflict alerts**: direct and indirect conflicts and duplicate work, shown in forums and sent to the agents involved.
+- **Merge runs**: Omagari merges two works in a sandbox on a member's machine and runs your check command, so "these might break each other" turns into pass or fail.
+- **Channels and Q&A**: chat with teammates and their agents, or ask someone's agent a question without interrupting them.
+- **Decisions on GitHub**: posts that need a person open a GitHub issue, and decisions become PRs.
+
+## Quick start
+
+You need:
+
+- Node.js 24.12 or later
 - git
-- Claude Code나 Codex(이 기기에서 로그인한 것)
-- 워크스페이스 레포에 push 권한이 있는 GitHub 계정
-- 팀이 띄운 Omagari 서버의 주소
+- Claude Code or Codex, signed in on this machine
+- A GitHub account with push access to the workspace repo
+- The address of your team's Omagari server
 
-## 설치
-
-멤버는 `main`을 받아 쓴다. `dev`는 작업이 모이는 곳이라 쓰지 않는다([ADR-0019](docs/adr/0019-stage1-version-is-git-tag-members-run-main.md)).
-
-Omagari로 Omagari를 만들며 써 보는 도그푸딩은 예외다. 도그푸딩 서버가 `dev`를 따르므로([ADR-0042](docs/adr/0042-dogfood-server-on-fly-follows-dev.md)), 그 서버를 쓰는 기기는 `--branch dev`로 설치 클론을 받는다. 서버가 새 계약이 되면 러너가 이 클론을 스스로 받는다(아래 업데이트).
+Members run `main`. `dev` is where work collects, so don't use it ([ADR-0019](docs/adr/0019-stage1-version-is-git-tag-members-run-main.md)). The one exception is dogfooding: the dogfood server follows `dev` ([ADR-0042](docs/adr/0042-dogfood-server-on-fly-follows-dev.md)), so machines that use it clone with `--branch dev`. When the server moves to a new contract, the runner updates this clone by itself (see Update).
 
 ```bash
 git clone --branch main https://github.com/omagari-dev/omagari.git ~/omagari
@@ -22,7 +32,7 @@ cd ~/omagari
 npm ci
 ```
 
-`omagari`를 PATH에 둔다. PATH에 있는 폴더에 CLI의 심볼릭 링크를 건다. Claude Code나 Codex를 네이티브 설치로 깔았으면 `~/.local/bin`이 이미 PATH에 있다.
+Put `omagari` on your PATH by linking the CLI into a folder that's already there. If you installed Claude Code or Codex natively, `~/.local/bin` is already on your PATH.
 
 ```bash
 mkdir -p ~/.local/bin
@@ -30,44 +40,44 @@ ln -sf "$PWD/packages/cli/src/main.ts" ~/.local/bin/omagari
 omagari --version
 ```
 
-`command not found`가 나오면 `~/.local/bin`이 PATH에 없다. 셸 설정(`~/.zshrc` 등)에 `export PATH="$HOME/.local/bin:$PATH"`를 더하고 터미널을 새로 연다. 에이전트도 상태 한 줄 스킬에서 `omagari`를 부르므로 셸 설정에 두어야 한다.
+If you get `command not found`, `~/.local/bin` isn't on your PATH. Add `export PATH="$HOME/.local/bin:$PATH"` to your shell config (`~/.zshrc` and so on) and open a new terminal. Agents call `omagari` from the status line skill, so it has to be in the shell config, not just typed once.
 
-서버 주소도 셸 설정에 둔다. 주지 않으면 `http://127.0.0.1:3000`에 붙는다.
+Put the server address in your shell config too. Without it, the CLI connects to `http://127.0.0.1:3000`.
 
 ```bash
-export OMAGARI_SERVER=https://<팀의 서버>
+export OMAGARI_SERVER=https://<your-team-server>
 ```
 
-이 기기의 에이전트에 훅과 상태 한 줄 스킬을 깐다. 기기마다 한 번이고, 다시 돌려도 하나만 깔린다. Codex는 Codex에서 `/hooks`를 열어 두 훅을 신뢰해야 돈다.
+Install the hooks and the status line skill into this machine's agents. Run it once per machine; running it again keeps one copy. For Codex, open `/hooks` in Codex and trust the two hooks, or they won't run.
 
 ```bash
 omagari install
 ```
 
-워크스페이스 레포를 받은 폴더에서 러너를 켜 둔다. 처음이면 GitHub 기기 인증으로 로그인한다. 러너가 켜져 있어야 팀이 내 작업과 에이전트를 본다.
+Start the runner in the folder where you cloned the workspace repo. The first time, it signs you in with GitHub device flow. Keep it running, because the team only sees your work and your agent while it is.
 
 ```bash
-cd <워크스페이스 레포 폴더>
+cd <your workspace repo folder>
 omagari runner
 ```
 
-## 검사 명령
+## Check command
 
-합쳐 돌려 보기는 두 작업을 합쳐 레포의 검사 명령을 이 기기의 샌드박스 안에서 돌린다. 바깥 네트워크, 임시 폴더 밖에 쓰기, 홈 폴더 읽기가 막힌다. 검사 명령은 팀이 레포 최상위에 `.omagari.json`을 커밋해 기본 브랜치에 머지하면 정해진다. `setup`(검사 명령 앞에 한 번 돌릴 준비 명령)은 없어도 된다.
+A merge run merges two works and runs the repo's check command inside a sandbox on this machine. The sandbox blocks outside network access, writes outside a temp folder, and reading your home folder. The team sets the check command by committing `.omagari.json` at the repo root and merging it into the default branch. `setup` (a command that runs once before the check) is optional.
 
 ```json
 { "check": "npm test", "setup": "npm ci" }
 ```
 
-러너는 기본 브랜치(원격 추적)에 머지된 판만 읽는다. 이 기기에서 샌드박스와 검사 명령이 도는지는 지금 폴더의 내 작업에 한 번 돌려 본다.
+The runner only reads the version merged into the default branch (the remote tracking branch). To see whether the sandbox and the check command work on this machine, run it once against your current work in the current folder.
 
 ```bash
 omagari runner check
 ```
 
-샌드박스 도구는 macOS에는 따로 깔 것이 없고, Linux는 bubblewrap, socat, ripgrep이 있어야 한다. Windows는 WSL2 안에서 러너를 켜고 레포도 WSL2 안에 두며, 도구는 Linux와 같다(PowerShell에서 켠 러너는 합쳐 돌려 보지 않는다). WSL2에서는 Windows 드라이브(`/mnt/c` 등)도 읽지 못한다. 이 기기에서 끄려면 `omagari runner --merge-check off`로 켜고, 고른 것은 그 레포에 남는다.
+On macOS there's nothing extra to install. On Linux you need bubblewrap, socat, and ripgrep. On Windows, run the runner inside WSL2 and keep the repo inside WSL2 too, with the same tools as Linux (a runner started from PowerShell doesn't do merge runs). Windows drives (`/mnt/c` and so on) aren't readable from WSL2 either. To turn merge runs off on this machine, start the runner with `omagari runner --merge-check off`. The choice is remembered per repo.
 
-## 업데이트
+## Update
 
 ```bash
 cd ~/omagari
@@ -75,59 +85,93 @@ git pull
 npm ci
 ```
 
-그리고 러너를 다시 켠다(`Ctrl-C`로 끄고 `omagari runner`). 서버의 계약이 더 새로워 러너가 거절당하면 러너가 스스로 한다: 깔린 클론(러너 프로그램이 있는 체크아웃)에서 `git pull --ff-only`와 `npm ci`를 하고 같은 인자로 다시 켠다. 받은 것(앞뒤 커밋)은 `omagari runner log`에 남는다. 관측하는 레포 폴더는 건드리지 않는다. 깔린 클론에 고친 파일이 있거나 빨리 감기가 안 되면 아무것도 바꾸지 않고 할 일을 알린다. 서버가 더 낡았을 때도 받지 않는다. Node를 올렸거나 체크아웃을 옮겼으면 `omagari install`도 다시 돌린다. 훅 명령에 Node와 체크아웃의 경로가 들어 있다.
+Then restart the runner (`Ctrl-C`, then `omagari runner`). If the server's contract is newer and rejects your runner, the runner updates itself: it runs `git pull --ff-only` and `npm ci` in the install clone (the checkout that holds the runner program) and starts again with the same arguments. What it pulled (the commits before and after) goes to `omagari runner log`. It never touches the repo folder it observes. If the install clone has edited files or can't fast-forward, it changes nothing and tells you what to do. It doesn't update to an older server's contract either. If you upgraded Node or moved the checkout, run `omagari install` again, because the hook commands contain the Node and checkout paths.
 
-릴리즈마다 무엇이 바뀌었는지는 [GitHub 릴리즈](https://github.com/omagari-dev/omagari/releases)에 있다. 맨 위에 "러너도 업데이트해야 해요"가 있으면 서버와 러너 사이의 계약이 바뀐 릴리즈다.
+What changed in each release is on [GitHub Releases](https://github.com/omagari-dev/omagari/releases). If a release starts with "Runners need to update too", the contract between the server and the runner changed.
 
-## 버전 확인
+## Check your version
 
 ```bash
 omagari --version
 ```
 
-`omagari v0.1.0 (contract 9)`처럼 이 체크아웃의 git 태그와 계약 버전을 보인다. 릴리즈 뒤의 커밋이면 `v0.1.0-3-gabc1234`, 태그를 받지 못한 클론이면 `버전 모름(커밋 abc1234)`이다.
+It prints this checkout's git tag and the contract version, like `omagari v0.1.0 (contract 9)`. After a release, commits show up as `v0.1.0-3-gabc1234`. A clone without tags shows the commit instead.
 
-서버와 이 기기의 계약 버전이 다르면 서버가 러너를 받지 않고, 러너가 할 일을 알린다.
+If the server and this machine have different contract versions, the server rejects the runner, and the runner tells you what to do.
 
-- 서버가 더 새로우면: "서버는 v0.3.0, 이 기기는 v0.2.1이에요." 러너가 스스로 받고 다시 켠다. 받지 못하면 알려 주는 대로 위의 업데이트를 하고 러너를 다시 켠다.
-- 서버가 더 오래됐으면: 서버를 올려야 한다. 서버를 띄운 사람에게 알린다.
+- Server is newer: the runner updates itself and restarts. If it can't, follow the steps in Update above and restart the runner.
+- Server is older: the server has to be updated. Tell whoever runs it.
 
-## 서버
+## Run a server
 
-서버도 `main`으로 띄우고(도그푸딩 서버는 `dev`를 따라 Fly.io에 저절로 올라간다. 아래 "Fly.io에 올리기"), 업데이트도 멤버와 같다(`git pull`, `npm ci`, 다시 띄우기). 켜질 때 `Omagari 서버 v0.1.0 (contract 9): ...`처럼 버전을 로그에 남긴다.
+The server also runs `main`, and updating works like for members (`git pull`, `npm ci`, start again). The dogfood server follows `dev` and deploys to Fly.io by itself (see "Deploy to Fly.io" below). On start, it logs its version, like `Omagari server v0.1.0 (contract 9): ...`.
 
 ```bash
-cp .env.example .env     # OMAGARI_REPO, GITHUB_CLIENT_ID를 채운다(.env는 커밋하지 않는다)
+cp .env.example .env     # fill in OMAGARI_REPO and GITHUB_CLIENT_ID (don't commit .env)
 HOST=0.0.0.0 npm run server
 ```
 
-`OMAGARI_REPO`는 받을 GitHub 계정 목록이다(ADR-0043). 쉼표로 나눠 여럿 적고, 계정(`owner`)이나 레포(`owner/name`)로 적는다.
+`OMAGARI_REPO` is the list of GitHub accounts the server accepts ([ADR-0043](docs/adr/0043-workspace-is-a-github-account-people-follow-github.md)). Separate several with commas. Each entry is an account (`owner`) or a repo (`owner/name`).
 
-- 받을 계정마다 워크스페이스가 하나다(`api.workspaces`). 다른 계정의 레포는 다른 워크스페이스에 들어가고, 멤버, 접속 상태, 채널, 포럼, 포스트, 결정, 지표가 워크스페이스끼리 섞이지 않는다. 한 사람이 둘에 다 들어가면 `Omagari-Workspace` 머리말(실시간 연결은 hello의 `workspace`)로 골라 오간다. 고르지 않으면 들어간 첫 워크스페이스다. 레포가 하나이던 판과 워크스페이스가 하나이던 판의 DB는 켤 때 첫 워크스페이스의 것으로 옮겨진다. 화면은 워크스페이스가 하나일 때만 지금처럼 돈다(#238).
-- 워크스페이스에는 이 계정들의 레포만 들어간다. 레포는 그 레포의 GitHub Admin이 `POST /api/repos/add`(`{ "repo": "owner/name" }`)로 넣고 `POST /api/repos/remove`로 뺀다. 뺀 레포의 것은 지우지 않아 다시 넣으면 돌아온다. 화면은 아직 없다(#238).
-- `owner/name`으로 적은 레포는 그 계정을 받고, 서버가 켜질 때마다 넣는다. 아무도 로그인할 수 없는 새 서버의 첫 레포는 이렇게 넣는다. API로 뺀 레포를 다시 넣지 않으려면 여기서도 지운다.
-- 첫 `owner/name`은 레포가 하나이던 판의 레포다. 그 판의 DB로 켜면 있던 작업, 알림, 포스트, 라벨, 결정, 검사 명령이 이 레포의 것으로 옮겨지고, 들어와 있던 세션도 다시 로그인하지 않고 이 레포의 멤버다(10분 안에 GitHub 권한으로 다시 확인한다).
-- 멤버는 워크스페이스 레포 가운데 하나라도 push 권한이 있는 사람이다. 레포마다 push 권한이 있는 것만 보이고, 로그인할 때와 10분마다 다시 읽는다. 러너는 폴더의 GitHub 원격으로 그 레포에 이어진다. 레포마다 러너를 하나씩 켠다.
-- 레포마다인 API(작업, 멤버, 포스트, 라벨, 결정, 피드)는 `Omagari-Repo: owner/name` 머리말로 레포를 고른다. 없으면 부른 사람에게 보이는 첫 레포다. CLI는 폴더의 원격을 싣는다.
+- Each accepted account is one workspace (`api.workspaces`). Repos from different accounts go into different workspaces, and members, presence, channels, forums, posts, decisions, and metrics never mix between workspaces. A person who is in two picks one with the `Omagari-Workspace` header (for the live connection, `workspace` in hello). Without it, they get the first workspace they belong to. A database from the single-repo or single-workspace versions moves to the first workspace on start. The UI only works as before when there's one workspace (#238).
+- A workspace only holds repos of its accounts. A repo's GitHub Admin adds one with `POST /api/repos/add` (`{ "repo": "owner/name" }`) and removes it with `POST /api/repos/remove`. Removing a repo doesn't delete its data, so adding it again brings it back. There's no UI for this yet (#238).
+- A repo written as `owner/name` accepts that account, and the server adds it on every start. A new server where nobody can sign in yet gets its first repo this way. To keep a repo you removed through the API from coming back, delete it here too.
+- The first `owner/name` is the repo of the single-repo version. If you start with a database from that version, its works, alerts, posts, labels, decisions, and check commands move to that repo, and sessions that were signed in stay signed in as members of it (GitHub permissions are checked again within 10 minutes).
+- A member is someone with push access to at least one of the workspace's repos. People only see the repos they have push access to, rechecked at sign-in and every 10 minutes. A runner connects to a repo through the folder's GitHub remote. Run one runner per repo.
+- APIs that are per repo (works, members, posts, labels, decisions, feed) pick the repo with the `Omagari-Repo: owner/name` header. Without it, they use the first repo the caller can see. The CLI sends the folder's remote.
 
-`OMAGARI_DB`(기본 `omagari.db`)와 `PORT`(기본 3000)로 DB 파일과 포트를 바꾼다. 멤버가 웹을 여는 주소가 서버가 듣는 주소와 다르면 `OMAGARI_URL`에 준다. 결정 PR의 출처(포스트 링크)가 이 주소로 적힌다.
+`OMAGARI_DB` (default `omagari.db`) and `PORT` (default 3000) change the database file and the port. If members open the web UI at a different address than the one the server listens on, set `OMAGARI_URL`. Decision PRs link back to posts using this address.
 
-서버가 `npm run build -w @omagari/web`로 빌드한 웹 화면(`packages/web/dist`)이 있으면 같은 주소에서 낸다. 없는 경로는 화면의 첫 파일로 보낸다. 개발할 때는 지금처럼 `npm run web`(Vite)를 쓴다. 건강 확인은 `GET /api/health`다.
+If a web build exists (`npm run build -w @omagari/web` creates `packages/web/dist`), the server serves it at the same address and sends unknown paths to its first file. While developing, use `npm run web` (Vite) as before. The health check is `GET /api/health`.
 
-### Fly.io에 올리기
+### Deploy to Fly.io
 
-Fly.io(도쿄 `nrt`)의 작은 기계 하나에 서버를 올린다. 레포의 도그푸딩 서버가 이렇게 돈다(ADR-0042). 설정은 `fly.toml`, 이미지는 `Dockerfile`에 있다. 앱 이름과 받을 계정 목록은 레포에 없고 `.env`에 적는다(`cp .env.example .env`로 시작). 처음 한 번 사람이 한다.
+The server runs on one small Fly.io machine (Tokyo, `nrt`). This is how the repo's dogfood server runs ([ADR-0042](docs/adr/0042-dogfood-server-on-fly-follows-dev.md)). Settings are in `fly.toml` and the image is in `Dockerfile`. The app name and the account list aren't in the repo; put them in `.env` (start with `cp .env.example .env`). A person does the first deploy by hand.
 
 ```bash
-set -a; . ./.env; set +a                    # FLY_APP, OMAGARI_REPO를 셸로 읽는다
+set -a; . ./.env; set +a                    # read FLY_APP and OMAGARI_REPO into the shell
 fly apps create "$FLY_APP"
 fly volumes create omagari_data --region nrt --size 1 -a "$FLY_APP"
-fly secrets set GITHUB_CLIENT_ID=<기기 인증을 켠 GitHub 앱> -a "$FLY_APP"
+fly secrets set GITHUB_CLIENT_ID=<GitHub app with device flow on> -a "$FLY_APP"
 fly deploy -a "$FLY_APP" -e OMAGARI_REPO="$OMAGARI_REPO"
 ```
 
-- 비밀값은 `fly secrets`로만 넣는다. 레포에는 두지 않는다. `OMAGARI_REPO`(받을 계정 목록)는 비밀이 아니라 배포할 때 `-e`로 준다. 앱 이름과 함께 `fly.toml`에 두지 않은 까닭은 누가 올려도 같은 값만 `fly.toml`에 두려는 것이다(`app`은 toml이 환경변수를 못 읽어 `-a`로 준다). `OMAGARI_URL`은 Fly에서는 `https://<앱 이름>.fly.dev`로 서버가 정한다.
-- DB는 볼륨(`/data/omagari.db`)에 있어 새 판으로 바꿔도 남는다. 백업은 볼륨의 날마다 스냅샷이다(`fly volumes snapshots list`로 본다. 기본 5일 보관).
-- 건강 확인(`/api/health`)을 통과한 판만 갈아 끼운다. 못 통과하면 옛 판이 남는다.
-- 자동 배포: `.github/workflows/deploy.yml`이 `dev`의 CI가 통과하면 `fly deploy`를 돈다. `dev`에서만 쓸 수 있는 GitHub Environment `dogfood`(Settings → Environments, 배포 브랜치를 `dev`로 제한)에 비밀값 `FLY_API_TOKEN`(`fly tokens create deploy`)과 변수 `FLY_APP`, `OMAGARI_REPO`를 넣어야 켜지고, 하나라도 없으면 배포 단계를 건너뛴다. CI가 돈 커밋이 지금 `dev`의 끝이 아니면(옛 실행을 다시 돌린 경우) 올리지 않는다.
-- 이 기기에서 이미지를 확인하려면: `docker build -t omagari .` 뒤 `docker run -p 8080:8080 -v omagari-data:/data -e OMAGARI_REPO=<owner/name> -e GITHUB_CLIENT_ID=<앱> omagari`.
+- Secrets only go in through `fly secrets`, never in the repo. `OMAGARI_REPO` isn't secret, so it's passed with `-e` at deploy time. It stays out of `fly.toml` along with the app name so that `fly.toml` only holds values that are the same no matter who deploys (`app` is passed with `-a`, since toml can't read environment variables). On Fly, the server sets `OMAGARI_URL` to `https://<app name>.fly.dev` itself.
+- The database lives on a volume (`/data/omagari.db`), so it survives new versions. Backups are the volume's daily snapshots (`fly volumes snapshots list`, kept 5 days by default).
+- A new version only replaces the old one if it passes the health check (`/api/health`). If it doesn't, the old version stays.
+- Auto deploy: `.github/workflows/deploy.yml` runs `fly deploy` once CI passes on `dev`. It needs a GitHub Environment named `dogfood` that only `dev` can use (Settings → Environments, deployment branches limited to `dev`), with the secret `FLY_API_TOKEN` (`fly tokens create deploy`) and the variables `FLY_APP` and `OMAGARI_REPO`. If any is missing, the deploy step is skipped. It also doesn't deploy when the commit CI ran on is no longer the tip of `dev` (a re-run of an old run).
+- To check the image on your machine: `docker build -t omagari .`, then `docker run -p 8080:8080 -v omagari-data:/data -e OMAGARI_REPO=<owner/name> -e GITHUB_CLIENT_ID=<app> omagari`.
+
+## Development
+
+Before you push, run the same three checks CI runs:
+
+```bash
+npm run format      # fixes formatting and lint
+npm run typecheck
+npm test
+```
+
+To look around the UI without a team, start the demo server. It fakes GitHub and seeds a workspace with members, forums, and conflicts. `DEMO_AGENT=fake` makes your agent answer with canned replies, so it doesn't use your subscription.
+
+```bash
+DEMO_AGENT=fake node test/demo.ts
+```
+
+## Docs
+
+- [docs/omagari-v3.md](docs/omagari-v3.md): what Omagari is and why
+- [docs/omagari-v3-implementation.md](docs/omagari-v3-implementation.md): how it's built
+- [GLOSSARY.md](GLOSSARY.md): the words we use
+- [docs/adr/](docs/adr/): design decisions
+- [DESIGN.md](DESIGN.md): how screens look and read
+
+Some of these are still in Korean while the docs move to English ([ADR-0045](docs/adr/0045-english-by-default-korean-as-a-choice.md)).
+
+## Contributing
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) first. To report a security problem, see [SECURITY.md](SECURITY.md). Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## License
+
+[AGPL-3.0](LICENSE)
