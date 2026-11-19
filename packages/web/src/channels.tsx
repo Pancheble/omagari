@@ -19,16 +19,17 @@ import { type ReactNode, type RefObject, useEffect, useId, useState } from "reac
 import { repoName, type Workspace as Space } from "./api.ts";
 import { useMenu } from "./dm.tsx";
 import { OTHER, type PostItem, postTitle, settled } from "./forum.tsx";
+import { language, t } from "./i18n.ts";
 import { ALL } from "./places.ts";
 
-/** 채널 이름 순서. 받은 곳(목록, 실시간, 만들기)과 상관없이 같은 순서로 둔다. */
+/** Channel name order. The same order no matter where the channels came from (list, live, create). */
 export const byName = (channels: Channel[]) =>
-  channels.toSorted((a, b) => a.name.localeCompare(b.name, "ko"));
+  channels.toSorted((a, b) => a.name.localeCompare(b.name, language));
 
 /**
- * 무엇을 접었는지(`key`: "채팅 채널" 카테고리, 채널 패널). 이 기기에 기억하고, 처음에는 펼쳐 둔다.
- * 저장소를 막아 둔 브라우저(사생활 보호 창 등)에서는 이 탭에서만 남는다.
- * 채널 패널이 앞(옆 칸)과 서랍에 둘 다 있어서 앱 틀이 하나만 들고 둘에 나눠 준다.
+ * What is collapsed (`key`: the "Chat channels" category, the channel panel). Remembered on this device, expanded at first.
+ * In browsers that block storage (private windows, etc.) it only lasts for this tab.
+ * The channel panel exists both in front (side column) and in the drawer, so the app frame holds one state and hands it to both.
  */
 export function useCollapsed(key: string) {
   const [collapsed, set] = useState(() => {
@@ -48,7 +49,7 @@ export function useCollapsed(key: string) {
   return [collapsed, toggle] as const;
 }
 
-/** 내 포스트를 접은 포럼들의 id. 이 기기에 기억한다. */
+/** Ids of the forums whose "my posts" are folded. Remembered on this device. */
 function useFolded() {
   const KEY = "omagari.forums-folded";
   const [folded, set] = useState<string[]>(() => {
@@ -70,14 +71,14 @@ function useFolded() {
 }
 
 /**
- * 채널 패널(시안 101): 늘 한 곳(레포 하나나 "<계정> 전체")의 것이라 층 머리도 레포 묶음도 없이 두 카테고리만 있다.
- * `channels`는 그곳의 채널만 받는다(`placeOf`).
- * "채팅 채널": 접을 수 있는 머리(이름, 꺾쇠, 채널을 만드는 `+`)와 채널 줄.
- * "포럼 채널"(시안 55-D): 포럼 줄 밑에 내가 관련된(`mine`) 열린 포스트만 가지로 달린다. 같은 포스트가 여러 포럼에 맞으면 그 포럼마다 달린다.
- * 내 포스트가 있는 포럼은 줄 끝 꺾쇠로 접고, 접으면 수와 새 글 점이 남는다. 풀린 포스트는 빠지고, 새 글이 있으면 굵게와 점이 붙는다.
- * `other`면 포럼들 아래 구분선 뒤에 어느 포럼에도 맞지 않는 "다른 포스트" 줄이 있다. `+`는 포럼을 만든다.
- * 채널 줄은 주소의 `#채널 id`를 바꾸는 링크라, 새 탭에서 열 수 있고 뒤로 가기로 앞 채널에 돌아간다. 가지는 `#포럼 id/알림 번호`다.
- * 접어도 지금 고른 줄은 남는다.
+ * Channel panel (mock 101): it always shows one place (one repo, or "All of <account>"), so there are no floor headers or repo groups, just two categories.
+ * `channels` only gets that place's channels (`placeOf`).
+ * "Chat channels": a collapsible header (name, chevron, `+` to create a channel) and the channel rows.
+ * "Forum channels" (mock 55-D): under each forum row hang only the open posts that involve me (`mine`) as branches. A post that fits several forums hangs under each of them.
+ * A forum with my posts folds with the chevron at the end of its row; folded, it keeps the count and the new-post dot. Settled posts drop out, and a post with new activity gets bold text and a dot.
+ * With `other`, an "Other posts" row for posts that fit no forum sits after a divider below the forums. `+` creates a forum.
+ * Channel rows are links that change `#channel id` in the address, so they open in a new tab and Back returns to the previous channel. A branch is `#forum id/alert number`.
+ * Even when folded, the currently selected row stays.
  */
 export function ChannelList({
   channels,
@@ -96,14 +97,14 @@ export function ChannelList({
   onCreateForum,
 }: {
   channels?: Channel[];
-  /** "다른 포스트" 줄을 둔다. */
+  /** Show the "Other posts" row. */
   other: boolean;
   current?: string;
-  /** 열려 있는 포스트의 알림 번호 */
+  /** Alert number of the open post */
   post?: number;
   posts?: PostItem[];
   unread: (post: PostItem) => boolean;
-  /** 내가 관련된 포스트인가: 내 작업이 걸렸거나 내가 글을 썼다. */
+  /** Does the post involve me: my Work is on it, or I wrote in it. */
   mine: (post: PostItem) => boolean;
   collapsed: boolean;
   forumCollapsed: boolean;
@@ -154,7 +155,7 @@ export function ChannelList({
                 <>
                   <small className="forum-count">{branches.length}</small>
                   {branches.some(unread) && (
-                    <span className="unread-dot" role="img" aria-label="새 글" />
+                    <span className="unread-dot" role="img" aria-label={t.channels.panel.unread} />
                   )}
                 </>
               )}
@@ -164,7 +165,7 @@ export function ChannelList({
                 type="button"
                 className="forum-fold"
                 aria-expanded={!shut}
-                aria-label={`${channel.name}의 내 포스트 ${shut ? "펼치기" : "접기"}`}
+                aria-label={t.channels.panel.foldMyPosts(channel.name, shut)}
                 onClick={() => toggleFolded(channel.id)}
               >
                 {shut ? (
@@ -176,7 +177,7 @@ export function ChannelList({
             )}
           </div>
           {!shut && branches.length > 0 && (
-            <ul className="branches" aria-label={`${channel.name}의 내 포스트`}>
+            <ul className="branches" aria-label={t.channels.panel.myPosts(channel.name)}>
               {branches.map((item) => (
                 <li key={item.alert}>
                   <a
@@ -189,7 +190,13 @@ export function ChannelList({
                     onClick={onPick}
                   >
                     <span>{postTitle(item)}</span>
-                    {unread(item) && <span className="unread-dot" role="img" aria-label="새 글" />}
+                    {unread(item) && (
+                      <span
+                        className="unread-dot"
+                        role="img"
+                        aria-label={t.channels.panel.unread}
+                      />
+                    )}
                   </a>
                 </li>
               ))}
@@ -202,19 +209,19 @@ export function ChannelList({
   return (
     <nav className="channels">
       <Category
-        title="채팅 채널"
+        title={t.channels.panel.chatTitle}
         collapsed={collapsed}
         onToggle={onToggle}
-        add={{ label: "채팅 채널 만들기", onClick: onCreate }}
+        add={{ label: t.channels.panel.createChat, onClick: onCreate }}
       >
         {chatRows}
       </Category>
       {channels && (
         <Category
-          title="포럼 채널"
+          title={t.channels.panel.forumTitle}
           collapsed={forumCollapsed}
           onToggle={onForumToggle}
-          add={{ label: "포럼 만들기", onClick: onCreateForum }}
+          add={{ label: t.channels.panel.createForum, onClick: onCreateForum }}
         >
           {forumRows}
           {!forumCollapsed && other && (
@@ -236,7 +243,7 @@ export function ChannelList({
   );
 }
 
-/** 접을 수 있는 카테고리 머리와 그 아래 줄들. `add`가 있으면 오른쪽 끝에 `+`가 선다. */
+/** A collapsible category header and the rows under it. With `add`, a `+` sits at the right end. */
 function Category({
   title,
   collapsed,
@@ -286,8 +293,8 @@ function Category({
 }
 
 /**
- * 계정 아바타(시안 101): GitHub 아바타를 쓰고 조직은 둥근 네모, 개인 계정은 동그라미다(GitHub과 같다).
- * 아바타가 없거나 받지 못하면 계정 이름 첫 글자를 쓴다.
+ * Account avatar (mock 101): uses the GitHub avatar, a rounded square for organizations and a circle for personal accounts (same as GitHub).
+ * If there's no avatar or it fails to load, the first letter of the account name is used.
  */
 export function AccountMark({ space, size = 28 }: { space: Space; size?: 22 | 28 }) {
   const [failed, setFailed] = useState(false);
@@ -302,7 +309,7 @@ export function AccountMark({ space, size = 28 }: { space: Space; size?: 22 | 28
   );
 }
 
-/** 어느 계정 묶음을 펼쳤는지. 이 기기에 기억하고, 처음에는 지금 보는 계정만 펴 둔다. */
+/** Which account groups are expanded. Remembered on this device; at first only the account being viewed is open. */
 function useAccountOpen(current: string) {
   const KEY = "omagari.accounts-open";
   const [saved, set] = useState<Record<string, boolean>>(() => {
@@ -325,13 +332,13 @@ function useAccountOpen(current: string) {
 }
 
 const placeLabel = (space: Space, place: string) =>
-  place === ALL ? `${space.name} 전체` : repoName(place);
+  place === ALL ? t.channels.place.allOf(space.name) : repoName(place);
 
 /**
- * 채널 패널 맨 위의 이름 줄과 레포 고르기 메뉴(시안 101-1, 101-3). 이름 줄은 계정 아바타, 작은 계정 이름, 굵은 레포 이름이나 "전체"이고,
- * 다른 곳에 새 글이 있으면 점이 붙는다. 누르면 바로 아래에 메뉴가 열린다: 레포 찾기 칸, 계정마다 접히는 묶음
- * (레포가 둘 이상이면 "<계정> 전체", 레포마다 한 줄, 내가 Admin인 레포가 있으면 끝에 "레포 넣기"), Admin인 레포 줄의 ⋯ 메뉴.
- * `action`(채널 패널 접기)은 오른쪽 끝에 그대로 선다.
+ * The name row at the top of the channel panel and the repo picker menu (mocks 101-1, 101-3). The name row has the account avatar, a small account name, and a bold repo name or "All",
+ * with a dot if there are new posts elsewhere. Clicking it opens the menu right below: a repo search field, a group per account that folds
+ * ("All of <account>" if there are two or more repos, one row per repo, and "Add a repo" at the end if I'm Admin of some repo), and a ⋯ menu on the rows of repos I'm Admin of.
+ * `action` (fold the channel panel) stays at the right end.
  */
 export function PlacePicker({
   workspaces,
@@ -347,14 +354,14 @@ export function PlacePicker({
 }: {
   workspaces: Space[];
   current: Space;
-  /** 지금 보는 곳: 레포 이름이나 `ALL` */
+  /** The place being viewed: a repo name or `ALL` */
   place: string;
-  /** 지금 계정의 그곳에 새 글이 있나. 다른 계정의 새 글은 아직 모른다. */
+  /** Is there anything new in that place of the current account. New posts on other accounts aren't known yet. */
   fresh: (place: string) => boolean;
-  /** 계정마다 내가 Admin인 레포. 없으면 아직 읽지 않았다. */
+  /** The repos I'm Admin of, per account. Missing means not loaded yet. */
   admin: Record<string, AdminRepo[] | "error" | undefined>;
   action?: ReactNode;
-  /** 계정 묶음이 펼쳐져 보이면 그 계정의 Admin 레포를 읽는다. */
+  /** When an account group is shown expanded, load that account's Admin repos. */
   onAdmin: (workspace: string) => void;
   onPick: (workspace: string, place: string) => void;
   onAddRepo: (workspace: string) => void;
@@ -364,15 +371,15 @@ export function PlacePicker({
   const menu = useId();
   const [query, setQuery] = useState("");
   const [isOpen, toggle] = useAccountOpen(current.id);
-  /** ⋯ 메뉴를 연 레포 */
+  /** The repo whose ⋯ menu is open */
   const [more, setMore] = useState<string>();
   const found = (repo: string) => repoName(repo).toLowerCase().includes(query.trim().toLowerCase());
   const places = (space: Space) => (space.repos.length > 1 ? [ALL, ...space.repos] : space.repos);
   const elsewhere = places(current).some((other) => other !== place && fresh(other));
-  // 펼쳐 보이는 계정의 Admin 레포를 읽는다("레포 넣기"와 ⋯가 거기에 달렸다).
+  // Load the Admin repos of the accounts shown expanded ("Add a repo" and ⋯ hang on them).
   const shown = open ? workspaces.filter((space) => query.trim() || isOpen(space.id)) : [];
   const missing = shown.filter((space) => admin[space.id] === undefined).map((space) => space.id);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 아직 읽지 않은 계정이 바뀔 때만 읽는다
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only load when the not-yet-loaded accounts change
   useEffect(() => {
     for (const id of missing) onAdmin(id);
   }, [missing.join()]);
@@ -382,7 +389,7 @@ export function PlacePicker({
   };
   return (
     <div className="workspace picker">
-      {/* biome-ignore lint/a11y/noStaticElementInteractions: 안에 든 메뉴와 버튼의 키를 한곳에서 받는다 */}
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: one place takes the keys for the menu and buttons inside */}
       <div className="forum-menu-wrap" ref={wrap} onKeyDown={onKeyDown}>
         <button
           ref={button}
@@ -400,19 +407,26 @@ export function PlacePicker({
           <AccountMark space={current} />
           <span className="place-names">
             <small>{current.name}</small>
-            <h1>{place === ALL ? "전체" : repoName(place)}</h1>
+            <h1>{place === ALL ? t.channels.place.all : repoName(place)}</h1>
           </span>
-          {elsewhere && <span className="unread-dot" role="img" aria-label="다른 곳에 새 글" />}
+          {elsewhere && (
+            <span className="unread-dot" role="img" aria-label={t.channels.place.elsewhere} />
+          )}
           <ChevronsUpDown size={14} aria-hidden />
         </button>
         {open && (
-          <div className="forum-menu place-menu" id={menu} role="menu" aria-label="레포 고르기">
+          <div
+            className="forum-menu place-menu"
+            id={menu}
+            role="menu"
+            aria-label={t.channels.place.menu}
+          >
             <label className="place-search">
               <Search size={14} aria-hidden />
               <input
                 type="search"
-                placeholder="레포 찾기"
-                aria-label="레포 찾기"
+                placeholder={t.channels.place.find}
+                aria-label={t.channels.place.find}
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
               />
@@ -444,8 +458,16 @@ export function PlacePicker({
                     <span className="pop-name">{space.name}</span>
                     {!expanded && (
                       <>
-                        <small className="pop-aside">레포 {space.repos.length}</small>
-                        {news && <span className="unread-dot" role="img" aria-label="새 글" />}
+                        <small className="pop-aside">
+                          {t.channels.place.repoCount(space.repos.length)}
+                        </small>
+                        {news && (
+                          <span
+                            className="unread-dot"
+                            role="img"
+                            aria-label={t.channels.panel.unread}
+                          />
+                        )}
                       </>
                     )}
                   </button>
@@ -473,7 +495,11 @@ export function PlacePicker({
                             )}
                             <span className="pop-name">{placeLabel(space, p)}</span>
                             {space.id === current.id && !here && fresh(p) && (
-                              <span className="unread-dot" role="img" aria-label="새 글" />
+                              <span
+                                className="unread-dot"
+                                role="img"
+                                aria-label={t.channels.panel.unread}
+                              />
                             )}
                             {here && <Check className="place-check" size={16} aria-hidden />}
                           </button>
@@ -500,14 +526,14 @@ export function PlacePicker({
                       }}
                     >
                       <Plus size={16} aria-hidden />
-                      <span className="pop-name">레포 넣기</span>
+                      <span className="pop-name">{t.channels.place.add}</span>
                     </button>
                   )}
                 </section>
               );
             })}
             <hr />
-            <p className="pop-note">넣은 레포 가운데 push 권한이 있는 것만 보여요.</p>
+            <p className="pop-note">{t.channels.place.note}</p>
           </div>
         )}
       </div>
@@ -517,8 +543,8 @@ export function PlacePicker({
 }
 
 /**
- * 레포 줄의 ⋯ 메뉴(시안 101-1, 91-C): "GitHub에서 열기"와 "워크스페이스에서 빼기". 빼기는 한 번 더 누르게 한다.
- * 그 레포의 Admin에게만 보인다.
+ * The ⋯ menu on a repo row (mocks 101-1, 91-C): "Open on GitHub" and "Remove from workspace". Removing takes one more click to confirm.
+ * Only that repo's Admin sees it.
  */
 function RepoMore({
   repo,
@@ -539,7 +565,7 @@ function RepoMore({
         type="button"
         role="menuitem"
         className="repo-more"
-        aria-label="레포 메뉴"
+        aria-label={t.channels.repoMenu.label}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menu : undefined}
@@ -552,7 +578,12 @@ function RepoMore({
         <Ellipsis size={18} aria-hidden />
       </button>
       {open && (
-        <div className="forum-menu repo-menu" id={menu} role="menu" aria-label="레포 메뉴">
+        <div
+          className="forum-menu repo-menu"
+          id={menu}
+          role="menu"
+          aria-label={t.channels.repoMenu.label}
+        >
           <a
             role="menuitem"
             className="menu-item pop-row"
@@ -562,7 +593,7 @@ function RepoMore({
             tabIndex={-1}
           >
             <ExternalLink size={16} aria-hidden />
-            <span className="pop-name">GitHub에서 열기</span>
+            <span className="pop-name">{t.channels.repoMenu.openGithub}</span>
           </a>
           <hr />
           <button
@@ -585,13 +616,13 @@ function RepoMore({
             <Minus size={16} aria-hidden />
             <span className="pop-name">
               {removing === "ask" || removing === "busy"
-                ? "한 번 더 누르면 빠져요"
-                : "워크스페이스에서 빼기"}
+                ? t.channels.repoMenu.confirmRemove
+                : t.channels.repoMenu.remove}
             </span>
           </button>
           {removing === "error" && (
             <p className="pop-note error" role="alert">
-              빼지 못했어요. 잠시 뒤 다시 시도해 주세요.
+              {t.channels.repoMenu.removeFailed}
             </p>
           )}
         </div>
@@ -603,8 +634,8 @@ function RepoMore({
 export type AdminRepo = Awaited<ReturnType<typeof call<typeof api.adminRepos>>>["repos"][number];
 
 /**
- * "레포 넣기" 대화 상자(시안 91-A): 이 계정의 레포 가운데 내가 Admin인 것만 보이고, 안 넣은 것에 "넣기"가 있다.
- * 빼기는 채널 패널의 레포 ⋯ 메뉴에서 한다(시안 91-C).
+ * The "Add a repo" dialog (mock 91-A): only this account's repos where I'm Admin show, and the ones not added yet have an "Add" button.
+ * Removing is done from the repo ⋯ menu in the channel panel (mock 91-C).
  */
 export function RepoDialog({
   dialog,
@@ -613,9 +644,9 @@ export function RepoDialog({
   onAdd,
 }: {
   dialog: RefObject<HTMLDialogElement | null>;
-  /** 메뉴에서 "레포 넣기"를 누른 계정 */
+  /** The account whose "Add a repo" was clicked in the menu */
   account: Space;
-  /** 없으면 읽는 중, `"error"`면 GitHub에서 읽지 못했다. */
+  /** Missing means loading; `"error"` means GitHub couldn't be read. */
   repos?: AdminRepo[] | "error";
   onAdd: (repo: string) => Promise<void>;
 }) {
@@ -623,7 +654,7 @@ export function RepoDialog({
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState(false);
   return (
-    // biome-ignore lint/a11y/useKeyWithClickEvents: Esc는 dialog가 맡는다
+    // biome-ignore lint/a11y/useKeyWithClickEvents: the dialog handles Esc
     <dialog
       ref={dialog}
       className="dialog repo-dialog"
@@ -631,22 +662,19 @@ export function RepoDialog({
       onClose={() => setError(false)}
       onClick={(event) => event.target === event.currentTarget && dialog.current?.close()}
     >
-      <h2 id={heading}>레포 넣기</h2>
-      <p className="dialog-lead">
-        내가 Admin인 레포만 보여요. 개인 레포도 넣어야 Omagari가 봐요. 넣으면 그 레포에 push 권한이
-        있는 사람이 멤버로 들어와요.
-      </p>
+      <h2 id={heading}>{t.channels.addRepo.title}</h2>
+      <p className="dialog-lead">{t.channels.addRepo.lead}</p>
       <p className="repo-account">
         <AccountMark space={account} size={22} />
         <strong>{account.name}</strong>
       </p>
       {repos === undefined ? (
         <p className="help" role="status" aria-busy="true">
-          레포를 읽는 중…
+          {t.channels.addRepo.loading}
         </p>
       ) : repos === "error" ? (
         <p className="help error" role="alert">
-          GitHub에서 레포를 읽지 못했어요. 잠시 뒤 다시 열어 주세요.
+          {t.channels.addRepo.loadFailed}
         </p>
       ) : (
         <ul className="repo-pick">
@@ -655,12 +683,10 @@ export function RepoDialog({
               <Book size={16} aria-hidden />
               <span className="repo-pick-name">
                 <strong>{repoName(repo.name)}</strong>
-                <small>
-                  {repo.private ? "비공개" : "공개"} · push 권한 {repo.pushers}명
-                </small>
+                <small>{t.channels.addRepo.visibility(repo.private, repo.pushers)}</small>
               </span>
               {repo.added ? (
-                <small className="repo-added">넣음</small>
+                <small className="repo-added">{t.channels.addRepo.added}</small>
               ) : (
                 <button
                   type="button"
@@ -678,7 +704,7 @@ export function RepoDialog({
                     }
                   }}
                 >
-                  넣기
+                  {t.channels.addRepo.add}
                 </button>
               )}
             </li>
@@ -687,13 +713,13 @@ export function RepoDialog({
       )}
       {error && (
         <p className="help error" role="alert">
-          레포를 넣지 못했어요. 잠시 뒤 다시 시도해 주세요.
+          {t.channels.addRepo.addFailed}
         </p>
       )}
-      <p className="help">다른 계정의 레포는 메뉴에서 그 계정 아래 "레포 넣기"로 넣어요.</p>
+      <p className="help">{t.channels.addRepo.other}</p>
       <div className="dialog-actions">
         <button type="button" className="button quiet" onClick={() => dialog.current?.close()}>
-          닫기
+          {t.channels.addRepo.close}
         </button>
       </div>
     </dialog>

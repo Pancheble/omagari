@@ -1,0 +1,41 @@
+import type { Words } from "../i18n.ts";
+
+/** 채널 대화와 `@호출` 입력 칸의 한국어 글(conversation.tsx, call.tsx). */
+export const conversationKo: Words["conversation"] = {
+  members: (n) => `멤버 ${n}명`,
+  today: "오늘",
+  yesterday: "어제",
+  reconnecting: "서버에 다시 붙는 중…",
+  retry: "다시 시도",
+  failed: {
+    post: "채널에 올리지 못했어요",
+    send: "메시지를 보내지 못했어요",
+    runnerOff: (executor) => `${executor} 러너가 꺼져 있어 지금은 물을 수 없어요`,
+    ask: "질문을 보내지 못했어요",
+    gif: "GIF를 보내지 못했어요",
+    react: "반응을 달지 못했어요",
+    unreact: "반응을 떼지 못했어요",
+  },
+  loadFailedTitle: "메시지를 불러오지 못했어요",
+  loadFailedBody: "연결이 끊긴 것 같아요. 인터넷을 확인해 볼래요?",
+  emptyTitle: (channel) => `# ${channel}에 아직 메시지가 없어요`,
+  emptyBody: "첫 메시지를 보내거나, 내 에이전트에게 먼저 물어보세요.",
+  logLabel: (channel) => `# ${channel}의 메시지`,
+  sendTo: (channel) => `# ${channel}에 메시지 보내기`,
+  send: "보내기",
+  messageActions: "메시지 동작",
+  fromGithub: "이슈에 GitHub에서 단 댓글",
+  loading: "메시지를 불러오는 중",
+  call: {
+    noAgentsTitle: "연결된 에이전트가 없어요",
+    noAgentsBody: "이 기기에서 러너를 켜면 @로 내 에이전트를 불러 모두가 보게 물을 수 있어요.",
+    menuTitle: "모두가 보게 묻기",
+    answering: "답하는 중…",
+    idle: "쉬는 중",
+    addNote: "한마디 덧붙이기 (선택)",
+    askEveryone: (executor) => `${executor}에게 모두가 보게 묻기`,
+    attachedOwner: (owner, executor) => `${owner}의 ${executor}`,
+    removeAttached: "올릴 문답 빼기",
+    cancelCall: (executor) => `${executor} 부르기 취소`,
+  },
+};

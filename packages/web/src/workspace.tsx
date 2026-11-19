@@ -82,7 +82,7 @@ import {
   postTitle,
   settled,
 } from "./forum.tsx";
-import { setLanguage } from "./i18n.ts";
+import { setLanguage, t } from "./i18n.ts";
 import { type CreateKind, ForumDialog, LabelsContext, PostLabels } from "./labels.tsx";
 import { useLive } from "./live.ts";
 import { MemberList, MemberSkeleton } from "./members.tsx";
@@ -91,18 +91,18 @@ import { ProfilePanel } from "./profile.tsx";
 import { type Opened, PeopleContext, ProfileCard, ProfileView } from "./profile-card.tsx";
 import { Settings } from "./settings.tsx";
 
-/** 이 폭부터 채널 패널이 늘 보인다. 그보다 좁으면 대화만 두고 채널 패널은 서랍으로 연다(DESIGN.md 앱의 좁은 화면). */
+/** From this width the channel panel is always visible. Narrower, only the conversation shows and the channel panel opens as a drawer (DESIGN.md, app on narrow screens). */
 const WIDE = "(min-width: 834px)";
-/** 이 폭부터 오른쪽 칸이 대화 옆에 선다. 그보다 좁으면 대화 위에 뜨고, 833px 이하는 시트다. */
+/** From this width the right column sits next to the conversation. Narrower, it floats over the conversation, and at 833px or less it is a sheet. */
 const BESIDE = "(min-width: 1069px)";
 
-/** 채널 패널을 접고 펴는 단축키. 맥은 ⌘\, 그 밖은 Ctrl+\(DESIGN.md 채널 패널 접기). */
+/** Shortcut to fold and unfold the channel panel. ⌘\ on Mac, Ctrl+\ elsewhere (DESIGN.md, folding the channel panel). */
 const MAC = /Mac|iPhone|iPad/.test(navigator.userAgent);
 const FOLD_KEY = MAC ? "⌘\\" : "Ctrl+\\";
-/** 접힌 채널 패널을 꺼내 보거나 닫기 전에 마우스가 머무는 시간. */
+/** How long the mouse must rest before a folded channel panel peeks out or closes. */
 const PEEK_DELAY = 300;
 
-/** 미디어 쿼리가 맞는지. 창 폭이 바뀌면 따라온다. */
+/** Whether the media query matches. Follows window width changes. */
 function useMedia(query: string) {
   return useSyncExternalStore(
     (onChange) => {
@@ -115,8 +115,8 @@ function useMedia(query: string) {
 }
 
 /**
- * 번호로 합친다. 같은 메시지가 지난 대화와 실시간으로 두 번 와도 하나만 남고, 나중에 온 것이 앞의 것을 바꾼다.
- * 다만 답이 온 문답은 늦게 온 "답을 기다리는 중"으로 되돌리지 않는다.
+ * Merge by number. The same message arriving twice, from past conversation and live, stays as one, and the later one replaces the earlier.
+ * But a Q&A that has an answer is never reverted to a late "waiting for the answer".
  */
 /** 포스트에서 말한 멤버들(글과 올린 문답을 쓴 사람). 결정자 후보로 보인다. */
 const speakersOf = (messages: ChannelMessage[] = []) => [
@@ -143,14 +143,14 @@ const merge = (a: ChannelMessage[], b: ChannelMessage[]) => {
   return [...byId.values()].sort((x, y) => x.id - y.id);
 };
 
-/** 문답을 번호로 넣거나 바꾼다. 답이 온 것은 늦게 온 "답을 기다리는 중"으로 되돌리지 않는다. */
+/** Insert or replace a Q&A by number. One that has an answer is never reverted to a late "waiting for the answer". */
 const upsert = (qas: Qa[], qa: Qa) => {
   const known = qas.find((other) => other.id === qa.id);
   if (known && known.answer.state !== "pending" && qa.answer.state === "pending") return qas;
   return [...qas.filter((other) => other.id !== qa.id), qa].sort((x, y) => x.id - y.id);
 };
 
-/** 주소의 `#채널 id`. 채널 줄이 링크라 고르면 바뀌고, 뒤로 가기로도 바뀐다. */
+/** `#channel id` in the address. Channel rows are links, so picking one changes it, and so does Back. */
 function useHash() {
   const [hash, setHash] = useState(() => decodeURIComponent(location.hash.slice(1)));
   useEffect(() => {
@@ -162,10 +162,10 @@ function useHash() {
 }
 
 /**
- * 앱 틀: 왼쪽 채널 패널, 가운데 대화 칸, 오른쪽 칸. 오른쪽 칸은 멤버 목록(#19)과 내 에이전트(#21) 가운데 하나만 열린다.
- * 좁은 화면에서는 같은 채널 패널을 왼쪽 서랍(모달 `<dialog>`)으로 연다.
- * 실시간 연결이 붙을 때마다(처음, 다시 붙을 때) 채널 목록을 다시 읽는다. 붙은 뒤에 읽으니 그사이 생긴 것도 빠지지 않는다.
- * 멤버 목록은 같은 연결로 붙을 때마다 한 번, 달라질 때마다 온다.
+ * App frame: the channel panel on the left, the conversation in the middle, the right column. The right column holds only one of the member list (#19) and my agent (#21).
+ * On narrow screens the same channel panel opens as a left drawer (modal `<dialog>`).
+ * Every time the live connection attaches (first time, and reconnects) the channel list is read again. Reading after attaching means nothing created in between is missed.
+ * The member list arrives once each time the same connection attaches, and again whenever it changes.
  */
 export function Workspace({
   me,
@@ -179,24 +179,24 @@ export function Workspace({
 }: {
   me: Me;
   session: string;
-  /** 내가 들어간 워크스페이스들과 지금 고른 것의 id */
+  /** The workspaces I joined and the id of the one picked */
   workspaces: Space[];
   workspace: string;
-  /** 다른 계정의 곳(레포나 "전체")을 골랐다(시안 101). */
+  /** Picked a place (a repo or "All") on another account (mock 101). */
   onSwitch: (workspace: string, place: string) => void;
-  /** 레포를 넣거나 뺐다(내게 보이는 레포 전부). 앱이 워크스페이스 목록을 고친다. */
+  /** Added or removed a repo (all the repos visible to me). The app updates the workspace list. */
   onRepos: (repos: string[]) => void;
   onLogout: () => void;
-  /** 세션이 끝났다(API나 실시간 연결이 그렇게 답했다). */
+  /** The session ended (the API or the live connection said so). */
   onSignedOut: () => void;
 }) {
   const drawer = useRef<HTMLDialogElement>(null);
   const creator = useRef<HTMLDialogElement>(null);
-  /** "만들기" 대화 상자에서 고른 종류. 누른 카테고리의 `+`가 정해 둔다(시안 88-A). */
+  /** The kind picked in the "Create" dialog. Set by the `+` of the category that was clicked (mock 88-A). */
   const [createKind, setCreateKind] = useState<CreateKind>("chat");
   const forumEditor = useRef<HTMLDialogElement>(null);
   const space = workspaces.find((other) => other.id === workspace) ?? (workspaces[0] as Space);
-  /** 이 워크스페이스에서 내게 보이는 레포들. 레포를 넣고 빼면 앱이 바꿔 준다. */
+  /** The repos of this workspace that are visible to me. The app changes it when repos are added or removed. */
   const repos = space.repos;
   /** 레포마다의 라벨(ADR-0039, ADR-0043). 붙을 때 읽고, 실시간 연결의 `labels`(첫 레포의 것)로 갈아 끼운다. */
   const [labelsByRepo, setLabelsByRepo] = useState<Record<string, Label[]>>({});
@@ -209,9 +209,9 @@ export function Workspace({
     ).values(),
   ];
   const repoDialog = useRef<HTMLDialogElement>(null);
-  /** 계정마다 내가 Admin인 레포(레포 넣기 목록과 레포 줄의 ⋯). 없으면 아직 읽지 않았다. */
+  /** The repos I'm Admin of, per account (the "Add a repo" list and the ⋯ on repo rows). Missing means not loaded yet. */
   const [admins, setAdmins] = useState<Record<string, AdminRepo[] | "error">>({});
-  /** 읽는 중인 계정. 메뉴가 같은 계정을 거듭 읽지 않게 한다. */
+  /** The accounts being loaded. Keeps the menu from loading the same account over and over. */
   const reading = useRef(new Set<string>());
   const loadAdmin = (id: string) => {
     reading.current.add(id);
@@ -223,9 +223,9 @@ export function Workspace({
       })
       .finally(() => reading.current.delete(id));
   };
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 워크스페이스를 열 때 한 번 읽는다
+  // biome-ignore lint/correctness/useExhaustiveDependencies: load once when the workspace opens
   useEffect(() => void loadAdmin(workspace), []);
-  /** "레포 넣기" 창을 연 계정 */
+  /** The account whose "Add a repo" window is open */
   const [adding, setAdding] = useState(workspace);
   useEffect(() => {
     const wide = matchMedia(WIDE);
@@ -254,20 +254,20 @@ export function Workspace({
   const submitted = useRef<Record<number, Fields>>({});
   const wide = useMedia(WIDE);
 
-  /** 채널 패널을 접었는지. 834px 이상에서만 쓰고, 좁아졌다 다시 넓어지면 기억한 대로 돌아간다. */
+  /** Whether the channel panel is folded. Only used at 834px and up; when the window narrows and widens again, it returns to what was remembered. */
   const [folded, toggleFolded] = useCollapsed("omagari.side-panel-folded");
   const shut = wide && folded;
   const [peek, setPeek] = useState(false);
-  /** 접힌 패널을 대화 위에 꺼내 보는 중인지. */
+  /** Whether the folded panel is peeking out over the conversation. */
   const peeking = shut && peek;
   const sideId = useId();
   const side = useRef<HTMLElement>(null);
   const foldButton = useRef<HTMLButtonElement>(null);
   const unfoldButton = useRef<HTMLButtonElement>(null);
   const peekTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  /** 접고 편 뒤에 초점을 다른 쪽 버튼으로 옮길지. */
+  /** Whether to move focus to the other button after folding or unfolding. */
   const refocus = useRef(false);
-  /** 접고 편다. 초점이 사라질 곳(접힐 패널, 펴면 없어지는 펴는 버튼)에 있었으면 다른 쪽 버튼으로 옮긴다. */
+  /** Fold or unfold. If focus was where it would disappear (the panel being folded, or the unfold button that vanishes on unfolding), move it to the other button. */
   const toggleFold = () => {
     const at = document.activeElement;
     refocus.current = folded ? at === unfoldButton.current : !!side.current?.contains(at);
@@ -280,23 +280,23 @@ export function Workspace({
     refocus.current = false;
     (folded ? unfoldButton : foldButton).current?.focus();
   }, [folded]);
-  /** 꺼내 본 패널을 닫는다. 그 안에 초점이 있었으면 펴는 버튼으로 옮긴다. */
+  /** Close the peeking panel. If focus was inside it, move it to the unfold button. */
   const closePeek = () => {
     clearTimeout(peekTimer.current);
     if (side.current?.contains(document.activeElement)) unfoldButton.current?.focus();
     setPeek(false);
   };
-  /** 꺼내 본 패널에서 연 상태 메뉴나 채널 만들기가 열려 있는지. 그동안은 닫지 않는다. */
+  /** Whether a status menu or channel creation opened from the peeking panel is open. It doesn't close meanwhile. */
   const held = () =>
     !!(settings || creator.current?.open || side.current?.querySelector(".status-menu"));
-  /** 펴는 버튼이나 창 왼쪽 가장자리에 마우스가 머물면 꺼내 본다. 키보드 초점과 손가락으로는 꺼내 보지 않는다. */
+  /** Peek out when the mouse rests on the unfold button or the left edge of the window. Keyboard focus and touch don't peek it out. */
   const hoverIn = (event: PointerEvent) => {
     clearTimeout(peekTimer.current);
     if (!peeking && event.pointerType === "mouse") {
       peekTimer.current = setTimeout(() => setPeek(true), PEEK_DELAY);
     }
   };
-  /** 마우스가 나가고 잠시 뒤 닫는다. 그때 다시 들어와 있으면 두고, 메뉴가 열려 있으면 닫힐 때까지 미룬다. */
+  /** Close shortly after the mouse leaves. If it has come back in by then, leave it; if a menu is open, wait until it closes. */
   const hoverOut = () => {
     clearTimeout(peekTimer.current);
     if (!peeking) return;
@@ -309,8 +309,8 @@ export function Workspace({
     };
     later();
   };
-  // ⌘\(Ctrl+\)로 접고 펴고, Esc로 꺼내 본 패널을 닫는다. 넓은 화면에서만 듣는다.
-  // 키는 자판 배열과 상관없이 같은 자리(Backslash)로 본다. 한글 자판에서는 ₩가 찍히는 자리다.
+  // Fold and unfold with ⌘\ (Ctrl+\), and close the peeking panel with Esc. Only listens on wide screens.
+  // The key is read by position (Backslash) regardless of keyboard layout. On a Korean keyboard that position types ₩.
   useEffect(() => {
     if (!wide) return;
     const onKey = (event: KeyboardEvent) => {
@@ -322,23 +322,23 @@ export function Workspace({
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   });
-  /** 열린 오른쪽 칸: 멤버 목록, 내 에이전트(DM), 프로필 전체 보기. 한 번에 하나만 열린다. */
+  /** The open right column: member list, my agent (DM), or full profile view. Only one opens at a time. */
   const [right, setRight] = useState<"members" | "agent" | "profile">();
-  /** 열린 프로필 카드와, 전체 보기에 열린 사람(로그인) */
+  /** The open profile card, and the person (login) open in the full view */
   const [card, setCard] = useState<Opened>();
   const [profile, setProfile] = useState<string>();
   const rightId = useId();
   const membersButton = useRef<HTMLButtonElement>(null);
   const agentButton = useRef<HTMLButtonElement>(null);
-  /** 닫히면 초점을 돌려줄 버튼. 연 버튼이다. */
+  /** The button to return focus to when closed. The one that opened it. */
   const closing = useRef<HTMLButtonElement | null>(null);
   const closeRight = () => {
     closing.current = right === "agent" ? agentButton.current : membersButton.current;
     setRight(undefined);
   };
   /**
-   * 옆 칸의 포스트가 오른쪽 칸을 쓰고 있으면 다른 칸을 열 때 포스트를 닫는다. 단, 내 에이전트는 포스트를 크게 보고 연다(포스트의 DM).
-   * 오른쪽 칸 자리는 하나다.
+   * If a side-column post is using the right column, opening another column closes the post. The exception is my agent, which opens with the post in the big view (the post's DM).
+   * There is only one right-column slot.
    */
   const toggleRight = (panel: "members" | "agent" | "profile") => {
     if (asidePost && openPost) {
@@ -347,32 +347,32 @@ export function Workspace({
     }
     return right === panel ? closeRight() : setRight(panel);
   };
-  // 닫으면 연 버튼으로 돌아간다. 시트(모달)가 사라진 뒤라야 바깥에 포커스를 줄 수 있다.
+  // On close, return to the button that opened it. Focus can only go outside after the sheet (modal) is gone.
   useEffect(() => {
     if (right || !closing.current) return;
     closing.current.focus();
     closing.current = null;
   }, [right]);
-  /** 채널마다 불러 둔 내 DM. 연 적 없는 채널은 없고, DM 칸을 처음 열 때 읽는다. */
+  /** My DM per channel, already loaded. Missing for channels never opened; read the first time the DM column opens. */
   const [dms, setDms] = useState<Record<string, Dm>>({});
   /**
-   * 채널 입력 칸에 붙인 DM 문답(DESIGN.md "채널에 올리기"). DM 칸과 채널 입력 칸이 함께 본다.
-   * 입력 칸의 글처럼 그 채널에만 있어서 채널을 옮기면 빠진다.
+   * DM Q&As attached to the channel input (DESIGN.md "posting to a channel"). The DM column and the channel input both see them.
+   * Like the text in the input, they belong to that channel only, so they drop when the channel changes.
    */
   const [attached, setAttached] = useState<Qa>();
-  /** 에이전트마다 고른 모델과 effort. 이 브라우저에 남아 새로 고쳐도 그대로다. DM과 `@호출`이 같이 쓴다. */
+  /** The model and effort picked per agent. Kept in this browser, so they survive a refresh. DM and `@call` share them. */
   const [picks, setPicks] = useState<Picks>(() => savedPicks(me.login));
-  /** 채널마다 불러 둔 대화. 연 적 없는 채널은 없고, 처음 열 때 지난 대화를 읽는다. */
+  /** The conversation per channel, already loaded. Missing for channels never opened; past messages are read the first time it opens. */
   const [views, setViews] = useState<Record<string, View>>({});
-  /** 주소는 `#채널 id`, 포럼의 포스트는 `#포럼 id/알림 번호`(옆 칸), 크게 보면 `#포럼 id/알림 번호/big`. */
+  /** The address is `#channel id`; a forum post is `#forum id/alert number` (side column), and the big view is `#forum id/alert number/big`. */
   const hash = useHash();
   const [hashChannel, hashPost, hashSize] = hash.split("/");
   const found =
     channels?.find((channel) => channel.id === hashChannel) ??
     (hashChannel === OTHER.id ? OTHER : undefined);
-  /** 메뉴에서 고른 곳(레포 이름이나 "전체"). 이 기기에 남는다. */
+  /** The place picked in the menu (a repo name or "All"). Kept on this device. */
   const [picked, setPicked] = useState(() => remembered(placeKey(workspace)));
-  /** 지금 보는 곳(시안 101): 주소의 채널이 선 곳, 없으면 고른 곳이다. 패널은 늘 이곳의 것이다. */
+  /** The place being viewed (mock 101): the one the address's channel stands in, else the picked one. The panel always shows this place. */
   const here = found ? placeOf(found, repos) : placeIn(repos, picked);
   const inPlace = channels?.filter((channel) => placeOf(channel, repos) === here);
   const current =
@@ -380,13 +380,13 @@ export function Workspace({
     inPlace?.find((channel) => channel.kind === "chat" && !channel.repo) ??
     inPlace?.find((channel) => channel.kind === "chat") ??
     inPlace?.[0];
-  // 지금 보는 곳과 그곳에서 본 채널을 기억한다. 메뉴로 다시 오면 그 채널로 간다.
+  // Remember the place being viewed and the channel seen there. Coming back via the menu goes to that channel.
   useEffect(() => {
     if (here !== picked) setPicked(here);
     remember(placeKey(workspace), here);
     if (found) remember(lastKey(workspace, here), `#${hash}`);
   }, [here, hash, found, picked, workspace]);
-  /** 메뉴에서 곳을 고른다. 다른 계정이면 앱이 그 워크스페이스로 바꾼다. 그곳에서 마지막에 본 채널로 간다. */
+  /** Pick a place from the menu. On another account the app switches to that workspace. Goes to the last channel seen there. */
   const pick = (id: string, place: string) => {
     if (id !== workspace) return onSwitch(id, place);
     setPicked(place);
@@ -398,8 +398,8 @@ export function Workspace({
   const openPost = forum ? posts?.find((item) => item.alert === Number(hashPost)) : undefined;
   const big = openPost !== undefined && hashSize === "big";
   /**
-   * 링크로 온 채널이나 포스트가 보이지 않는다(시안 93-C): 없는 것과 push 권한이 없는 레포의 것을 가르지 않는다.
-   * 레포 이름은 서버가 내주지 않으니 화면에도 없다.
+   * A channel or post reached by link isn't visible (mock 93-C): we don't tell "doesn't exist" from "in a repo you have no push access to".
+   * The server doesn't reveal the repo name, so the screen has none either.
    */
   const missing =
     (!!hashChannel && channels !== undefined && !found) ||
@@ -411,7 +411,7 @@ export function Workspace({
     name: postTitle(openPost),
     kind: "chat",
   };
-  /** 대화와 DM이 향하는 채널: 열린 포스트, 아니면 고른 채널. 포럼 자체는 대화가 없다. */
+  /** The channel that the conversation and DM go to: the open post, else the picked channel. A forum itself has no conversation. */
   const active = postChannel ?? (forum ? undefined : current);
   /** 포스트마다 마지막으로 읽은 글 수. 이 기기에 남는다. */
   const [seen, setSeen] = useState<Record<string, number>>(() => {
@@ -456,19 +456,19 @@ export function Workspace({
         mine(item) &&
         item.forums.some((id) => forumPlace.get(id) === place),
     );
-  /** 멤버가 나 하나다(시안 100-A). 계정 종류가 아니라 멤버 수로 정한다. */
+  /** I'm the only member (mock 100-A). Decided by member count, not account type. */
   const solo = members?.length === 1 && members[0]?.login === me.login;
-  /** 카드의 "프로필 전체 보기": 오른쪽 칸에 그 사람을 연다. 옆 칸의 포스트가 칸을 쓰고 있으면 포스트를 닫는다. */
+  /** The card's "View full profile": opens that person in the right column. If a side-column post is using the column, it closes the post. */
   const showProfile = (login: string) => {
     setCard(undefined);
     setProfile(login);
     if (asidePost && openPost) location.hash = `${current?.id}`;
     setRight("profile");
   };
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 대화를 옮기면 붙인 문답을 뺀다
+  // biome-ignore lint/correctness/useExhaustiveDependencies: moving the conversation removes the attached Q&A
   useEffect(() => setAttached(undefined), [active?.id]);
 
-  /** 세션이 끝났으면 로그인으로 돌아간다. 그 밖의 실패는 부른 쪽이 보인다. */
+  /** If the session ended, return to login. Other failures are shown by the caller. */
   const check = (error: unknown) => {
     if (signedOut(error)) onSignedOut();
     return error;
@@ -482,7 +482,7 @@ export function Workspace({
   const upsertDecision = (decision: Decision) =>
     setDecisions((list) => [...list.filter((other) => other.id !== decision.id), decision]);
 
-  /** 불러 둔 채널이면 대화에 넣는다. 안 연 채널의 것은 버리고, 열 때 지난 대화로 읽는다. */
+  /** If the channel is already loaded, put it into the conversation. For a channel never opened, drop it and read past messages when it opens. */
   const receive = (message: ChannelMessage) => {
     if (message.kind === "decision") upsertDecision(message.decision);
     // 알림은 포럼 목록의 포스트다. 고쳐졌으면 고친 시각을 붙이고, 새 글이 서면 요약(`post`)이 바뀌어 온다.
@@ -503,7 +503,7 @@ export function Workspace({
     });
   };
 
-  /** 불러 둔 채널의 DM이면 넣는다. 안 연 채널의 것은 버리고, 열 때 읽는다. */
+  /** If it is the DM of an already loaded channel, put it in. For a channel never opened, drop it and read when it opens. */
   const receiveQa = (qa: Qa) =>
     setDms((all) => {
       const dm = all[qa.channel];
@@ -514,7 +514,7 @@ export function Workspace({
     setDms((all) => ({ ...all, [channel]: "loading" }));
     try {
       const { qas } = await call(server(session), api.dms, { channel });
-      // 읽는 사이에 실시간으로 온 것도 합친다.
+      // Merge in what arrived live while reading.
       setDms((all) => {
         const now = all[channel];
         return { ...all, [channel]: Array.isArray(now) ? now.reduce(upsert, qas) : qas };
@@ -525,12 +525,12 @@ export function Workspace({
     }
   };
   const dmLoaded = active !== undefined && dms[active.id] !== undefined;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: DM 칸에서 채널을 처음 열 때 한 번만 읽는다
+  // biome-ignore lint/correctness/useExhaustiveDependencies: read only once, the first time the DM column opens the channel
   useEffect(() => {
     if (right === "agent" && active && !dmLoaded) void loadDm(active.id);
   }, [right, active?.id, dmLoaded]);
 
-  /** 내 에이전트에게 묻는다. DM은 비공개, `@호출`은 공개다. `@호출`이면 채널에 선 문답도 바로 넣는다. */
+  /** Ask my agent. DM is private, `@call` is public. For `@call`, the Q&A standing in the channel is put in right away too. */
   const ask = async (
     channel: string,
     executor: ExecutorId,
@@ -557,15 +557,15 @@ export function Workspace({
   };
 
   /**
-   * DM의 문답을 채널 입력 칸에 붙인다. 초점은 입력 칸이 가져간다. 오른쪽 칸이 대화 위에 뜨는 폭이면 오른쪽 칸을 닫는다.
-   * 그때는 연 버튼으로 초점을 돌리지 않는다(`closeRight`를 쓰지 않는다).
+   * Attach the DM's Q&A to the channel input. The input takes focus. If the right column floats over the conversation at this width, close the right column.
+   * In that case, don't return focus to the opening button (don't use `closeRight`).
    */
   const attach = (qa: Qa) => {
     setAttached(qa);
     if (!matchMedia(BESIDE).matches) setRight(undefined);
   };
 
-  /** DM의 문답을 함께 쓴 글과 채널에 올린다. 채널에 선 메시지와, 공개가 된 DM의 문답을 바로 넣는다. */
+  /** Post the DM's Q&A with the text written alongside to the channel. Put in right away the message that stands in the channel, and the Q&A of a DM that became public. */
   const post = async (qa: Qa, text: string) => {
     try {
       const { message } = await call(server(session), api.postQa, { qa: qa.id, text });
@@ -585,7 +585,7 @@ export function Workspace({
           .then((list) => setChannels(byName(list.channels)))
           .catch(check);
         loadRepos(repos);
-        // 끊긴 사이에 온 답은 다시 오지 않는다. 불러 둔 DM을 버리고 열려 있는 것은 다시 읽는다.
+        // Replies that arrived while disconnected don't come again. Drop the loaded DMs and read the open one again.
         setDms({});
         // A language picked elsewhere while we were cut off doesn't come again.
         call(server(session), api.me)
@@ -645,7 +645,7 @@ export function Workspace({
       .catch(() => {});
   };
 
-  /** 계정 `id`의 레포를 넣고 뺀 뒤: 보이는 레포가 바뀌었으니 지금 워크스페이스면 채널과 레포마다인 것을 다시 읽는다. */
+  /** After adding or removing a repo on account `id`: the visible repos changed, so if it's the current workspace, read the channels and per-repo things again. */
   const reposChanged = (id: string, all: string[]) => {
     onRepos(all);
     void loadAdmin(id);
@@ -670,7 +670,7 @@ export function Workspace({
     }
   };
 
-  /** 지난 대화를 읽는다. `before`가 없으면 맨 끝에서부터, 있으면 그보다 오래된 것이다. */
+  /** Read past messages. Without `before`, from the very end; with it, older than that. */
   const load = async (channel: string, before?: number) => {
     setViews((all) => ({
       ...all,
@@ -691,7 +691,7 @@ export function Workspace({
       }));
     } catch (error) {
       check(error);
-      // 오래된 것을 못 읽었으면 그대로 두고, 다시 위로 올리면 또 읽는다.
+      // If older ones couldn't be read, leave it, and it reads again when scrolled up again.
       setViews((all) => ({
         ...all,
         [channel]:
@@ -703,7 +703,7 @@ export function Workspace({
   };
 
   const opened = active !== undefined && views[active.id] !== undefined;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 채널을 처음 열 때 한 번만 읽는다
+  // biome-ignore lint/correctness/useExhaustiveDependencies: read only once, the first time the channel opens
   useEffect(() => {
     if (active && !opened) void load(active.id);
   }, [active?.id, opened]);
@@ -716,11 +716,11 @@ export function Workspace({
     }
   };
 
-  /** GIF 찾기. 서버가 키를 붙여 GIPHY에 대신 묻는다(ADR-0044). */
+  /** GIF search. The server asks GIPHY on our behalf with the key attached (ADR-0044). */
   const searchGifs = async (query: string) =>
     (await call(server(session), api.gifs, { query })).gifs;
 
-  /** 채팅 채널은 지금 보는 곳에 만든다. 레포가 하나뿐인 계정이면 그 레포의 채널이다. */
+  /** A chat channel is created in the place being viewed. For an account with only one repo, it is that repo's channel. */
   const create = async (name: string) => {
     const { channel } = await call(server(session), api.createChannel, {
       name,
@@ -780,11 +780,11 @@ export function Workspace({
     drawer.current?.close();
     setCreateKind(kind);
     creator.current?.showModal();
-    // 종류는 이미 골라져 있으니 초점은 종류 고르기가 아니라 이름 칸에 둔다.
+    // The kind is already picked, so focus goes to the name field, not to the kind picker.
     creator.current?.querySelector<HTMLInputElement>(".text-input")?.focus();
   };
 
-  /** 내 접속 상태와 상태 메시지를 바꾼다. 바뀐 것은 실시간 연결의 멤버 목록으로 돌아온다. */
+  /** Change my presence and status message. The change comes back in the live connection's member list. */
   const setPresence = async (presence: ChosenPresence, duration?: PresenceDuration) => {
     try {
       await call(server(session), api.setPresence, { presence, duration });
@@ -854,7 +854,7 @@ export function Workspace({
     </ChannelPanel>
   );
 
-  /** 지금 오른쪽 칸에 선 것. 옆 칸의 포스트가 있으면 그것이고, 포럼 목록에는 DM이 없다. */
+  /** What stands in the right column now. If there is a side-column post it is that, and the forum list has no DM. */
   const shown = asidePost ? "post" : right === "agent" && !active ? undefined : right;
 
   /** 직접 충돌이 걸린 작업("로그인/브랜치"): 풀리지 않은 직접 충돌 알림의 두 작업. 멤버 목록의 작업 줄에 배지가 붙는다. */
@@ -1025,7 +1025,7 @@ export function Workspace({
       title: postTitle(item),
     }));
 
-  /** 멤버들의 프로필 사진. 사람 아바타가 로그인으로 찾는다. */
+  /** Profile photos of the members. Person avatars look them up by login. */
   const faces = new Map(
     (members ?? []).flatMap((member) => (member.avatar ? [[member.login, member.avatar]] : [])),
   );
@@ -1044,7 +1044,7 @@ export function Workspace({
               .filter(Boolean)
               .join(" ")}
           >
-            {/* 접힌 동안 창 왼쪽 가장자리(창 안쪽 여백 8px). 마우스가 머물면 꺼내 본다. */}
+            {/* While folded, the left edge of the window (8px inner margin). Peeks out when the mouse rests on it. */}
             {shut && (
               <div className="peek-edge" onPointerEnter={hoverIn} onPointerLeave={hoverOut} />
             )}
@@ -1052,7 +1052,7 @@ export function Workspace({
               ref={side}
               id={sideId}
               className={peeking ? "side-panel peek" : "side-panel"}
-              aria-label="채널 패널"
+              aria-label={t.channels.frame.channelPanel}
               inert={shut && !peeking}
               onPointerEnter={() => peeking && clearTimeout(peekTimer.current)}
               onPointerLeave={hoverOut}
@@ -1063,8 +1063,8 @@ export function Workspace({
                   ref={foldButton}
                   type="button"
                   className="fold-button"
-                  aria-label={folded ? "채널 패널 펼쳐 두기" : "채널 패널 닫기"}
-                  data-tip={`${folded ? "채널 패널 펼쳐 두기" : "채널 패널 닫기"} ${FOLD_KEY}`}
+                  aria-label={folded ? t.channels.frame.keepPanelOpen : t.channels.frame.closePanel}
+                  data-tip={`${folded ? t.channels.frame.keepPanelOpen : t.channels.frame.closePanel} ${FOLD_KEY}`}
                   aria-keyshortcuts={MAC ? "Meta+\\" : "Control+\\"}
                   aria-expanded={!folded}
                   aria-controls={sideId}
@@ -1083,7 +1083,7 @@ export function Workspace({
                 <button
                   type="button"
                   className="header-button drawer-button"
-                  aria-label="채널 패널 열기"
+                  aria-label={t.channels.frame.openPanel}
                   onClick={() => drawer.current?.showModal()}
                 >
                   <Menu size={18} aria-hidden />
@@ -1093,8 +1093,8 @@ export function Workspace({
                     ref={unfoldButton}
                     type="button"
                     className="header-button"
-                    aria-label="채널 패널 열기"
-                    data-tip={`채널 패널 열기 ${FOLD_KEY}`}
+                    aria-label={t.channels.frame.openPanel}
+                    data-tip={`${t.channels.frame.openPanel} ${FOLD_KEY}`}
                     aria-keyshortcuts={MAC ? "Meta+\\" : "Control+\\"}
                     aria-expanded={false}
                     aria-controls={sideId}
@@ -1109,7 +1109,7 @@ export function Workspace({
                   <div className="channel-title">
                     <h2>
                       <Lock className="channel-mark" size={20} aria-hidden />
-                      <span>찾을 수 없음</span>
+                      <span>{t.channels.frame.notFound}</span>
                     </h2>
                   </div>
                 ) : big && openPost && current ? (
@@ -1117,7 +1117,7 @@ export function Workspace({
                     <a
                       className="header-button"
                       href={`#${current.id}`}
-                      aria-label="포럼으로 돌아가기"
+                      aria-label={t.channels.frame.backToForum}
                     >
                       <ChevronLeft size={18} aria-hidden />
                     </a>
@@ -1134,7 +1134,7 @@ export function Workspace({
                     <ChannelTitle channel={current} members={solo ? undefined : members?.length} />
                   )
                 )}
-                {/* 오른쪽 칸을 여는 버튼들. 평소에는 아이콘만, 연 버튼만 이름이 붙는다. */}
+                {/* Buttons that open the right column. Usually icon only; only the open one gets a name. */}
                 <div className="header-actions" hidden={missing}>
                   {big && labelButton}
                   {big && debateButton}
@@ -1143,7 +1143,7 @@ export function Workspace({
                     <button
                       type="button"
                       className="header-button"
-                      aria-label="포럼 고치기"
+                      aria-label={t.channels.frame.editForum}
                       onClick={() => forumEditor.current?.showModal()}
                     >
                       <Settings2 size={18} aria-hidden />
@@ -1153,7 +1153,7 @@ export function Workspace({
                     <a
                       className="header-button"
                       href={`#${current.id}/${openPost.alert}`}
-                      aria-label="옆 칸으로"
+                      aria-label={t.channels.frame.toSidePanel}
                     >
                       <Minimize2 size={18} aria-hidden />
                     </a>
@@ -1163,22 +1163,24 @@ export function Workspace({
                       ref={agentButton}
                       type="button"
                       className="header-button"
-                      aria-label="내 에이전트"
+                      aria-label={t.channels.frame.myAgent}
                       aria-expanded={shown === "agent"}
                       aria-controls={shown === "agent" ? rightId : undefined}
                       onClick={() => toggleRight("agent")}
                     >
                       <MessageSquare size={18} aria-hidden />
-                      {shown === "agent" && <span>내 에이전트</span>}
+                      {shown === "agent" && <span>{t.channels.frame.myAgent}</span>}
                     </button>
                   )}
-                  {/* 혼자면 멤버 목록이 뜻이 없어 버튼을 두지 않는다(시안 100-A). */}
+                  {/* Alone, a member list makes no sense, so there is no button (mock 100-A). */}
                   {!solo && (
                     <button
                       ref={membersButton}
                       type="button"
                       className="header-button"
-                      aria-label={shown === "profile" ? "프로필" : "멤버 목록"}
+                      aria-label={
+                        shown === "profile" ? t.channels.frame.profile : t.channels.frame.members
+                      }
                       aria-expanded={shown === "members" || shown === "profile"}
                       aria-controls={
                         shown === "members" || shown === "profile" ? rightId : undefined
@@ -1186,20 +1188,17 @@ export function Workspace({
                       onClick={() => toggleRight(shown === "profile" ? "profile" : "members")}
                     >
                       <Users size={18} aria-hidden />
-                      {shown === "members" && <span>멤버 목록</span>}
-                      {shown === "profile" && <span>프로필</span>}
+                      {shown === "members" && <span>{t.channels.frame.members}</span>}
+                      {shown === "profile" && <span>{t.channels.frame.profile}</span>}
                     </button>
                   )}
                 </div>
               </header>
               {missing ? (
                 <div className="empty">
-                  <h2>이 레포는 볼 수 없어요</h2>
-                  <p>
-                    push 권한이 있는 사람만 이 레포의 채널과 포스트를 봐요. GitHub에서 권한을 받으면
-                    10분 안에 패널에 생겨요.
-                  </p>
-                  {/* 레포 이름은 쓰지 않는다. 레포가 하나뿐인 계정이면 "전체"가 없어 그 레포로 간다(시안 93-C, 101). */}
+                  <h2>{t.channels.frame.hiddenTitle}</h2>
+                  <p>{t.channels.frame.hiddenBody}</p>
+                  {/* Don't use the repo name. For an account with only one repo there is no "All", so it goes to that repo (mocks 93-C, 101). */}
                   <button
                     type="button"
                     className="button outline"
@@ -1209,20 +1208,20 @@ export function Workspace({
                     }}
                   >
                     {repos.length > 1
-                      ? `${space.name} 전체로 가기`
-                      : `${repoName(repos[0] ?? "")}로 가기`}
+                      ? t.channels.frame.goToAll(space.name)
+                      : t.channels.frame.goToRepo(repoName(repos[0] ?? ""))}
                   </button>
                 </div>
               ) : inPlace?.length === 0 && !found ? (
                 <div className="empty">
-                  <h2>아직 채널이 없어요</h2>
-                  <p>채널을 만들어 멤버들과 이야기를 시작해 보세요.</p>
+                  <h2>{t.channels.frame.emptyTitle}</h2>
+                  <p>{t.channels.frame.emptyBody}</p>
                   <button
                     type="button"
                     className="button primary"
                     onClick={() => openCreator("chat")}
                   >
-                    채널 만들기
+                    {t.channels.frame.createChannel}
                   </button>
                 </div>
               ) : forum && !big ? (
@@ -1239,7 +1238,7 @@ export function Workspace({
                   onSaveFilter={(filter) => updateForum(current, current.name, filter)}
                 />
               ) : (
-                conversation(`${postChannel?.name}에 메시지 보내기`)
+                conversation(t.channels.frame.messageTo(postChannel?.name ?? ""))
               )}
             </main>
             {!missing && asidePost && openPost && postChannel && (
@@ -1262,7 +1261,7 @@ export function Workspace({
                       <a
                         className="header-button"
                         href={`#${current?.id}/${openPost.alert}/big`}
-                        aria-label="크게 보기"
+                        aria-label={t.channels.frame.expand}
                       >
                         <Maximize2 size={18} aria-hidden />
                       </a>
@@ -1270,7 +1269,7 @@ export function Workspace({
                   </div>
                 }
               >
-                {conversation("이 포스트에 메시지 보내기")}
+                {conversation(t.channels.frame.messagePost)}
               </RightPanel>
             )}
             {shown === "agent" && active && (
@@ -1297,10 +1296,15 @@ export function Workspace({
               />
             )}
             {shown === "members" && !solo && (
-              <RightPanel id={rightId} title="멤버 목록" sheet={!wide} onClose={closeRight}>
+              <RightPanel
+                id={rightId}
+                title={t.channels.frame.members}
+                sheet={!wide}
+                onClose={closeRight}
+              >
                 {live === "reconnecting" && members && (
                   <p className="banner info" role="status">
-                    서버에 다시 붙는 중…
+                    {t.channels.frame.reconnecting}
                   </p>
                 )}
                 {members ? (
@@ -1311,16 +1315,21 @@ export function Workspace({
               </RightPanel>
             )}
             {shown === "profile" && profileOf && (
-              <RightPanel id={rightId} title="프로필" sheet={!wide} onClose={closeRight}>
+              <RightPanel
+                id={rightId}
+                title={t.channels.frame.profile}
+                sheet={!wide}
+                onClose={closeRight}
+              >
                 <ProfileView member={profileOf} direct={direct} />
               </RightPanel>
             )}
-            {/* 덮개를 누르면 닫힌다. 키보드로는 Esc가 닫는다(dialog가 해 준다). */}
-            {/* biome-ignore lint/a11y/useKeyWithClickEvents: Esc는 dialog가 맡는다 */}
+            {/* Clicking the cover closes it. With the keyboard, Esc closes it (the dialog does that). */}
+            {/* biome-ignore lint/a11y/useKeyWithClickEvents: the dialog handles Esc */}
             <dialog
               ref={drawer}
               className="drawer"
-              aria-label="채널 패널"
+              aria-label={t.channels.frame.channelPanel}
               onClick={(event) => event.target === event.currentTarget && drawer.current?.close()}
             >
               <div className="side-panel">{panel(() => drawer.current?.close())}</div>
@@ -1332,7 +1341,7 @@ export function Workspace({
               onAdd={addRepo}
             />
             <ForumDialog
-              // 곳을 바꾸면 새로 그려 레포 칩이 지금 보는 곳으로 골라진 채로 열린다.
+              // Changing the place redraws it, so it opens with the repo chip set to the place being viewed.
               key={here}
               dialog={creator}
               posts={previews}
@@ -1441,10 +1450,10 @@ export function Workspace({
 }
 
 /**
- * 오른쪽 칸. 1069px 이상은 세 번째 칸, 834–1068px은 대화 위에 겹친 칸(CSS가 정한다),
- * 833px 이하(`sheet`)는 아래에서 올라오는 전체 높이 시트(모달 `<dialog>`)다. 닫기 버튼과 Esc, 덮개 누르기로 닫힌다.
- * `full`이면 시트 대신 채널처럼 화면 전체를 쓰는 대화이고(포스트와 DM), 닫기는 머리 왼쪽 "‹"다.
- * 머리 왼쪽은 제목(`title`)이고, `head`를 주면 그것이 대신 선다(DM 칸의 고른 에이전트).
+ * Right column. At 1069px and up it is the third column; at 834–1068px it is a column overlapping the conversation (CSS decides),
+ * and at 833px and below (`sheet`) it is a full-height sheet rising from the bottom (modal `<dialog>`). It closes with the close button, Esc, or clicking the cover.
+ * With `full`, it is not a sheet but a conversation using the whole screen like a channel (posts and DMs), and the close is the "‹" at the head's left.
+ * The head's left is the title (`title`); if `head` is given, that stands there instead (the agent picked in the DM column).
  */
 export function RightPanel({
   id,
@@ -1472,7 +1481,12 @@ export function RightPanel({
     <div className="right-panel">
       <div className="panel-head">
         {page && (
-          <button type="button" className="header-button" aria-label="돌아가기" onClick={onClose}>
+          <button
+            type="button"
+            className="header-button"
+            aria-label={t.channels.frame.back}
+            onClick={onClose}
+          >
             <ChevronLeft size={18} aria-hidden />
           </button>
         )}
@@ -1481,7 +1495,7 @@ export function RightPanel({
           <button
             type="button"
             className="header-button"
-            aria-label={`${title} 닫기`}
+            aria-label={t.channels.frame.closePanelNamed(title)}
             onClick={onClose}
           >
             <X size={18} aria-hidden />
@@ -1499,7 +1513,7 @@ export function RightPanel({
     );
   }
   return (
-    // biome-ignore lint/a11y/useKeyWithClickEvents: Esc는 dialog의 cancel이 맡는다
+    // biome-ignore lint/a11y/useKeyWithClickEvents: the dialog's cancel handles Esc
     <dialog
       ref={dialog}
       id={id}
@@ -1528,7 +1542,7 @@ function ChannelPanel({
   children,
 }: {
   me: Me;
-  /** 이름 줄(레포 고르기) */
+  /** The name row (repo picker) */
   head: ReactNode;
   solo: boolean;
   mine?: MemberView;
@@ -1555,24 +1569,33 @@ function ChannelPanel({
   );
 }
 
-/** 사람마다(로그인) GitHub 프로필 사진 주소. 앱 틀이 멤버 목록으로 채운다. */
+/** GitHub profile photo URL per person (login). The app frame fills it from the member list. */
 export const FacesContext = createContext<Map<string, string>>(new Map());
 
-/** 사람 이름(#288): "GitHub 이름 (로그인)". GitHub 이름이 없거나 로그인과 같으면 로그인만 쓴다. */
+/** Person name (#288): "GitHub name (login)". If there is no GitHub name or it equals the login, only the login. */
 export const personName = (name: string, login: string) =>
   name && name !== login ? `${name} (${login})` : login;
 
-/** 접속 상태를 읽는 말. 접속 점의 이름이고, 상태 메시지가 없는 멤버 행의 둘째 줄이다. */
+/** The words that read a presence. The name of the presence dot, and the second line of a member row with no status message. */
+// Getters, so the words follow the current language at render time.
 export const PRESENCE_WORDS = {
-  online: "온라인",
-  away: "자리 비움",
-  dnd: "방해 금지",
-  offline: "오프라인",
+  get online() {
+    return t.channels.presence.online;
+  },
+  get away() {
+    return t.channels.presence.away;
+  },
+  get dnd() {
+    return t.channels.presence.dnd;
+  },
+  get offline() {
+    return t.channels.presence.offline;
+  },
 } as const satisfies Record<Presence, string>;
 
 /**
- * 사람 아바타. `presence`를 주면 오른쪽 아래에 접속 점(DESIGN.md "접속 점")이 붙는다.
- * 점 둘레의 고리는 아바타를 점 모양으로 도려내 놓인 바탕이 그대로 보이게 한다. 바탕이 바뀌어도(올렸을 때) 맞는다.
+ * Person avatar. With `presence`, a presence dot sits at the bottom right (DESIGN.md "presence dot").
+ * The ring around the dot cuts the avatar out in the dot's shape so the background behind shows through as is. It fits even when the background changes (on hover).
  */
 export const Avatar = ({
   name,
@@ -1581,7 +1604,7 @@ export const Avatar = ({
   presence,
 }: {
   name: string;
-  /** 주면 그 사람의 GitHub 프로필 사진을 쓴다(멤버 목록이 실어 온 것). 없거나 받지 못하면 이니셜이다. */
+  /** If given, uses that person's GitHub profile photo (carried by the member list). Without it or if it fails to load, initials. */
   login?: string;
   size: 22 | 36 | 40 | 64 | 80;
   presence?: Presence;
@@ -1607,7 +1630,7 @@ export const Avatar = ({
   );
 };
 
-/** 접속 점의 모양만: 온라인은 초록 원, 자리 비움은 주황 초승달, 방해 금지는 빨간 원에 흰 가로줄, 오프라인은 회색 빈 고리. */
+/** Dot shape only: online is a green circle, away an orange crescent, dnd a red circle with a white bar, offline an empty gray ring. */
 export const Dot = ({ presence, ...rest }: { presence: Presence } & ComponentProps<"span">) => (
   <span className="dot" data-presence={presence} {...rest} />
 );
