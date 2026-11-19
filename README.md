@@ -174,4 +174,4 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) first. To report a security problem, see
 
 ## License
 
-[MIT](LICENSE)
+[AGPL-3.0](LICENSE)

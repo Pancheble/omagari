@@ -62,4 +62,4 @@ We keep decisions in the repo.
 
 ## License
 
-The license is in [LICENSE](LICENSE). Check the terms before you contribute.
+Omagari is licensed under [AGPL-3.0](LICENSE). Contributions are licensed under AGPL-3.0 too. There's no CLA.
