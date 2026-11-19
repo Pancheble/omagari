@@ -194,13 +194,18 @@ export const sameFilter = (a: Draft | undefined, b: Draft | undefined) => {
 /** 레포 칩의 값: "모두"나 레포 이름들. */
 const reposWord = (repos: string[]) => (repos.length ? repos.map(repoName).join(", ") : "모두");
 
-/** 레포 조건이 패널 어디에 보일지(ADR-0043): 레포 하나면 그 레포 밑, 아니면 워크스페이스 전체 밑이다. */
-const placeNote = (repos: string[]) =>
-  repos.length === 1
-    ? `레포가 하나라 ${repoName(repos[0] as string)} 밑에 보여요.`
-    : repos.length === 0
-      ? "모든 레포라 워크스페이스 전체 밑에 보여요."
-      : `레포가 ${["", "", "둘", "셋", "넷"][repos.length] ?? `${repos.length}개`}라 워크스페이스 전체 밑에 보여요.`;
+/**
+ * 레포 조건이 패널 어디에 보일지(ADR-0043, 시안 101): 레포 하나면 그 레포, 아니면 "<계정> 전체"다.
+ * 레포가 하나뿐인 계정에는 "전체"가 없어 그 레포에 보인다.
+ */
+export const placeNote = (picked: string[], account: string, repos: string[]) =>
+  repos.length < 2
+    ? `레포가 하나뿐인 계정이라 ${repoName(repos[0] ?? account)}에 보여요.`
+    : picked.length === 1
+      ? `레포가 하나라 ${repoName(picked[0] as string)}에 보여요.`
+      : picked.length === 0
+        ? `모든 레포라 ${account} 전체에 보여요.`
+        : `레포가 ${["", "", "둘", "셋", "넷"][picked.length] ?? `${picked.length}개`}라 ${account} 전체에 보여요.`;
 
 /** 필터 칩에 쓰는 값: 색 점 셋까지와 "논의인 라벨 모두"나 라벨 이름. */
 function FilterValue({ draft }: { draft: Draft }) {
@@ -248,10 +253,13 @@ export function FilterRow({
   onStates,
   filter,
   draft,
+  account,
   repos,
   onDraft,
   onSave,
 }: {
+  /** 워크스페이스의 계정 이름 */
+  account: string;
   /** 워크스페이스에서 내게 보이는 레포들. 레포 칩이 고른다. */
   repos: string[];
   states: Set<"open" | "resolved">;
@@ -311,7 +319,7 @@ export function FilterRow({
       </Chip>
       {filter && (
         <Chip name="레포" value={<span>{reposWord(picked)}</span>} changed={reposChanged}>
-          <RepoOptions repos={repos} picked={picked} onPick={pickRepos} />
+          <RepoOptions account={account} repos={repos} picked={picked} onPick={pickRepos} />
         </Chip>
       )}
       {filter && (
@@ -353,10 +361,12 @@ const STATE_WORDS = { open: "열림", resolved: "풀림" } as const;
 
 /** 레포 칩의 창: "모든 레포"와 레포마다 한 줄. "모든 레포"를 켜면 레포는 꺼진다. */
 function RepoOptions({
+  account,
   repos,
   picked,
   onPick,
 }: {
+  account: string;
   repos: string[];
   picked: string[];
   onPick: (repos: string[]) => void;
@@ -392,7 +402,7 @@ function RepoOptions({
           <span className="pop-name">{repoName(repo)}</span>
         </button>
       ))}
-      <p className="pop-note">{placeNote(picked)}</p>
+      <p className="pop-note">{placeNote(picked, account, repos)}</p>
     </>
   );
 }
@@ -517,7 +527,9 @@ export function ForumDialog({
   dialog,
   forum,
   posts,
+  account,
   repos,
+  start = [],
   kind = "forum",
   onKind,
   onCreateChat,
@@ -528,8 +540,12 @@ export function ForumDialog({
   forum?: Channel;
   /** 미리 보기에 쓰는 포스트들과 그 제목 */
   posts: { labels: string[]; importance: Importance; repo: string; title: string }[];
+  /** 워크스페이스의 계정 이름 */
+  account: string;
   /** 워크스페이스에서 내게 보이는 레포들. 레포 칩이 고른다(시안 92-A). */
   repos: string[];
+  /** 새로 만들 때 처음 골라 둔 레포 칩: 지금 보는 곳(시안 101). 비면 "모든 레포"다. */
+  start?: string[];
   /** 만들 때 고른 종류. `onKind`가 있으면 종류 고르기가 선다. */
   kind?: CreateKind;
   onKind?: (kind: CreateKind) => void;
@@ -540,8 +556,8 @@ export function ForumDialog({
   const labels = useLabels();
   const [name, setName] = useState(forum?.name ?? "");
   const [draft, setDraft] = useState<Draft>(forum?.filter ?? null);
-  /** 레포 조건. 비면 "모든 레포"다. 처음에는 모든 레포다. */
-  const [picked, setPicked] = useState<string[]>(forum?.filter?.repos ?? []);
+  /** 레포 조건. 비면 "모든 레포"다. 새로 만들 때는 지금 보는 곳이다. */
+  const [picked, setPicked] = useState<string[]>(forum?.filter?.repos ?? start);
   const full = draft && withRepos(draft, picked);
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -583,7 +599,7 @@ export function ForumDialog({
       onClose={() => {
         setName(forum?.name ?? "");
         setDraft(forum?.filter ?? null);
-        setPicked(forum?.filter?.repos ?? []);
+        setPicked(forum?.filter?.repos ?? start);
         setError(undefined);
         setDeleting(false);
       }}
@@ -672,7 +688,7 @@ export function ForumDialog({
             </div>
             <p className="place-note">
               <Info size={14} aria-hidden />
-              {placeNote(picked)}
+              {placeNote(picked, account, repos)}
             </p>
           </fieldset>
         )}

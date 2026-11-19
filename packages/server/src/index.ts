@@ -91,7 +91,7 @@ import type { GitHub, RepoLabel } from "./github.ts";
 import { createApp, type Env, mount } from "./http.ts";
 import { labelsFor } from "./labeler.ts";
 
-export { type GitHub, type Pull, type RepoLabel, realGitHub } from "./github.ts";
+export { type Account, type GitHub, type Pull, type RepoLabel, realGitHub } from "./github.ts";
 
 /** push 권한을 다시 확인하는 주기. Room의 10분에서 시작한다(ADR-0011). */
 const RECHECK_MS = 10 * 60_000;
@@ -970,6 +970,13 @@ export async function startServer(options: {
   );
   const hasColumn = (table: string, column: string) =>
     db.prepare(`SELECT 1 FROM pragma_table_info('${table}') WHERE name = '${column}'`).get();
+  // 사람의 GitHub 프로필 사진(#288). 이름과 함께 로그인할 때와 10분마다 다시 읽는다.
+  if (!hasColumn("people", "avatar")) db.exec("ALTER TABLE people ADD COLUMN avatar TEXT");
+  // 계정의 종류와 아바타(시안 101의 이름 줄). 멤버의 push 권한을 읽을 때 GitHub에서 함께 읽어 고친다.
+  if (!hasColumn("workspaces", "kind")) {
+    db.exec("ALTER TABLE workspaces ADD COLUMN kind TEXT NOT NULL DEFAULT 'organization'");
+    db.exec("ALTER TABLE workspaces ADD COLUMN avatar TEXT");
+  }
   if (!hasColumn("channels", "workspace")) {
     // 채널의 이름은 워크스페이스마다 하나다. 표 전체에 하나이던 UNIQUE를 빼려고 표를 다시 만든다. messages가 가리키는 표라 외래 키를 잠시 끈다.
     db.exec("PRAGMA foreign_keys = OFF");
@@ -1505,7 +1512,7 @@ export async function startServer(options: {
   const membersView = (repo: string, works: WorkView[]): MemberView[] => {
     const people = db
       .prepare(
-        `SELECT s.login, COALESCE(p.name, s.login) AS name, o.since, f.presence, f.until, f.message, f.emoji
+        `SELECT s.login, COALESCE(p.name, s.login) AS name, p.avatar, o.since, f.presence, f.until, f.message, f.emoji
          FROM ${MEMBERS} s
          LEFT JOIN people p ON p.login = s.login
          LEFT JOIN offline o ON o.repo = ? AND o.login = s.login
@@ -1515,6 +1522,7 @@ export async function startServer(options: {
       .all(repo, repo) as {
       login: string;
       name: string;
+      avatar: string | null;
       since: number | null;
       presence: ChosenPresence | null;
       until: number | null;
@@ -1569,13 +1577,14 @@ export async function startServer(options: {
     );
     const conflicted = conflictedWorks(repo);
     const broken = brokenWorks(repo);
-    return people.map(({ login, name, since, ...profile }) => {
+    return people.map(({ login, name, avatar, since, ...profile }) => {
       const agents = known
         .filter((agent) => agent.login === login)
         .map(({ executor }) => agent(login, executor));
       return {
         login,
         name,
+        avatar,
         presence: presenceOf(login, profile.presence, profile.until),
         message: profile.message || null,
         emoji: profile.emoji || null,
@@ -2681,6 +2690,12 @@ export async function startServer(options: {
       const can = await github.canPush(token, repo);
       if (stopped) break;
       if (can && can.name !== repo && moveRepo(repo, can.name)) repo = can.name;
+      if (can?.account)
+        db.prepare("UPDATE workspaces SET kind = ?, avatar = ? WHERE id = ?").run(
+          can.account.kind,
+          can.account.avatar,
+          ownerOf(repo),
+        );
       if (can === undefined) unknown.push(repo);
       else if (can.push) {
         push.push(repo);
@@ -2811,7 +2826,7 @@ export async function startServer(options: {
     if ("error" in polled)
       throw new ContractFailure({ code: "unauthorized", message: polled.error });
 
-    const { login, name } = await github.user(polled.token);
+    const { login, name, avatar } = await github.user(polled.token);
     const access = await readAccess(login, polled.token);
     if (access.unknown.length > 0 && access.push.length === 0) {
       throw new ContractFailure({
@@ -2831,9 +2846,10 @@ export async function startServer(options: {
       login,
       polled.token,
     );
-    db.prepare("INSERT OR REPLACE INTO people (login, name) VALUES (?, ?)").run(
+    db.prepare("INSERT OR REPLACE INTO people (login, name, avatar) VALUES (?, ?, ?)").run(
       login,
       name ?? login,
+      avatar,
     );
     shareSituation(); // 빠졌다 돌아온 멤버의 작업이 다시 보인다
     return { session, login };
@@ -2841,24 +2857,37 @@ export async function startServer(options: {
 
   mount(app, api.me, (_, c) => {
     const login = c.get("login") as string;
-    const person = db.prepare("SELECT name FROM people WHERE login = ?").get(login) as
-      | { name: string }
+    const person = db.prepare("SELECT name, avatar FROM people WHERE login = ?").get(login) as
+      | { name: string; avatar: string | null }
       | undefined;
     const repos = reposOf(login);
-    return { login, name: person?.name ?? login, repo: repos[0] ?? "", repos };
+    return {
+      login,
+      name: person?.name ?? login,
+      avatar: person?.avatar ?? null,
+      repo: repos[0] ?? "",
+      repos,
+    };
   });
 
   mount(app, api.workspaces, (_, c) => {
     const repos = reposOf(c.get("login") as string);
-    const names = new Map(
-      (db.prepare("SELECT id, name FROM workspaces").all() as { id: string; name: string }[]).map(
-        ({ id, name }) => [id, name],
-      ),
+    const rows = new Map(
+      (
+        db.prepare("SELECT id, name, kind, avatar FROM workspaces").all() as {
+          id: string;
+          name: string;
+          kind: "organization" | "user";
+          avatar: string | null;
+        }[]
+      ).map((row) => [row.id, row]),
     );
     return {
       workspaces: [...new Set(repos.map(ownerOf))].map((id) => ({
         id,
-        name: names.get(id) ?? id,
+        name: rows.get(id)?.name ?? id,
+        kind: rows.get(id)?.kind ?? "organization",
+        avatar: rows.get(id)?.avatar ?? null,
         repos: repos.filter((repo) => ownerOf(repo) === id),
       })),
     };
@@ -4682,6 +4711,21 @@ export async function startServer(options: {
         login: string;
         github_token: string;
       }[];
+      // GitHub에서 바꾼 이름과 프로필 사진을 따라간다. 사람마다 한 번만 읽고, 못 읽으면 지난 것을 둔다.
+      let renamed = false;
+      for (const [login, token] of new Map(rows.map((row) => [row.login, row.github_token]))) {
+        const user = await github.user(token).catch(() => undefined);
+        if (stopped) return;
+        if (user?.login !== login) continue;
+        renamed ||=
+          db
+            .prepare(
+              "UPDATE people SET name = ?, avatar = ? WHERE login = ? AND (name != ? OR avatar IS NOT ?)",
+            )
+            .run(user.name ?? login, user.avatar, login, user.name ?? login, user.avatar).changes >
+          0;
+      }
+      if (renamed) shareMembers();
       for (const row of rows) {
         const access = await readAccess(row.login, row.github_token);
         if (stopped) return;

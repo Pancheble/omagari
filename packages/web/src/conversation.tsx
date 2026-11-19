@@ -29,7 +29,7 @@ import { QaLine } from "./dm.tsx";
 import { AlertLine } from "./forum.tsx";
 import type { LiveState } from "./live.ts";
 import { VerdictStrip } from "./verdict.tsx";
-import { Avatar } from "./workspace.tsx";
+import { Avatar, personName } from "./workspace.tsx";
 
 /** 채널 하나의 대화. 실시간으로 받은 것은 불러오는 중에도 쌓아 두고, 지난 대화를 받으면 번호로 합친다. */
 export type View = {
@@ -443,12 +443,12 @@ function Message({
           {timeOf(message.at)}
         </time>
       ) : (
-        <Avatar name={message.name} size={36} />
+        <Avatar name={message.name} login={message.login} size={36} />
       )}
       <div className="message-body">
         {!grouped && (
           <p className="message-head">
-            <strong>{message.name}</strong>
+            <strong>{personName(message.name, message.login)}</strong>
             <time dateTime={message.at} title={fullTime(message.at)}>
               {timeOf(message.at)}
             </time>

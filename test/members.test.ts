@@ -51,6 +51,7 @@ test("멤버 목록에 사람마다 이름과 실행기마다의 에이전트, �
     {
       login: "bob",
       name: "bob",
+      avatar: null,
       presence: "offline", // 웹 창을 연 적이 없다
       message: null,
       emoji: null,
@@ -62,6 +63,7 @@ test("멤버 목록에 사람마다 이름과 실행기마다의 에이전트, �
   assert.deepEqual(await aliceOf(), {
     login: "alice",
     name: "김지은",
+    avatar: null,
     presence: "offline",
     message: null,
     emoji: null,

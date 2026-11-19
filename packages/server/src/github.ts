@@ -17,14 +17,18 @@ export type GitHub = {
   pollDevice(
     deviceCode: string,
   ): Promise<{ token: string } | { pending: true; intervalMs?: number } | { error: string }>;
-  /** 토큰 주인의 GitHub 로그인과 프로필 이름. 이름을 비워 두었으면 `name`이 null이다. */
-  user(token: string): Promise<{ login: string; name: string | null }>;
+  /** 토큰 주인의 GitHub 로그인, 프로필 이름, 프로필 사진 주소. 이름을 비워 두었으면 `name`이 null이다. */
+  user(token: string): Promise<{ login: string; name: string | null; avatar: string | null }>;
   /**
    * 토큰 주인이 `owner/name`에 push할 수 있나와 GitHub이 지금 그 레포를 부르는 이름(`name`).
    * 레포가 옮겨지거나 이름이 바뀌었으면 GitHub이 옛 이름을 새 레포로 넘겨 주어 `name`이 새 이름이다(ADR-0043).
    * 볼 수 없으면 `name`은 물은 그대로다. GitHub이 답하지 못하면 `undefined`다.
+   * 볼 수 있으면 레포 계정의 종류와 아바타(`account`)도 온다(워크스페이스의 이름 줄, 시안 101).
    */
-  canPush(token: string, repo: string): Promise<{ push: boolean; name: string } | undefined>;
+  canPush(
+    token: string,
+    repo: string,
+  ): Promise<{ push: boolean; name: string; account?: Account } | undefined>;
   /** 토큰 주인이 `owner/name`의 Admin인가(워크스페이스에 레포를 넣고 뺀다, ADR-0043). GitHub이 답하지 못하면 `undefined`다. */
   canAdmin(token: string, repo: string): Promise<boolean | undefined>;
   /**
@@ -112,6 +116,9 @@ export type GitHub = {
   ): Promise<RepoLabel>;
 };
 
+/** GitHub 계정의 종류와 아바타 주소. */
+export type Account = { kind: "organization" | "user"; avatar: string | null };
+
 /** 레포의 GitHub 라벨. `id`는 이름이 바뀌어도 그대로다. 색은 `#` 없는 16진수다. */
 export type RepoLabel = { id: number; name: string; color: string; description: string };
 
@@ -190,7 +197,13 @@ export function realGitHub(clientId: string): GitHub {
     const json = await response.json();
     const can = json.permissions?.[kind];
     if (typeof can !== "boolean") return undefined;
-    return { can, name: typeof json.full_name === "string" ? json.full_name : repo };
+    // 레포의 owner는 계정(조직이나 개인)이다: `type`이 "Organization"이나 "User", `avatar_url`이 아바타다.
+    const owner = json.owner as { type?: unknown; avatar_url?: unknown } | undefined;
+    const account: Account | undefined = owner && {
+      kind: owner.type === "User" ? "user" : "organization",
+      avatar: typeof owner.avatar_url === "string" ? owner.avatar_url : null,
+    };
+    return { can, name: typeof json.full_name === "string" ? json.full_name : repo, account };
   };
 
   return {
@@ -221,12 +234,16 @@ export function realGitHub(clientId: string): GitHub {
     async user(token) {
       const response = await get("/user", token);
       if (!response.ok) throw new Error(`GitHub /user: HTTP ${response.status}`);
-      const { login, name } = await response.json();
-      return { login, name: name || null };
+      const { login, name, avatar_url } = await response.json();
+      return {
+        login,
+        name: name || null,
+        avatar: typeof avatar_url === "string" ? avatar_url : null,
+      };
     },
     async canPush(token, repo) {
       const found = await permission(token, repo, "push");
-      return found && { push: found.can, name: found.name };
+      return found && { push: found.can, name: found.name, account: found.account };
     },
     canAdmin: async (token, repo) => (await permission(token, repo, "admin"))?.can,
     // 내 레포: GET /user/repos(https://docs.github.com/en/rest/repos/repos#list-repositories-for-the-authenticated-user)의 `permissions.admin`.
