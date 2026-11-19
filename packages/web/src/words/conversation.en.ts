@@ -34,6 +34,15 @@ export const conversationEn = {
     gone: "Can't see the original message",
     gif: "GIF",
   },
+  thread: {
+    thread: "Thread",
+    replies: (n: number) => `${n} ${n === 1 ? "reply" : "replies"}`,
+    last: (time: string) => `Last reply ${time}`,
+    placeholder: "Reply",
+    alsoSend: (channel: string) => `Also send to # ${channel}`,
+    repliedIn: "Replied in a thread: ",
+    loadFailed: "Couldn't load the thread",
+  },
   fromGithub: "A comment left on the issue on GitHub",
   loading: "Loading messages",
   call: {

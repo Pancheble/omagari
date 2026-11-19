@@ -39,7 +39,6 @@ import {
   type Debate,
   decode,
   encode,
-  IMPORTANCE_LABELS,
   type MergeRun,
   RUNNER_SOCKET,
   runnerToServer,
@@ -270,6 +269,13 @@ await say(
   pay,
   "> **minsu**\n> 부분 환불이면 깨질 것 같은데요.\n\n맞아요, 영수증 금액이랑도 안 맞을 거예요.",
 );
+// Thread (#345): replies under minsu's webhook message, and one also sent to the channel.
+for (const [as, text, alsoInChannel] of [
+  [hajun.as, "재시도 간격은 지수 백오프로 가요?", false],
+  [minsu.as, "네, 최대 다섯 번까지요.", false],
+  [seoyeon.as, "백오프 상한은 설정으로 빼 주세요.", true],
+] as const)
+  await call(as, api.send, { channel: pay, text, threadOf: webhookOnly.id, alsoInChannel });
 
 // 부딪힘: 같은 줄(직접 충돌), 정의 줄을 바꾼 함수를 쓰는 곳(간접 충돌), 같은 이름의 새 정의(중복 구현), 선점에 붙인 계획(선언된 계약 변경).
 await own("src/config.ts", line3("owner"));
@@ -451,9 +457,7 @@ await call(world.owner, api.createForum, {
   name: "결제 팀",
   filter: { labels: ["결제", "결정 필요"] },
 });
-const reference = (await call(world.owner, api.channels)).channels.find(
-  (c) => c.name === IMPORTANCE_LABELS.reference,
-);
+const reference = (await call(world.owner, api.channels)).channels.find((c) => c.name === "FYI");
 assert.ok(reference);
 await call(world.owner, api.updateForum, {
   id: reference.id,
