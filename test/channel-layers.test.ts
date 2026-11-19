@@ -272,8 +272,9 @@ test("포럼은 레포로 거르고, 레포의 라벨 이름을 바꾸면 그 �
   const filterOf = async (id: string) =>
     (await call(owner, api.channels)).channels.find((c) => c.id === id)?.filter;
   assert.deepEqual(await filterOf(payForum.id), { labels: ["충돌"], repos: [REPO2] });
-  assert.deepEqual(await filterOf(allForum.id), { labels: ["직접 충돌", "충돌"] });
-  // (가짜 GitHub는 라벨을 레포끼리 나누지 않아 REPO도 다음 주기에 같은 이름을 받는다. REPO만 거르는 포럼이 그대로인지는 여기서 가리지 않는다.)
+  // 가짜 GitHub는 라벨을 레포끼리 나누지 않아 REPO도 다음 주기에 같은 이름을 받는다. 어느 레포에도 옛 이름이 없어지면 옛 이름은
+  // 포럼에서 빠지는데, 그 때가 이 호출보다 먼저일지 나중일지는 주기에 달렸다. 그래서 끝에 이르는 모습만 본다(REPO만 거르는 포럼이 그대로인지는 가리지 않는다).
+  await eventually(async () => assert.deepEqual(await filterOf(allForum.id), { labels: ["충돌"] }));
   await eventually(async () => {
     assert.deepEqual(await forumsOf(owner, REPO2), [ids(payForum, allForum, reference)]);
   });
