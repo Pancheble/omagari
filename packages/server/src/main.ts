@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { CONTRACT_VERSION } from "@omagari/contract";
-import { realGitHub, startServer } from "./index.ts";
+import { realGiphy, realGitHub, startServer } from "./index.ts";
 
 const WEB_DIST = fileURLToPath(new URL("../../web/dist", import.meta.url));
 
@@ -19,6 +19,12 @@ if (accept.length === 0 || !GITHUB_CLIENT_ID) {
 const server = await startServer({
   accept,
   github: realGitHub(GITHUB_CLIENT_ID),
+  // GIF 찾기(ADR-0044). 키가 없으면 GIF 버튼이 없다. 프로덕션 키면 GIPHY_PER_HOUR로 시간당 한도를 올린다(베타 키는 100).
+  giphy: process.env.GIPHY_API_KEY
+    ? realGiphy(process.env.GIPHY_API_KEY, {
+        perHour: process.env.GIPHY_PER_HOUR ? Number(process.env.GIPHY_PER_HOUR) : undefined,
+      })
+    : undefined,
   database: process.env.OMAGARI_DB ?? "omagari.db",
   port: Number(process.env.PORT ?? 3000),
   hostname: process.env.HOST,

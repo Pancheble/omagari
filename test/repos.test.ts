@@ -39,6 +39,7 @@ test("Admin만 같은 계정의 레포를 넣고 빼며, 러너는 원격으로 
     avatar: null,
     repo: REPO2,
     repos: [REPO2],
+    gif: false,
   });
   await assert.rejects(call(alice, api.removeRepo, { repo: REPO2 }), refused("forbidden"));
   // 레포 넣기 목록에는 내가 Admin인 레포만 실린다. Admin이 아니면 비어 다른 레포의 이름도 수도 보이지 않는다(시안 93-C).
@@ -170,6 +171,7 @@ test("레포가 하나이던 판의 DB로 켜도 있던 것이 그 레포에 그
     avatar: null,
     repo: REPO,
     repos: [REPO],
+    gif: false,
   });
 
   // owner는 새 레포의 권한을 받은 뒤 다시 들어온다.

@@ -88,10 +88,12 @@ import { checkoutVersion } from "@omagari/contract/version";
 import type { Context } from "hono";
 import type { WSContext } from "hono/ws";
 import { type WebSocket, WebSocketServer } from "ws";
+import type { Giphy } from "./giphy.ts";
 import type { GitHub, RepoLabel } from "./github.ts";
 import { createApp, type Env, mount } from "./http.ts";
 import { labelsFor } from "./labeler.ts";
 
+export { type Giphy, realGiphy } from "./giphy.ts";
 export { type Account, type GitHub, type Pull, type RepoLabel, realGitHub } from "./github.ts";
 
 /** push 권한을 다시 확인하는 주기. Room의 10분에서 시작한다(ADR-0011). */
@@ -438,6 +440,8 @@ export async function startServer(options: {
    */
   accept: string[];
   github: GitHub;
+  /** GIF 찾기(ADR-0044). 서버 설정에 GIPHY 키가 있을 때만 준다. 없으면 웹에 GIF 버튼이 없다. */
+  giphy?: Giphy;
   /** SQLite 파일. 주지 않으면 메모리에 두고 서버가 꺼지면 잃는다. */
   database?: string;
   port?: number;
@@ -2916,7 +2920,16 @@ export async function startServer(options: {
       avatar: person?.avatar ?? null,
       repo: repos[0] ?? "",
       repos,
+      gif: !!options.giphy,
     };
+  });
+
+  // 브라우저 대신 서버가 키를 붙여 GIPHY에 묻는다. 키는 서버 밖으로 나가지 않고, 찾은 결과는 쌓아 두지 않는다(ADR-0044).
+  mount(app, api.gifs, ({ query }) => {
+    if (!options.giphy) {
+      throw new ContractFailure({ code: "not_found", message: "이 서버에는 GIPHY 키가 없다" });
+    }
+    return options.giphy.search(query).then((gifs) => ({ gifs }));
   });
 
   mount(app, api.workspaces, (_, c) => {

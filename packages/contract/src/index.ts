@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 51;
+export const CONTRACT_VERSION = 52;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -1651,6 +1651,19 @@ export const Workspace = z.strictObject({
 });
 export type Workspace = z.output<typeof Workspace>;
 
+/**
+ * GIPHY에서 찾은 GIF 하나(ADR-0044). 서버는 GIPHY 응답 가운데 이것만 넘기고 쌓아 두지 않는다.
+ * `url`은 찾기 칸에 보일 작은 그림(폭 200px)의 주소이고, 브라우저가 GIPHY에서 바로 받는다.
+ */
+export const Gif = z.strictObject({
+  id: z.string().regex(/^[A-Za-z0-9]+$/),
+  title: z.string(),
+  url: z.string(),
+  width: z.number(),
+  height: z.number(),
+});
+export type Gif = z.output<typeof Gif>;
+
 /** 웹이 쓰는 API. 이후의 이슈는 자기 경로를 여기에 더한다. */
 export const api = {
   health: {
@@ -1699,6 +1712,8 @@ export const api = {
       repo: z.string(),
       /** 이 멤버가 push 권한이 있어 보이는 워크스페이스의 레포들, 넣은 순서. 로그인할 때와 10분마다 다시 읽는다. */
       repos: z.array(z.string()),
+      /** 서버 설정에 GIPHY 키가 있어 `api.gifs`를 쓸 수 있다. 없으면 웹은 GIF 버튼을 두지 않는다(ADR-0044). */
+      gif: z.boolean(),
     }),
   },
   /**
@@ -2200,6 +2215,16 @@ export const api = {
       text: z.string().trim().min(1).max(MAX_MESSAGE_CHARS),
     }),
     response: z.strictObject({ message: ChannelMessage }),
+  },
+  /**
+   * GIPHY에서 GIF를 찾는다(ADR-0044). 서버가 키를 붙여 대신 묻고, 등급은 R까지다. `query`가 비어 있으면 GIPHY의 인기 GIF다.
+   * 서버에 GIPHY 키가 없으면 `not_found`, GIPHY가 답하지 않거나 서버의 시간당 한도를 넘으면 `internal`이다.
+   */
+  gifs: {
+    method: "POST",
+    path: "/api/gifs",
+    body: z.strictObject({ query: z.string().trim().max(50) }),
+    response: z.strictObject({ gifs: z.array(Gif) }),
   },
   /**
    * 사람이 쓴 메시지(글이나 공개된 문답)에 반응을 달거나(`on: true`) 뗀다(ADR-0044). 이미 단 것을 다시 달거나 달지 않은 것을 떼도 오류가 아니다.

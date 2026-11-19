@@ -710,6 +710,10 @@ export function Workspace({
     }
   };
 
+  /** GIF 찾기. 서버가 키를 붙여 GIPHY에 대신 묻는다(ADR-0044). */
+  const searchGifs = async (query: string) =>
+    (await call(server(session), api.gifs, { query })).gifs;
+
   /** 채팅 채널은 지금 보는 곳에 만든다. 레포가 하나뿐인 계정이면 그 레포의 채널이다. */
   const create = async (name: string) => {
     const { channel } = await call(server(session), api.createChannel, {
@@ -987,6 +991,7 @@ export function Workspace({
         attached={attached?.channel === active.id ? attached : undefined}
         onAttach={setAttached}
         onSend={(text) => send(active.id, text)}
+        searchGifs={me.gif ? searchGifs : undefined}
         onCall={(executor, question) => ask(active.id, executor, question, "public")}
         onPost={post}
         onRetry={() => void load(active.id)}
