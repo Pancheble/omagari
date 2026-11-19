@@ -108,6 +108,18 @@ function App() {
       workspaces={state.workspaces}
       workspace={state.workspace}
       onSwitch={switchTo}
+      onRepos={(id, repos) =>
+        setState((now) =>
+          now.kind === "in"
+            ? {
+                ...now,
+                workspaces: now.workspaces.map((space) =>
+                  space.id === id ? { ...space, repos } : space,
+                ),
+              }
+            : now,
+        )
+      }
       onLogout={logout}
       onSignedOut={expire}
     />
