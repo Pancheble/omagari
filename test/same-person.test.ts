@@ -108,11 +108,11 @@ test("한 사람의 두 브랜치가 같은 곳을 고치면 직접 충돌 알�
   await eventually(async () =>
     assert.deepEqual(
       worksIn(await preEdit(world, world.repo.folder, "src/pay.ts"), "omagari-nearby"),
-      [`- owner · 브랜치 "refund"`],
+      [`- owner · branch "refund"`],
     ),
   );
   assert.deepEqual(worksIn(await preEdit(world, refund, "src/pay.ts"), "omagari-nearby"), [
-    `- owner · 브랜치 "payment"`,
+    `- owner · branch "payment"`,
   ]);
   assert.deepEqual(
     worksIn(await preEdit(world, world.repo.folder, "src/only.ts"), "omagari-nearby"),
@@ -121,10 +121,10 @@ test("한 사람의 두 브랜치가 같은 곳을 고치면 직접 충돌 알�
 
   // 세션 시작 훅: 브랜치마다 다른 쪽만 보인다.
   assert.deepEqual(worksIn(await sessionStart(world, world.repo.folder), "omagari-situation"), [
-    `- owner · 브랜치 "refund"`,
+    `- owner · branch "refund"`,
   ]);
   assert.deepEqual(worksIn(await sessionStart(world, refund), "omagari-situation"), [
-    `- owner · 브랜치 "payment"`,
+    `- owner · branch "payment"`,
   ]);
 });
 
@@ -234,7 +234,9 @@ test("omagari impact가 내 다른 브랜치의 작업은 보이고 같은 브�
     MONEY.replace("refund(amount: number)", "refund(amount: number, reason: string)"),
   );
   const works = (stdout: string) =>
-    stdout.split("정의 줄을 바꾸고 있는 다른 멤버의 작업:\n")[1]?.split("바꾸겠다고")[0];
+    stdout
+      .split("Other members' Work that is changing the definition line:\n")[1]
+      ?.split("Other members' Claims")[0];
   await eventually(async () => {
     const mine = await world.cliIn(refund, "impact", "refund");
     assert.equal(mine.code, 0, mine.stderr);
@@ -243,5 +245,5 @@ test("omagari impact가 내 다른 브랜치의 작업은 보이고 같은 브�
   // 같은 브랜치(payment)에서 묻으면 내 작업은 빠진다.
   const own = await world.cliIn(world.repo.folder, "impact", "refund");
   assert.equal(own.code, 0, own.stderr);
-  assert.equal(works(own.stdout), "  없음\n");
+  assert.equal(works(own.stdout), "  none\n");
 });

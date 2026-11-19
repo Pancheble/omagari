@@ -140,7 +140,7 @@ ${JSON.stringify({
   assert.equal(owner.calls[0]?.resume, "work-payment");
   assert.equal(owner.calls[0]?.fork, true);
   assert.equal(alice.calls[0]?.resume, undefined);
-  assert.match(alice.calls[0]?.message ?? "", /맥락 없이 참여한다/);
+  assert.match(alice.calls[0]?.message ?? "", /taking part without context/);
   assert.equal(alice.calls[0]?.folder, desk.folder);
 
   // alice가 내면 둘 다 공개되고, 근거마다 각자 레포에서 본 표시가 붙는다.
@@ -181,11 +181,11 @@ ${JSON.stringify({
   const post = (await postOf(world.owner, "declared"))?.channel ?? "";
   assert.match(
     (await world.cli("runner", "log")).stdout,
-    new RegExp(`토론 ${post} 라운드 1 작업 세션 work-payment에서 갈라 띄움`),
+    new RegExp(`debate ${post} round 1 forked from work session work-payment`),
   );
   assert.match(
     (await world.cliIn(desk.folder, "runner", "log")).stdout,
-    new RegExp(`토론 ${post} 라운드 1 맥락 없이 참여`),
+    new RegExp(`debate ${post} round 1 joined without context`),
   );
 });
 
@@ -281,7 +281,7 @@ test("증거 라벨이 없는 포스트는 안건과 근거를 붙여 요청해�
     "src/pay.ts:3 둘 다 이 줄을 바꿨다",
   );
   assert.equal(cli.code, 0, cli.stderr);
-  assert.match(cli.stdout, /토론이 열렸다/);
+  assert.match(cli.stdout, /The Debate is open/);
   const opened = await eventually(async () => {
     const found = await postOf(world.owner, "direct");
     assert.ok(found?.debate?.revealed);
@@ -308,9 +308,9 @@ test("증거 라벨이 없는 포스트는 안건과 근거를 붙여 요청해�
 
 /** 토론 세션이면 라운드(첫 라운드는 1), 아니면 0. 반박 라운드의 지시문은 "N라운드(반박)"로 시작한다. */
 const roundOf = (message: string) =>
-  /라운드\(반박\)/.test(message)
-    ? Number(/토론의 (\d+)라운드\(반박\)/.exec(message)?.[1])
-    : /첫 입장을 낸다/.test(message)
+  /\(rebuttal\)/.test(message)
+    ? Number(/This is round (\d+) \(rebuttal\)/.exec(message)?.[1])
+    : /give your first stance/.test(message)
       ? 1
       : 0;
 
@@ -414,7 +414,7 @@ test("반박 두 라운드에 상대 입장이 감싸여 넘어가고, 사유 �
     assert.ok(found);
     return found.message;
   });
-  assert.match(drafted, /주인을 가린 안 가운데 이 안을 골랐다/);
+  assert.match(drafted, /picked this stance from the stances with the owner hidden/);
   assert.match(
     drafted,
     /<conclusion owner="[^"]+ \(owner\)" branch="payment">\n<claim>reason을 선택으로 받는다<\/claim>/,
@@ -605,12 +605,12 @@ test("입장에 붙은 패치를 두 작업을 합친 것 위에 얹어 샌드�
   assert.match(
     (await world.cli("runner", "log")).stdout,
     new RegExp(
-      `검사 명령 "sh check.sh"  토론 ${post} 라운드 1 실험 payment \\+ alice의 refund  .*판정 통과`,
+      `check command "sh check.sh"  debate ${post} round 1 experiment payment \\+ refund of alice  .*verdict 통과`,
     ),
   );
   assert.match(
     (await world.cliIn(desk.folder, "runner", "log")).stdout,
-    new RegExp(`토론 ${post} 라운드 1 실험 refund \\+ owner의 payment  .*판정 깨짐`),
+    new RegExp(`debate ${post} round 1 experiment refund \\+ payment of owner  .*verdict 깨짐`),
   );
 });
 
@@ -636,7 +636,10 @@ test("검사 명령이 없거나 샌드박스가 없으면 돌리지 못함과 �
   );
   const ownerRun = stanceOf("reason을 더한다").stances[0]?.experiment;
   assert.equal(ownerRun?.verdict, "not_run");
-  assert.match(ownerRun?.reason ?? "", /기본 브랜치\(origin\/main\)에 \.omagari\.json이 없다/);
+  assert.match(
+    ownerRun?.reason ?? "",
+    /The default branch \(origin\/main\) has no \.omagari\.json/,
+  );
   assert.equal(ownerRun?.check, undefined);
   const aliceRun = stanceOf("부르는 쪽을 고친다").stances[0]?.experiment;
   assert.equal(aliceRun?.verdict, "not_run");
@@ -820,11 +823,13 @@ test("멤버가 대행을 부르면 그 멤버의 러너가 부재자의 작업�
   const gate = Promise.withResolvers<void>();
   // bob의 작업도 refund를 써 bob과 owner의 토론이 따로 열린다. 그 요청에는 바로 답하고, 대행 요청만 센다.
   const bob = fakeExecutor(async ({ message }) => {
-    if (!message.includes("대신 부른 대행")) return JSON.stringify({ claim: "bob", evidence: [] });
+    if (!message.includes("You are a proxy called in for"))
+      return JSON.stringify({ claim: "bob", evidence: [] });
     await gate.promise;
     return JSON.stringify({ claim: "대행의 입장: reason은 선택", evidence: ["부재자의 계획"] });
   });
-  const proxyCalls = () => bob.calls.filter((c) => c.message.includes("대신 부른 대행"));
+  const proxyCalls = () =>
+    bob.calls.filter((c) => c.message.includes("You are a proxy called in for"));
   /** 이 토론(alice와 owner의 포스트). */
   const current = async () => {
     const found = (await call(world.owner, api.posts)).posts.find((p) => p.channel === post);
@@ -854,7 +859,7 @@ test("멤버가 대행을 부르면 그 멤버의 러너가 부재자의 작업�
   assert.equal(told?.resume, undefined);
   assert.equal(told?.folder, bobDesk.desk.folder);
   assert.deepEqual(told?.tools, ["Read", "Grep", "Glob"]);
-  assert.match(told?.message ?? "", /alice\(alice\) 대신 부른 대행이다/);
+  assert.match(told?.message ?? "", /You are a proxy called in for alice \(alice\)/);
   assert.match(told?.message ?? "", /<absent_work branch="refund" share="full">/);
   assert.match(told?.message ?? "", /src\/extra\.ts/);
   assert.ok(!told?.message.includes("alice-work"));
@@ -880,7 +885,7 @@ test("멤버가 대행을 부르면 그 멤버의 러너가 부재자의 작업�
   assert.equal(proxyCalls().length, 1);
   assert.equal(rebuttals().length, 1);
   const resumed = rebuttals()[0]?.message ?? "";
-  assert.match(resumed, /bob가 부른 대행이 냈다/);
+  assert.match(resumed, /was given by a proxy that bob called/);
   assert.match(resumed, /<my_stance>\n<claim>대행의 입장: reason은 선택<\/claim>/);
   assert.equal(seatOf(choosing, "alice").proxy, undefined);
   const aliceAt = choosing.options.findIndex((o) => o.stances[0]?.claim.startsWith("대행의 입장"));
@@ -949,7 +954,7 @@ test("대행의 입장에 붙은 패치는 부른 사람의 러너가 부재자�
   const bobSandbox = fakeSandbox();
   const bob = fakeExecutor(({ message }) =>
     JSON.stringify(
-      message.includes("대신 부른 대행")
+      message.includes("You are a proxy called in for")
         ? { claim: "대행: reason을 새 파일에", evidence: [], patch: NOTE_PATCH }
         : { claim: "bob", evidence: [] },
     ),
@@ -1019,7 +1024,7 @@ test("Codex 에이전트는 주인이 그 브랜치에서 쓰던 Codex 작업 �
   assert.ok(args.includes("payment-work"));
   assert.ok(args.includes('sandbox_mode="read-only"'));
   assert.ok(!args.includes("other-branch"));
-  assert.ok(!calls[0]?.input.includes("맥락 없이 참여한다"));
+  assert.ok(!calls[0]?.input.includes("taking part without context"));
   assert.equal(context, "session");
 });
 
@@ -1027,6 +1032,6 @@ test("그 브랜치의 Codex 작업 세션이 없으면 Codex 에이전트는 �
   const { calls, context } = await codexDebate(t, async () => {});
   assert.equal(calls.length, 1);
   assert.ok(!calls[0]?.args.includes("fork"));
-  assert.match(calls[0]?.input ?? "", /맥락 없이 참여한다/);
+  assert.match(calls[0]?.input ?? "", /taking part without context/);
   assert.equal(context, "none");
 });

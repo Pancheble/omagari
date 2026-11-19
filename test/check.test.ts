@@ -53,10 +53,10 @@ test("omagari runner check가 내 작업을 커밋하지 않은 변경까지 임
   assert.equal(passed.code, 0, passed.stderr);
   assert.match(
     passed.stdout,
-    /검사 명령: sh check\.sh \(기본 브랜치 origin\/main의 \.omagari\.json\)/,
+    /Check command: sh check\.sh \(\.omagari\.json on default branch origin\/main\)/,
   );
-  assert.match(passed.stdout, /판정: 통과 \(\d+\.\d초\)/);
-  assert.doesNotMatch(passed.stdout, /출력의 끝부분/);
+  assert.match(passed.stdout, /Verdict: 통과 \(\d+\.\ds\)/);
+  assert.doesNotMatch(passed.stdout, /End of output/);
 
   // 샌드박스에 넘긴 것: 임시 워크트리에서, 바깥 네트워크를 막고, 쓰기는 임시 워크트리와 임시 폴더만, 홈 폴더 읽기를 막는다.
   assert.equal(fake.calls.length, 1);
@@ -97,7 +97,7 @@ test("omagari runner check가 내 작업을 커밋하지 않은 변경까지 임
   await write("check.sh", "seq 1 40 >&2\necho 실패한 테스트 >&2\nexit 3\n");
   const broken = await world.cli("runner", "check");
   assert.equal(broken.code, 1);
-  assert.match(broken.stdout, /판정: 깨짐 \(\d+\.\d초\)\n출력의 끝부분:\n {2}17\n/);
+  assert.match(broken.stdout, /Verdict: 깨짐 \(\d+\.\ds\)\nEnd of output:\n {2}17\n/);
   assert.match(broken.stdout, / {2}40\n {2}실패한 테스트\n/);
   assert.doesNotMatch(broken.stdout, / {2}16\n/);
 
@@ -105,8 +105,14 @@ test("omagari runner check가 내 작업을 커밋하지 않은 변경까지 임
   const log = await world.cli("runner", "log");
   const lines = log.stdout.trimEnd().split("\n");
   assert.equal(lines.length, 2);
-  assert.match(lines[0] ?? "", /검사 명령 "sh check\.sh" {2}폴더 .+ {2}판정 통과 {2}\d+\.\d초$/);
-  assert.match(lines[1] ?? "", /검사 명령 "sh check\.sh" {2}폴더 .+ {2}판정 깨짐 {2}\d+\.\d초$/);
+  assert.match(
+    lines[0] ?? "",
+    /check command "sh check\.sh" {2}folder .+ {2}verdict 통과 {2}\d+\.\ds$/,
+  );
+  assert.match(
+    lines[1] ?? "",
+    /check command "sh check\.sh" {2}folder .+ {2}verdict 깨짐 {2}\d+\.\ds$/,
+  );
 });
 
 test("설정 파일이 없거나 읽지 못하거나 샌드박스를 쓸 수 없으면 돌리지 않고 까닭과 고치는 법을 보인다", async (t) => {
@@ -117,11 +123,14 @@ test("설정 파일이 없거나 읽지 못하거나 샌드박스를 쓸 수 없
 
   const none = await world.cli("runner", "check");
   assert.equal(none.code, 1);
-  assert.match(none.stdout, /판정: 돌리지 못함/);
-  assert.match(none.stdout, /기본 브랜치\(origin\/main\)에 \.omagari\.json이 없다\. 정하는 법: /);
+  assert.match(none.stdout, /Verdict: 돌리지 못함/);
+  assert.match(
+    none.stdout,
+    /The default branch \(origin\/main\) has no \.omagari\.json\. How to set it: /,
+  );
   // 작업 폴더에만 있는 설정은 읽지 않는다.
   await writer(repo.folder)(".omagari.json", config({ check: "true" }));
-  assert.match((await world.cli("runner", "check")).stdout, /\.omagari\.json이 없다/);
+  assert.match((await world.cli("runner", "check")).stdout, /has no \.omagari\.json/);
   await rm(join(repo.folder, ".omagari.json"));
 
   await merge(repo, { ".omagari.json": config({ chek: "npm test" }) });
@@ -129,7 +138,7 @@ test("설정 파일이 없거나 읽지 못하거나 샌드박스를 쓸 수 없
   assert.equal(wrong.code, 1);
   assert.match(
     wrong.stdout,
-    /\.omagari\.json을 읽지 못했다\(JSON이 아니거나 꼴이 다르다\)\. 정하는 법: /,
+    /Couldn't read \.omagari\.json on the default branch \(origin\/main\) \(it isn't JSON or has the wrong shape\)\. How to set it: /,
   );
 
   await merge(repo, { ".omagari.json": config({ check: "true" }) });
@@ -138,7 +147,7 @@ test("설정 파일이 없거나 읽지 못하거나 샌드박스를 쓸 수 없
   assert.equal(unsandboxed.code, 1);
   assert.match(
     unsandboxed.stdout,
-    /판정: 돌리지 못함 \(\d+\.\d초\)\n {2}샌드박스 도구가 없다: bubblewrap\. 까는 법: /,
+    /Verdict: 돌리지 못함 \(\d+\.\ds\)\n {2}샌드박스 도구가 없다: bubblewrap\. 까는 법: /,
   );
   // 가두지 않고 돌리는 길이 없다.
   assert.equal(fake.calls.length, 0);
@@ -166,7 +175,7 @@ test("준비 명령은 검사 명령 앞에 돌고, 실패하거나 상한을 �
   });
   const prepared = await world.cli("runner", "check");
   assert.equal(prepared.code, 0, prepared.stdout);
-  assert.match(prepared.stdout, /준비 명령: touch prepared\n판정: 통과/);
+  assert.match(prepared.stdout, /Setup command: touch prepared\nVerdict: 통과/);
   assert.deepEqual(commands(), ["touch prepared", "test -f prepared"]);
   // 준비 명령이 임시 워크트리에 만든 것은 내 폴더에 남지 않는다.
   await assert.rejects(access(join(repo.folder, "prepared")));
@@ -178,7 +187,7 @@ test("준비 명령은 검사 명령 앞에 돌고, 실패하거나 상한을 �
   assert.equal(failed.code, 1);
   assert.match(
     failed.stdout,
-    /판정: 돌리지 못함 \(.+\)\n {2}준비 명령이 실패했다\(종료 코드 2\)\n출력의 끝부분:\n {2}준비 실패/,
+    /Verdict: 돌리지 못함 \(.+\)\n {2}The setup command failed \(exit code 2\)\nEnd of output:\n {2}준비 실패/,
   );
   assert.deepEqual(commands(), ["echo 준비 실패; exit 2"]);
 
@@ -189,9 +198,9 @@ test("준비 명령은 검사 명령 앞에 돌고, 실패하거나 상한을 �
   const slowSetup = await world.cli("runner", "check");
   assert.match(
     slowSetup.stdout,
-    /판정: 돌리지 못함 \((\d+\.\d)초\)\n {2}준비 명령을 2초 상한에서 끊었다/,
+    /Verdict: 돌리지 못함 \((\d+\.\d)s\)\n {2}The setup command was cut off at the 2 s limit/,
   );
-  assert.ok(Number(/\((\d+\.\d)초\)/.exec(slowSetup.stdout)?.[1]) < 10);
+  assert.ok(Number(/\((\d+\.\d)s\)/.exec(slowSetup.stdout)?.[1]) < 10);
 
   await merge(repo, {
     ".omagari.json": config({ check: "echo 시작; sleep 30" }),
@@ -200,7 +209,7 @@ test("준비 명령은 검사 명령 앞에 돌고, 실패하거나 상한을 �
   assert.equal(slow.code, 1);
   assert.match(
     slow.stdout,
-    /판정: 돌리지 못함 \(.+\)\n {2}검사 명령을 2초 상한에서 끊었다\. 끊긴 것은 통과로 치지 않는다\n출력의 끝부분:\n {2}시작/,
+    /Verdict: 돌리지 못함 \(.+\)\n {2}The check command was cut off at the 2 s limit\. A cut-off run doesn't count as a pass\nEnd of output:\n {2}시작/,
   );
 
   await merge(repo, {
@@ -210,13 +219,13 @@ test("준비 명령은 검사 명령 앞에 돌고, 실패하거나 상한을 �
   assert.equal(loud.code, 1);
   assert.match(
     loud.stdout,
-    /검사 명령을 출력 10000바이트 상한에서 끊었다\. 끊긴 것은 통과로 치지 않는다/,
+    /The check command was cut off at the output 10000 bytes limit\. A cut-off run doesn't count as a pass/,
   );
 
   const log = (await world.cli("runner", "log")).stdout;
   assert.match(
     log,
-    /검사 명령 "true" {2}준비 명령 "sleep 30 & wait" {2}폴더 .+ {2}판정 돌리지 못함: 준비 명령을 2초 상한에서 끊었다/,
+    /check command "true" {2}setup command "sleep 30 & wait" {2}folder .+ {2}verdict 돌리지 못함: The setup command was cut off at the 2 s limit/,
   );
 });
 
@@ -234,10 +243,10 @@ test("러너를 켤 때 검사 명령과 샌드박스 안에서 돈다는 것을
   const notice = async (...args: string[]) => {
     const runner = world.launchCliIn(desk.folder, "runner", ...args);
     t.after(() => runner.stop("SIGKILL"));
-    const [, code] = await runner.output(/코드 (\S+) |러너가 켜졌다/);
+    const [, code] = await runner.output(/enter code (\S+) |Runner started/);
     if (code) world.github.approve(code, "alice");
     const [found = ""] = await runner.output(
-      /합쳐 돌려 보기\(.+\): [^\n]*(\n {2}[^\n]*)*남는다\.[^\n]*\n/,
+      /Merge run \(.+\): [^\n]*(\n {2}[^\n]*)*stays in this repo\.[^\n]*\n/,
     );
     await runner.stop();
     return found;
@@ -246,38 +255,41 @@ test("러너를 켤 때 검사 명령과 샌드박스 안에서 돈다는 것을
   const none = await notice();
   assert.match(
     none,
-    /^합쳐 돌려 보기\(켜짐\): 검사 명령이 없어 돌리지 않는다\. 기본 브랜치\(origin\/main\)에 \.omagari\.json이 없다\. 정하는 법: /,
+    /^Merge run \(on\): there's no check command, so nothing runs\. The default branch \(origin\/main\) has no \.omagari\.json\. How to set it: /,
   );
 
   await merge(desk, {
     ".omagari.json": config({ check: "npm test", setup: "npm ci" }),
   });
   const on = await notice();
-  assert.match(on, /^합쳐 돌려 보기\(켜짐\): /);
-  assert.match(on, /\n {2}검사 명령: npm test\n {2}준비 명령: npm ci\n/);
-  assert.match(on, /기본 브랜치\(origin\/main\)의 \.omagari\.json에서 읽고, 샌드박스 안에서 돈다/);
-  assert.match(on, /끄려면 omagari runner --merge-check off\./);
+  assert.match(on, /^Merge run \(on\): /);
+  assert.match(on, /\n {2}Check command: npm test\n {2}Setup command: npm ci\n/);
+  assert.match(
+    on,
+    /read from \.omagari\.json on the default branch \(origin\/main\) and run inside the sandbox/,
+  );
+  assert.match(on, /To turn it off: omagari runner --merge-check off\./);
 
   // 명령이 바뀐 뒤 다시 켜면 바뀐 명령을 다시 알린다.
   await merge(desk, { ".omagari.json": config({ check: "npm run check" }) });
   const changed = await notice();
-  assert.match(changed, /\n {2}검사 명령: npm run check\n/);
-  assert.doesNotMatch(changed, /준비 명령/);
+  assert.match(changed, /\n {2}Check command: npm run check\n/);
+  assert.doesNotMatch(changed, /Setup command/);
 
   // 끈 것은 다시 켜도 남는다.
   assert.match(
     await notice("--merge-check", "off"),
-    /^합쳐 돌려 보기\(꺼 둠\): 이 기기에서는 검사 명령을 돌리지 않는다\. 켜려면 omagari runner --merge-check on\./,
+    /^Merge run \(off\): this machine doesn't run check commands\. To turn it on: omagari runner --merge-check on\./,
   );
-  assert.match(await notice(), /^합쳐 돌려 보기\(꺼 둠\)/);
+  assert.match(await notice(), /^Merge run \(off\)/);
   assert.match(
     await notice("--merge-check=on"),
-    /^합쳐 돌려 보기\(켜짐\)[^\n]*\n {2}검사 명령: npm run check\n/,
+    /^Merge run \(on\)[^\n]*\n {2}Check command: npm run check\n/,
   );
 
   const wrong = await world.cliIn(desk.folder, "runner", "--merge-check", "maybe");
   assert.equal(wrong.code, 1);
-  assert.match(wrong.stderr, /합쳐 돌려 보기는 on, off 가운데 하나다: maybe/);
+  assert.match(wrong.stderr, /Merge run must be one of on, off: maybe/);
 });
 
 test("임시 워크트리는 레포의 Git 폴더 아래에서 다시 쓰이고, 내 폴더의 의존성이 이어지되 워크스페이스 패키지는 임시 워크트리 안을 가리킨다", async (t) => {
@@ -313,9 +325,9 @@ test("임시 워크트리는 레포의 Git 폴더 아래에서 다시 쓰이고,
   const before = await repo.git("status", "--porcelain");
 
   const first = await world.cli("runner", "check");
-  assert.match(first.stdout, /판정: 통과/, first.stdout);
+  assert.match(first.stdout, /Verdict: 통과/, first.stdout);
   const second = await world.cli("runner", "check");
-  assert.match(second.stdout, /판정: 통과/, second.stdout);
+  assert.match(second.stdout, /Verdict: 통과/, second.stdout);
 
   // 레포의 Git 폴더 아래에서 돌고, 돌림마다 자리를 옮긴다(#150). 끝나면 쉬는 자리로 돌아간다. 내 폴더의 git status와 워크트리 목록에는 나타나지 않는다.
   const [one, two] = fake.calls;
@@ -381,7 +393,7 @@ test("검사 명령이 임시 워크트리의 Git 설정과 훅을 바꿔 둬도
   // 두 번 돌린다. 첫 번째 뒤의 되돌리기와 두 번째의 마련이 모두 샌드박스 밖의 git이다.
   for (let round = 0; round < 2; round++) {
     const ran = await world.cli("runner", "check");
-    assert.match(ran.stdout, /판정: 통과/, ran.stdout);
+    assert.match(ran.stdout, /Verdict: 통과/, ran.stdout);
   }
   assert.deepEqual(await readdir(marks), []);
   // 샌드박스 안의 git이 쓰는 Git 폴더는 쓸 수 있게 열린다.
@@ -425,7 +437,7 @@ test("검사가 끝난 뒤 남은 프로세스나 검사 명령이 임시 워크
   await write("packages/app/node_modules/inner/index.txt", "안쪽 것");
 
   const first = await world.cli("runner", "check");
-  assert.match(first.stdout, /판정: 통과/, first.stdout);
+  assert.match(first.stdout, /Verdict: 통과/, first.stdout);
   for (let i = 0; i < 200; i++) {
     if (
       await access(done).then(
@@ -438,7 +450,7 @@ test("검사가 끝난 뒤 남은 프로세스나 검사 명령이 임시 워크
   }
   await access(done);
   const second = await world.cli("runner", "check");
-  assert.match(second.stdout, /판정: 통과/, second.stdout);
+  assert.match(second.stdout, /Verdict: 통과/, second.stdout);
 
   // 남은 프로세스가 돌려 둔 링크를 따라 바깥에 의존성을 잇지 않았고, packages/app 링크를 따라 바깥의 node_modules를 지우지 않았다.
   assert.deepEqual(await readdir(join(outside, "app/node_modules")), ["keep"]);
@@ -483,7 +495,7 @@ test("Windows 그대로에서는 돌리지 못함의 까닭이 WSL2 안내다", 
   const platform = Object.getOwnPropertyDescriptor(process, "platform");
   Object.defineProperty(process, "platform", { value: "win32" });
   try {
-    assert.match((await osSandbox.unavailable()) ?? "", /WSL2 안에서 러너를 켜세요/);
+    assert.match((await osSandbox.unavailable()) ?? "", /start the runner inside WSL2/);
   } finally {
     Object.defineProperty(process, "platform", platform as PropertyDescriptor);
   }
@@ -501,22 +513,22 @@ test("Linux에서 혼자 돌린 것이 유닉스 소켓 막기로 깨진 것으�
   const blocked = await world.cli("runner", "check");
   assert.match(
     blocked.stdout,
-    /판정: 깨짐 \(\d+\.\d초\)\n {2}이 기기\(Linux\)에서는 샌드박스가 유닉스 소켓을 막는다/,
+    /Verdict: 깨짐 \(\d+\.\ds\)\n {2}On this machine \(Linux\) the sandbox blocks Unix sockets/,
   );
 
   await merge(repo, { ".omagari.json": config({ check: "echo 단언 실패; exit 1" }) });
-  assert.doesNotMatch((await world.cli("runner", "check")).stdout, /유닉스 소켓/);
+  assert.doesNotMatch((await world.cli("runner", "check")).stdout, /Unix sockets/);
 
   // 소켓을 막지 않는 기기(macOS)에서는 같은 출력이어도 붙지 않는다.
   await merge(repo, { ".omagari.json": config({ check: socketFail }) });
   fake.blocksUnixSockets = false;
-  assert.doesNotMatch((await world.cli("runner", "check")).stdout, /유닉스 소켓을 막는다/);
+  assert.doesNotMatch((await world.cli("runner", "check")).stdout, /blocks Unix sockets/);
 });
 
 test("seccomp 도우미가 없다는 경고가 나오면 샌드박스를 쓸 수 없는 기기이고, 다른 경고는 막지 않는다", () => {
   const seccomp = "seccomp not available - unix socket access not restricted";
   assert.equal(dependencyProblem({ errors: [], warnings: [seccomp] }), NO_SECCOMP);
-  assert.match(NO_SECCOMP, /고치는 법: /);
+  assert.match(NO_SECCOMP, /To fix it: /);
   assert.equal(
     dependencyProblem({ errors: [], warnings: ["bubblewrap 0.4.1 is older than 0.5.0"] }),
     undefined,
@@ -543,7 +555,7 @@ test("관측이 늘 빼는 .env와 .env.*는 검사 트리에도 담지 않아, 
   await write("config/.env.local", "KEY=DUMMY-SECRET\n");
 
   const checked = await world.cli("runner", "check");
-  assert.match(checked.stdout, /판정: 통과/);
+  assert.match(checked.stdout, /Verdict: 통과/);
   // 내 폴더의 파일은 그대로다.
   assert.equal(await readFile(join(repo.folder, ".env"), "utf8"), "KEY=DUMMY-SECRET\n");
 });

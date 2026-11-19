@@ -1,4 +1,4 @@
-// 검사 명령: 레포에 커밋한 설정 파일에서 기본 브랜치의 판만 읽고(ADR-0034), 임시 워크트리에서 샌드박스 안에서만 돌린다(ADR-0033).
+// Check command: reads only the default branch's version of the config file committed to the repo (ADR-0034), and runs only inside the sandbox in a temp worktree (ADR-0033).
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import {
@@ -31,7 +31,7 @@ import { secret } from "./observe.ts";
 
 const execFileAsync = promisify(execFile);
 
-/** 상한(Room의 값, ADR-0035). 넘으면 끊고, 끊긴 것은 통과가 아니다. 테스트는 러너를 띄울 때 줄인다. */
+/** Limits (Room's values, ADR-0035). Past them the run is cut off, and a cut-off run is not a pass. Tests shrink them when they start the runner. */
 export const CHECK_LIMITS = {
   checkMs: 5 * 60_000,
   setupMs: 10 * 60_000,
@@ -39,75 +39,76 @@ export const CHECK_LIMITS = {
 };
 export type CheckLimits = typeof CHECK_LIMITS;
 
-/** 출력의 끝부분: 끝 25줄(Room의 값)이고, 줄이 아주 길면 합쳐 4000자까지만 남긴다. */
+/** The tail of the output: the last 25 lines (Room's value). If lines are very long, it keeps at most 4000 characters in total. */
 const TAIL_LINES = 25;
 const TAIL_CHARS = 4000;
-/** 도는 동안 들고 있는 출력. 끝부분만 보이므로 앞은 버린다. */
+/** Output held while the command runs. Only the tail is shown, so the front is dropped. */
 const KEEP_CHARS = 64 * 1024;
 
-/** 샌드박스 안으로 넘기는 환경 변수. 이것과 `LC_`로 시작하는 것 말고는 넘기지 않는다. 토큰과 키가 든 변수는 넘기지 않는다(ADR-0033). */
+/** Environment variables passed into the sandbox. Only these and ones starting with `LC_` are passed. Variables that hold tokens or keys are not passed (ADR-0033). */
 const PASSED_ENV = ["PATH", "LANG", "LANGUAGE", "TERM", "TZ", "USER", "LOGNAME", "SHELL"];
 
 /**
- * 러너의 바깥 경계: 샌드박스. 셸 명령 하나를 가둬 돌릴 실행 인자를 만든다. 러너는 그것을 `folder`에서 `env`만 주고 띄운다.
- * 실제 것은 `@anthropic-ai/sandbox-runtime`이다(`osSandbox`). 테스트는 여기에 가짜를 꽂는다.
+ * The runner's outer boundary: the sandbox. Builds the exec arguments that run one shell command locked in. The runner starts it in `folder` with only `env`.
+ * The real one is `@anthropic-ai/sandbox-runtime` (`osSandbox`). Tests plug a fake in here.
  */
 export type Sandbox = {
-  /** Linux처럼 샌드박스가 유닉스 소켓을 모두 막는 기기다. 혼자 돌린 것이 소켓 때문에 깨지면 그 까닭을 붙인다. */
+  /** A machine like Linux, where the sandbox blocks every Unix socket. If a command that ran alone breaks because of sockets, this reason gets attached. */
   blocksUnixSockets?: boolean;
-  /** 이 기기에서 쓸 수 없으면 그 까닭과 까는 법. 쓸 수 있으면 없다. */
+  /** Why the sandbox can't be used on this machine, and how to install it. Absent if it can be used. */
   unavailable(): Promise<string | undefined>;
   wrap(input: SandboxInput): Promise<string[]>;
 };
 export type SandboxInput = {
-  /** 셸 명령 한 줄 */
+  /** One shell command line */
   command: string;
-  /** 명령이 도는 폴더(임시 워크트리) */
+  /** Folder the command runs in (the temp worktree) */
   folder: string;
-  /** 넘기는 환경 변수 전부 */
+  /** All the environment variables passed in */
   env: Record<string, string>;
-  /** 막는 설정. `@anthropic-ai/sandbox-runtime`에 그대로 넘긴다. */
+  /** The blocking config. Passed straight to `@anthropic-ai/sandbox-runtime`. */
   policy: SandboxRuntimeConfig;
 };
 
-/** 샌드박스 도구를 까는 법. macOS는 따로 깔 것이 없다. */
+/** How to install the sandbox tools. macOS needs nothing extra. */
 const INSTALL =
-  "Linux는 bubblewrap, socat, ripgrep을 깐다(예: sudo apt install bubblewrap socat ripgrep). Ubuntu 24.04부터는 AppArmor가 막으면 bubblewrap의 사용자 네임스페이스를 풀어야 한다";
+  "On Linux, install bubblewrap, socat, and ripgrep (for example: sudo apt install bubblewrap socat ripgrep). From Ubuntu 24.04, if AppArmor blocks it, you have to allow unprivileged user namespaces for bubblewrap";
 
-/** seccomp 도우미가 없는 기기(x64, arm64 밖의 Linux)에서 돌리지 않는 까닭과 고치는 법. */
+/** Why the check doesn't run on a machine without the seccomp helper (Linux other than x64 and arm64), and how to fix it. */
 export const NO_SECCOMP =
-  "이 기기에는 sandbox-runtime의 seccomp 도우미가 없어 유닉스 소켓을 막지 못한다. 막지 못한 채 돌리지 않는다. 고치는 법: x64나 arm64 Linux(또는 그 위의 WSL2)에서 러너를 켠다";
+  "This machine has no sandbox-runtime seccomp helper, so it can't block Unix sockets. It won't run without blocking them. To fix it: start the runner on x64 or arm64 Linux (or WSL2 on top of it)";
 
-/** Linux에서 샌드박스가 유닉스 소켓을 모두 막는다는 까닭. 혼자 돌린 것이 소켓 막기로 깨졌을 때 "가릴 수 없음"에 붙인다(ADR-0038). */
+/** The reason that the sandbox on Linux blocks every Unix socket. Attached to "cannot tell" when a command that ran alone broke because of the socket blocking (ADR-0038). */
 export const SOCKET_BLOCKED =
-  "이 기기(Linux)에서는 샌드박스가 유닉스 소켓을 막는다. 소켓을 쓰는 검사 명령은 혼자 돌려도 깨져 합쳐서 깨졌는지 가릴 수 없다";
+  "On this machine (Linux) the sandbox blocks Unix sockets. A check command that uses sockets breaks even when run alone, so you can't tell whether the merge broke it";
 
-/** 출력에 소켓이 막혀 깨진 흔적이 있다: 소켓을 말하는 것과 권한 오류(seccomp는 `EPERM`을 돌려준다)가 함께 있다. 휴리스틱이다. */
+/** The output shows signs of breaking because sockets were blocked: it mentions sockets and also has a permission error (seccomp returns `EPERM`). A heuristic. */
 const socketTrouble = (output: string) =>
   /EPERM|Operation not permitted/i.test(output) &&
   /socket|\blisten\b|\bconnect\b|\bbind\b|AF_UNIX|\.sock\b/i.test(output);
 
 /**
- * sandbox-runtime의 도구 검사 결과에서 이 기기를 못 쓰는 까닭. 오류가 있으면 도구가 없는 것이고,
- * seccomp 경고는 소켓을 막지 못한 채 도는 것이라 ADR-0038의 막기를 못 지켜 돌리지 않는다.
- * 다른 경고(0.5 미만 bubblewrap 등)는 막지 않는다: 지금은 seccomp가 유닉스 소켓을 모두 막아 소켓 파일을 가릴 일이 없고, 쓰기·네트워크·홈 막기는 그대로 지켜진다(#163).
+ * Why this machine can't be used, from the sandbox-runtime's tool check result. An error means the tool is missing,
+ * and a seccomp warning means it would run without blocking sockets, which breaks the blocking in ADR-0038, so it doesn't run.
+ * Other warnings (bubblewrap below 0.5 and so on) don't block it: seccomp blocks every Unix socket right now, so there are no socket files to hide, and the write, network, and home blocking still hold (#163).
  */
 export function dependencyProblem({ errors, warnings }: { errors: string[]; warnings: string[] }) {
-  if (errors.length > 0) return `샌드박스 도구가 없다: ${errors.join(", ")}. 까는 법: ${INSTALL}`;
+  if (errors.length > 0)
+    return `Sandbox tools are missing: ${errors.join(", ")}. To install: ${INSTALL}`;
   if (warnings.some((warning) => warning.includes("seccomp not available"))) return NO_SECCOMP;
 }
 
-/** 프록시를 띄우는 초기화. 한 번만 한다. 막는 설정은 명령마다 넘긴다. */
+/** Initialization that starts the proxy. Done once. The blocking config is passed with each command. */
 let initialized: Promise<void> | undefined;
 
-/** 이 기기의 샌드박스: macOS는 `sandbox-exec`, Linux는 bubblewrap(ADR-0033). 쓰지 않는 기기에서는 불러오지도 않는다. */
+/** The sandbox on this machine: `sandbox-exec` on macOS, bubblewrap on Linux (ADR-0033). On a machine that doesn't use it, it isn't even loaded. */
 export const osSandbox: Sandbox = {
   blocksUnixSockets: process.platform === "linux",
   async unavailable() {
     if (process.platform !== "darwin" && process.platform !== "linux")
       return process.platform === "win32"
-        ? "Windows에서는 WSL2 안에서 러너를 켜세요. 레포도 WSL2 안에 두고, WSL2에 bubblewrap, socat, ripgrep을 까세요(ADR-0038)"
-        : `이 기기(${process.platform})에서는 샌드박스를 쓸 수 없어 돌리지 않는다. macOS, Linux, Windows의 WSL2에서 켠 러너만 검사 명령을 돌린다`;
+        ? "On Windows, start the runner inside WSL2. Keep the repo inside WSL2 too, and install bubblewrap, socat, and ripgrep in WSL2 (ADR-0038)"
+        : `The sandbox can't be used on this machine (${process.platform}), so nothing runs. Only a runner started on macOS, Linux, or Windows WSL2 runs check commands`;
     const { SandboxManager } = await import("@anthropic-ai/sandbox-runtime");
     return dependencyProblem(await SandboxManager.checkDependenciesAsync());
   },
@@ -118,19 +119,19 @@ export const osSandbox: Sandbox = {
       throw error;
     });
     await initialized;
-    // 0.0.81은 유닉스 소켓 허락(`network.allowUnixSockets`)을 명령마다 넘긴 설정이 아니라 `initialize`·`updateConfig`로 둔 설정에서만 읽는다
-    // (`sandbox-manager.js`의 `getAllowUnixSockets`). 돌림마다 임시 폴더가 다르므로 매번 이번 설정으로 바꿔 둔다. 돌림은 한 번에 하나다(`turn`).
+    // 0.0.81 reads the Unix socket allowance (`network.allowUnixSockets`) only from the config set by `initialize` and `updateConfig`, not from the config passed per command
+    // (`getAllowUnixSockets` in `sandbox-manager.js`). The temp folder differs on every run, so we set it to this run's config each time. Only one run goes at a time (`turn`).
     SandboxManager.updateConfig(policy);
     return ["/bin/sh", "-c", await SandboxManager.wrapWithSandbox(command, undefined, policy)];
   },
 };
 
-/** 정하는 법. 설정이 없거나 읽지 못했을 때 붙인다. */
-const HOW = `정하는 법: 레포 최상위에 ${CHECK_FILE}을 {"check": "<검사 명령>", "setup": "<준비 명령, 없어도 된다>"} 꼴로 커밋해 기본 브랜치에 머지한다`;
+/** How to set it. Attached when the config is missing or couldn't be read. */
+const HOW = `How to set it: commit ${CHECK_FILE} at the top of the repo as {"check": "<check command>", "setup": "<setup command, optional>"} and merge it into the default branch`;
 
 /**
- * 기본 브랜치에서 읽은 설정. 읽었으면 `config`, 못 읽었으면 까닭과 정하는 법(`problem`)과 그 갈래(`why`, 서버로 나가는 것)다.
- * `branch`는 읽은 원격 추적 브랜치다.
+ * The config read from the default branch. If read, `config`. If not, the reason with how to set it (`problem`) and its kind (`why`, which goes to the server).
+ * `branch` is the remote-tracking branch it was read from.
  */
 export type CheckRead = { branch?: string } & (
   | { config: CheckConfig; problem?: undefined; why?: undefined }
@@ -141,7 +142,7 @@ export type CheckRead = { branch?: string } & (
     }
 );
 
-/** 서버에 알리는 꼴(`checkCommand`). 명령만 싣고 까닭은 갈래만 싣는다. */
+/** The form reported to the server (`checkCommand`). It carries only the command, and only the kind of reason. */
 export const checkReading = (read: CheckRead): CheckReading =>
   read.config ? { config: read.config } : { problem: read.why };
 
@@ -154,28 +155,28 @@ const gitOut = async (folder: string, args: string[], env?: Record<string, strin
   ).stdout.trim();
 
 /**
- * 설정 파일을 `remote`의 기본 브랜치(`refs/remotes/<remote>/HEAD`)에서 읽는다. 작업 폴더나 내 브랜치의 판은 읽지 않는다(ADR-0034).
- * 원격 추적이라 받아 온(fetch) 만큼만 안다.
+ * Reads the config file from the default branch of `remote` (`refs/remotes/<remote>/HEAD`). It doesn't read the working folder's or my branch's version (ADR-0034).
+ * It's remote-tracking, so it only knows what has been fetched.
  */
 export async function readCheck(folder: string, remote: string | undefined): Promise<CheckRead> {
   if (!remote)
     return {
       why: "unknown_branch",
-      problem: "레포의 GitHub 원격을 몰라 기본 브랜치를 읽지 못했다",
+      problem: "Don't know the repo's GitHub remote, so the default branch couldn't be read",
     };
   const ref = `refs/remotes/${remote}/HEAD`;
   const branch = await gitOut(folder, ["rev-parse", "--abbrev-ref", ref]).catch(() => undefined);
   if (!branch)
     return {
       why: "unknown_branch",
-      problem: `${remote}의 기본 브랜치를 모른다. git remote set-head ${remote} --auto 로 정하라`,
+      problem: `Don't know the default branch of ${remote}. Set it with git remote set-head ${remote} --auto`,
     };
   const text = await gitOut(folder, ["show", `${ref}:${CHECK_FILE}`]).catch(() => undefined);
   if (text === undefined)
     return {
       branch,
       why: "missing",
-      problem: `기본 브랜치(${branch})에 ${CHECK_FILE}이 없다. ${HOW}`,
+      problem: `The default branch (${branch}) has no ${CHECK_FILE}. ${HOW}`,
     };
   let parsed: ReturnType<typeof CheckConfig.safeParse> | undefined;
   try {
@@ -185,37 +186,37 @@ export async function readCheck(folder: string, remote: string | undefined): Pro
     return {
       branch,
       why: "invalid",
-      problem: `기본 브랜치(${branch})의 ${CHECK_FILE}을 읽지 못했다(JSON이 아니거나 꼴이 다르다). ${HOW}`,
+      problem: `Couldn't read ${CHECK_FILE} on the default branch (${branch}) (it isn't JSON or has the wrong shape). ${HOW}`,
     };
   return { branch, config: parsed.data };
 }
 
-/** 러너를 켤 때 주인에게 알리는 것: 합쳐 돌려 보기가 켜졌는지, 켜졌으면 어떤 명령이 어디서 도는지(ADR-0034). */
+/** What to tell the owner when the runner starts: whether merge runs are on and, if so, which command runs where (ADR-0034). */
 export function checkNotice(read: CheckRead, on: boolean) {
   const toggle = `omagari runner --merge-check ${on ? "off" : "on"}`;
   if (!on)
-    return `합쳐 돌려 보기(꺼 둠): 이 기기에서는 검사 명령을 돌리지 않는다. 켜려면 ${toggle}. 고른 것은 이 레포에 남는다.`;
+    return `Merge run (off): this machine doesn't run check commands. To turn it on: ${toggle}. Your choice stays in this repo.`;
   if (!read.config)
-    return `합쳐 돌려 보기(켜짐): 검사 명령이 없어 돌리지 않는다. ${read.problem}\n  끄려면 ${toggle}. 고른 것은 이 레포에 남는다.`;
+    return `Merge run (on): there's no check command, so nothing runs. ${read.problem}\n  To turn it off: ${toggle}. Your choice stays in this repo.`;
   return [
-    "합쳐 돌려 보기(켜짐): 내 작업과 다른 멤버의 작업에 간접 충돌(추정)이 걸리면, 두 작업을 합쳐 아래 명령을 이 기기에서 저절로 돌린다.",
-    `  검사 명령: ${read.config.check}`,
-    ...(read.config.setup ? [`  준비 명령: ${read.config.setup}`] : []),
-    `  명령은 기본 브랜치(${read.branch})의 ${CHECK_FILE}에서 읽고, 샌드박스 안에서 돈다: 바깥 네트워크, 임시 폴더 밖에 쓰기, 홈 폴더 읽기가 막힌다.`,
-    `  끄려면 ${toggle}. 고른 것은 이 레포에 남는다. 이 기기에서 도는지는 omagari runner check로 본다.`,
+    "Merge run (on): when your work and another member's work hit a (guessed) indirect conflict, the two works are merged and the command below runs on this machine automatically.",
+    `  Check command: ${read.config.check}`,
+    ...(read.config.setup ? [`  Setup command: ${read.config.setup}`] : []),
+    `  The commands are read from ${CHECK_FILE} on the default branch (${read.branch}) and run inside the sandbox: outside network, writes outside the temp folder, and reads of the home folder are blocked.`,
+    `  To turn it off: ${toggle}. Your choice stays in this repo. To see whether it runs on this machine, use omagari runner check.`,
   ].join("\n");
 }
 
-/** `path`가 `home` 아래에 있다(`home` 자신은 아니다). */
+/** `path` is under `home` (not `home` itself). */
 const under = (home: string, path: string) => {
   const inner = relative(home, path);
   return isAbsolute(path) && inner !== "" && !inner.startsWith("..") && !isAbsolute(inner);
 };
 
 /**
- * `/proc/mounts` 본문에서 Windows 드라이브가 걸린 자리. WSL2는 드라이브를 9p(예전 `drvfs`)로 걸고 원본이 `C:\\` 꼴이다.
- * 걸린 자리는 `/etc/wsl.conf`의 automount `root`로 바뀔 수 있어 이름을 짐작하지 않고 목록에서 읽는다(ADR-0038).
- * 공백은 `\\040`으로 적혀 있다.
+ * The place in the `/proc/mounts` text where Windows drives are mounted. WSL2 mounts drives as 9p (formerly `drvfs`) with a source like `C:\\`.
+ * The mount point can change through automount `root` in `/etc/wsl.conf`, so we read it from the list instead of guessing the name (ADR-0038).
+ * Spaces are written as `\\040`.
  */
 export function windowsDrives(mounts: string | undefined): string[] {
   const octal = (text: string) =>
@@ -230,7 +231,7 @@ export function windowsDrives(mounts: string | undefined): string[] {
     .map(([, at = ""]) => octal(at));
 }
 
-/** WSL2이면 `/proc/mounts` 본문. 아니면 없다. WSL2의 커널 이름에는 `microsoft`가 들어 있다. */
+/** The `/proc/mounts` text if this is WSL2. Otherwise nothing. The WSL2 kernel name contains `microsoft`. */
 export async function osMounts(): Promise<string | undefined> {
   if (process.platform !== "linux") return undefined;
   const release = await readFile("/proc/sys/kernel/osrelease", "utf8").catch(() => "");
@@ -239,8 +240,8 @@ export async function osMounts(): Promise<string | undefined> {
 }
 
 /**
- * Linux에서 샌드박스 안의 첫 줄이 부르는 `apply-seccomp` 도우미(유닉스 소켓 막기)가 든 폴더. 러너의 `node_modules`는 사용자의 홈 폴더 아래에 있을 수 있어
- * 홈 읽기 막기에 가려지면 명령이 `No such file or directory`로 돌지 못하므로 다시 연다(#174). 자리는 sandbox-runtime이 찾는 `vendor/seccomp/<arch>`와 같다.
+ * The folder that holds the `apply-seccomp` helper (Unix socket blocking) that the first line inside the sandbox calls on Linux. The runner's `node_modules` may be under the user's home folder,
+ * and if the home read-blocking hides it, the command can't start and fails with `No such file or directory`, so we reopen it (#174). The location matches `vendor/seccomp/<arch>`, which sandbox-runtime looks for.
  */
 function seccompHelper() {
   if (process.platform !== "linux") return [];
@@ -251,9 +252,9 @@ function seccompHelper() {
 }
 
 /**
- * 막는 설정(ADR-0033): 바깥 네트워크를 막고 자기 기기의 포트는 쓴다. 유닉스 소켓은 `sockets`(임시 워크트리와 임시 폴더) 아래에서만 열고 붙는다(ADR-0037). 쓰기는 임시 워크트리, 임시 폴더, 샌드박스 안의 git이 쓰는 Git 폴더만이다.
- * 읽기는 홈 폴더를 막고 임시 워크트리, 임시 폴더, 도구 자리, 이어 둔 의존성 폴더, 레포의 개체 폴더만 다시 연다. 레포의 Git 폴더는 열지 않는다(원격 URL에 토큰이 있을 수 있다). 도구 자리는 러너를 돌리는 Node가 깔린 곳과 PATH의 폴더 가운데
- * 홈 폴더 아래의 것이다(nvm처럼 Node를 홈 폴더에 깐 기기).
+ * The blocking config (ADR-0033): blocks the outside network but allows this machine's own ports. Unix sockets can be opened and connected to only under `sockets` (the temp worktree and temp folder) (ADR-0037). Writes are allowed only to the temp worktree, the temp folder, and the Git folder that git inside the sandbox uses.
+ * Reads block the home folder and reopen only the temp worktree, the temp folder, the tool locations, the linked dependency folders, and the repo's objects folder. The repo's Git folder is not opened (the remote URL may hold a token). The tool locations are the ones under the home folder
+ * among where the Node that runs the runner is installed and the PATH folders (a machine where Node is installed in the home folder, like nvm).
  */
 function policy(
   writable: string[],
@@ -263,7 +264,7 @@ function policy(
 ): SandboxRuntimeConfig {
   const home = homedir();
   const node = dirname(dirname(process.execPath));
-  // WSL2의 PATH에는 Windows 쪽 폴더가 섞여 있다. 그것은 다시 열지 않고, Node가 드라이브에 있을 때 그 자리만 연다.
+  // WSL2's PATH has Windows-side folders mixed in. We don't reopen those, and only open the drive location when Node is on a drive.
   const tools = [node, ...(process.env.PATH ?? "").split(delimiter)].filter(
     (path) =>
       under(home, path) || (path === node && drives.some((d) => path === d || under(d, path))),
@@ -284,7 +285,7 @@ function policy(
   };
 }
 
-/** 넘기는 환경 변수. 홈 폴더는 읽지 못하므로 도구가 설정과 캐시를 임시 폴더에 쓰게 `HOME`과 `TMPDIR`을 그리로 둔다. */
+/** The environment variables passed in. The home folder can't be read, so `HOME` and `TMPDIR` point to the temp folder so tools write their config and cache there. */
 function passedEnv(temp: string) {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env))
@@ -293,19 +294,19 @@ function passedEnv(temp: string) {
   return { ...env, HOME: temp, TMPDIR: temp };
 }
 
-const duration = (ms: number) => (ms >= 60_000 ? `${ms / 60_000}분` : `${ms / 1000}초`);
+const duration = (ms: number) => (ms >= 60_000 ? `${ms / 60_000} min` : `${ms / 1000} s`);
 const size = (bytes: number) =>
-  bytes >= 1024 * 1024 ? `${bytes / 1024 / 1024}MB` : `${bytes}바이트`;
+  bytes >= 1024 * 1024 ? `${bytes / 1024 / 1024}MB` : `${bytes} bytes`;
 
-/** 출력의 끝부분. 터미널 제어 문자는 뺀다. */
+/** The tail of the output. Terminal control characters are removed. */
 function tail(output: string) {
   const lines = stripVTControlCharacters(output).trimEnd().split(/\r?\n/);
   return lines.slice(-TAIL_LINES).join("\n").slice(-TAIL_CHARS);
 }
 
 /**
- * 셸 명령 하나를 샌드박스로 가둬 상한 안에서 돌린다. 시간이나 출력(`outputBytes`를 주면)을 넘으면 끊고 넘은 상한(`cut`)을 돌려준다.
- * 따로 프로세스 그룹으로 띄워, 끊거나 끝날 때 명령이 띄우고 남긴 것까지 함께 끈다.
+ * Runs one shell command locked in the sandbox within the limits. If time or output (when `outputBytes` is given) goes over, it cuts the run off and returns the limit that was exceeded (`cut`).
+ * It starts in its own process group, so when the run is cut off or ends, anything the command started and left behind is killed too.
  */
 async function sandboxed(
   sandbox: Sandbox,
@@ -322,7 +323,7 @@ async function sandboxed(
   const killGroup = () => {
     try {
       if (child.pid) process.kill(-child.pid, "SIGKILL");
-    } catch {} // 이미 끝났다
+    } catch {} // Already finished
   };
   let output = "";
   let bytes = 0;
@@ -335,12 +336,12 @@ async function sandboxed(
   const take = (chunk: string) => {
     bytes += Buffer.byteLength(chunk);
     if (limits.outputBytes !== undefined && bytes > limits.outputBytes)
-      return stop(`출력 ${size(limits.outputBytes)}`);
+      return stop(`output ${size(limits.outputBytes)}`);
     output = (output + chunk).slice(-KEEP_CHARS);
   };
   child.stdout.setEncoding("utf8").on("data", take);
   child.stderr.setEncoding("utf8").on("data", take);
-  // 셸이 끝나도 뒤에 띄워 둔 것(테스트가 띄운 서버 같은 것)이 출력을 잡고 있으면 닫히지 않는다. 끝나면 그룹째 끈다.
+  // If something started in the background after the shell ends (like a server a test started) holds the output, it never closes. When the shell ends, we kill the whole group.
   child.once("exit", killGroup);
   try {
     const [code] = (await once(child, "close")) as [number | null];
@@ -350,15 +351,15 @@ async function sandboxed(
   }
 }
 
-/** 이을 의존성 폴더의 이름. */
+/** Names of the dependency folders to link. */
 const DEPS = ["node_modules", ".venv"];
-/** 한 단계 아래의 패키지를 두는 폴더. */
+/** The folder that holds packages one level down. */
 const GROUPS = ["packages", "apps", "libs"];
 
 /**
- * 내 폴더의 의존성 폴더 하나(`src`)를 임시 워크트리의 같은 자리(`dst`)에 잇는다. 통째로 링크하면 Node가 링크를 실제 경로로 풀어
- * 워크스페이스 패키지가 합친 코드가 아닌 내 폴더의 코드로 읽힌다. 그래서 `node_modules`는 항목마다 잇고(`@범위`와 `.bin`은 한 겹 더 들어가),
- * 내 폴더 안의 패키지를 가리키는 링크는 임시 워크트리 안의 같은 패키지를 가리키게 다시 건다.
+ * Links one dependency folder (`src`) of my folder to the same place (`dst`) in the temp worktree. If we linked it whole, Node would resolve the link to the real path
+ * and workspace packages would be read from my folder's code, not the merged code. So `node_modules` is linked entry by entry (`@scope` and `.bin` go one level deeper),
+ * and links that point to a package in my folder are re-pointed to the same package in the temp worktree.
  */
 async function mirror(src: string, dst: string, folder: string, worktree: string) {
   await mkdir(dst);
@@ -366,7 +367,7 @@ async function mirror(src: string, dst: string, folder: string, worktree: string
     const from = join(src, entry.name);
     const to = join(dst, entry.name);
     const real = await realpath(from).catch(() => undefined);
-    if (!real) continue; // 끊어진 링크
+    if (!real) continue; // Broken link
     const inner = relative(folder, real);
     if (entry.isSymbolicLink() && under(folder, real) && !inner.split(sep).includes("node_modules"))
       await symlink(join(worktree, inner), to);
@@ -377,14 +378,14 @@ async function mirror(src: string, dst: string, folder: string, worktree: string
 }
 
 /**
- * `path`에 이르는 길에 링크가 없다(`path`는 실제 경로에서 시작한다). 샌드박스 밖에서 임시 워크트리에 쓰거나 지우기 전에 본다.
- * 검사 명령이 바꿔 둔 링크를 따라가 샌드박스 밖에 쓰지 않으려는 것이다(#150).
+ * There's no link on the way to `path` (`path` starts from a real path). Checked before writing to or deleting from the temp worktree outside the sandbox.
+ * It's so we don't follow a link the check command swapped in and write outside the sandbox (#150).
  */
 const direct = async (path: string) => (await realpath(path).catch(() => "")) === path;
 
 /**
- * 내 폴더의 최상위와 한 단계 아래의 의존성 폴더를 임시 워크트리에 잇는다. 이은 자리(워크트리 안)와 읽을 실제 폴더를 돌려준다.
- * 이을 자리에 무엇이 있으면(지난 검사 명령이 남긴 링크라도) 따라가지 않고 지운 뒤 새로 만든다. 길에 링크가 있는 자리는 건너뛴다.
+ * Links my folder's top-level dependency folders and the ones one level down into the temp worktree. Returns the linked places (in the worktree) and the real folders to read.
+ * If something is already at the place to link (even a link left by a previous check command), it's deleted and made fresh without following it. A place with a link on the way is skipped.
  */
 async function linkDeps(folder: string, worktree: string) {
   const places = [""];
@@ -411,21 +412,21 @@ async function linkDeps(folder: string, worktree: string) {
   return { links, reads };
 }
 
-/** 사용자와 시스템의 Git 설정을 읽지 않는다. 합친 코드의 `.gitattributes`가 그 설정의 필터(예: git-lfs)를 샌드박스 밖에서 부르지 못하게 한다. */
+/** Doesn't read the user's or system's Git config. It stops the merged code's `.gitattributes` from calling that config's filters (for example git-lfs) outside the sandbox. */
 const NO_USER_CONFIG = {
   GIT_CONFIG_NOSYSTEM: "1",
   GIT_CONFIG_GLOBAL: "/dev/null",
 };
 
 /**
- * 러너가 샌드박스 밖에서 임시 워크트리에 부르는 git(#144). 샌드박스가 쓸 수 없는 러너의 Git 폴더(`gitDir`)를 쓰고,
- * 임시 워크트리의 `.git`은 찾지도 읽지도 않는다. 검사 명령이 거기 써 둔 설정(`core.fsmonitor`, `core.hooksPath`, 필터)과 훅은 돌지 않는다.
+ * The git the runner calls on the temp worktree outside the sandbox (#144). It uses the runner's Git folder (`gitDir`), which the sandbox can't write,
+ * and never finds or reads the temp worktree's `.git`. The config (`core.fsmonitor`, `core.hooksPath`, filters) and hooks the check command wrote there don't run.
  */
 const workGit = (gitDir: string, worktree: string, args: string[]) =>
   gitOut(worktree, [`--git-dir=${gitDir}`, `--work-tree=${worktree}`, ...args], NO_USER_CONFIG);
 
 /**
- * 임시 워크트리를 `tree`(내 작업)로 맞춘다. 추적하는 파일은 되돌리고 추적하지 않는 새 파일은 지우되, 무시되는 파일(빌드 산출물)은 남긴다.
+ * Sets the temp worktree to `tree` (my work). Tracked files are reverted and new untracked files are deleted, but ignored files (build outputs) stay.
  */
 async function reset(gitDir: string, worktree: string, tree: string) {
   await workGit(gitDir, worktree, ["read-tree", "--reset", tree]);
@@ -433,15 +434,15 @@ async function reset(gitDir: string, worktree: string, tree: string) {
   await workGit(gitDir, worktree, ["clean", "--force", "-d", "--quiet"]);
 }
 
-/** 한 번에 하나만 돌린다. 임시 워크트리 하나를 다시 쓰므로 겹치면 서로 덮는다. */
+/** Runs only one at a time. It reuses a single temp worktree, so overlapping runs would overwrite each other. */
 let turn: Promise<unknown> = Promise.resolve();
 
 /**
- * 내 폴더의 파일 전부(커밋하지 않은 변경과 추적하지 않는 새 파일 포함, gitignore된 것은 빼고)를 임시 인덱스(`index`)에 담아 트리로 쓴다.
- * 내 폴더의 인덱스는 건드리지 않는다. 트리는 레포의 개체로 남아, 같은 내용이면 같은 id다(합쳐 돌려 보기의 지문).
+ * Puts every file in my folder (including uncommitted changes and new untracked files, but not gitignored ones) into a temp index (`index`) and writes it as a tree.
+ * It doesn't touch my folder's index. The tree stays as an object in the repo, so the same content gives the same id (the merge run's fingerprint).
  */
 export async function workTree(folder: string, index: string) {
-  // 지금 인덱스에서 시작하면 바뀌지 않은 파일은 다시 읽지 않는다. 없으면(커밋이 없는 레포) 빈 인덱스에서 시작한다.
+  // Starting from the current index means unchanged files aren't read again. If there's none (a repo with no commits), we start from an empty index.
   const current = await gitOut(folder, [
     "rev-parse",
     "--path-format=absolute",
@@ -451,7 +452,7 @@ export async function workTree(folder: string, index: string) {
   await copyFile(current, index).catch(() => {});
   const withIndex = { GIT_INDEX_FILE: index };
   await gitOut(folder, ["add", "--all"], withIndex);
-  // 관측이 늘 빼는 것(.env, .env.*)은 검사 트리에도 담지 않는다. 합친 코드가 그것을 출력해 서버로 내보내지 못하게 한다.
+  // What the observation always leaves out (.env, .env.*) isn't put in the check tree either. It stops the merged code from printing it and sending it to the server.
   const secrets = (await gitOut(folder, ["ls-files", "--cached", "-z"], withIndex))
     .split("\0")
     .filter((path) => path && secret(path));
@@ -470,8 +471,8 @@ export async function workTree(folder: string, index: string) {
 }
 
 /**
- * 합쳐 돌려 보기의 상대 작업: 서버에 올라온 관측과, 내 작업의 기준 커밋.
- * `alone`을 주면 합치지 않고 한쪽만 돌린다(ADR-0035): `mine`은 내 트리, `theirs`는 상대의 판(상대의 기준 커밋에 관측을 얹은 트리)이다.
+ * The other work in a merge run: the observation uploaded to the server, and the base commit of my work.
+ * With `alone`, it doesn't merge and runs only one side (ADR-0035): `mine` is my tree, `theirs` is the other side's version (a tree made by putting the observation on the other side's base commit).
  */
 export type MergeWith = {
   base: string;
@@ -480,8 +481,8 @@ export type MergeWith = {
 };
 
 /**
- * 내 트리(`mine`)에 상대의 바뀐 파일을 Git으로 합친다(ADR-0036). 상대의 판은 상대의 기준 커밋에 관측의 내용을 얹은 트리이고,
- * 조상은 두 기준 커밋이 갈라진 지점이다. 내용이 빠진 파일은 얹지 않는다(그 파일 없이 돈다). 줄이 부딪히면 합친 트리 대신 까닭이다.
+ * Merges the other side's changed files into my tree (`mine`) with Git (ADR-0036). The other side's version is a tree made by putting the observation's content on the other side's base commit,
+ * and the ancestor is where the two base commits diverged. Files with missing content aren't put on (it runs without that file). If lines conflict, you get the reason instead of a merged tree.
  */
 async function mergeTree(
   folder: string,
@@ -496,16 +497,16 @@ async function mergeTree(
   );
   if (!known)
     return {
-      problem: `상대의 기준 커밋(${theirs.base.slice(0, 7)})이 이 기기에 없다. git fetch로 받으면 다음에 돌린다`,
+      problem: `The other side's base commit (${theirs.base.slice(0, 7)}) isn't on this machine. Fetch it with git fetch and it will run next time`,
     };
   const ancestor = await gitOut(folder, ["merge-base", base, theirs.base]).catch(() => "");
   if (!ancestor)
     return {
-      problem: "두 작업의 기준 커밋이 갈라진 지점이 없다(이어지지 않은 역사)",
+      problem: "The two works' base commits have no point where they diverged (unrelated history)",
     };
   const withIndex = { GIT_INDEX_FILE: join(run, "theirs-index") };
   await gitOut(folder, ["read-tree", theirs.base], withIndex);
-  // ponytail: 상대의 파일은 모두 보통 파일(100644)로 얹는다. 실행 비트나 심볼릭 링크가 문제가 되면 관측에 모드를 싣는다.
+  // ponytail: Every file of the other side is put on as a regular file (100644). If the executable bit or symlinks become a problem, put the mode in the observation.
   const lines: string[] = [];
   for (const file of theirs.files) {
     if ("omitted" in file) continue;
@@ -524,7 +525,7 @@ async function mergeTree(
   await update;
   const their = await gitOut(folder, ["write-tree"], withIndex);
   if (alone === "theirs") return { tree: their };
-  // 부딪히면 1로 끝나고, 첫 줄은 합친(부딪힌 표시가 든) 트리, 그 뒤는 부딪힌 경로다.
+  // On conflict it exits with 1; the first line is the merged tree (with conflict markers), and after that are the conflicting paths.
   const merged = await execFileAsync("git", [
     "-C",
     folder,
@@ -543,29 +544,39 @@ async function mergeTree(
     },
   );
   const [tree = "", ...paths] = merged.out.trim().split("\n");
-  if (!merged.clean) return { problem: `줄이 부딪혀 합쳐지지 않는다: ${paths.join(", ")}` };
+  if (!merged.clean)
+    return {
+      problem: `Lines conflict, so it can't merge: ${paths.join(", ")}`,
+    };
   return { tree };
 }
 
 /**
- * 서버에 올라온 관측(그 작업의 기준 커밋에 관측의 내용을 얹은 것)의 트리. 대행의 실험이 부재자의 작업을 "내 트리"로 쓸 때 쓴다(ADR-0040).
- * 러너의 레포에서 임시 인덱스로만 한다. 기준 커밋이 이 기기에 없으면 까닭이다.
+ * The tree of an observation uploaded to the server (its content put on that work's base commit). Used when a debate experiment treats the absent member's work as "my tree" (ADR-0040).
+ * Done only with a temp index in the runner's repo. If the base commit isn't on this machine, you get the reason.
  */
 export async function observedTree(folder: string, work: { base: string; files: ObservedFile[] }) {
   const run = await mkdtemp(join(tmpdir(), "omagari-tree-"));
   try {
-    return await mergeTree(folder, run, "", { base: work.base, theirs: work, alone: "theirs" });
+    return await mergeTree(folder, run, "", {
+      base: work.base,
+      theirs: work,
+      alone: "theirs",
+    });
   } finally {
     await rm(run, { recursive: true, force: true });
   }
 }
 
 /**
- * 트리(`tree`)에 패치를 얹은 트리(ADR-0040의 실험). 러너의 레포에서 임시 인덱스로만 한다(`git apply --cached`). 내 폴더의 파일과 인덱스, 브랜치는 건드리지 않는다.
- * 얹어지지 않으면 까닭이다. 레포 밖을 가리키는 경로는 `git apply`가 거절한다.
+ * A tree made by putting a patch on a tree (`tree`) (the experiment in ADR-0040). Done only with a temp index in the runner's repo (`git apply --cached`). It doesn't touch my folder's files, index, or branch.
+ * If it doesn't apply, you get the reason. `git apply` rejects paths that point outside the repo.
  */
 async function patchTree(folder: string, run: string, tree: string, patch: string) {
-  const withIndex = { ...NO_USER_CONFIG, GIT_INDEX_FILE: join(run, "patch-index") };
+  const withIndex = {
+    ...NO_USER_CONFIG,
+    GIT_INDEX_FILE: join(run, "patch-index"),
+  };
   await gitOut(folder, ["read-tree", tree], withIndex);
   const apply = execFileAsync("git", ["-C", folder, "apply", "--cached", "--whitespace=nowarn"], {
     env: { ...process.env, ...withIndex },
@@ -575,19 +586,19 @@ async function patchTree(folder: string, run: string, tree: string, patch: strin
     () => undefined,
     (error) => String(error.stderr ?? error.message).trim(),
   );
-  if (failed !== undefined) return { problem: `패치가 얹어지지 않는다: ${failed}` };
+  if (failed !== undefined) return { problem: `The patch doesn't apply: ${failed}` };
   return { tree: await gitOut(folder, ["write-tree"], withIndex) };
 }
 
 /**
- * 임시 워크트리를 마련한다: 레포의 Git 폴더 아래(`<Git 폴더>/omagari/check-worktree`)에 두고 다시 쓴다. 내 폴더의 `git status`와 관측에 잡히지 않는다.
- * 돌리는 동안에는 돌림마다 새 자리(`<Git 폴더>/omagari/check-run-*`)로 옮겨 두고, 끝나면 쉬는 자리로 되돌린다. 샌드박스는 경로로 쓰기를 열므로,
- * 검사 명령이 프로세스 그룹을 벗어나 남긴 프로세스는 지난 돌림의 자리에만 쓸 수 있고 쉬는 자리나 다음 돌림의 자리에는 쓰지 못한다(#150).
- * `git worktree add`는 쓰지 않는다. 그러면 샌드박스 안의 `git`이 레포의 Git 폴더 전체(원격 URL의 토큰이 든 config 포함)를 읽어야 한다.
- * 대신 자기만의 Git 폴더를 두고 개체 폴더만 빌려 읽는다(alternates). 그래서 샌드박스에는 개체 폴더만 열면 된다.
- * Git 폴더는 둘이다(#144). 러너가 쓰는 것(`<run>/runner-git`)은 샌드박스가 쓸 수 없고, 샌드박스 안의 `git`이 쓰는 것(`<run>/git`)은 그 복사본이다.
- * 임시 워크트리의 `.git`은 뒤의 것을 가리키는 파일이다. 둘 다 이번 돌림의 임시 폴더에 새로 만들어, 지난 돌림에서 남은 것을 믿지 않는다.
- * 그 안을 `tree`(내 작업이나 합친 것)로 맞춘다.
+ * Sets up the temp worktree: it's placed under the repo's Git folder (`<Git folder>/omagari/check-worktree`) and reused. It doesn't show up in my folder's `git status` or in the observation.
+ * While running, it's moved to a fresh place per run (`<Git folder>/omagari/check-run-*`), and when the run ends it's moved back to the resting place. The sandbox opens writes by path, so
+ * a process the check command left behind after escaping its process group can write only to the previous run's place, not to the resting place or the next run's place (#150).
+ * We don't use `git worktree add`. That would make `git` inside the sandbox read the repo's whole Git folder (including the config with the token in the remote URL).
+ * Instead it has its own Git folder and borrows only the objects folder for reading (alternates). So the sandbox needs only the objects folder opened.
+ * There are two Git folders (#144). The one the runner uses (`<run>/runner-git`) can't be written by the sandbox, and the one git inside the sandbox uses (`<run>/git`) is a copy of it.
+ * The temp worktree's `.git` is a file that points to the latter. Both are freshly made in this run's temp folder, so we don't trust anything left over from a previous run.
+ * Then it's set to `tree` (my work or the merged one).
  */
 async function prepareWork(folder: string, run: string, tree: string) {
   const gitDir = join(run, "runner-git");
@@ -599,28 +610,28 @@ async function prepareWork(folder: string, run: string, tree: string) {
   await mkdir(dirname(rest), { recursive: true });
   const worktree = await mkdtemp(join(dirname(rest), "check-run-"));
   const head = await gitOut(folder, ["rev-parse", "HEAD"]);
-  // 훅은 없는 채로 둔다(`--template=`).
+  // Hooks are left out (`--template=`).
   await gitOut(run, ["init", "--quiet", "--bare", "--template=", gitDir], NO_USER_CONFIG);
   await mkdir(join(gitDir, "objects", "info"), { recursive: true });
   await writeFile(join(gitDir, "objects", "info", "alternates"), `${join(common, "objects")}\n`);
   const place = async () => {
-    // 쉬는 자리의 것을 이번 돌림의 자리로 옮긴다(빈 폴더 위로 옮긴다). 없으면(처음, 망가져 지웠다) 빈 채로 시작한다.
+    // Move the one at the resting place to this run's place (moved onto an empty folder). If there's none (first time, or it was broken and deleted), start empty.
     await rename(rest, worktree).catch((error) => {
       if (error.code !== "ENOENT") throw error;
     });
     await mkdir(worktree, { recursive: true });
-    // 지난 돌림의 검사 명령이 바꿔 둔 `.git`은 지운다. 링크여도 따라가지 않는다.
+    // Delete the `.git` a previous run's check command changed. Even if it's a link, we don't follow it.
     await rm(join(worktree, ".git"), { recursive: true, force: true });
     await workGit(gitDir, worktree, ["update-ref", "--no-deref", "HEAD", head]);
     await reset(gitDir, worktree, tree);
     await cp(gitDir, sandboxGit, { recursive: true });
     await gitOut(run, [`--git-dir=${sandboxGit}`, "config", "core.bare", "false"], NO_USER_CONFIG);
-    // `wx`: 그새 무언가 생겼으면 따라가 쓰지 않고 실패한다.
+    // `wx`: if something appeared in the meantime, it fails instead of following it and writing.
     await writeFile(join(worktree, ".git"), `gitdir: ${sandboxGit}\n`, {
       flag: "wx",
     });
   };
-  // 지난 돌림이 죽으며 망가졌으면 지우고 처음부터 만든다.
+  // If the previous run died and left it broken, delete it and build from scratch.
   await place().catch(async () => {
     await rm(worktree, { recursive: true, force: true });
     await rm(rest, { recursive: true, force: true });
@@ -630,7 +641,7 @@ async function prepareWork(folder: string, run: string, tree: string) {
   return { worktree, rest, tree, common, gitDir, sandboxGit };
 }
 
-/** `checkWork`의 결과. 계약의 `checked`와 같다. */
+/** The result of `checkWork`. Same as `checked` in the contract. */
 export type CheckResult = {
   verdict: Verdict;
   reason?: string;
@@ -641,24 +652,24 @@ export type CheckResult = {
 };
 
 /**
- * `folder`의 내 작업에 기본 브랜치의 검사 명령을 샌드박스 안에서 한 번 돌린다(`omagari runner check`).
- * `merge`를 주면 상대 작업을 합친 것에 돌린다(합쳐 돌려 보기). 줄이 부딪혀 합쳐지지 않으면 돌리지 못함이다.
- * `patch`를 주면 그 위에 패치를 얹어 돌린다(토론의 실험). 얹어지지 않으면 돌리지 못함이다.
- * 준비 명령이 있으면 먼저 돌리고, 실패하면 돌리지 못함이다. 설정을 읽지 못했거나 샌드박스를 쓸 수 없으면 아무것도 돌리지 않는다.
- * 가두지 않고 돌리는 길은 없다. 임시 워크트리는 레포의 Git 폴더 아래에 두고 다시 쓴다.
+ * Runs the default branch's check command once, inside the sandbox, on my work in `folder` (`omagari runner check`).
+ * With `merge`, it runs on my work merged with the other side's work (a merge run). If lines conflict and can't merge, it's "could not run".
+ * With `patch`, it puts the patch on top and runs (a debate experiment). If it doesn't apply, it's "could not run".
+ * If there's a setup command, it runs first, and if that fails, it's "could not run". If the config couldn't be read or the sandbox can't be used, nothing runs.
+ * There's no way to run without locking it in. The temp worktree sits under the repo's Git folder and is reused.
  */
 export function checkWork(options: {
   folder: string;
   remote: string | undefined;
   sandbox: Sandbox;
   limits: CheckLimits;
-  /** 이미 쓴 내 트리(`workTree`). 없으면 지금 폴더에서 쓴다. */
+  /** My tree already written (`workTree`). If absent, it's written from the current folder. */
   tree?: string;
-  /** 합쳐 돌려 보기면 상대 작업. 없으면 내 작업만 돌린다. */
+  /** The other side's work for a merge run. If absent, only my work runs. */
   merge?: MergeWith;
-  /** 토론의 실험이면 합친 것 위에 얹을 패치. */
+  /** The patch to put on the merged result, for a debate experiment. */
   patch?: string;
-  /** WSL2의 `/proc/mounts` 본문을 돌려주는 곳. 테스트가 WSL2인 척하려고 꽂는다. 기본은 이 기기를 본다(`osMounts`). */
+  /** Where to get the `/proc/mounts` text of WSL2. Tests plug it in to pretend to be WSL2. By default it looks at this machine (`osMounts`). */
   mounts?: () => Promise<string | undefined>;
 }): Promise<CheckResult> {
   const result = turn.then(() => checkOne(options));
@@ -671,9 +682,9 @@ async function checkOne(options: {
   remote: string | undefined;
   sandbox: Sandbox;
   limits: CheckLimits;
-  /** 이미 쓴 내 트리(`workTree`). 없으면 지금 폴더에서 쓴다. */
+  /** My tree already written (`workTree`). If absent, it's written from the current folder. */
   tree?: string;
-  /** 합쳐 돌려 보기면 상대 작업. 없으면 내 작업만 돌린다. */
+  /** The other side's work for a merge run. If absent, only my work runs. */
   merge?: MergeWith;
   patch?: string;
   mounts?: () => Promise<string | undefined>;
@@ -693,9 +704,9 @@ async function checkOne(options: {
   const { check, setup } = read.config;
   const missing = await sandbox.unavailable();
   if (missing) return done("not_run", { reason: missing });
-  // 임시 폴더 하나에 임시 워크트리와, 명령이 쓰는 임시 폴더(`HOME`, `TMPDIR`)를 둔다. 경로는 샌드박스 설정과 맞게 실제 경로로 둔다.
-  // 명령이 임시 폴더에 유닉스 소켓을 열므로 짧은 곳에 둔다. macOS의 사용자 임시 폴더(`/var/folders/…/T/`)에 두면 소켓 경로가 104바이트 상한을 넘어 `/tmp`에 둔다(ADR-0037).
-  // ponytail: 40바이트 안이면 그대로 쓴다. 샌드박스 안에서 도는 러너(이 레포의 테스트)는 `/tmp`에 쓰지 못하고, 받은 임시 폴더는 짧다.
+  // One temp folder holds the temp worktree and the temp folders the command uses (`HOME`, `TMPDIR`). Paths are real paths, to match the sandbox config.
+  // The command opens Unix sockets in the temp folder, so it goes somewhere short. In macOS's user temp folder (`/var/folders/…/T/`) the socket path would pass the 104-byte limit, so it goes in `/tmp` (ADR-0037).
+  // ponytail: If it fits in 40 bytes, we use it as is. A runner that runs inside a sandbox (this repo's tests) can't write to `/tmp`, and the temp folder it's given is short.
   const base = Buffer.byteLength(tmpdir()) <= 40 ? tmpdir() : "/tmp";
   const run = await realpath(await mkdtemp(join(base, "omagari-check-")));
   const temp = join(run, "tmp");
@@ -703,7 +714,7 @@ async function checkOne(options: {
   let links: string[] = [];
   try {
     await mkdir(temp);
-    // 합치기는 러너의 레포에서만 한다(임시 워크트리와 샌드박스의 Git 폴더는 건드리지 않는다). 합친 트리를 임시 워크트리로 꺼낸다.
+    // Merging is done only in the runner's repo (the temp worktree and the sandbox's Git folder are untouched). We check the merged tree out into the temp worktree.
     let tree = options.tree ?? (await workTree(folder, join(run, "index")));
     if (options.merge) {
       const merged = await mergeTree(folder, run, tree, options.merge);
@@ -721,7 +732,7 @@ async function checkOne(options: {
     links = deps.links;
     const drives = windowsDrives(await (options.mounts ?? osMounts)());
     const readable = [join(common, "objects"), ...deps.reads];
-    // sandbox-runtime은 감쌀 때 TMPDIR을 /tmp/claude로 덮는다(#146). 명령 앞에서 러너가 준 임시 폴더로 되돌린다. 러너 프로세스의 환경은 건드리지 않는다.
+    // sandbox-runtime overrides TMPDIR with /tmp/claude when it wraps (#146). Before the command, the runner restores the temp folder it gave. The runner process's environment is untouched.
     const input = (command: string) => ({
       command: `export TMPDIR='${temp.replaceAll("'", `'\\''`)}'; ${command}`,
       folder: worktree,
@@ -734,12 +745,12 @@ async function checkOne(options: {
       });
       if (ran.cut)
         return done("not_run", {
-          reason: `준비 명령을 ${ran.cut} 상한에서 끊었다`,
+          reason: `The setup command was cut off at the ${ran.cut} limit`,
           output: ran.output,
         });
       if (ran.code !== 0)
         return done("not_run", {
-          reason: `준비 명령이 실패했다(종료 코드 ${ran.code ?? "없음, 신호로 끝났다"})`,
+          reason: `The setup command failed (exit code ${ran.code ?? "none, ended by a signal"})`,
           output: ran.output,
         });
     }
@@ -749,10 +760,10 @@ async function checkOne(options: {
     });
     if (ran.cut)
       return done("not_run", {
-        reason: `검사 명령을 ${ran.cut} 상한에서 끊었다. 끊긴 것은 통과로 치지 않는다`,
+        reason: `The check command was cut off at the ${ran.cut} limit. A cut-off run doesn't count as a pass`,
         output: ran.output,
       });
-    // Linux에서는 샌드박스가 유닉스 소켓을 모두 막는다. 소켓 때문에 깬 것으로 보이면 까닭을 붙인다. macOS와 소켓과 상관없이 깬 것에는 붙이지 않는다.
+    // On Linux the sandbox blocks every Unix socket. If it looks like sockets broke it, we attach the reason. We don't attach it on macOS or to breaks unrelated to sockets.
     const socket = ran.code !== 0 && sandbox.blocksUnixSockets && socketTrouble(ran.output);
     return done(ran.code === 0 ? "pass" : "broken", {
       output: ran.output,
@@ -760,11 +771,11 @@ async function checkOne(options: {
     });
   } catch (error) {
     return done("not_run", {
-      reason: `돌리지 못했다: ${error instanceof Error ? error.message : error}`,
+      reason: `Couldn't run: ${error instanceof Error ? error.message : error}`,
     });
   } finally {
-    // 돌린 뒤 먼저 쉬는 자리로 옮긴다. 샌드박스에 남은 프로세스는 이번 돌림의 자리에만 쓸 수 있어 더는 손대지 못한다(#150).
-    // 그다음 이은 링크를 떼고(길에 링크가 생긴 자리는 따라가지 않고 둔다) 추적하는 파일을 되돌린다. 무시되는 파일은 남긴다.
+    // After the run, first move it to the resting place. A process left in the sandbox can write only to this run's place, so it can't touch anything more (#150).
+    // Then we remove the linked links (a place where a link appeared on the way is left alone, not followed) and revert tracked files. Ignored files stay.
     if (work) {
       const { worktree, rest } = work;
       const moved = await rename(worktree, rest).then(

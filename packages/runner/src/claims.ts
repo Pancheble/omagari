@@ -1,16 +1,16 @@
-// 선점(ADR-0008): 걸 곳을 내 사본에서 찾고, 남의 선점을 내 사본의 줄로 옮기고, 겹침을 본다.
-// 줄 옮기기는 Room처럼 선점한 사람의 판과 내 판의 줄 차이로 한다. 상대의 판을 읽을 수 없으면 상대의 줄 그대로 "대략"이다.
+// Claims (ADR-0008): finds the place to claim in my copy, maps other people's Claims to lines in my copy, and checks overlap.
+// Mapping lines works like Room: by the line difference between the claimer's version and mine. If the other version can't be read, it's "approximate" with the other person's lines as they are.
 import { lstat, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Claim, LineRange, SeenClaim, WorkView } from "@omagari/contract";
 import { blobAt, gitIn, type Hunk, hasCommit, hunks } from "./nearby.ts";
 import { symbolRange } from "./symbols.ts";
 
-/** 선점이 그 경로(파일)를 덮는가. 폴더 선점은 그 아래 모두를 덮는다. */
+/** Whether the Claim covers that path (file). A folder Claim covers everything under it. */
 export const covers = (claim: Pick<Claim, "path" | "unit">, path: string) =>
   claim.unit === "folder" ? path.startsWith(claim.path) : claim.path === path;
 
-/** 두 선점(같은 사본의 줄)이 겹치는가. 파일 전체나 폴더는 그 안의 무엇과도 겹친다. */
+/** Whether two Claims (lines in the same copy) overlap. A whole file or a folder overlaps with anything inside it. */
 export function overlap(
   a: Pick<Claim, "path" | "unit" | "lines">,
   b: Pick<Claim, "path" | "unit" | "lines">,
@@ -22,7 +22,7 @@ export function overlap(
   return a.lines.from <= b.lines.to && b.lines.from <= a.lines.to;
 }
 
-/** 앞 판의 줄 하나를 뒤 판의 줄로 옮긴다. 바뀐 곳 안이면 그 바뀐 곳의 뒤 판 자리(`end`면 끝, 아니면 시작)다. */
+/** Maps one line of the earlier version to a line of the later version. If it's inside a changed place, it's that place's spot in the later version (the end for `end`, otherwise the start). */
 function shift(found: Hunk[], line: number, end: boolean) {
   let delta = 0;
   for (const hunk of found) {
@@ -40,8 +40,8 @@ const readText = (full: string) =>
   );
 
 /**
- * 남의 선점을 내 사본(`tree`)의 줄로 옮긴다. 상대의 판은 서버에 올라온 내용, 그 파일을 바꾸지 않았으면 상대의 기준 커밋의 판이다.
- * 상대의 판이나 내 파일을 읽을 수 없으면 상대의 줄 그대로 `approx`다. 줄이 없는 선점(파일 전체, 폴더)은 옮길 것이 없다.
+ * Maps someone else's Claim to lines in my copy (`tree`). The other version is the content uploaded to the server, or the other person's base commit version if they didn't change that file.
+ * If the other version or my file can't be read, it's `approx` with the other person's lines as they are. A Claim with no lines (a whole file, a folder) has nothing to map.
  */
 export async function see(
   repo: string,
@@ -69,7 +69,7 @@ export async function see(
   return { ...claim, lines, approx: false };
 }
 
-/** 이 사본에서 선점을 걸 곳을 정한다. 걸 수 없으면 까닭을 들어 던진다. */
+/** Decides the place to claim in this copy. If it can't be claimed, it throws with the reason. */
 export async function resolve(
   tree: string,
   base: string,
@@ -77,30 +77,35 @@ export async function resolve(
 ): Promise<Pick<Claim, "path" | "unit" | "symbol" | "lines">> {
   const { symbol, lines } = target;
   const path = target.path.replace(/^\.\//, "");
-  if (symbol !== undefined && lines !== undefined) throw new Error("심볼과 줄 범위는 하나만 준다");
+  if (symbol !== undefined && lines !== undefined)
+    throw new Error("give either a symbol or a line range, not both");
   const stat = await lstat(join(tree, path)).catch(() => undefined);
   if (path.endsWith("/") || stat?.isDirectory()) {
     if (symbol !== undefined || lines !== undefined)
-      throw new Error(`폴더에는 심볼이나 줄 범위를 주지 않는다: ${path}`);
+      throw new Error(`don't give a symbol or line range for a folder: ${path}`);
     return { path: path.endsWith("/") ? path : `${path}/`, unit: "folder" };
   }
   if (symbol !== undefined) {
     const content = await readText(join(tree, path));
     const range = content && (await symbolRange(path, content.toString(), symbol));
-    if (!range) throw new Error(`${path}에서 ${symbol}의 정의를 찾지 못했다`);
+    if (!range) throw new Error(`couldn't find the definition of ${symbol} in ${path}`);
     return { path, unit: "symbol", symbol, lines: range };
   }
   if (lines !== undefined) {
     if (lines.from < 1 || lines.to < lines.from)
-      throw new Error(`줄 범위는 1부터, 시작이 끝보다 크지 않게 준다: ${lines.from}-${lines.to}`);
+      throw new Error(
+        `the line range starts at 1 and the start can't be greater than the end: ${lines.from}-${lines.to}`,
+      );
     return { path, unit: "lines", lines };
   }
-  // 기준 커밋에 없던 새 파일만 파일 전체를 잡는다. 있던 파일은 고칠 곳을 좁혀 건다(Room과 같다).
+  // Only a new file that wasn't in the base commit can be claimed as a whole file. A file that was there is claimed by narrowing to the place to edit (same as Room).
   const existed = await gitIn(tree)("cat-file", "-e", `${base}:${path}`).then(
     () => true,
     () => false,
   );
   if (existed)
-    throw new Error(`기준 커밋에 있던 파일은 심볼(--symbol)이나 줄 범위(--lines)로 건다: ${path}`);
+    throw new Error(
+      `claim a file that was in the base commit by symbol (--symbol) or line range (--lines): ${path}`,
+    );
   return { path, unit: "file" };
 }

@@ -111,21 +111,21 @@ test("심볼, 줄 범위, 폴더, 새 파일 전체로 선점한다. 겹치지 �
 
   assert.match(
     await omagari(world, ["claim", "src/pay.ts", "--symbol", "refund"]),
-    /^payment의 선점을 걸었다: "src\/pay.ts"의 "refund" 줄 5-7\n/,
+    /^Claimed on payment: "refund" in "src\/pay.ts" lines 5-7\n/,
   );
   assert.match(
     await omagari(world, ["claim", "src/notes.txt", "--lines", "2-4"]),
-    /^payment의 선점을 걸었다: "src\/notes.txt" 줄 2-4\n/,
+    /^Claimed on payment: "src\/notes.txt" lines 2-4\n/,
   );
   assert.match(
     await omagari(world, ["claim", "src/refund/"]),
-    /^payment의 선점을 걸었다: 폴더 "src\/refund\/"\n/,
+    /^Claimed on payment: folder "src\/refund\/"\n/,
   );
   // 기준 커밋에 없던 새 파일은 경로만 주면 파일 전체가 잡힌다. 하위 폴더에서 준 경로도 레포 최상위에서 본 것으로 걸린다.
   await writer(world.repo.folder)("src/new.ts", "export const a = 1;\n");
   assert.match(
     await omagari(world, ["claim", "new.ts"], `${world.repo.folder}/src`),
-    /^payment의 선점을 걸었다: "src\/new.ts" 파일 전체\n/,
+    /^Claimed on payment: "src\/new.ts" whole file\n/,
   );
 
   // 기준 커밋에 있던 파일은 심볼이나 줄 범위로 좁혀 건다. 없는 심볼은 걸리지 않는다.
@@ -133,11 +133,11 @@ test("심볼, 줄 범위, 폴더, 새 파일 전체로 선점한다. 겹치지 �
   assert.equal(whole.code, 1);
   assert.match(
     whole.stderr,
-    /기준 커밋에 있던 파일은 심볼\(--symbol\)이나 줄 범위\(--lines\)로 건다/,
+    /claim a file that was in the base commit by symbol \(--symbol\) or line range \(--lines\)/,
   );
   const missing = await world.cli("claim", "src/pay.ts", "--symbol", "nope");
   assert.equal(missing.code, 1);
-  assert.match(missing.stderr, /src\/pay.ts에서 nope의 정의를 찾지 못했다/);
+  assert.match(missing.stderr, /couldn't find the definition of nope in src\/pay.ts/);
 
   // 다른 멤버는 편지함이 아니라 피드에서 본다.
   await eventually(async () =>
@@ -163,13 +163,13 @@ test("omagari release로 하나나 모두를 푼다. 푼 것은 다른 멤버의
 
   assert.match(
     await omagari(world, ["release", "src/pay.ts", "--symbol", "refund"]),
-    /^payment의 선점 1개를 풀었다:\n {2}"src\/pay.ts"의 "refund" 줄 5-7\n/,
+    /^Released 1 Claim\(s\) on payment:\n {2}"refund" in "src\/pay.ts" lines 5-7\n/,
   );
   assert.match(
     await omagari(world, ["release"]),
-    /^payment의 선점 1개를 풀었다:\n {2}"src\/notes.txt" 줄 2-4\n/,
+    /^Released 1 Claim\(s\) on payment:\n {2}"src\/notes.txt" lines 2-4\n/,
   );
-  assert.match(await omagari(world, ["release"]), /^payment에 풀 선점이 없다\n/);
+  assert.match(await omagari(world, ["release"]), /^payment has no Claims to release\n/);
   assert.deepEqual((await claimNews(alice)).slice(0, 2).sort(), [
     "풀었다 owner payment src/notes.txt",
     "풀었다 owner payment src/pay.ts",
@@ -197,44 +197,41 @@ test("남의 선점은 내 사본의 줄로 옮겨 편집 전 훅에 들어가�
   );
   assert.match(
     await omagari(world, ["claim", "src/pay.ts", "--symbol", "refund"], desk.folder),
-    /^refund의 선점을 걸었다: "src\/pay.ts"의 "refund" 줄 8-10\n/,
+    /^Claimed on refund: "refund" in "src\/pay.ts" lines 8-10\n/,
   );
 
   // owner가 그 파일을 고치려 하면 alice의 선점이 owner의 줄로 들어가고, 근처 작업이 있는데 owner의 선점이 없으니 선점하라고 권한다.
   const first = await eventually(async () => {
     const context = await hook(world, { path: "src/pay.ts" });
     assert.deepEqual(block(context, "omagari-claims"), [
-      `- alice의 브랜치 "refund" · "src/pay.ts"의 "refund" 줄 5-7`,
+      `- alice's branch "refund" · "refund" in "src/pay.ts" lines 5-7`,
     ]);
     return context;
   });
+  assert.match(first, /rather than editing inside the claimed part\. It isn't blocked\./);
   assert.match(
     first,
-    /선점한 곳 안은 고치지 말고 기다리거나 그 사람에게 물어본다\. 막지는 않는다\./,
-  );
-  assert.match(
-    first,
-    /내 작업은 "src\/pay.ts"을 선점하지 않았다\. 고치기 전에 고칠 곳을 선점한다: omagari claim/,
+    /my Work hasn't claimed "src\/pay.ts"\. Before editing, claim the part you'll change: omagari claim/,
   );
   // 달라진 것이 없으면 다시 넣지 않는다.
   assert.equal(await hook(world, { path: "src/pay.ts" }), "");
 
   // 겹쳐도 걸린다. 겹친 alice의 선점이 owner의 줄로 함께 보인다.
   const claimed = await omagari(world, ["claim", "src/pay.ts", "--lines", "6"]);
-  assert.match(claimed, /^payment의 선점을 걸었다: "src\/pay.ts" 줄 6\n/);
+  assert.match(claimed, /^Claimed on payment: "src\/pay.ts" lines 6\n/);
   assert.match(
     claimed,
-    /겹친 다른 멤버의 선점.*\n {2}alice의 브랜치 "refund" · "src\/pay.ts"의 "refund" 줄 5-7\n/,
+    /Overlapping Claims from other members.*\n {2}alice's branch "refund" · "refund" in "src\/pay.ts" lines 5-7\n/,
   );
 
   // 양쪽 작업의 편지함에 겹침이 들어간다. 줄은 각자의 사본 기준이다.
   await eventually(async () =>
     assert.deepEqual(block(await hook(world, { cwd: desk.folder }), "omagari-inbox"), [
-      `- 선점이 겹친다: 내 선점 "src/pay.ts"의 "refund" 줄 8-10와 owner의 브랜치 "payment"의 선점 "src/pay.ts" 줄 6. 줄은 각자의 사본 기준이다. 겹친 곳은 기다리거나 상대에게 물어본다.`,
+      `- Claims overlap: my Claim "refund" in "src/pay.ts" lines 8-10 and owner's branch "payment"'s Claim "src/pay.ts" lines 6. Lines are from each side's own copy. Wait for the overlapping part, or ask the other side.`,
     ]),
   );
   // owner의 것은 omagari claim의 응답 끝에 먼저 실렸을 수 있다. 그러면 훅에는 다시 들어가지 않는다.
-  const ownerSees = `- 선점이 겹친다: 내 선점 "src/pay.ts" 줄 6와 alice의 브랜치 "refund"의 선점 "src/pay.ts"의 "refund" 줄 8-10. 줄은 각자의 사본 기준이다. 겹친 곳은 기다리거나 상대에게 물어본다.`;
+  const ownerSees = `- Claims overlap: my Claim "src/pay.ts" lines 6 and alice's branch "refund"'s Claim "refund" in "src/pay.ts" lines 8-10. Lines are from each side's own copy. Wait for the overlapping part, or ask the other side.`;
   await eventually(async () =>
     assert.ok(
       block(claimed, "omagari-inbox").includes(ownerSees) ||
@@ -245,7 +242,7 @@ test("남의 선점은 내 사본의 줄로 옮겨 편집 전 훅에 들어가�
   // 이제 owner도 그 파일을 선점했으니 선점하라는 권유 없이 남의 선점만 다시 들어간다.
   const after = await hook(world, { path: "src/pay.ts" });
   assert.deepEqual(block(after, "omagari-claims"), [
-    `- alice의 브랜치 "refund" · "src/pay.ts"의 "refund" 줄 5-7`,
+    `- alice's branch "refund" · "refund" in "src/pay.ts" lines 5-7`,
   ]);
   assert.doesNotMatch(after, /omagari claim/);
 
@@ -254,7 +251,7 @@ test("남의 선점은 내 사본의 줄로 옮겨 편집 전 훅에 들어가�
   await eventually(async () =>
     assert.deepEqual(
       block(await hook(world, { path: "src/notes.txt", agent: "a1" }), "omagari-claims"),
-      [`- alice의 브랜치 "refund" · 폴더 "src/"`],
+      [`- alice's branch "refund" · folder "src/"`],
     ),
   );
 });
@@ -272,14 +269,14 @@ test("상대 내용을 읽을 수 없으면 줄에 대략이 붙고, 오프라�
   const seen = (context: string) => block(context, "omagari-claims");
   await eventually(async () =>
     assert.deepEqual(seen(await hook(world, { path: "src/notes.txt", agent: "a1" })), [
-      `- bob의 브랜치 "docs" · "src/notes.txt" 줄 2-3(대략, 줄이 밀렸을 수 있다)`,
+      `- bob's branch "docs" · "src/notes.txt" lines 2-3(approx, lines may have shifted)`,
     ]),
   );
 
   await desk.stop();
   await eventually(async () =>
     assert.deepEqual(seen(await hook(world, { path: "src/notes.txt", agent: "a2" })), [
-      `- bob의 브랜치 "docs" · "src/notes.txt" 줄 2-3(대략, 줄이 밀렸을 수 있다, 오래됨, 주인이 오래 오프라인이다)`,
+      `- bob's branch "docs" · "src/notes.txt" lines 2-3(approx, lines may have shifted, stale, the owner has been offline for a long time)`,
     ]),
   );
   await eventually(async () =>
@@ -363,7 +360,7 @@ test("#82의 편지함 표로 만든 DB로도 뜨고, 넘겨주지 않은 소식
   t.after(world.stop);
   await eventually(async () =>
     assert.deepEqual(block(await hook(world), "omagari-inbox"), [
-      `- 풀렸다: 내 작업과 alice의 브랜치 "refund"의 직접 충돌`,
+      `- Resolved: my Work and alice's branch "refund"'s 직접 충돌`,
     ]),
   );
 });

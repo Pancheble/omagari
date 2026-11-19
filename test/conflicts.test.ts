@@ -529,7 +529,7 @@ test("함수의 정의 줄을 바꾸면 그 함수를 쓰는 다른 작업에 �
   await receives(
     world,
     alice.desk.folder,
-    `- 간접 충돌(추정): 내 작업과 owner의 브랜치 "payment". 한쪽이 정의 줄을 바꾸거나 없앤 심볼을 다른 쪽이 쓴다. 이름으로만 이어 다른 심볼일 수 있다. "refund"(나: 씀 "src/checkout.ts":1, "src/checkout.ts":2 / 상대: 정의 줄 바꿈 "src/pay.ts":4)`,
+    `- Indirect conflict (estimated): my Work and owner's branch "payment". One side changed or removed a definition line of a symbol the other side uses. It's linked by name only, so it may be a different symbol. "refund" (me: 씀 "src/checkout.ts":1, "src/checkout.ts":2 / them: 정의 줄 바꿈 "src/pay.ts":4)`,
   );
 
   // 바꾼 정의 줄을 되돌리면 풀렸다.
@@ -547,7 +547,7 @@ test("함수의 정의 줄을 바꾸면 그 함수를 쓰는 다른 작업에 �
   await receives(
     world,
     alice.desk.folder,
-    `- 풀렸다: 내 작업과 owner의 브랜치 "payment"의 간접 충돌(추정)`,
+    `- Resolved: my Work and owner's branch "payment"'s 간접 충돌(추정)`,
   );
 
   // 다시 바꾸면 새 알림이다. 쓰는 쪽 러너가 꺼져 있으면 바꾼 쪽 러너만으로는 풀었다고 보지 않는다.
@@ -616,12 +616,12 @@ test("두 작업에 같은 이름의 새 정의가 생기면 중복 구현이 �
   await receives(
     world,
     world.repo.folder,
-    `- 중복 구현: 내 작업과 alice의 브랜치 "refund"에 같은 이름의 새 정의가 따로 생겼다. "split"(나: 새로 만듦 "src/money.ts":1 / 상대: 새로 만듦 "src/split.ts":1)`,
+    `- Duplicate work: my Work and alice's branch "refund" each made a new definition with the same name. "split" (me: 새로 만듦 "src/money.ts":1 / them: 새로 만듦 "src/split.ts":1)`,
   );
   await receives(
     world,
     alice.desk.folder,
-    `- 중복 구현: 내 작업과 owner의 브랜치 "payment"에 같은 이름의 새 정의가 따로 생겼다. "split"(나: 새로 만듦 "src/split.ts":1 / 상대: 새로 만듦 "src/money.ts":1)`,
+    `- Duplicate work: my Work and owner's branch "payment" each made a new definition with the same name. "split" (me: 새로 만듦 "src/split.ts":1 / them: 새로 만듦 "src/money.ts":1)`,
   );
 
   // 같은 줄(pay의 본문)을 둘이 고치고, owner는 refund의 정의 줄도 바꾼다. 한 쌍에 세 종류가 따로 선다.

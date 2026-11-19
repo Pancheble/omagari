@@ -14,7 +14,8 @@ export const total = refund(2);
 
 /** 토론이 라운드 몇인지 지시문에서 읽는다(첫 입장은 1). */
 const roundOf = (message: string) =>
-  /토론의 (\d+)라운드\(반박\)/.exec(message)?.[1] ?? (/첫 입장을 낸다/.test(message) ? "1" : "0");
+  /This is round (\d+) \(rebuttal\)/.exec(message)?.[1] ??
+  (/give your first stance/.test(message) ? "1" : "0");
 
 test("토론의 공개된 입장과 결론이 이슈 댓글로 가고(가린 라운드는 공개 뒤에), 소식이 두 작업의 편지함으로 가고, 지표에 센다", async (t) => {
   const stance = (who: string, gate?: Promise<void>) =>
@@ -71,7 +72,7 @@ test("토론의 공개된 입장과 결론이 이슈 댓글로 가고(가린 라
   assert.ok(issue);
 
   // 토론이 열렸다는 소식이 두 작업의 편지함에 간다. 첫 라운드는 가려져 있어 입장이 댓글로 가지 않는다.
-  const opened = /토론이 열렸다: 포스트 /;
+  const opened = /A debate opened: post /;
   // 편지함은 한 번 넘기면 비워진다(CLI는 어느 명령이든 응답 끝에 밀린 소식을 싣는다). 먼저 받은 쪽을 다시 확인하면 빈 채로 보이고,
   // 위 claim의 응답에 이미 실려 갔을 수도 있다. 그래서 받은 것을 쌓아 두고, 쌓인 것에서 찾는다.
   const seen = new Map([[world.repo.folder, claimed.stdout]]);
@@ -126,9 +127,9 @@ test("토론의 공개된 입장과 결론이 이슈 댓글로 가고(가린 라
   // 내 차례와 결론 소식이 두 작업의 편지함에 갔다.
   for (const folder of [world.repo.folder, desk.folder]) {
     const seen = (await world.cliIn(folder, "status")).stdout;
-    assert.match(seen, /토론에서 내 차례다: 포스트 .*의 2번째 라운드/);
-    assert.match(seen, /토론에서 내 차례다: 포스트 .*의 3번째 라운드/);
-    assert.match(seen, /토론의 결론이 났다: 포스트 .*에서 사람이 골라서/);
+    assert.match(seen, /Your turn in the debate: round 2 of post /);
+    assert.match(seen, /Your turn in the debate: round 3 of post /);
+    assert.match(seen, /A debate reached a conclusion: in post .*, a person picked/);
   }
 
   // 지표: 열린 토론 1, 사람이 골라 끝난 토론 1.
@@ -142,7 +143,7 @@ test("토론의 공개된 입장과 결론이 이슈 댓글로 가고(가린 라
   const shown = await world.cli("metrics", "--days", "1");
   assert.match(
     shown.stdout,
-    /토론 열림 {2}끝남\(실험\) {2}끝남\(근거\) {2}끝남\(사람\) {2}끝남\(만료\) {2}결정 PR/,
+    /Debates opened {2}Ended \(experiment\) {2}Ended \(evidence\) {2}Ended \(human\) {2}Ended \(expired\) {2}Decision PRs/,
   );
   assert.match(shown.stdout, / {2}1 {2}0 {2}0 {2}1 {2}0 {2}0\n$/);
 });

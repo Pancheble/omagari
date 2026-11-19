@@ -44,7 +44,7 @@ test("실행기가 실패하거나 답 없이 끝나면 오류가 돌아오고, 
 
   const silent = await world.cli("runner", "ask", "말하지 마");
   assert.equal(silent.code, 1);
-  assert.match(silent.stderr, /답 없이 끝났다/);
+  assert.match(silent.stderr, /The executor finished without an answer/);
 
   assert.deepEqual(await world.cli("runner", "ask", "다시"), {
     code: 0,
@@ -62,7 +62,7 @@ test("러너가 실행한 것(언제, 어느 세션으로, 무엇을 받아)이 
   const world = await startWorld({ executor: fake.executor });
   t.after(world.stop);
 
-  assert.match((await world.cli("runner", "log")).stdout, /아직 없다/);
+  assert.match((await world.cli("runner", "log")).stdout, /hasn't run anything yet/);
   await world.cli("runner", "ask", "첫 질문");
   await world.cli("runner", "ask", "죽어");
 
@@ -72,7 +72,7 @@ test("러너가 실행한 것(언제, 어느 세션으로, 무엇을 받아)이 
   assert.deepEqual(more, []);
   assert.match(
     first,
-    /^\d{4}-\d\d-\d\dT\S+ {2}세션 session-1 {2}도구 Read,Grep,Glob {2}받은 것 "첫 질문" {2}답함 "답"$/,
+    /^\d{4}-\d\d-\d\dT\S+ {2}session session-1 {2}tools Read,Grep,Glob {2}received "첫 질문" {2}answered "답"$/,
   );
-  assert.match(second, /세션 session-1 .*받은 것 "죽어" {2}실패: 실행기가 죽었다$/);
+  assert.match(second, /session session-1 .*received "죽어" {2}failed: 실행기가 죽었다$/);
 });

@@ -58,7 +58,7 @@ test("들어온 멤버는 그날 웹을 열었거나 채널에서 읽고 쓴 멤
   const lines = shown.stdout.trimEnd().split("\n");
   assert.equal(
     lines[0],
-    "날짜(Asia/Seoul)  들어온 멤버  문답  돌려 봄  통과  깨짐  가릴 수 없음  돌리지 못함  토론 열림  끝남(실험)  끝남(근거)  끝남(사람)  끝남(만료)  결정 PR",
+    "Date (Asia/Seoul)  Members joined  Q&As  Merge runs  통과  깨짐  가릴 수 없음  돌리지 못함  Debates opened  Ended (experiment)  Ended (evidence)  Ended (human)  Ended (expired)  Decision PRs",
   );
   assert.equal(lines.length, 4);
   assert.match(
