@@ -134,7 +134,7 @@ ${JSON.stringify({
   assert.ok(!JSON.stringify(web.received).includes(ownerClaim));
   assert.ok(!alice.calls[0]?.message.includes(ownerClaim));
   // 요청에는 포스트의 알림이 데이터로 실린다. 토론 세션은 읽기 도구만 받는다.
-  assert.match(alice.calls[0]?.message ?? "", /<alert kind="선언된 계약 변경"/);
+  assert.match(alice.calls[0]?.message ?? "", /<alert kind="Declared contract change"/);
   assert.deepEqual(alice.calls[0]?.tools, ["Read", "Grep", "Glob"]);
   // owner는 주인이 그 브랜치에서 쓰던 작업 세션을 갈라 띄웠다. alice는 찾지 못해 맥락 없이(계획과 diff를 넣어) 참여한다.
   assert.equal(owner.calls[0]?.resume, "work-payment");
@@ -209,7 +209,10 @@ test("증거 라벨이 없는 포스트에는 토론이 열리지 않고, 자동
   });
   assert.equal(direct.debate, null);
   // 직접 충돌 라벨을 논의로 바꿔 포스트가 논의가 되어도 증거 라벨이 없으니 토론은 열리지 않는다.
-  await call(world.owner, api.editLabel, { name: "직접 충돌", next: { importance: "discuss" } });
+  await call(world.owner, api.editLabel, {
+    name: "Direct conflict",
+    next: { importance: "discuss" },
+  });
   await eventually(async () =>
     assert.equal((await postOf(world.owner, "direct"))?.importance, "discuss"),
   );
@@ -233,7 +236,7 @@ test("증거 라벨이 없는 포스트에는 토론이 열리지 않고, 자동
   // 사람이 포스트에 확인됨을 붙여도 토론이 열린다.
   await call(world.owner, api.setPostLabels, {
     post: direct.channel,
-    labels: ["직접 충돌", "확인됨"],
+    labels: ["Direct conflict", "Confirmed"],
   });
   const confirmed = (await postOf(world.owner, "direct"))?.debate;
   assert.equal(confirmed && seatOf(confirmed, "bob").state, "off");
@@ -298,12 +301,12 @@ test("증거 라벨이 없는 포스트는 안건과 근거를 붙여 요청해�
   );
   const again = await world.cli("debate", direct.channel, "--agenda", "a", "--grounds", "b");
   assert.equal(again.code, 1);
-  assert.match(again.stderr, /이미 열린 토론/);
+  assert.match(again.stderr, /A debate is already open/);
 
   // 안건이나 근거가 빈 CLI 요청은 열리지 않았다고 알린다.
   const none = await world.cli("debate", "없는포스트", "--agenda", "a", "--grounds", "b");
   assert.equal(none.code, 1);
-  assert.match(none.stderr, /없는 포스트/);
+  assert.match(none.stderr, /No such post/);
 });
 
 /** 토론 세션이면 라운드(첫 라운드는 1), 아니면 0. 반박 라운드의 지시문은 "N라운드(반박)"로 시작한다. */
@@ -605,12 +608,12 @@ test("입장에 붙은 패치를 두 작업을 합친 것 위에 얹어 샌드�
   assert.match(
     (await world.cli("runner", "log")).stdout,
     new RegExp(
-      `check command "sh check.sh"  debate ${post} round 1 experiment payment \\+ refund of alice  .*verdict 통과`,
+      `check command "sh check.sh"  debate ${post} round 1 experiment payment \\+ refund of alice  .*verdict Pass`,
     ),
   );
   assert.match(
     (await world.cliIn(desk.folder, "runner", "log")).stdout,
-    new RegExp(`debate ${post} round 1 experiment refund \\+ payment of owner  .*verdict 깨짐`),
+    new RegExp(`debate ${post} round 1 experiment refund \\+ payment of owner  .*verdict Broken`),
   );
 });
 

@@ -360,7 +360,7 @@ test("#82의 편지함 표로 만든 DB로도 뜨고, 넘겨주지 않은 소식
   t.after(world.stop);
   await eventually(async () =>
     assert.deepEqual(block(await hook(world), "omagari-inbox"), [
-      `- Resolved: my Work and alice's branch "refund"'s 직접 충돌`,
+      `- Resolved: my Work and alice's branch "refund"'s Direct conflict`,
     ]),
   );
 });

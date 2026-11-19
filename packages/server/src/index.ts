@@ -98,44 +98,44 @@ import { labelsFor } from "./labeler.ts";
 export { type Giphy, realGiphy } from "./giphy.ts";
 export { type Account, type GitHub, type Pull, type RepoLabel, realGitHub } from "./github.ts";
 
-/** push 권한을 다시 확인하는 주기. Room의 10분에서 시작한다(ADR-0011). */
+/** How often push access is rechecked. Starts from Room's 10 minutes (ADR-0011). */
 const RECHECK_MS = 10 * 60_000;
-/** 러너 연결의 생사를 묻는 주기. 답이 없으면 다음 주기에 끊는다. */
+/** How often a runner connection is pinged. No answer by the next round closes it. */
 const HEARTBEAT_MS = 30_000;
-/** 끝나지 않은 기기 인증을 들고 있는 수의 상한. 로그인 없이 부르는 경로라 GitHub에 무한히 묻지 않는다. */
+/** Max number of unfinished device authorizations held. This path is called without login, so it doesn't ask GitHub without limit. */
 const MAX_PENDING_LOGINS = 100;
-/** 한 주소가 들고 있을 수 있는 끝나지 않은 기기 인증의 수. 한 주소가 상한을 다 채워 남의 로그인을 막지 못하게 한다. */
+/** Max unfinished device authorizations one address can hold. Stops one address from filling the cap and blocking others' logins. */
 const MAX_PENDING_PER_CLIENT = 5;
-/** 이만큼 묻지 않은 기기 인증은 버려진 것으로 보고 지운다. CLI와 웹은 몇 초마다 묻는다. */
+/** A device authorization not polled for this long is treated as abandoned and removed. The CLI and web poll every few seconds. */
 const ABANDONED_LOGIN_MS = 60_000;
-/** hello를 마치기까지의 시간. 넘으면 연결을 끊는다. */
+/** Time allowed to finish hello. The connection is closed after this. */
 const HELLO_MS = 10_000;
-/** hello를 마치기 전에 받는 프레임 하나의 상한. hello는 작다. */
+/** Max size of one frame received before hello finishes. hello is small. */
 const MAX_HELLO_BYTES = 64 * 1024;
-/** hello를 마치지 않은 연결 수의 상한. */
+/** Max number of connections that haven't finished hello. */
 const MAX_UNGREETED = 200;
-/** 작업마다의 초안 PR 제목과 머지 여부를 GitHub에서 다시 읽는 주기. 오래된 오프라인 멤버도 이 주기에 지운다. */
+/** How often each work's draft PR title and merge state are reread from GitHub. Long-offline members are also removed on this round. */
 const FOLLOW_MS = 60_000;
-/** 오프라인인 멤버의 관측과 상태 한 줄을 남겨 두는 시간. Room의 7일이다(1단계 질문 A10). */
+/** How long an offline member's observations and status line are kept. Room's 7 days (stage 1 Q A10). */
 const FORGET_MS = 7 * 24 * 60 * 60_000;
-/** 지표의 하루를 자르는 시간대. 만드는 팀의 하루다(ADR-0018). 서울은 일광 절약 시간이 없어 하루가 늘 24시간이다. */
+/** Time zone that cuts the metrics day. The building team's day (ADR-0018). Seoul has no daylight saving, so a day is always 24 hours. */
 const TIME_ZONE = "Asia/Seoul";
 const DAY_MS = 24 * 60 * 60_000;
-/** `TIME_ZONE`에서 그 시각의 날짜(YYYY-MM-DD). sv-SE가 ISO 꼴로 적는다. */
+/** The date (YYYY-MM-DD) of that moment in `TIME_ZONE`. sv-SE writes it in ISO form. */
 const dayOf = (ms: number) => new Intl.DateTimeFormat("sv-SE", { timeZone: TIME_ZONE }).format(ms);
 
-/** 에이전트가 쓴 줄이 없을 때 보이는 고치는 파일의 줄. 바뀐 것이 없으면 없다. */
+/** The line for the file being edited, shown when the agent wrote no line. None if nothing changed. */
 function filesLine(files: ObservedFile[]) {
   const [first] = files;
   if (!first) return null;
-  const others = files.length > 1 ? ` 외 ${files.length - 1}개` : "";
-  return `${basename(first.path)}${others} 수정 중`;
+  const others = files.length > 1 ? ` and ${files.length - 1} more` : "";
+  return `Editing ${basename(first.path)}${others}`;
 }
 
 const hash = (session: string) => createHash("sha256").update(session).digest("hex");
 const bearer = (authorization?: string) => authorization?.match(/^Bearer (\S+)$/)?.[1];
 
-/** 문답을 읽는다. 뒤에 WHERE와 ORDER BY를 붙여 쓴다. */
+/** Reads Q&As. Append WHERE and ORDER BY. */
 const QAS = "SELECT id, channel, login, executor, question, at, answer, visibility FROM qas";
 type QaRow = {
   id: number;
@@ -157,41 +157,49 @@ const qaView = (row: QaRow): Qa => ({
   answer: row.answer === null ? { state: "pending" } : JSON.parse(row.answer),
 });
 
-/** 레포 `owner/name`의 워크스페이스: 계정 이름의 소문자(ADR-0043). */
+/** The workspace of repo `owner/name`: the account name in lowercase (ADR-0043). */
 const ownerOf = (repo: string) => (repo.split("/")[0] ?? "").toLowerCase();
-/** `ownerOf`를 SQL로. `r`은 레포를 내는 SQL이다. */
+/** `ownerOf` in SQL. `r` is the SQL that yields the repo. */
 const ownerSql = (r: string) => `lower(substr(${r}, 1, instr(${r}, '/') - 1))`;
 
-/** 알림 줄이 서는 채널(ADR-0039). 포럼은 거른 보기라 알림 줄을 담지 않는다. 채널 목록에 없고 아무도 쓰지 못한다. */
+/** The channel where alert lines stand (ADR-0039). Forums are filtered views, so they hold no alert lines. It isn't in the channel list and nobody can write to it. */
 const ALERTS = "alerts";
+/** The default labels' Korean names before ADR-0045, and their English names. Label sync renames them. */
+const KOREAN_LABELS: Record<string, string> = {
+  "직접 충돌": ALERT_LABELS.direct,
+  "간접 충돌": ALERT_LABELS.indirect,
+  "중복 구현": ALERT_LABELS.duplicate,
+  "계약 변경": ALERT_LABELS.declared,
+  확인됨: CONFIRMED_LABEL,
+};
 
-/** 포스트(채널 줄)의 글 수. `c`가 포스트의 채널이다. 결정 PR의 줄은 세지 않는다. */
+/** Number of messages in a post (a channel line). `c` is the post's channel. Decision PR lines aren't counted. */
 const POST_COUNT = "(SELECT COUNT(*) FROM messages WHERE channel = c.id AND decision IS NULL)";
 
-/** 결정 파일을 두는 레포의 폴더(구현 8장). */
+/** The repo folder that holds decision files (implementation doc, section 8). */
 const DECISIONS = "docs/decisions";
-/** 레포의 AGENTS.md가 결정 폴더를 가리키지 않으면 첫 결정 PR이 더하는 한 줄. */
-const AGENTS_LINE = `결정 기록은 \`${DECISIONS}/\`에 있다. 일을 시작하기 전에 관련 결정을 읽는다.`;
-/** 이의 창의 길이를 시간 수로(ADR-0030). */
+/** The one line the first decision PR adds if the repo's AGENTS.md doesn't point to the decisions folder. */
+const AGENTS_LINE = `Decision records are in \`${DECISIONS}/\`. Read the related decisions before you start work.`;
+/** Length of the objection window in hours (ADR-0030). */
 const windowHours = (window: DecisionWindow) =>
   typeof window === "object"
     ? window.amount * (window.unit === "day" ? 24 : 1)
     : { now: 0, hour: 1, day: 24, three_days: 72 }[window];
 const windowName = (window: DecisionWindow) =>
   typeof window === "object"
-    ? `${window.amount}${window.unit === "day" ? "일" : "시간"}`
-    : { now: "바로", hour: "1시간", day: "하루", three_days: "3일" }[window];
-/** 이름 붙은 창은 그대로, 직접 넣은 창은 JSON으로 `span` 열에 둔다. */
+    ? `${window.amount} ${window.unit === "day" ? "day" : "hour"}${window.amount === 1 ? "" : "s"}`
+    : { now: "right away", hour: "1 hour", day: "1 day", three_days: "3 days" }[window];
+/** A named window is kept as is; a custom window goes in the `span` column as JSON. */
 const spanOf = (span: string): DecisionWindow =>
   span.startsWith("{") ? JSON.parse(span) : (span as DecisionWindow);
 
-/** 로그인의 프로필 이름. 모르면 로그인이다. `l`은 로그인을 내는 SQL이다. */
+/** A login's profile name. Falls back to the login if unknown. `l` is the SQL that yields the login. */
 const nameSql = (l: string) => `COALESCE((SELECT name FROM people WHERE login = ${l}), ${l})`;
 
 /**
- * 결정 하나를 계약의 꼴로 읽는 JSON. `d`가 decisions, `dp`가 정리한 사람의 people이다. `decisionView`가 상태를 짓고 시각을 고친다.
- * 서브쿼리가 돌려준 JSON은 `json()`으로 감싼다. 안 그러면 SQLite 판에 따라 `json_object` 안에서 배열이 문자열로 들어간다(Node 24.22.3, #258).
- * 결정자(`d.deciders`, 로그인의 JSON 배열) 가운데 정리한 사람은 늘 동의한 것이다(ADR-0029).
+ * JSON that reads one decision in the contract's shape. `d` is decisions, `dp` is the people row of the person who wrapped it up. `decisionView` builds the state and fixes the times.
+ * Wrap JSON returned by a subquery in `json()`. Otherwise, depending on the SQLite version, an array ends up as a string inside `json_object` (Node 24.22.3, #258).
+ * Among the deciders (`d.deciders`, a JSON array of logins), the person who wrapped it up always agrees (ADR-0029).
  */
 const DECISION = `json_object('id', d.id, 'post', d.post, 'login', d.login, 'name', COALESCE(dp.name, d.login),
   'title', d.title, 'path', d.path, 'pull', json_object('number', d.pull, 'url', d.url),
@@ -231,17 +239,17 @@ const decisionView = (json: string): Decision => {
 };
 
 /**
- * 메시지를 쓴 사람의 이름과, 공개된 문답이면 그 문답, 알림이면 그 알림과 달린 포스트와 함께 읽는다. 뒤에 WHERE와 ORDER BY를 붙여 쓴다.
+ * Read together with the author's name, the Q&A if it's a public Q&A, or the alert and its post if it's an alert. Append WHERE and ORDER BY.
  */
 const POST_LAST = `(SELECT json_object('login', x.login, 'name', COALESCE(pp.name, x.login),
   'line', COALESCE(x.note, x.text, qq.question, ''), 'at', x.at) FROM messages x
   LEFT JOIN people pp ON pp.login = x.login LEFT JOIN qas qq ON qq.id = x.qa
   WHERE x.channel = c.id AND x.decision IS NULL ORDER BY x.id DESC LIMIT 1)`;
 
-/** 포럼 전부의 id와 거르기(JSON 배열), 이름 순. */
+/** The id and filter (JSON array) of every forum, by name. */
 const FORUMS = `(SELECT json_group_array(json_object('id', f.id, 'filter', json(f.filter)) ORDER BY f.name)
   FROM channels f WHERE f.filter IS NOT NULL AND f.workspace = c.workspace)`;
-/** 포스트(`c`)의 중요도: 라벨 가운데 하나라도 논의면 논의다(ADR-0039). 모르는 라벨은 참고다. */
+/** A post's (`c`) importance: Discuss if any label is Discuss (ADR-0039). An unknown label counts as FYI. */
 const POST_IMPORTANCE = `CASE WHEN EXISTS (SELECT 1 FROM json_each(c.labels) j
   JOIN labels l ON l.repo = c.repo AND l.name = j.value AND l.importance = 'discuss') THEN 'discuss' ELSE 'reference' END`;
 
@@ -292,17 +300,17 @@ type MessageRow = {
   decision: string | null;
   last: string | null;
   forums: string | null;
-  /** 레포의 것(알림 줄과 포스트의 글)이면 그 레포. 채팅 채널의 것이면 NULL이다. */
+  /** The repo, if it belongs to a repo (an alert line or a post's message). NULL if it belongs to a chat channel. */
   repo: string | null;
-  /** 이 줄이 선 워크스페이스. 알림 줄의 자리(`ALERTS`)의 것도 그 알림의 레포가 정한다. */
+  /** The workspace this line stands in. An alert line's place (`ALERTS`) is also decided by the alert's repo. */
   workspace: string | null;
-  /** 달린 반응 `[이모지, 로그인, 이름]`의 JSON 배열, 단 차례. */
+  /** JSON array of reactions `[emoji, login, name]`, in the order they were added. */
   reactions: string;
 } & Pick<QaRow, "executor" | "question" | "answer" | "visibility">;
 
 /**
- * 알림 표의 한 줄을 계약의 알림으로. `files` 열은 직접 충돌이면 파일들, 나머지 종류면 심볼들이다.
- * `ALERT_FILES`개까지 이름을 적고 나머지는 센다.
+ * One row of the alerts table as a contract alert. The `files` column holds files for a direct conflict and symbols for other kinds.
+ * Names up to `ALERT_FILES` are written and the rest are counted.
  */
 const alertView = (row: {
   kind: string | null;
@@ -329,24 +337,24 @@ const alertView = (row: {
   };
 };
 
-/** 간접 충돌과 선언된 계약 변경의 심볼에서 쓰는 쪽(`works`의 자리). 그 쪽 러너가 계산한 것이다. */
+/** The side that uses the symbols of an indirect conflict or a declared contract change (the `works` slot). The runner on that side computed it. */
 const usingSide = (symbol: AlertSymbol) =>
   symbol.places[0].some((place) => place.role === "uses") ? 0 : 1;
 
-/** 쓰는 쪽 러너만 계산하는 종류(방향이 있다). */
+/** Kinds only the using side's runner computes (they have a direction). */
 const oneWay = (kind: Alert["kind"]) => kind === "indirect" || kind === "declared";
 
-/** 알림에 묶인 것 하나의 열쇠: 직접 충돌은 경로, 중복 구현은 이름, 간접 충돌과 선언된 계약 변경은 이름과 쓰는 쪽(방향마다 따로다). */
+/** The key of one thing tied to an alert: a path for a direct conflict, a name for duplicate work, a name and using side for an indirect conflict or a declared contract change (each direction is separate). */
 const itemId = (kind: Alert["kind"], item: AlertFile | AlertSymbol) =>
   "path" in item ? item.path : oneWay(kind) ? `${item.name}\0${usingSide(item)}` : item.name;
 
-/** 알림에 묶인 것 하나를 계산할 수 있는 러너의 멤버들(ADR-0023). 간접 충돌과 선언된 계약 변경은 쓰는 쪽 사본의 색인이 있어야 한다. */
+/** The runner members who can compute one thing tied to an alert (ADR-0023). An indirect conflict or a declared contract change needs an index of the using side's copy. */
 const computedBy = (kind: Alert["kind"], item: AlertFile | AlertSymbol, works: WorkRef[]) =>
   oneWay(kind) && "places" in item
     ? [works[usingSide(item)]?.login]
     : works.map((work) => work.login);
 
-/** 포스트 요약(`Post`에서 `alert`만 뺀 것). `row`는 알림 줄이다. 한 줄은 줄바꿈을 접고 `POST_LINE`자까지만 준다. */
+/** A post summary (`Post` without `alert`). `row` is the alert line. A line folds line breaks and is cut at `POST_LINE` characters. */
 const POST_LINE = 200;
 const postSummary = (row: MessageRow): Omit<Post, "alert"> => {
   const last = row.last === null ? null : JSON.parse(row.last);
@@ -381,7 +389,7 @@ const postSummary = (row: MessageRow): Omit<Post, "alert"> => {
   };
 };
 
-/** 반응 줄을 이모지마다 묶는다. 이모지는 처음 달린 차례로 선다. */
+/** Groups reaction rows by emoji. Emojis stand in the order they were first added. */
 const reactionsOf = (json: string): Reaction[] => {
   const grouped = new Map<string, Reaction["members"]>();
   for (const [emoji, login, name] of JSON.parse(json) as [string, string, string][])
@@ -437,63 +445,63 @@ const messageView = (row: MessageRow): ChannelMessage => {
 
 export async function startServer(options: {
   /**
-   * 받을 GitHub 계정 목록(ADR-0043). 이 계정의 레포만 워크스페이스에 넣는다. `owner/name`으로 적은 것은 그 계정을 받고
-   * 그 레포를 켤 때마다 넣는다. 첫 `owner/name`은 레포가 하나이던 판의 레포라, 이미 있는 DB의 것을 그 레포로 옮긴다.
+   * GitHub accounts to accept (ADR-0043). Only this account's repos go into the workspace. An `owner/name` entry accepts that account and
+   * is added whenever that repo is turned on. The first `owner/name` is the repo from when there was one repo, so it moves what an existing DB has to that repo.
    */
   accept: string[];
   github: GitHub;
-  /** GIF 찾기(ADR-0044). 서버 설정에 GIPHY 키가 있을 때만 준다. 없으면 웹에 GIF 버튼이 없다. */
+  /** GIF search (ADR-0044). Given only when the server config has a GIPHY key. Without it the web has no GIF button. */
   giphy?: Giphy;
-  /** SQLite 파일. 주지 않으면 메모리에 두고 서버가 꺼지면 잃는다. */
+  /** SQLite file. If not given, it lives in memory and is lost when the server stops. */
   database?: string;
   port?: number;
-  /** 듣는 주소. 기본은 이 기기 안에서만 듣는다. 바깥에 열 때만 "0.0.0.0"처럼 준다. */
+  /** Address to listen on. By default it listens only on this machine. Give something like "0.0.0.0" only to open it outside. */
   hostname?: string;
   recheckMs?: number;
   heartbeatMs?: number;
   followMs?: number;
   forgetMs?: number;
-  /** 편지함의 소식을 남겨 두는 시간. 기본 14일(`INBOX_MS`). 테스트가 줄여 쓴다. 만료는 `followMs`마다 치운다. */
+  /** How long inbox items are kept. Default 14 days (`INBOX_MS`). Tests shorten it. Expiry is swept every `followMs`. */
   inboxMs?: number;
-  /** 고른 접속 상태가 온라인으로 돌아오기까지의 시간. 테스트가 줄여 쓴다. 주지 않은 것은 계약의 시간이다. */
+  /** Time for a chosen presence to go back to online. Tests shorten it. If not given, it's the contract's time. */
   presenceDurations?: Partial<Record<PresenceDuration, number>>;
-  /** 사람이 웹을 여는 주소. 결정 파일의 출처(포스트 링크)에 쓴다. 주지 않으면 서버가 듣는 주소다. */
+  /** The address where people open the web. Used for a decision file's source (the post link). If not given, it's the address the server listens on. */
   publicUrl?: string;
-  /** 결정 PR의 이의 창에서 한 시간의 길이. 기본은 정말 한 시간이다. 테스트가 줄여 쓴다. 창이 닫혔는지는 `followMs`마다 본다. */
+  /** Length of one hour in a decision PR's objection window. By default it's really one hour. Tests shorten it. Whether the window closed is checked every `followMs`. */
   hourMs?: number;
-  /** 토론의 라운드 수. 기본은 `DEBATE_ROUNDS`(가린 첫 라운드와 반박 두 라운드)이고 줄일 수 있다. */
+  /** Number of debate rounds. Default is `DEBATE_ROUNDS` (a blinded first round and two rebuttal rounds) and it can be reduced. */
   debateRounds?: number;
-  /** 토론이 끝나지 않으면 만료하기까지의 시간. 기본 14일(`INBOX_MS`). 테스트가 줄여 쓴다. 만료는 `followMs`마다 본다. */
+  /** Time before an unfinished debate expires. Default 14 days (`INBOX_MS`). Tests shorten it. Expiry is checked every `followMs`. */
   debateMs?: number;
-  /** Fly 위에서 돈다(`FLY_APP_NAME`이 있다). 그때만 앞단이 넣는 Fly-Client-IP를 클라이언트 주소로 믿는다. */
+  /** Running on Fly (`FLY_APP_NAME` is set). Only then is the Fly-Client-IP the front adds trusted as the client address. */
   behindFly?: boolean;
-  /** hello를 마치기까지의 시간. 기본 10초. 테스트가 줄여 쓴다. */
+  /** Time to finish hello. Default 10 seconds. Tests shorten it. */
   helloMs?: number;
-  /** 빌드한 웹 화면(`vite build`의 dist) 폴더. 주면 API와 같은 주소에서 낸다. 개발할 때는 주지 않고 Vite를 쓴다. */
+  /** Folder of the built web UI (`vite build`'s dist). If given, it's served from the same address as the API. In development it's not given and Vite is used. */
   webDir?: string;
 }) {
   const { github } = options;
-  /** 받을 계정들(소문자). */
+  /** Accounts to accept (lowercase). */
   const accounts = new Set(options.accept.map((entry) => entry.split("/")[0]?.toLowerCase()));
-  /** 서버 설정이 정한 레포들. */
+  /** Repos set by the server config. */
   const seeds = options.accept.filter((entry) => entry.includes("/"));
-  /** 레포가 하나이던 판의 레포. 이미 있는 DB의 레포 없는 것은 이 레포의 것이다. */
+  /** The repo from when there was one repo. Rows in an existing DB without a repo belong to this repo. */
   const legacy = seeds[0];
   const version = checkoutVersion();
   const hostname = options.hostname ?? "127.0.0.1";
   const db = new DatabaseSync(options.database ?? ":memory:");
-  // 세션은 해시로만 둔다. GitHub 토큰은 서버 밖으로 나가지 않는다.
+  // Sessions are kept only as hashes. The GitHub token never leaves the server.
   db.exec(`CREATE TABLE IF NOT EXISTS sessions (
     hash TEXT PRIMARY KEY,
     login TEXT NOT NULL,
     github_token TEXT NOT NULL
   ) STRICT`);
-  // 멤버마다 GitHub 프로필의 이름. 로그인할 때마다 다시 적는다.
+  // Each member's GitHub profile name. Rewritten at every login.
   db.exec(`CREATE TABLE IF NOT EXISTS people (
     login TEXT PRIMARY KEY,
     name TEXT NOT NULL
   ) STRICT`);
-  // 작업(멤버 + 브랜치)마다의 마지막 관측. `files`는 계약의 ObservedFile 배열(JSON)이다.
+  // The last observation for each work (member + branch). `files` is the contract's ObservedFile array (JSON).
   db.exec(`CREATE TABLE IF NOT EXISTS works (
     login TEXT NOT NULL,
     branch TEXT NOT NULL,
@@ -502,7 +510,7 @@ export async function startServer(options: {
     files TEXT NOT NULL,
     PRIMARY KEY (login, branch)
   ) STRICT`);
-  // 작업마다 에이전트가 쓴 상태 한 줄. `at`은 쓴 시각(ms)이다. 관측이 없는 브랜치에도 쓸 수 있고, 관측되면 보인다.
+  // The one-line status the agent wrote for each work. `at` is the time written (ms). It can be written for a branch with no observation, and shows once observed.
   db.exec(`CREATE TABLE IF NOT EXISTS lines (
     login TEXT NOT NULL,
     branch TEXT NOT NULL,
@@ -510,26 +518,26 @@ export async function startServer(options: {
     at INTEGER NOT NULL,
     PRIMARY KEY (login, branch)
   ) STRICT`);
-  // 멤버마다 러너가 붙을 때 알린 실행기. 실행기마다 에이전트가 하나다(ADR-0015). 러너가 떨어져도 남아 오프라인으로 보인다.
+  // The executors each member's runner reported when it connected. There is one agent per executor (ADR-0015). They stay after the runner drops and show as offline.
   db.exec(`CREATE TABLE IF NOT EXISTS agents (
     login TEXT NOT NULL,
     executor TEXT NOT NULL,
     PRIMARY KEY (login, executor)
   ) STRICT`);
-  // 작업마다 그 작업의 에이전트: 그 브랜치에서 마지막으로 훅이나 status set을 보낸 실행기(ADR-0015). 관측만 있는 작업은 없다.
+  // Each work's agent: the executor that last sent a hook or status set on that branch (ADR-0015). A work with only observations has none.
   db.exec(`CREATE TABLE IF NOT EXISTS work_agents (
     login TEXT NOT NULL,
     branch TEXT NOT NULL,
     executor TEXT NOT NULL,
     PRIMARY KEY (login, branch)
   ) STRICT`);
-  // 러너가 떨어진 멤버와 떨어진 시각(ms). 러너가 붙으면 지운다.
+  // Members whose runner dropped, and when it dropped (ms). Removed when the runner connects.
   db.exec(`CREATE TABLE IF NOT EXISTS offline (
     login TEXT PRIMARY KEY,
     since INTEGER NOT NULL
   ) STRICT`);
-  // 사람마다 스스로 고른 접속 상태와 상태 메시지. `presence`는 계약의 ChosenPresence, `until`은 고른 것이 끝나는 시각(ms)이고
-  // NULL이면 직접 바꿀 때까지다. `message`와 `emoji`(글 앞의 이모지 한 칸)가 빈 글이면 없다. 들어와 있는지(웹 창)는 여기 두지 않는다.
+  // Each person's self-chosen presence and status message. `presence` is the contract's ChosenPresence, `until` is when the choice ends (ms),
+  // and NULL means until they change it. `message` and `emoji` (one emoji before the text) are absent if empty. Whether they're present (a web window) isn't kept here.
   db.exec(`CREATE TABLE IF NOT EXISTS profiles (
     login TEXT PRIMARY KEY,
     presence TEXT NOT NULL,
@@ -537,18 +545,18 @@ export async function startServer(options: {
     message TEXT NOT NULL,
     emoji TEXT NOT NULL DEFAULT ''
   ) STRICT`);
-  // v0.1.0의 표에는 `emoji`가 없다.
+  // The v0.1.0 table has no `emoji`.
   if (!db.prepare("SELECT 1 FROM pragma_table_info('profiles') WHERE name = 'emoji'").get())
     db.exec("ALTER TABLE profiles ADD COLUMN emoji TEXT NOT NULL DEFAULT ''");
-  // 채팅 채널. 이름은 대소문자를 가리지 않고 하나뿐이다.
+  // Chat channels. Names are case-insensitive and unique.
   db.exec(`CREATE TABLE IF NOT EXISTS channels (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL UNIQUE COLLATE NOCASE
   ) STRICT`);
-  // 채널의 메시지. `id`는 워크스페이스 전체에서 늘어나기만 한다(AUTOINCREMENT라 지워도 다시 쓰지 않는다).
-  // 웹이 다시 붙을 때 이 번호 뒤의 것을 이어 받는다. `at`은 쓴 시각(ms)이다.
-  // 사람이 쓴 글이면 `text`, 공개된 문답이면 `qa`(문답 번호) 가운데 하나만 있다. 문답의 `login`은 그 에이전트의 주인이다.
-  // `note`는 문답을 올린 사람이 함께 쓴 글이다(없으면 NULL). `text`의 CHECK를 바꾸려면 표를 다시 만들어야 해서 따로 둔다.
+  // Channel messages. `id` only grows across the whole workspace (AUTOINCREMENT never reuses one even after a delete).
+  // When the web reconnects, it resumes from the messages after this number. `at` is the time written (ms).
+  // Exactly one of `text` (a message a person wrote) or `qa` (a Q&A number, for a public Q&A) is set. A Q&A's `login` is that agent's owner.
+  // `note` is what the person who posted the Q&A wrote with it (NULL if none). Changing the CHECK on `text` means rebuilding the table, so it's separate.
   db.exec(`CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     channel TEXT NOT NULL REFERENCES channels (id),
@@ -559,12 +567,12 @@ export async function startServer(options: {
     note TEXT,
     CHECK ((text IS NULL) != (qa IS NULL))
   ) STRICT`);
-  // v0.1.0의 표에는 `note`가 없다.
+  // The v0.1.0 table has no `note`.
   if (!db.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'note'").get())
     db.exec("ALTER TABLE messages ADD COLUMN note TEXT");
   db.exec("CREATE INDEX IF NOT EXISTS messages_by_channel ON messages (channel, id)");
-  // 메시지의 반응(ADR-0044): (메시지, 이모지, 멤버)마다 한 줄. `at`은 단 시각(ms)이다.
-  // 메시지의 `reacted`는 반응이 마지막으로 바뀐 시각(ms)이다. 다시 붙은 웹에 끊긴 사이에 바뀐 것을 다시 보내려고 둔다(떼면 줄이 없어지므로).
+  // Message reactions (ADR-0044): one row per (message, emoji, member). `at` is the time added (ms).
+  // A message's `reacted` is when its reactions last changed (ms). It lets a reconnecting web resend what changed while it was disconnected (since removing a reaction leaves no row).
   db.exec(`CREATE TABLE IF NOT EXISTS reactions (
     message INTEGER NOT NULL REFERENCES messages (id),
     emoji TEXT NOT NULL,
@@ -574,19 +582,19 @@ export async function startServer(options: {
   ) STRICT`);
   if (!db.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'reacted'").get())
     db.exec("ALTER TABLE messages ADD COLUMN reacted INTEGER");
-  // 알림에 달린 포스트(문답 Q3)는 채널의 한 줄이다. 그래서 글, 지난 대화, DM, `@호출`, 채널에 올리기가 채널과 같은 길로 돈다.
-  // `alert`는 알림이 선 메시지의 번호이고, 채팅 채널이면 NULL이다. 포스트의 `name`은 사람이 지을 수 없는 이름(줄바꿈으로 시작)이라
-  // 채팅 채널의 이름과 겹치지 않는다. 사람이 읽는 이름은 `postName`이 짓는다. v0.1.0의 표에는 `alert`가 없다.
+  // The post on an alert (Q&A Q3) is one line of a channel. So text, past conversation, DMs, `@mentions`, and posting to the channel run the same way as in a channel.
+  // `alert` is the number of the message the alert stands on, and NULL for a chat channel. A post's `name` is a name a person can't write (it starts with a line break),
+  // so it never collides with a chat channel's name. `postName` builds the name people read. The v0.1.0 table has no `alert`.
   if (!db.prepare("SELECT 1 FROM pragma_table_info('channels') WHERE name = 'alert'").get())
     db.exec("ALTER TABLE channels ADD COLUMN alert INTEGER REFERENCES messages (id)");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS channels_by_alert ON channels (alert)");
-  // 이슈에 올린 판정(#134): `verdict`는 마지막으로 이슈에 맞춘 것(confirmed, cleared, passed)이고, 올린 댓글의 번호는
-  // `verdict_comments`에 적어 댓글 읽기가 포스트의 글로 다시 들이지 않게 한다.
+  // The verdict posted to the issue (#134): `verdict` is what the issue was last matched to (confirmed, cleared, passed), and the numbers of the comments posted are kept in
+  // `verdict_comments` so reading comments doesn't bring them back in as post messages.
   if (!db.prepare("SELECT 1 FROM pragma_table_info('channels') WHERE name = 'verdict'").get())
     db.exec("ALTER TABLE channels ADD COLUMN verdict TEXT");
   db.exec("CREATE TABLE IF NOT EXISTS verdict_comments (id INTEGER PRIMARY KEY) STRICT");
-  // 포스트에서 정리한 결정과 그 결정 PR(ADR-0025). `login`은 정리한 멤버, `pull`과 `url`은 PR의 번호와 주소, `span`은 이의 창,
-  // `state`는 PR에서 읽은 상태(proposed, accepted, closed), `at`은 정리한 시각(ms)이다.
+  // A decision wrapped up from a post and its decision PR (ADR-0025). `login` is the member who wrapped it up, `pull` and `url` are the PR's number and address, `span` is the objection window,
+  // `state` is the state read from the PR (proposed, accepted, closed), and `at` is when it was wrapped up (ms).
   db.exec(`CREATE TABLE IF NOT EXISTS decisions (
     id INTEGER PRIMARY KEY,
     post TEXT NOT NULL REFERENCES channels (id),
@@ -599,12 +607,12 @@ export async function startServer(options: {
     state TEXT NOT NULL DEFAULT 'proposed',
     at INTEGER NOT NULL
   ) STRICT`);
-  // 결정 PR의 줄은 `decision`(결정 번호)이 있고, `text`가 일어난 일, `note`가 막힌 까닭, `login`이 그 일을 한 사람(없으면 빈 이름)이다.
+  // A decision PR's line has `decision` (the decision number). `text` is what happened, `note` is why it's blocked, and `login` is who did it (an empty name if none).
   if (!db.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'decision'").get())
     db.exec("ALTER TABLE messages ADD COLUMN decision INTEGER REFERENCES decisions (id)");
-  // 이의 창과 동의(#86). `branch`는 결정 PR의 브랜치, `deciders`는 결정자 로그인의 JSON 배열, `closes`는 창이 닫히는 시각(ms),
-  // `reopened`는 이의가 모두 거둬져 다시 열렸는지, `early`는 모두 동의해 일찍 머지했는지, `stuck`은 머지가 막히거나 멈춘 것({kind, reason})이다.
-  // #83의 결정은 결정자를 몰라 일찍 머지하지 않고, 창은 정리한 때부터 잰다.
+  // Objection window and agreements (#86). `branch` is the decision PR's branch, `deciders` is a JSON array of decider logins, `closes` is when the window closes (ms),
+  // `reopened` is whether it reopened after all objections were withdrawn, `early` is whether it merged early because everyone agreed, and `stuck` is a blocked or stalled merge ({kind, reason}).
+  // Decision #83 doesn't know its deciders, so it doesn't merge early, and its window counts from when it was wrapped up.
   if (!db.prepare("SELECT 1 FROM pragma_table_info('decisions') WHERE name = 'closes'").get()) {
     db.exec(`ALTER TABLE decisions ADD COLUMN branch TEXT;
       ALTER TABLE decisions ADD COLUMN deciders TEXT NOT NULL DEFAULT '[]';
@@ -617,16 +625,16 @@ export async function startServer(options: {
     );
     db.exec("UPDATE decisions SET closes = at WHERE span = 'now'");
   }
-  // 대행이 낀 토론의 부재자(#198). 로그인의 JSON 배열이고, 모두 동의해야 머지한다.
+  // Absentees of a debate with a proxy (#198). A JSON array of logins, and all of them must agree to merge.
   if (!db.prepare("SELECT 1 FROM pragma_table_info('decisions') WHERE name = 'absent'").get())
     db.exec("ALTER TABLE decisions ADD COLUMN absent TEXT NOT NULL DEFAULT '[]'");
-  // 결정자의 동의. 정리한 사람의 것은 두지 않는다(늘 동의한 것이다).
+  // Deciders' agreements. The wrapper-up's isn't stored (they always agree).
   db.exec(`CREATE TABLE IF NOT EXISTS agreements (
     decision INTEGER NOT NULL REFERENCES decisions (id),
     login TEXT NOT NULL,
     PRIMARY KEY (decision, login)
   ) STRICT`);
-  // 걸린 이의. 포스트에서 낸 것(`post`)과 GitHub의 변경 요청 리뷰(`github`). 거두면 지운다. `at`은 낸 시각(ms)이다.
+  // Objections raised. One from a post (`post`) and one from a GitHub changes-requested review (`github`). Removed when withdrawn. `at` is when it was raised (ms).
   db.exec(`CREATE TABLE IF NOT EXISTS objections (
     decision INTEGER NOT NULL REFERENCES decisions (id),
     login TEXT NOT NULL,
@@ -634,14 +642,14 @@ export async function startServer(options: {
     at INTEGER NOT NULL,
     PRIMARY KEY (decision, login, via)
   ) STRICT`);
-  // 채널의 종류(ADR-0027). 포스트의 줄은 'chat'으로 두고 `alert`로 가린다. 2단계 앞의 표에는 `kind`가 없다.
+  // Channel kind (ADR-0027). A post's line is 'chat' and is told apart by `alert`. Tables from before stage 2 have no `kind`.
   if (!db.prepare("SELECT 1 FROM pragma_table_info('channels') WHERE name = 'kind'").get())
     db.exec(
       "ALTER TABLE channels ADD COLUMN kind TEXT NOT NULL DEFAULT 'chat' CHECK (kind IN ('chat', 'forum'))",
     );
-  // 포스트의 GitHub 이슈(ADR-0032). `issue`는 번호(아직 열지 못했으면 NULL), 제목·라벨(JSON)·열림은 GitHub에서 마지막으로 읽은 것이다.
-  // `issue_closed`는 알림이 풀려 Omagari가 이슈를 닫은 시각(ms)이다. 사람이 다시 열면 다시 닫지 않는다.
-  // 메시지의 `comment`는 그 글과 맞춘 이슈 댓글의 번호다. 포스트의 글을 댓글로 올렸거나 댓글이 글로 들어왔다. `github`이 1이면 들어온 것이다.
+  // A post's GitHub issue (ADR-0032). `issue` is the number (NULL if it couldn't be opened yet), and the title, labels (JSON), and open state are what was last read from GitHub.
+  // `issue_closed` is when Omagari closed the issue because the alert resolved (ms). If a person reopens it, it's not closed again.
+  // A message's `comment` is the number of the issue comment matched to that message. A post's message was posted as a comment, or a comment came in as a message. `github` set to 1 means it came in.
   if (!db.prepare("SELECT 1 FROM pragma_table_info('channels') WHERE name = 'issue'").get())
     db.exec(`ALTER TABLE channels ADD COLUMN issue INTEGER;
       ALTER TABLE channels ADD COLUMN issue_url TEXT;
@@ -652,10 +660,10 @@ export async function startServer(options: {
       ALTER TABLE messages ADD COLUMN comment INTEGER;
       ALTER TABLE messages ADD COLUMN github INTEGER NOT NULL DEFAULT 0;`);
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS messages_by_comment ON messages (comment)");
-  // 알림(ADR-0023): 두 작업 한 쌍과 종류(`kind`)마다 하나. 채널에는 messages의 한 줄(`alert`)로 선다. 그 줄의 `text`는 빈 글, `login`은 빈 이름이다
-  // (`text`의 CHECK를 바꾸려면 표를 다시 만들어야 한다). `pair`는 두 작업을 정한 순서로 적은 열쇠, `works`는 계약의 WorkRef 둘(JSON),
-  // `files`는 묶은 것 전부(직접 충돌이면 계약의 AlertFile 배열로 확인된 것부터 경로 순, 나머지 종류면 AlertSymbol 배열로 이름 순)다. `resolved`는 풀린 시각(ms)이고, 풀리지 않은 알림은 쌍마다 하나다.
-  // `updated`는 마지막으로 고친 시각(ms)이다. 실시간 연결이 다시 붙을 때 끊긴 사이에 고친 알림을 다시 보낸다.
+  // Alerts (ADR-0023): one per pair of works and kind (`kind`). In a channel it stands as one messages row (`alert`). That row's `text` is empty and `login` is an empty name
+  // (changing the CHECK on `text` means rebuilding the table). `pair` is the key with the two works in a fixed order, `works` is two contract WorkRefs (JSON),
+  // and `files` is everything grouped (for a direct conflict, the contract's AlertFile array with confirmed ones first and then by path; for other kinds, an AlertSymbol array by name). `resolved` is when it resolved (ms), and there is one unresolved alert per pair.
+  // `updated` is when it was last changed (ms). When a live connection reconnects, alerts changed while it was down are resent.
   db.exec(`CREATE TABLE IF NOT EXISTS alerts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     pair TEXT NOT NULL,
@@ -666,21 +674,21 @@ export async function startServer(options: {
     updated INTEGER NOT NULL
   ) STRICT`);
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS alerts_open ON alerts (pair) WHERE resolved IS NULL");
-  // 직접 충돌만 있던 표에는 `kind`가 없다. 직접 충돌의 `pair`는 그대로 두고, 다른 종류는 `pair` 앞에 종류를 붙인다.
+  // A table with only direct conflicts has no `kind`. A direct conflict's `pair` stays as is, and other kinds put the kind before `pair`.
   if (!db.prepare("SELECT 1 FROM pragma_table_info('alerts') WHERE name = 'kind'").get())
     db.exec("ALTER TABLE alerts ADD COLUMN kind TEXT NOT NULL DEFAULT 'direct'");
-  // 합쳐 돌려 보기(ADR-0036): `run`은 간접 충돌 알림에 붙은 마지막 판정(계약의 AlertRun, JSON), `confirmed`는 깨져 확인됐는지(0, 1)다.
+  // Merge run (ADR-0036): `run` is the last verdict attached to an indirect conflict alert (the contract's AlertRun, JSON), and `confirmed` is whether it broke and was confirmed (0, 1).
   if (!db.prepare("SELECT 1 FROM pragma_table_info('alerts') WHERE name = 'run'").get())
     db.exec(`ALTER TABLE alerts ADD COLUMN run TEXT;
       ALTER TABLE alerts ADD COLUMN confirmed INTEGER NOT NULL DEFAULT 0;`);
-  // 통과로 닫힌 간접 충돌(ADR-0035): `held`가 1이면 그 쌍은 다시 돌린 판정이 나올 때까지 알림을 다시 세우지 않는다. 쌍마다 하나까지다.
+  // Indirect conflict closed as passed (ADR-0035): if `held` is 1, the alert isn't raised again for that pair until a rerun verdict comes. At most one per pair.
   if (!db.prepare("SELECT 1 FROM pragma_table_info('alerts') WHERE name = 'held'").get())
     db.exec("ALTER TABLE alerts ADD COLUMN held INTEGER NOT NULL DEFAULT 0");
-  // v0.1.0의 표에는 `alert`가 없다.
+  // The v0.1.0 table has no `alert`.
   if (!db.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'alert'").get())
     db.exec("ALTER TABLE messages ADD COLUMN alert INTEGER REFERENCES alerts (id)");
-  // 포스트의 라벨(ADR-0039, JSON 배열). 이슈의 라벨(`issue_labels`)과 따로 Omagari에 둔다. 이 열이 없던 DB의 포스트에는
-  // 알림의 종류 라벨과, 확인됐으면 확인됨을 붙인다. 이미 연 이슈는 그대로 둔다(문답 A10).
+  // A post's labels (ADR-0039, JSON array). Kept in Omagari separately from the issue's labels (`issue_labels`). For posts in a DB without this column,
+  // the alert's kind label is added, plus Confirmed if it was confirmed. Issues already opened are left alone (Q&A A10).
   if (!db.prepare("SELECT 1 FROM pragma_table_info('channels') WHERE name = 'labels'").get()) {
     db.exec("ALTER TABLE channels ADD COLUMN labels TEXT");
     const posts = db
@@ -695,8 +703,8 @@ export async function startServer(options: {
         post.id,
       );
   }
-  // 라벨(ADR-0039): 레포의 GitHub 라벨과 팀이 단 중요도. 이름, 색, 설명은 주기마다 GitHub에서 읽는다. `github`은 GitHub 라벨의 id이고,
-  // 아직 GitHub에 없는 기본 라벨(종류 넷과 확인됨)은 NULL이라 다음 주기에 만든다. GitHub처럼 이름은 대소문자를 가리지 않는다.
+  // Labels (ADR-0039): the repo's GitHub labels and the importance the team set. Name, color, and description are read from GitHub every round. `github` is the GitHub label id,
+  // and a default label not yet on GitHub (the four kinds and Confirmed) is NULL and is created on the next round. As on GitHub, names are case-insensitive.
   db.exec(`CREATE TABLE IF NOT EXISTS labels (
     name TEXT NOT NULL UNIQUE COLLATE NOCASE,
     github INTEGER UNIQUE,
@@ -704,16 +712,16 @@ export async function startServer(options: {
     description TEXT NOT NULL DEFAULT '',
     importance TEXT NOT NULL DEFAULT 'reference' CHECK (importance IN ('reference', 'discuss'))
   ) STRICT`);
-  /** 레포의 기본 라벨이 목록에 없으면 넣는다. GitHub에 없으면 다음 주기에 만든다. */
+  /** Adds the repo's default labels if they're missing from the list. If they're not on GitHub, they're created on the next round. */
   const seedLabels = (repo: string) => {
     for (const [name, color] of Object.entries(DEFAULT_LABEL_COLORS))
       db.prepare(
         "INSERT OR IGNORE INTO labels (repo, name, color, importance) VALUES (?, ?, ?, ?)",
       ).run(repo, name, color, DISCUSS_LABELS.includes(name) ? "discuss" : "reference");
   };
-  // 포럼의 거르기(ADR-0039, 계약의 ForumFilter JSON). 포럼에만 있고, 채팅과 포스트와 알림 줄의 자리(`ALERTS`)는 NULL이다.
-  // 이 열이 없던 DB: 알림 줄을 모두 `ALERTS`로 옮기고, 있던 포럼은 논의로 거르며 "부딪힘"은 "논의"가 된다(이름이 겹치면 그대로 둔다).
-  // 처음 띄운 서버에도 "논의"와 "참고" 포럼이 생긴다. 그 뒤로 지운 포럼은 다시 만들지 않는다.
+  // A forum's filter (ADR-0039, the contract's ForumFilter JSON). Only forums have it; chat, posts, and the alert lines' place (`ALERTS`) are NULL.
+  // For a DB without this column: all alert lines move to `ALERTS`, existing forums are filtered to Discuss, and "Conflict" becomes "Discuss" (left alone if the name collides).
+  // A freshly started server also gets the "Discuss" and "FYI" forums. A forum deleted after that isn't recreated.
   if (!db.prepare("SELECT 1 FROM pragma_table_info('channels') WHERE name = 'filter'").get()) {
     db.exec("BEGIN");
     db.exec("ALTER TABLE channels ADD COLUMN filter TEXT");
@@ -726,7 +734,9 @@ export async function startServer(options: {
       JSON.stringify({ importance: "discuss" }),
       ALERTS,
     );
-    db.exec("UPDATE OR IGNORE channels SET name = '논의' WHERE kind = 'forum' AND name = '부딪힘'");
+    db.prepare(
+      "UPDATE OR IGNORE channels SET name = ? WHERE kind = 'forum' AND name = '부딪힘'",
+    ).run(IMPORTANCE_LABELS.discuss);
     for (const importance of Importance.options) {
       const filter = JSON.stringify({ importance });
       if (!db.prepare("SELECT 1 FROM channels WHERE filter = ?").get(filter))
@@ -736,9 +746,9 @@ export async function startServer(options: {
     }
     db.exec("COMMIT");
   }
-  // 편지함(2단계 질문 A5~A7): 작업(`login` + `branch`)마다 넘겨줄 소식. 알림(`alert`)이거나, 그 밖의 소식(`news`, 계약의 InboxItem에서
-  // id, branch, at을 뺀 것의 JSON) 가운데 하나다. `at`은 들어온 시각(ms)이다.
-  // 작업과 알림마다 넘겨주지 않은 것은 하나다. 넘겨준 확인이 오면 지우고, `inboxMs`가 지나면 만료로 지운다.
+  // Inbox (stage 2 Q A5~A7): news to hand to each work (`login` + `branch`). It's either an alert (`alert`) or other news (`news`, JSON of the contract's InboxItem
+  // without id, branch, at). `at` is when it came in (ms).
+  // There is one undelivered item per work and alert. When a delivery receipt comes it's removed, and after `inboxMs` it's removed as expired.
   const INBOX = `(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     login TEXT NOT NULL,
@@ -750,7 +760,7 @@ export async function startServer(options: {
     CHECK ((alert IS NULL) != (news IS NULL))
   ) STRICT`;
   db.exec(`CREATE TABLE IF NOT EXISTS inbox ${INBOX}`);
-  // #82의 표에는 `news`가 없고 `alert`가 NOT NULL이다. 표를 다시 만들어 옮긴다(번호는 그대로 이어 간다).
+  // The #82 table has no `news` and `alert` is NOT NULL. The table is rebuilt and moved over (numbers continue as they were).
   if (!db.prepare("SELECT 1 FROM pragma_table_info('inbox') WHERE name = 'news'").get()) {
     db.exec("BEGIN");
     db.exec(`CREATE TABLE inbox_next ${INBOX}`);
@@ -761,8 +771,8 @@ export async function startServer(options: {
     db.exec("ALTER TABLE inbox_next RENAME TO inbox");
     db.exec("COMMIT");
   }
-  // 선점(ADR-0008). `lines`는 LineRange(JSON)이고 심볼과 줄 범위에만 있다. `at`은 건 시각(ms)이다.
-  // `stale`은 주인이 오프라인으로 `forgetMs`를 넘겨 "오래됨"이 된 시각(ms)이고, 그 뒤 `forgetMs`가 더 지나면 지운다. 러너가 다시 붙으면 지운다.
+  // Claims (ADR-0008). `lines` is a LineRange (JSON) and exists only for symbols and line ranges. `at` is when it was set (ms).
+  // `stale` is when the owner went offline past `forgetMs` and it became "stale" (ms); after another `forgetMs` it's removed. Removed when the runner reconnects.
   db.exec(`CREATE TABLE IF NOT EXISTS claims (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     login TEXT NOT NULL,
@@ -775,23 +785,23 @@ export async function startServer(options: {
     stale INTEGER,
     plan TEXT
   ) STRICT`);
-  // #85의 표에는 계획(`plan`, 계약의 Plan JSON)이 없다.
+  // The #85 table has no plan (`plan`, the contract's Plan JSON).
   if (!db.prepare("SELECT 1 FROM pragma_table_info('claims') WHERE name = 'plan'").get())
     db.exec("ALTER TABLE claims ADD COLUMN plan TEXT");
-  // 피드에만 남는 소식: 걸거나 푼 선점(`kind`가 claim이나 released, `claim`은 계약의 Claim JSON). `inboxMs`가 지나면 지운다.
+  // News that stays only in the feed: a claim set or released (`kind` is claim or released, `claim` is the contract's Claim JSON). Removed after `inboxMs`.
   db.exec(`CREATE TABLE IF NOT EXISTS feed (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     kind TEXT NOT NULL,
     claim TEXT NOT NULL,
     at INTEGER NOT NULL
   ) STRICT`);
-  // 워크스페이스의 설정 하나씩: 러너가 마지막으로 알려 온 설정 파일(`check`, 계약의 CheckReading JSON).
+  // One setting per workspace: the config file the runner last reported (`check`, the contract's CheckReading JSON).
   db.exec(`CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   ) STRICT`);
-  // 문답. 묻는 사람(`login`)이 그 에이전트의 주인이다. 비공개면 그 사람만 보고, 공개면 messages에 한 줄이 서서 모두가 본다.
-  // `answer`는 계약의 Qa.answer(JSON)이고, 답을 기다리는 동안 NULL이다. `settled`는 답이나 실패를 적은 시각(ms)이다.
+  // Q&As. The asker (`login`) is that agent's owner. If private, only that person sees it; if public, one line stands in messages and everyone sees it.
+  // `answer` is the contract's Qa.answer (JSON) and is NULL while waiting for an answer. `settled` is when the answer or failure was written (ms).
   db.exec(`CREATE TABLE IF NOT EXISTS qas (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     channel TEXT NOT NULL REFERENCES channels (id),
@@ -804,8 +814,8 @@ export async function startServer(options: {
     settled INTEGER
   ) STRICT`);
   db.exec("CREATE INDEX IF NOT EXISTS qas_by_asker ON qas (login, channel, id)");
-  // 묻기(ADR-0024). 묻는 작업(`login` + `branch`)이 받는 멤버(`target`)에게 보낸 질문. `executor`는 받는 쪽 실행기이고 고르지 않았으면 보낼 때 정한다.
-  // `answer`는 편지함에 넣은 답이나 실패(JSON)이고, 답을 기다리는 동안 NULL이다. `at`은 물은 시각(ms)이고 `inboxMs`가 지나면 지운다.
+  // Asks (ADR-0024). A question sent by the asking work (`login` + `branch`) to the receiving member (`target`). `executor` is the receiving side's executor, chosen at send time if none was picked.
+  // `answer` is the answer or failure put in the inbox (JSON) and is NULL while waiting. `at` is when it was asked (ms) and it's removed after `inboxMs`.
   db.exec(`CREATE TABLE IF NOT EXISTS questions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     login TEXT NOT NULL,
@@ -816,12 +826,12 @@ export async function startServer(options: {
     at INTEGER NOT NULL,
     answer TEXT
   ) STRICT`);
-  // 남의 질문에 답하지 않게 스위치를 끈 멤버(ADR-0024). 기본은 켜짐이라 없으면 켜짐이다.
+  // Members who turned off the switch so they don't answer others' questions (ADR-0024). The default is on, so a missing row means on.
   db.exec("CREATE TABLE IF NOT EXISTS ask_off (login TEXT PRIMARY KEY) STRICT");
   // Each member's personal settings (contract Prefs, JSON). No row means DEFAULT_PREFS.
   db.exec("CREATE TABLE IF NOT EXISTS prefs (login TEXT PRIMARY KEY, prefs TEXT NOT NULL) STRICT");
-  // 포스트의 토론(ADR-0040). 한 포스트에 토론은 하나다. `round`는 지금 라운드, `state`는 `Debate.state`다.
-  // `flip`이 1이면 안의 순서를 자리의 거꾸로 둔다(주인을 가린다). `winner`는 결론이 된 자리, `by`는 정한 길, `chooser`와 `decided`는 고른 멤버와 시각(ms)이다.
+  // A post's debate (ADR-0040). A post has one debate. `round` is the current round and `state` is `Debate.state`.
+  // If `flip` is 1, the order of the sides is reversed from the seats (to blind the owner). `winner` is the seat that became the conclusion, `by` is how it was decided, and `chooser` and `decided` are the member who chose and when (ms).
   db.exec(`CREATE TABLE IF NOT EXISTS debates (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     post TEXT NOT NULL UNIQUE,
@@ -835,7 +845,7 @@ export async function startServer(options: {
     decided INTEGER,
     expired INTEGER NOT NULL DEFAULT 0
   ) STRICT`);
-  // 증거 라벨 없이 멤버나 에이전트가 낸 토론 요청(ADR-0040). 포스트마다 가장 나중 것 하나다. 안건이나 근거가 비면 열리지 않고 이것만 남는다.
+  // A debate request from a member or agent without an evidence label (ADR-0040). Only the latest one per post. If the agenda or evidence is empty, it doesn't open and only this remains.
   db.exec(`CREATE TABLE IF NOT EXISTS debate_requests (
     post TEXT PRIMARY KEY,
     login TEXT NOT NULL,
@@ -844,7 +854,7 @@ export async function startServer(options: {
     opened INTEGER NOT NULL,
     at INTEGER NOT NULL
   ) STRICT`);
-  // #195의 표에는 끝내기가 없다.
+  // The #195 table has no ending.
   if (!db.prepare("SELECT 1 FROM pragma_table_info('debates') WHERE name = 'state'").get()) {
     db.exec(`ALTER TABLE debates ADD COLUMN state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open', 'choosing', 'concluded', 'ended'));
       ALTER TABLE debates ADD COLUMN flip INTEGER NOT NULL DEFAULT 0;
@@ -853,10 +863,10 @@ export async function startServer(options: {
       ALTER TABLE debates ADD COLUMN chooser TEXT;
       ALTER TABLE debates ADD COLUMN decided INTEGER`);
   }
-  // #196의 표에는 만료가 없다. 만료는 `state`가 ended이고 `expired`가 1이다(CHECK를 바꾸지 않는다).
+  // The #196 table has no expiry. Expiry is `state` ended with `expired` 1 (the CHECK isn't changed).
   if (!db.prepare("SELECT 1 FROM pragma_table_info('debates') WHERE name = 'expired'").get())
     db.exec("ALTER TABLE debates ADD COLUMN expired INTEGER NOT NULL DEFAULT 0");
-  // 토론의 자리. `seat`은 알림의 `works` 자리(0, 1)다. `stance`는 라운드마다 낸 입장의 JSON 배열(#195의 행은 입장 하나), `error`는 내지 못한 까닭(JSON)이다.
+  // A debate's seats. `seat` is the alert's `works` slot (0, 1). `stance` is a JSON array of the stance given each round (the #195 row has one stance), and `error` is why it couldn't give one (JSON).
   db.exec(`CREATE TABLE IF NOT EXISTS seats (
     debate INTEGER NOT NULL,
     seat INTEGER NOT NULL,
@@ -868,7 +878,7 @@ export async function startServer(options: {
     proxy TEXT,
     PRIMARY KEY (debate, seat)
   ) STRICT`);
-  // 토론의 입장과 결론을 올린 이슈 댓글(ADR-0040). `seat`은 자리(0, 1)이고 결론은 -1, `round`는 입장의 라운드(0부터)다. 이 댓글은 포스트의 글로 다시 들이지 않는다.
+  // The issue comments that posted a debate's stances and conclusion (ADR-0040). `seat` is the seat (0, 1) and the conclusion is -1, and `round` is the stance's round (from 0). These comments aren't brought back in as post messages.
   db.exec(`CREATE TABLE IF NOT EXISTS debate_comments (
     debate INTEGER NOT NULL,
     seat INTEGER NOT NULL,
@@ -876,38 +886,38 @@ export async function startServer(options: {
     id INTEGER NOT NULL,
     PRIMARY KEY (debate, seat, round)
   ) STRICT`);
-  // 대행(#198). `proxy`는 이 자리에 대행을 부른 멤버다.
+  // Proxy (#198). `proxy` is the member who called a proxy for this seat.
   if (!db.prepare("SELECT 1 FROM pragma_table_info('seats') WHERE name = 'proxy'").get())
     db.exec("ALTER TABLE seats ADD COLUMN proxy TEXT");
-  // 날마다 들어온 멤버(ADR-0018). 날은 `TIME_ZONE`의 날짜다. 지표가 남기는 것은 이것뿐이고, 문답 수는 `qas`에서 센다.
-  // 지표는 워크스페이스마다다(ADR-0043). 한 사람이 두 워크스페이스에 들어오면 둘에서 하루에 한 번씩 센다.
+  // Members who showed up each day (ADR-0018). The day is a date in `TIME_ZONE`. This is all the metrics keep, and the Q&A count is counted from `qas`.
+  // Metrics are per workspace (ADR-0043). If one person enters two workspaces, they're counted once a day in each.
   db.exec(`CREATE TABLE IF NOT EXISTS visits (
     day TEXT NOT NULL,
     workspace TEXT NOT NULL,
     login TEXT NOT NULL,
     PRIMARY KEY (day, workspace, login)
   ) STRICT`);
-  // 합쳐 돌려 보기의 판정 수(ADR-0018, ADR-0036). 지문마다 한 번만 센다. 이름은 남기지 않고 지문, 판정, 시각만 둔다.
+  // Merge run verdict counts (ADR-0018, ADR-0036). Counted once per fingerprint. No names are kept, only the fingerprint, verdict, and time.
   db.exec(`CREATE TABLE IF NOT EXISTS merge_runs (
     fingerprint TEXT PRIMARY KEY,
     verdict TEXT NOT NULL,
     at INTEGER NOT NULL,
     workspace TEXT NOT NULL DEFAULT ''
   ) STRICT`);
-  // 워크스페이스의 레포(ADR-0043). 이름은 GitHub처럼 대소문자를 가리지 않고, 다른 표에는 여기 적힌 꼴 그대로 둔다. `at`은 넣은 시각(ms)이다.
+  // A workspace's repos (ADR-0043). Names are case-insensitive like GitHub, and other tables keep the form written here. `at` is when it was added (ms).
   db.exec(`CREATE TABLE IF NOT EXISTS repos (
     name TEXT PRIMARY KEY COLLATE NOCASE,
     at INTEGER NOT NULL
   ) STRICT`);
-  // 멤버마다 push 권한이 있는 레포(ADR-0043). 로그인할 때와 `recheckMs`마다 다시 읽는다. 하나라도 있으면 멤버다.
+  // Repos each member has push access to (ADR-0043). Reread at login and every `recheckMs`. Having any one makes them a member.
   const hadAccess = db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'access'").get();
   db.exec(`CREATE TABLE IF NOT EXISTS access (
     login TEXT NOT NULL,
     repo TEXT NOT NULL,
     PRIMARY KEY (login, repo)
   ) STRICT`);
-  // 레포마다인 표(ADR-0043). 레포가 하나이던 판의 DB는 `repo` 열이 없다. 그 줄은 옛 레포(`legacy`)의 것으로 옮긴다.
-  // 열쇠가 바뀌는 표는 다시 만들고, 다른 표가 가리키는 표(alerts)와 열쇠가 그대로인 표는 열만 더한다.
+  // Per-repo tables (ADR-0043). A DB from when there was one repo has no `repo` column. Those rows move to the old repo (`legacy`).
+  // A table whose key changes is rebuilt, and only a column is added to a table that other tables point to (alerts) or whose key stays the same.
   const hasRepo = (table: string) =>
     db.prepare(`SELECT 1 FROM pragma_table_info('${table}') WHERE name = 'repo'`).get();
   const rebuilt: Record<string, string> = {
@@ -935,7 +945,7 @@ export async function startServer(options: {
   if (moved.length > 0) {
     if (legacy === undefined && db.prepare("SELECT 1 FROM works UNION SELECT 1 FROM alerts").get())
       console.warn(
-        "레포가 하나이던 판의 DB인데 OMAGARI_REPO에 owner/name이 없어 있던 것이 어느 레포에도 보이지 않는다",
+        "This is a DB from when there was one repo, and OMAGARI_REPO has no owner/name, so existing data isn't visible in any repo",
       );
     db.exec("BEGIN");
     for (const table of moved) {
@@ -951,7 +961,7 @@ export async function startServer(options: {
         ).run(legacy ?? "");
         db.exec(`DROP TABLE ${table}; ALTER TABLE ${table}_next RENAME TO ${table}`);
       } else if (table === "channels") {
-        // 레포의 것은 포스트뿐이다. 채팅 채널과 포럼은 워크스페이스의 것이라 NULL이다(채널의 두 층은 #237).
+        // Only posts belong to a repo. Chat channels and forums belong to the workspace, so they're NULL (the channel's two layers are #237).
         db.exec("ALTER TABLE channels ADD COLUMN repo TEXT");
         db.prepare("UPDATE channels SET repo = ? WHERE alert IS NOT NULL").run(legacy ?? "");
       } else {
@@ -959,33 +969,33 @@ export async function startServer(options: {
         db.prepare(`UPDATE ${table} SET repo = ?`).run(legacy ?? "");
       }
     }
-    // 풀리지 않은 알림은 레포의 쌍마다 하나다.
+    // There is one unresolved alert per pair in a repo.
     db.exec("DROP INDEX IF EXISTS alerts_open");
     db.exec("CREATE UNIQUE INDEX alerts_open ON alerts (repo, pair) WHERE resolved IS NULL");
-    // 검사 명령은 레포마다다.
+    // Check commands are per repo.
     if (legacy !== undefined)
       db.prepare("UPDATE settings SET key = ? WHERE key = 'check'").run(`check ${legacy}`);
     db.exec("COMMIT");
   }
-  // 옮겨지거나 이름이 바뀐 레포(ADR-0043). 옛 이름으로 오는 설정, 원격, 머리말은 새 이름으로 읽는다.
+  // Repos that moved or were renamed (ADR-0043). Config, remotes, and headers that come with the old name are read as the new name.
   db.exec(`CREATE TABLE IF NOT EXISTS repo_moves (
     old TEXT PRIMARY KEY COLLATE NOCASE,
     new TEXT NOT NULL
   ) STRICT`);
-  // 레포의 GitHub 숫자 id(#315). 넣을 때나 처음 권한을 읽을 때 적고, 레포를 빼도 남긴다.
-  // 같은 이름이라도 id가 다르면 다른 레포다: 지워진 뒤 같은 이름으로 새로 만든 레포는 옛 레포의 것을 보지 못한다.
+  // The repo's GitHub numeric id (#315). Written when added or when push access is first read, and kept even if the repo is removed.
+  // The same name with a different id is a different repo: a repo recreated with the same name after being deleted can't see the old repo's data.
   db.exec(`CREATE TABLE IF NOT EXISTS repo_ids (
     name TEXT PRIMARY KEY COLLATE NOCASE,
     id INTEGER NOT NULL
   ) STRICT`);
-  /** GitHub이 `repo`라 부르는 레포(`id`)가 이 서버가 아는 그 레포인가. 처음 보는 이름이면 그 id를 적는다. */
+  /** Whether the repo GitHub calls `repo` (`id`) is the repo this server knows. If the name is new, its id is written. */
   const sameRepo = (repo: string, id: number) => {
     db.prepare("INSERT OR IGNORE INTO repo_ids (name, id) VALUES (?, ?)").run(repo, id);
     return (
       (db.prepare("SELECT id FROM repo_ids WHERE name = ?").get(repo) as { id: number }).id === id
     );
   };
-  /** 옮겨진 레포면 지금 이름, 아니면 그대로다. */
+  /** The current name if the repo moved, otherwise the same name. */
   const current = (repo: string) =>
     (
       db.prepare("SELECT new FROM repo_moves WHERE old = ?").get(repo) as
@@ -997,36 +1007,36 @@ export async function startServer(options: {
       current(repo),
       Date.now(),
     );
-  // 레포가 하나이던 판의 세션은 그 레포에 push 권한이 있는 것으로 들어왔다. 다시 확인할 때까지 그대로 본다.
+  // Sessions from when there was one repo came in as having push access to that repo. They're treated that way until rechecked.
   if (!hadAccess && legacy !== undefined)
     db.prepare("INSERT OR IGNORE INTO access (login, repo) SELECT login, ? FROM sessions").run(
       (db.prepare("SELECT name FROM repos WHERE name = ?").get(legacy) as { name: string }).name,
     );
-  /** 워크스페이스의 레포들, 넣은 순서. */
+  /** The workspace's repos, in the order added. */
   const allRepos = () =>
     (db.prepare("SELECT name FROM repos ORDER BY at, rowid").all() as { name: string }[]).map(
       (row) => row.name,
     );
   for (const repo of allRepos()) seedLabels(repo);
 
-  // 워크스페이스(ADR-0043): 레포의 계정(`ownerOf`)마다 하나다. 채팅 채널, 포럼, 날마다의 방문, 합쳐 돌려 보기의 판정 수는 워크스페이스마다 나뉜다.
-  // 워크스페이스는 그 계정의 레포가 처음 들어올 때 생긴다.
+  // Workspaces (ADR-0043): one per repo account (`ownerOf`). Chat channels, forums, daily visits, and merge run verdict counts are split per workspace.
+  // A workspace is created when a repo of that account first comes in.
   db.exec(
     "CREATE TABLE IF NOT EXISTS workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, at INTEGER NOT NULL) STRICT",
   );
   const hasColumn = (table: string, column: string) =>
     db.prepare(`SELECT 1 FROM pragma_table_info('${table}') WHERE name = '${column}'`).get();
-  // 사람의 GitHub 프로필 사진(#288). 이름과 함께 로그인할 때와 10분마다 다시 읽는다.
+  // A person's GitHub profile picture (#288). Reread with the name at login and every 10 minutes.
   if (!hasColumn("people", "avatar")) db.exec("ALTER TABLE people ADD COLUMN avatar TEXT");
-  // 사람의 GitHub 숫자 id(#315). 로그인할 때 적는다. 이 이름을 다른 id가 쓰던 것이면 들어오지 못한다.
+  // A person's GitHub numeric id (#315). Written at login. If another id used this name before, they can't get in.
   if (!hasColumn("people", "github_id")) db.exec("ALTER TABLE people ADD COLUMN github_id INTEGER");
-  // 계정의 종류와 아바타(시안 101의 이름 줄). 멤버의 push 권한을 읽을 때 GitHub에서 함께 읽어 고친다.
+  // The account kind and avatar (the name line of mockup 101). Read from GitHub and updated when a member's push access is read.
   if (!hasColumn("workspaces", "kind")) {
     db.exec("ALTER TABLE workspaces ADD COLUMN kind TEXT NOT NULL DEFAULT 'organization'");
     db.exec("ALTER TABLE workspaces ADD COLUMN avatar TEXT");
   }
   if (!hasColumn("channels", "workspace")) {
-    // 채널의 이름은 워크스페이스마다 하나다. 표 전체에 하나이던 UNIQUE를 빼려고 표를 다시 만든다. messages가 가리키는 표라 외래 키를 잠시 끈다.
+    // A channel's name is unique per workspace. The table is rebuilt to drop the UNIQUE that covered the whole table. messages points to this table, so foreign keys are briefly turned off.
     db.exec("PRAGMA foreign_keys = OFF");
     db.exec("BEGIN");
     db.exec("ALTER TABLE channels ADD COLUMN workspace TEXT");
@@ -1037,7 +1047,7 @@ export async function startServer(options: {
       .replace(/^CREATE TABLE\s+"?channels"?/, "CREATE TABLE channels_next")
       .replace("name TEXT NOT NULL UNIQUE COLLATE NOCASE", "name TEXT NOT NULL COLLATE NOCASE");
     if (next === sql || next.includes("UNIQUE COLLATE NOCASE"))
-      throw new Error(`channels 표를 다시 만들지 못했다: ${sql}`);
+      throw new Error(`Couldn't rebuild the channels table: ${sql}`);
     db.exec(next);
     db.exec("INSERT INTO channels_next SELECT * FROM channels");
     db.exec("DROP TABLE channels");
@@ -1047,12 +1057,12 @@ export async function startServer(options: {
     db.exec("COMMIT");
     db.exec("PRAGMA foreign_keys = ON");
   }
-  // 채널의 이름은 워크스페이스 안에서 층마다 하나다: 워크스페이스 채널(포럼 포함)끼리, 레포 채널은 그 레포 안에서. 권한 없는 레포의 채널 이름과 겹쳐 그 이름이 드러나지 않게 한다.
+  // A channel's name is unique per layer within a workspace: among workspace channels (forums included), and a repo channel within its repo. So a name can't be revealed by colliding with a channel name in a repo you can't access.
   db.exec("DROP INDEX IF EXISTS channels_by_name");
   db.exec(
     "CREATE UNIQUE INDEX IF NOT EXISTS channels_by_layer_name ON channels (workspace, COALESCE(repo, ''), name)",
   );
-  /** 새 워크스페이스에 "논의"와 "참고" 포럼을 둔다. */
+  /** Puts the "Discuss" and "FYI" forums in a new workspace. */
   const seedForums = (workspace: string) => {
     for (const importance of Importance.options)
       db.prepare(
@@ -1065,8 +1075,8 @@ export async function startServer(options: {
       );
   };
   /**
-   * `repo`의 워크스페이스가 없으면 만든다. 워크스페이스가 하나이던 판의 DB에 있던 채팅 채널과 포럼(워크스페이스 없는 것)은
-   * 처음 생기는 워크스페이스가 이어받고, 이어받을 것이 없으면 기본 포럼을 둔다.
+   * Creates the workspace of `repo` if it doesn't exist. Chat channels and forums with no workspace, left over from a DB from when there was one workspace,
+   * are taken over by the first workspace created, and if there's nothing to take over, the default forums are added.
    */
   const ensureWorkspace = (repo: string) => {
     const id = ownerOf(repo);
@@ -1083,13 +1093,15 @@ export async function startServer(options: {
   };
   for (const repo of allRepos()) ensureWorkspace(repo);
   /**
-   * GitHub에서 옮겨지거나 이름이 바뀐 레포 `from`의 것을 모두 새 이름 `to` 아래로 옮긴다(ADR-0043). `repo` 열이 있는 표 모두,
-   * 레포의 채널(다른 계정으로 갔으면 그 워크스페이스로), 같은 워크스페이스 포럼의 거르기, 검사 명령, 이어진 러너와 웹이다.
-   * 받을 계정 밖으로 갔거나 새 이름이 이미 워크스페이스에 있으면 옮기지 않고 옛 이름으로 둔다(GitHub이 옛 이름을 넘겨 주어 그대로 돈다).
+   * Moves everything of repo `from`, which moved or was renamed on GitHub, under the new name `to` (ADR-0043). Every table with a `repo` column,
+   * the repo's channels (to that workspace if it went to another account), the filters of forums in the same workspace, check commands, and connected runners and webs.
+   * If it went outside the accepted accounts or the new name is already in the workspace, it isn't moved and the old name stays (GitHub hands over the old name, so it keeps working).
    */
   const moveRepo = (from: string, to: string) => {
     if (!accounts.has(ownerOf(to))) {
-      console.warn(`${from}이 ${to}로 옮겨졌지만 받을 계정(OMAGARI_REPO) 밖이라 옛 이름으로 둔다`);
+      console.warn(
+        `${from} moved to ${to}, but that's outside the accepted accounts (OMAGARI_REPO), so the old name stays`,
+      );
       return false;
     }
     if (
@@ -1097,7 +1109,7 @@ export async function startServer(options: {
       allRepos().some((r) => r.toLowerCase() === to.toLowerCase())
     ) {
       console.warn(
-        `${from}이 ${to}로 옮겨졌지만 ${to}가 이미 워크스페이스에 있어 옛 이름으로 둔다`,
+        `${from} moved to ${to}, but ${to} is already in the workspace, so the old name stays`,
       );
       return false;
     }
@@ -1133,18 +1145,18 @@ export async function startServer(options: {
       db.exec("COMMIT");
     } catch (error) {
       db.exec("ROLLBACK");
-      console.error(`${from}을 ${to}로 옮기지 못했다:`, error);
+      console.error(`Couldn't move ${from} to ${to}:`, error);
       return false;
     }
     ensureWorkspace(to);
     for (const runner of runners.values()) if (runner.repo === from) runner.repo = to;
     for (const watcher of watchers.values())
       if (watcher.repo === from) Object.assign(watcher, { repo: to, workspace: ownerOf(to) });
-    console.log(`${from}이 GitHub에서 ${to}로 옮겨져 따라갔다`);
+    console.log(`${from} moved to ${to} on GitHub, so we followed`);
     return true;
   };
-  // 채팅 채널은 레포나 워크스페이스에 속한다(ADR-0043). 그 전부터 있던 채팅 채널은 그 워크스페이스의 첫 레포의 채널이 된다.
-  // 한 번만 한다: 그 뒤에 만든 워크스페이스 채널(레포 없음)을 다시 옮기지 않으려고 표시를 남긴다.
+  // Chat channels belong to a repo or a workspace (ADR-0043). Chat channels that existed before become channels of that workspace's first repo.
+  // Done only once: a mark is left so workspace channels created later (no repo) aren't moved again.
   if (!db.prepare("SELECT 1 FROM settings WHERE key = 'channels by repo'").get()) {
     for (const { id } of db.prepare("SELECT id FROM workspaces").all() as { id: string }[]) {
       const first = allRepos().find((repo) => ownerOf(repo) === id);
@@ -1155,7 +1167,7 @@ export async function startServer(options: {
     }
     db.prepare("INSERT INTO settings (key, value) VALUES ('channels by repo', '1')").run();
   }
-  /** 워크스페이스가 하나이던 판의 방문과 판정 수는 처음 생긴 워크스페이스의 것이다. */
+  /** Visits and verdict counts from when there was one workspace belong to the first workspace created. */
   const firstWorkspace =
     (
       db.prepare("SELECT id FROM workspaces ORDER BY at, rowid LIMIT 1").get() as
@@ -1178,25 +1190,28 @@ export async function startServer(options: {
     db.prepare("UPDATE merge_runs SET workspace = ?").run(firstWorkspace);
   }
 
-  // 서버가 막 떴으니 러너에 보낸 문답의 답은 오지 않는다. 기다리는 채로 남지 않게 실패로 둔다.
+  // The server just started, so answers to Q&As sent to a runner won't come. Mark them failed so they don't stay waiting.
   db.prepare("UPDATE qas SET answer = ?, settled = ? WHERE answer IS NULL").run(
     JSON.stringify({
       state: "failed",
-      error: { code: "runner_offline", message: "서버가 다시 떠서 답을 받지 못했다" },
+      error: {
+        code: "runner_offline",
+        message: "The server restarted, so the answer never arrived",
+      },
     }),
     Date.now(),
   );
-  // 서버가 막 떴으니 아무 러너도 붙어 있지 않다. 이미 떨어져 있던 멤버는 떨어진 시각을 그대로 둔다.
+  // The server just started, so no runner is connected. Members who were already dropped keep their drop time.
   db.prepare(
     `INSERT OR IGNORE INTO offline (repo, login, since)
      SELECT repo, login, ? FROM works UNION SELECT repo, login, ? FROM lines`,
   ).run(Date.now(), Date.now());
 
   /**
-   * 멤버의 작업을 러너가 지금 보는 것으로 바꾼다.
-   * 관측된 변경이 있다가 0이 된 작업은 에이전트가 쓴 줄을 지운다. 처음부터 0이던 작업의 줄은 남긴다(ADR-0010).
+   * Replaces a member's works with what the runner sees now.
+   * A work that had observed changes and went to 0 loses the line the agent wrote. A work that was 0 from the start keeps its line (ADR-0010).
    */
-  // ponytail: 레포마다 멤버 하나에 러너 하나로 본다. 한 멤버가 기기 둘에서 같은 레포의 러너를 켜면 나중에 보낸 쪽이 덮는다. 그때는 러너마다 나눈다.
+  // ponytail: one runner per member per repo. If a member starts runners for the same repo on two machines, the later sender overwrites. Split per runner then.
   const replaceWorks = (repo: string, login: string, works: Work[]) => {
     db.exec("BEGIN");
     const changed = new Set(
@@ -1215,19 +1230,19 @@ export async function startServer(options: {
     const clear = db.prepare("DELETE FROM lines WHERE repo = ? AND login = ? AND branch = ?");
     for (const work of works) {
       insert.run(repo, login, work.branch, work.base, work.share, JSON.stringify(work.files));
-      // intent의 빈 files는 바뀐 것이 0이 된 것이 아니라 보내지 않은 것이다. 수준을 낮춰도 쓴 줄은 남는다.
+      // An empty files in an intent means not sent, not that changes went to 0. Even if the level drops, the written line stays.
       if (work.share !== "intent" && work.files.length === 0 && changed.has(work.branch)) {
         clear.run(repo, login, work.branch);
       }
     }
     db.exec("COMMIT");
   };
-  /** 레포와 브랜치마다 열린 초안 PR의 제목. 열쇠는 `[repo, branch]`의 JSON이다. GitHub에서 `followMs`마다 다시 읽는다. 서버가 꺼지면 잃고 다음 주기에 다시 읽는다. */
+  /** The title of the open draft PR for each repo and branch. The key is JSON of `[repo, branch]`. Reread from GitHub every `followMs`. Lost when the server stops and reread on the next round. */
   let drafts = new Map<string, string>();
-  /** 레포의 멤버(세션이 있고 그 레포에 push 권한이 있다)를 내는 SQL. 레포를 하나 받는다. */
+  /** SQL that yields a repo's members (they have a session and push access to that repo). Takes one repo. */
   const MEMBERS =
     "(SELECT login FROM access WHERE repo = ? AND login IN (SELECT login FROM sessions))";
-  /** 멤버에게 보이는 레포들(push 권한이 있는 것), 넣은 순서. */
+  /** Repos visible to a member (ones they have push access to), in the order added. */
   const reposOf = (login: string) =>
     (
       db
@@ -1239,34 +1254,34 @@ export async function startServer(options: {
   const sees = (login: string, repo: string | null | undefined) =>
     repo != null &&
     !!db.prepare("SELECT 1 FROM access WHERE login = ? AND repo = ?").get(login, repo);
-  /** 포스트(채널 id)의 레포. 포스트가 아니면 없다. */
+  /** The repo of a post (channel id). None if it isn't a post. */
   const postRepo = (post: string) =>
     (
       db.prepare("SELECT repo FROM channels WHERE id = ? AND alert IS NOT NULL").get(post) as
         | { repo: string }
         | undefined
     )?.repo;
-  /** 채널의 워크스페이스. 알림 줄의 자리(`ALERTS`)와 없는 채널은 없다. */
+  /** A channel's workspace. None for the alert lines' place (`ALERTS`) and for a missing channel. */
   const channelWorkspace = (channel: string) =>
     (
       db.prepare("SELECT workspace FROM channels WHERE id = ?").get(channel) as
         | { workspace: string | null }
         | undefined
     )?.workspace ?? undefined;
-  /** 채널의 레포: 포스트와 레포 채널. 워크스페이스 채널과 없는 채널은 없다. */
+  /** A channel's repo: posts and repo channels. None for workspace channels and missing channels. */
   const channelRepo = (channel: string) =>
     (
       db.prepare("SELECT repo FROM channels WHERE id = ?").get(channel) as
         | { repo: string | null }
         | undefined
     )?.repo ?? undefined;
-  /** 멤버가 들어간 워크스페이스들(`id`), 넣은 순서. */
+  /** The workspaces (`id`) a member is in, in the order added. */
   const workspacesOf = (login: string) => [...new Set(reposOf(login).map(ownerOf))];
-  /** 멤버에게 보이는 포스트의 레포. 없거나 보이지 않으면 `not_found`다. */
+  /** The repo of a post visible to the member. `not_found` if it's missing or not visible. */
   const seenPost = (login: string, post: string) => {
     const repo = postRepo(post);
     if (!sees(login, repo))
-      throw new ContractFailure({ code: "not_found", message: `없는 포스트다: ${post}` });
+      throw new ContractFailure({ code: "not_found", message: `No such post: ${post}` });
     return repo as string;
   };
   const sessionLogin = (session: string) =>
@@ -1276,13 +1291,13 @@ export async function startServer(options: {
         | undefined
     )?.login;
 
-  /** 멤버가 오늘 들어왔다고 적는다. 웹만 부르는 곳(실시간 연결, 채널에서 읽고 쓰기)에서만 부른다. 러너와 CLI는 세지 않는다. */
+  /** Records that a member came in today. Only call from places only the web calls (live connection, reading and writing in a channel). Runners and the CLI aren't counted. */
   const visit = (login: string, workspace: string) =>
     db
       .prepare("INSERT OR IGNORE INTO visits (day, workspace, login) VALUES (?, ?, ?)")
       .run(dayOf(Date.now()), workspace, login);
 
-  /** 끝나지 않은 기기 인증. 서버가 꺼지면 잃는다. 다시 로그인하면 된다. */
+  /** Unfinished device authorizations. Lost when the server stops. Just log in again. */
   const logins = new Map<
     string,
     {
@@ -1290,51 +1305,51 @@ export async function startServer(options: {
       expiresAt: number;
       intervalMs: number;
       nextPollAt: number;
-      /** 시작한 쪽의 주소와 마지막으로 물은 시각. 버려진 것을 지우고 주소마다 센다. */
+      /** The starter's address and when it last polled. Abandoned ones are removed and counted per address. */
       client: string;
       polledAt: number;
     }
   >();
-  /** 지금 GitHub에 기기 인증을 여는 중인 수. 기다리는 사이에도 상한을 지키려고 미리 센다. */
+  /** Number currently opening a device authorization with GitHub. Counted ahead of time so the cap holds even while waiting. */
   let startingLogins = 0;
-  /** 주소마다 지금 GitHub에 기기 인증을 여는 중인 수. 한 주소가 한꺼번에 보내도 주소마다의 상한을 지킨다. */
+  /** Number per address currently opening a device authorization with GitHub. The per-address cap holds even if one address sends many at once. */
   const startingFrom = new Map<string, number>();
-  /** hello를 마친 러너의 연결과 그 러너가 돌리는 실행기, 실행기마다의 고를 거리. */
+  /** Runner connections that finished hello, the executors those runners run, and each executor's pick count. */
   const runners = new Map<
     WSContext,
     {
       login: string;
       hash: string;
-      /** 이 러너가 이어진 레포(ADR-0043). */
+      /** The repo this runner is attached to (ADR-0043). */
       repo: string;
       executors: ExecutorId[];
       choices: Partial<Record<ExecutorId, Choices>>;
       mergeCheck: MergeCheckState;
     }
   >();
-  /** hello를 마친 웹의 실시간 연결과 그 세션의 해시, 멤버, 고른 레포. 세션이 끝나면 닫는다. */
+  /** Live web connections that finished hello, with each session's hash, member, and chosen repo. Closed when the session ends. */
   const watchers = new Map<
     WSContext,
     { hash: string; login: string; repo: string; workspace: string }
   >();
   /**
-   * 웹 연결로 보내도 되는지. 열려 있고, 그 연결이 고른 레포(와 그 워크스페이스)가 아직 그 사람에게 보여야 한다.
-   * push 권한을 다시 읽는 사이에 권한을 잃은 연결이 닫히기 전에도 받지 않게, 웹으로 가는 모든 보내기가 이것을 지난다.
+   * Whether it's OK to send to a web connection. It must be open, and the repo (and its workspace) that connection chose must still be visible to that person.
+   * Every send to the web goes through this, so a connection that lost access while push access is being reread doesn't receive anything before it's closed.
    */
   const open = (socket: WSContext, watcher: { login: string; repo: string }) =>
     socket.readyState === 1 && sees(watcher.login, watcher.repo); // OPEN
-  /** 워크스페이스의 것을 그 워크스페이스를 고른 웹 모두에 보낸다. 다른 워크스페이스를 고른 연결에는 같은 사람의 것도 가지 않는다. */
+  /** Sends a workspace's item to every web that chose that workspace. It doesn't go to a connection that chose another workspace, even the same person's. */
   const broadcast = (workspace: string, frame: string) => {
     for (const [socket, watcher] of watchers)
       if (watcher.workspace === workspace && open(socket, watcher)) socket.send(frame);
   };
-  /** 레포의 것을 그 레포가 보이는 웹에만, 그 레포의 워크스페이스를 고른 연결로만 보낸다. */
+  /** Sends a repo's item only to webs that can see that repo, and only to connections that chose that repo's workspace. */
   const broadcastTo = (repo: string, frame: string) => {
     for (const [socket, watcher] of watchers)
       if (watcher.workspace === ownerOf(repo) && sees(watcher.login, repo) && open(socket, watcher))
         socket.send(frame);
   };
-  /** 채널의 한 줄을 그것이 보이는 웹에 보내고 계약의 꼴로 돌려준다. */
+  /** Sends one channel line to the webs that can see it and returns it in the contract's shape. */
   const shareRow = (row: MessageRow) => {
     const message = messageView(row);
     const frame = encode(serverToWeb, "message", message);
@@ -1342,7 +1357,7 @@ export async function startServer(options: {
     else if (row.workspace !== null) broadcast(row.workspace, frame);
     return message;
   };
-  /** `login`의 웹 연결에만 보낸다. 비공개인 DM은 이것으로만 나간다. `workspace`를 주면 그 워크스페이스를 고른 연결에만 간다. */
+  /** Sends only to `login`'s web connections. Private DMs go out only this way. If `workspace` is given, it goes only to connections that chose that workspace. */
   const sendTo = (login: string, frame: string, workspace?: string) => {
     for (const [socket, watcher] of watchers) {
       if (
@@ -1353,16 +1368,16 @@ export async function startServer(options: {
         socket.send(frame);
     }
   };
-  /** 러너에 보내고 답을 기다리는 문답. 키는 보낸 `ask`의 id다. 서버가 꺼지면 잃고, 다시 뜰 때 실패로 둔다. */
+  /** Q&As sent to a runner and waiting for an answer. The key is the sent `ask`'s id. Lost when the server stops, and marked failed when it starts again. */
   const asks = new Map<
     string,
     { socket: WSContext; login: string; executor: ExecutorId; qa: number }
   >();
-  /** 받는 쪽 러너에 보내고 답을 기다리는 질문(묻기). 키는 보낸 `question`의 id다. 연결이 끊기거나 서버가 다시 뜨면 잃고, 러너가 붙을 때 다시 보낸다. */
+  /** Questions (asks) sent to the receiving runner and waiting for an answer. The key is the sent `question`'s id. Lost when the connection drops or the server restarts, and resent when the runner connects. */
   const questionsSent = new Map<string, { socket: WSContext; executor: ExecutorId; id: number }>();
   /**
-   * 문답이 생기거나 바뀌었다. 묻는 사람의 연결에 보내고, 공개된 문답이면 채널에 선 줄을 모두에게 다시 보낸다.
-   * 채널에 선 줄이 있으면 돌려준다.
+   * A Q&A was created or changed. Sent to the asker's connections, and if the Q&A is public, the line standing in the channel is resent to everyone.
+   * Returns the line standing in the channel, if any.
    */
   const shareQa = (id: number) => {
     const asked = db.prepare(`${QAS} WHERE id = ?`).get(id) as QaRow;
@@ -1372,10 +1387,10 @@ export async function startServer(options: {
     if (!row) return { qa };
     return { qa, message: shareRow(row) };
   };
-  /** 기다리던 문답에 답이나 실패를 적고, 보이는 사람에게 보내고, 답하는 중을 거둔다. */
+  /** Writes the answer or failure to a waiting Q&A, sends it to those who can see it, and clears the in-progress marker. */
   const settle = (id: string, answer: Exclude<Qa["answer"], { state: "pending" }>) => {
     const ask = asks.get(id);
-    // 서버가 꺼지는 중이면 DB가 먼저 닫힐 수 있다. 남은 문답은 다시 뜰 때 실패로 둔다.
+    // If the server is shutting down, the DB may already be closed. Remaining Q&As are marked failed when it starts again.
     if (!ask || stopped) return;
     asks.delete(id);
     db.prepare("UPDATE qas SET answer = ?, settled = ? WHERE id = ?").run(
@@ -1384,15 +1399,15 @@ export async function startServer(options: {
       ask.qa,
     );
     const { message } = shareQa(ask.qa);
-    if (message) syncSoon(message.channel); // `@호출`의 답을 이슈 댓글로
+    if (message) syncSoon(message.channel); // the `@mention` answer goes to the issue comment
     shareMembers();
   };
-  /** 러너에 보내고 기다리는 결정 초안(ADR-0028). 키는 보낸 `draft`의 id이고 `Draft.id`다. 저장하지 않는다. */
+  /** Decision drafts sent to a runner and waiting (ADR-0028). The key is the sent `draft`'s id and is `Draft.id`. Not stored. */
   const drafting = new Map<
     string,
     { socket: WSContext; login: string; executor: ExecutorId; draft: Draft }
   >();
-  /** 기다리던 초안을 끝내고 요청한 사람에게 보낸다. 이미 끝났으면 없다. */
+  /** Finishes a waiting draft and sends it to the person who asked. None if it's already finished. */
   const settleDraft = (id: string, state: Exclude<Draft["state"], { state: "pending" }>) => {
     const found = drafting.get(id);
     if (!found || stopped) return;
@@ -1407,9 +1422,9 @@ export async function startServer(options: {
     return draft;
   };
 
-  /** 레포의 멤버들이 보는 그 레포의 작업 전부. 웹과 러너가 같은 것을 본다. */
+  /** All works in a repo that its members see. The web and runners see the same thing. */
   const worksView = (repo: string): WorkView[] => {
-    // 레포에서 빠진 사람(세션이나 push 권한이 없는 사람)의 작업은 보이지 않는다.
+    // Works of people who left the repo (no session or no push access) aren't visible.
     const rows = db
       .prepare(
         `SELECT w.login, w.branch, w.base, w.share, w.files, l.text, l.at, o.since FROM works w
@@ -1431,7 +1446,7 @@ export async function startServer(options: {
       const files: ObservedFile[] = JSON.parse(row.files);
       const draft = drafts.get(JSON.stringify([repo, branch]));
       const changes = filesLine(files);
-      // 고르는 순서: 에이전트가 쓴 줄 → 초안 PR 제목 → 고치는 파일 → 없음. 오프라인은 offlineSince로 따로 간다.
+      // Order of choice: the line the agent wrote -> the draft PR title -> the file being edited -> none. Offline goes separately through offlineSince.
       const line: StatusLine | null =
         text !== null && at !== null
           ? { source: "agent", text, at: new Date(at).toISOString() }
@@ -1446,8 +1461,8 @@ export async function startServer(options: {
   };
 
   /**
-   * 멤버 목록(과 그것으로 거르는 `omagari status`)에 보일 작업(ADR-0006). 바뀐 것이 없어 상태 한 줄(에이전트가 쓴 줄, 초안 PR, 바뀐 파일)도
-   * 선점도 없는 작업은 숨긴다. `api.works`와 러너의 situation, 부딪힘 계산은 걸러지지 않은 worksView를 그대로 쓴다.
+   * The works to show in the member list (and `omagari status`, which filters by it) (ADR-0006). A work with no changes, so no status line (the agent's line, draft PR, changed files),
+   * and no claim is hidden. `api.works`, the runner's situation, and conflict computation use the unfiltered worksView as is.
    */
   const shownWorks = (repo: string, works: WorkView[]): WorkView[] => {
     const claimed = new Set(
@@ -1489,7 +1504,7 @@ export async function startServer(options: {
     stale: row.stale !== null,
     ...(row.plan !== null && { plan: JSON.parse(row.plan) }),
   });
-  /** 레포의 선점 전부. 작업처럼 레포에서 빠진 사람의 것은 보이지 않는다. */
+  /** All claims in the repo. Claims by people who left the repo, like work, are hidden. */
   const claimsView = (repo: string): Claim[] =>
     (
       db
@@ -1497,7 +1512,7 @@ export async function startServer(options: {
         .all(repo, repo) as ClaimRow[]
     ).map(claimView);
 
-  /** 선점을 푼다. 피드에 남기고 푼 것을 돌려준다. 상황은 부른 쪽이 보낸다. */
+  /** Releases a claim. Logs it to the feed and returns what was released. The caller sends the situation. */
   const releaseClaims = (where: string, ...params: (string | number)[]) => {
     const rows = db.prepare(`SELECT * FROM claims WHERE ${where}`).all(...params) as ClaimRow[];
     const now = Date.now();
@@ -1512,13 +1527,13 @@ export async function startServer(options: {
     return rows.map(claimView);
   };
 
-  /** 계획대로라면 선점한 작업의 정의 줄에 생길 변경. 이름 바꾸기는 옛 이름이 없어진다. */
+  /** The change a plan would make to the claimed work's definition line. A rename drops the old name. */
   const PLAN_CHANGE = { rename: "removed", signature: "changed", delete: "removed", add: "added" };
   /**
-   * 푼 선점의 계획 가운데 이루지 못한 것(그 작업의 관측에서 정의 줄이 계획대로 바뀌지 않았다)을 취소로 알린다.
-   * 그 계획의 열린 선언된 계약 변경 알림을 받은 다른 작업의 편지함에 넣는다. 머지되어 풀린 것은 부르지 않는다.
+   * Alerts a cancel for the parts of a released claim's plan that never happened (the work's observation never changed the definition line as planned).
+   * Puts it in the inbox of other work that got an open declared contract change alert for that plan. Not called for claims released by a merge.
    */
-  // ponytail: 이루었는지는 서버가 받은 관측의 정의 줄로만 본다. intent 작업은 정의 줄을 올리지 않아 늘 취소로 본다.
+  // ponytail: whether it happened is judged only by the definition line in the observation the server received. Intent work never raises a definition line, so it always counts as cancelled.
   const cancelPlans = (repo: string, claims: Claim[]) => {
     const works = worksView(repo);
     const open = db
@@ -1556,9 +1571,9 @@ export async function startServer(options: {
   };
 
   /**
-   * 멤버 목록: 사람마다 이름, 접속 상태와 상태 메시지, 실행기마다의 에이전트, 작업마다의 상태 한 줄. 이름 순이다.
-   * 접속 상태는 웹 창(실시간 연결)이 하나라도 붙어 있으면 고른 것, 없거나 "오프라인으로 보이기"면 offline이다.
-   * 오프라인으로 보이는 사람과 정말 나간 사람은 같은 모양이다. 상태 메시지는 둘 다 그대로 보인다.
+   * Member list: per person, name, online status and status message, the agents per executor, and the one-line status per work. Sorted by name.
+   * Online if any web window (live connection) is attached, unless they picked "appear offline" or none is attached; then offline.
+   * Someone appearing offline looks the same as someone who really left. The status message shows either way.
    */
   const membersView = (repo: string, works: WorkView[]): MemberView[] => {
     const people = db
@@ -1580,7 +1595,7 @@ export async function startServer(options: {
       message: string | null;
       emoji: string | null;
     }[];
-    // 접속 상태와 에이전트는 이 레포의 워크스페이스에서 본 것만이다. 다른 워크스페이스의 창과 러너는 이 목록에 드러나지 않는다.
+    // Online status and agents only count what this repo's workspace sees. Windows and runners in other workspaces don't show in this list.
     const workspace = ownerOf(repo);
     const open = new Set(
       [...watchers.values()]
@@ -1589,7 +1604,7 @@ export async function startServer(options: {
     );
     const now = Date.now();
     const presenceOf = (login: string, chosen: ChosenPresence | null, until: number | null) => {
-      // 끝난 것은 타이머가 지우기 전이라도 온라인이다.
+      // Ended ones are online even before the timer clears them.
       const live = chosen !== null && (until === null || until > now) ? chosen : "online";
       return !open.has(login) || live === "invisible" ? "offline" : (live satisfies Presence);
     };
@@ -1611,7 +1626,7 @@ export async function startServer(options: {
         ...questionsSent.values(),
         ...debatesSent.values(),
       ].some((ask) => ask.executor === executor && sockets.includes(ask.socket));
-      // 고를 거리는 묻는 문답이 갈 러너(마지막에 붙은 것)의 것이다.
+      // The choices belong to the runner that will get the Q&A (the last one attached).
       const choices = live.at(-1)?.[1].choices[executor] ?? { models: [], efforts: [] };
       const state = busy ? "answering" : sockets.length > 0 ? "online" : "offline";
       return { executor, state, choices } as const;
@@ -1652,7 +1667,7 @@ export async function startServer(options: {
     });
   };
 
-  /** 풀리지 않은 알림 가운데 줄이 부딪히는 것이 확인된 것의 작업들. 열쇠는 `[login, branch]`의 JSON이다. */
+  /** Work of unreleased alerts whose lines are confirmed to conflict. The key is the JSON of `[login, branch]`. */
   const conflictedWorks = (repo: string) => {
     const found = new Set<string>();
     const open = db
@@ -1671,7 +1686,7 @@ export async function startServer(options: {
     return found;
   };
 
-  /** 풀리지 않은 간접 충돌 가운데 합쳐 돌려 보니 깨져 확인된 것의 작업들("합치면 깨짐"). 열쇠는 `[login, branch]`의 JSON이다. */
+  /** Work of unreleased indirect conflicts that the merge run confirmed as broken ("breaks when merged"). The key is the JSON of `[login, branch]`. */
   const brokenWorks = (repo: string) =>
     new Set(
       (
@@ -1687,14 +1702,14 @@ export async function startServer(options: {
       ),
     );
 
-  /** 붙어 있는 러너마다 마지막으로 올린 직접 충돌의 계산. 끊기면 지운다. 아직 올리지 않은 러너는 없다. */
+  /** The last direct conflict computation each attached runner sent. Cleared on disconnect. A runner that hasn't sent one has none. */
   const reports = new Map<WSContext, ConflictPair[]>();
 
-  /** 알림 하나의 채널 줄을 붙어 있는 웹 모두에 보낸다. */
+  /** Sends one alert's channel line to every attached web. */
   const shareAlert = (alert: number) =>
     shareRow(db.prepare(`${MESSAGES} WHERE m.alert = ?`).get(alert) as MessageRow);
 
-  /** 포스트(채널 id)의 알림 줄을 붙어 있는 웹 모두에 다시 보낸다. 라벨이나 중요도가 바뀌었을 때 부른다. */
+  /** Resends a post's (channel id) alert line to every attached web. Call it when the label or importance changed. */
   const sharePost = (post: string) =>
     shareAlert(
       (
@@ -1705,20 +1720,20 @@ export async function startServer(options: {
           .get(post) as { alert: number }
       ).alert,
     );
-  /** 레포의 라벨 전부, 이름 순서. */
+  /** All labels in the repo, in name order. */
   const labelsView = (repo: string) =>
     db
       .prepare(
         "SELECT name, color, description, importance FROM labels WHERE repo = ? ORDER BY name",
       )
       .all(repo) as Label[];
-  /** 레포의 라벨을 그 레포를 고른 웹에 보낸다. */
+  /** Sends the repo's labels to the webs that picked that repo. */
   const shareLabels = (repo: string) => {
     const frame = encode(serverToWeb, "labels", labelsView(repo));
     for (const [socket, watcher] of watchers)
       if (watcher.repo === repo && open(socket, watcher)) socket.send(frame);
   };
-  /** 레포의 라벨 하나(이름은 대소문자를 가리지 않는다). */
+  /** One label in the repo (the name is case-insensitive). */
   const labelRow = (repo: string, name: string) =>
     db
       .prepare(
@@ -1728,8 +1743,8 @@ export async function startServer(options: {
       | { id: number; name: string; github: number | null; color: string; description: string }
       | undefined;
   /**
-   * 포스트마다 라벨을 고친다. `edit`이 포스트의 라벨과, 이슈가 있으면 마지막으로 읽은 이슈 라벨(`issue_labels`)에 똑같이 적용되고,
-   * 이슈가 있는 포스트에서만 고칠지는 `withIssue`로 가린다(주지 않으면 모두). 바뀐 포스트의 id를 돌려준다.
+   * Edits labels per post. `edit` applies the same to the post's labels and, if there's an issue, to the last read issue labels (`issue_labels`).
+   * `withIssue` picks whether to edit only posts with an issue (all if not given). Returns the ids of the posts that changed.
    */
   const editPostLabels = (
     repo: string,
@@ -1759,18 +1774,18 @@ export async function startServer(options: {
         row.id,
       );
       changed.push(row.id);
-      openDebate(row.id); // 이슈에서 증거 라벨을 붙였으면 토론이 열린다(ADR-0040)
+      openDebate(row.id); // a debate opens if the issue got an evidence label (ADR-0040)
     }
     return changed;
   };
   const labelNameExists = (name: string) =>
     !!db.prepare("SELECT 1 FROM labels WHERE name = ?").get(name);
-  /** 레포의 라벨 이름이 바뀌었다. 포스트와 이슈 라벨에서 이름을 바꾸고 웹에 알린다. */
+  /** A repo label was renamed. Renames it in posts and issue labels and tells the webs. */
   const renameLabel = (repo: string, from: string, to: string) => {
     for (const post of editPostLabels(repo, (labels) => labels.map((l) => (l === from ? to : l))))
       sharePost(post);
-    // 그 라벨로 거르는 포럼도 새 이름을 따른다. 그 레포만 거르는 포럼은 이름을 바꾸고,
-    // 다른 레포도 거르는 포럼은 다른 레포의 옛 이름 포스트를 잃지 않게 새 이름을 더한다.
+    // Forums filtering by that label follow the new name too. A forum filtering only that repo gets renamed,
+    // and a forum that also filters other repos gets the new name added, so it doesn't lose other repos' posts with the old name.
     for (const row of db
       .prepare(
         "SELECT id, name, kind, filter FROM channels WHERE workspace = ? AND EXISTS (SELECT 1 FROM json_each(filter, '$.labels') j WHERE j.value = ?)",
@@ -1784,7 +1799,7 @@ export async function startServer(options: {
       const labels = only
         ? old.labels.map((l) => (l === from ? to : l))
         : [
-            // 다른 레포에 옛 이름 라벨이 남아 있을 때만 옛 이름을 둔다. 아니면 안 보이는 레포의 옛 이름이 포럼에 남아 샌다.
+            // Keep the old name only if another repo still has a label with it. Otherwise the old name of a repo you can't see would leak into the forum.
             ...old.labels.filter((l) => l !== from || labelNameExists(from)),
             ...(old.labels.includes(to) ? [] : [to]),
           ];
@@ -1793,8 +1808,21 @@ export async function startServer(options: {
       broadcastChannel(ownerOf(repo), { ...row, filter: JSON.stringify(filter) });
     }
   };
+  /**
+   * Renames the repo's Korean default labels (before ADR-0045) to English here: the label, posts, their issue labels, and forums.
+   * Skips a label GitHub still has under the Korean name, or one whose English name is already linked to GitHub.
+   */
+  const englishLabels = (repo: string, theirs: RepoLabel[] = []) => {
+    for (const [from, to] of Object.entries(KOREAN_LABELS)) {
+      const local = labelRow(repo, from);
+      if (!local || theirs.some((l) => l.name === from) || labelRow(repo, to)?.github) continue;
+      db.prepare("DELETE FROM labels WHERE repo = ? AND name = ?").run(repo, to); // unlinked seed
+      db.prepare("UPDATE labels SET name = ? WHERE rowid = ?").run(to, local.id);
+      renameLabel(repo, from, to);
+    }
+  };
 
-  /** 채널에 메시지가 섰다. 포스트면 그 알림의 글 수가 바뀌었으니 알림 줄을 모두에게 다시 보낸다. */
+  /** A message landed in a channel. For a post, the alert's post count changed, so resend the alert line to everyone. */
   const posted = (channel: string) => {
     const row = db
       .prepare("SELECT a.alert FROM channels c JOIN messages a ON a.id = c.alert WHERE c.id = ?")
@@ -1802,25 +1830,25 @@ export async function startServer(options: {
     if (row) shareAlert(row.alert);
   };
 
-  /** 포스트의 알림 메시지. 채팅 채널이면 없다. */
+  /** A post's alert message. None for a chat channel. */
   const postAlert = (channel: string) =>
     db.prepare(`${MESSAGES} WHERE m.id = (SELECT alert FROM channels WHERE id = ?)`).get(channel) as
       | MessageRow
       | undefined;
 
-  /** 러너에 넘기는 채널의 이름. 포스트면 알림의 번호로 짓는다. */
+  /** The channel name passed to the runner. For a post, it's built from the alert's number. */
   const channelName = (channel: string) => {
     const alert = postAlert(channel);
     const name = (id: string) =>
       (db.prepare("SELECT name FROM channels WHERE id = ?").get(id) as { name: string }).name;
-    return alert ? `알림 ${alert.id}번 포스트` : name(channel);
+    return alert ? `Post for alert ${alert.id}` : name(channel);
   };
 
   /**
-   * 러너들의 계산을 두 작업 한 쌍과 종류마다 하나로 묶어 알림을 올리고, 고치고, 풀린 것을 닫는다(ADR-0023).
-   * 알림에 묶인 것(직접 충돌의 파일, 나머지의 심볼)마다 그것을 계산할 수 있는 러너가 있다(`computedBy`).
-   * 그 러너가 붙어 있는데 올리지 않았으면 풀린 것이고, 그 러너가 꺼져 있으면 알 수 없으니 지난 것을 그대로 둔다.
-   * 직접 충돌과 중복 구현은 두 쪽 러너 모두, 간접 충돌은 쓰는 쪽 러너만 계산한다. 한 파일을 양쪽 러너가 올렸으면 줄이 확인된 쪽을 쓴다.
+   * Merges the runners' computations into one alert per pair of work and kind, then raises, updates, and closes resolved alerts (ADR-0023).
+   * Every thing an alert is tied to (files for a direct conflict, symbols for the rest) has a runner that can compute it (`computedBy`).
+   * If that runner is attached and didn't send it, it's resolved. If that runner is off, we can't know, so the old state stays.
+   * Direct conflicts and duplicate work are computed by both sides' runners, indirect conflicts only by the using side's runner. If both runners sent a file, use the one with confirmed lines.
    */
   const reconcile = (repo: string) => {
     const name = (login: string) =>
@@ -1835,7 +1863,7 @@ export async function startServer(options: {
       { kind: Alert["kind"]; works: [WorkRef, WorkRef]; items: Map<string, Item> }
     >();
     const reporting = new Set<string>();
-    // 쌍의 두 끝은 서버가 아는 작업(관측이나 선점)이어야 한다. 모르는 작업을 이름 댄 쌍은 버린다.
+    // Both ends of a pair must be work the server knows (an observation or a claim). Pairs naming unknown work are dropped.
     const knownWork = db.prepare(
       `SELECT 1 FROM (SELECT repo, login, branch FROM works UNION SELECT repo, login, branch FROM claims)
        WHERE repo = ? AND login = ? AND branch = ?`,
@@ -1854,7 +1882,7 @@ export async function startServer(options: {
           JSON.stringify([pair.theirs.login, pair.theirs.branch]);
         const [a, b] = flip ? [pair.theirs, mine] : [mine, pair.theirs];
         const ends = JSON.stringify([a.login, a.branch, b.login, b.branch]);
-        // 직접 충돌의 열쇠는 종류가 하나뿐이던 때의 것 그대로다.
+        // The direct conflict key is kept as it was when there was only one kind.
         const key = pair.kind === "direct" ? ends : `${pair.kind} ${ends}`;
         const entry = found.get(key) ?? {
           kind: pair.kind,
@@ -1900,7 +1928,7 @@ export async function startServer(options: {
     }[];
     let changed = false;
     const now = Date.now();
-    // 통과로 닫힌 쌍(ADR-0035)은 다시 돌린 판정이 나올 때까지 세우지 않는다. 쓰는 쪽 러너가 붙어 있는데 그 쌍을 올리지 않으면 부딪힘이 풀린 것이라 놓아준다.
+    // A pair closed by passing (ADR-0035) isn't raised again until a re-run verdict comes. If the using side's runner is attached and doesn't send the pair, the conflict is resolved, so let it go.
     const held = new Set<string>();
     for (const row of db
       .prepare("SELECT id, pair, run FROM alerts WHERE repo = ? AND held = 1")
@@ -1919,7 +1947,7 @@ export async function startServer(options: {
       const kind = (entry?.kind ?? known?.kind) as Alert["kind"];
       const works = entry?.works ?? (JSON.parse(known?.works ?? "[]") as [WorkRef, WorkRef]);
       const items = new Map(entry?.items);
-      // 계산할 러너가 꺼져 있는 것은 지난 것을 그대로 둔다.
+      // If the runner that would compute it is off, the old state stays.
       for (const view of known ? (JSON.parse(known.files) as Item[]) : []) {
         const id = itemId(kind, view);
         if (items.has(id)) continue;
@@ -1938,7 +1966,7 @@ export async function startServer(options: {
         changed = true;
         continue;
       }
-      // 직접 충돌은 줄이 확인된 파일부터, 그 안에서는 경로 순이다. 심볼은 이름 순이다.
+      // Direct conflicts go files with confirmed lines first, then by path. Symbols go by name.
       const json = JSON.stringify(
         [...items.entries()]
           .sort(([x, a], [y, b]) =>
@@ -1973,7 +2001,7 @@ export async function startServer(options: {
       const message = db
         .prepare("INSERT INTO messages (channel, login, text, alert, at) VALUES (?, '', '', ?, ?)")
         .run(ALERTS, lastInsertRowid, now).lastInsertRowid;
-      // 알림 하나가 포스트 하나다(ADR-0027). 포스트의 이름은 사람이 지을 수 없는 이름(줄바꿈으로 시작)이다.
+      // One alert is one post (ADR-0027). The post's name is one a person can't type (it starts with a line break).
       const post = randomBytes(8).toString("hex");
       db.prepare(
         "INSERT INTO channels (id, name, alert, labels, repo, workspace) VALUES (?, ?, ?, ?, ?, ?)",
@@ -1981,20 +2009,20 @@ export async function startServer(options: {
       db.exec("COMMIT");
       shareAlert(Number(lastInsertRowid));
       deliver(repo, Number(lastInsertRowid), works, now);
-      void attachTeamLabels(post).finally(() => syncSoon(post)); // 팀 라벨을 단 뒤 포스트의 이슈를 연다(ADR-0032)
-      openDebate(post); // 계약 변경이면 토론이 열린다(ADR-0040)
+      void attachTeamLabels(post).finally(() => syncSoon(post)); // open the post's issue after the team labels are attached (ADR-0032)
+      openDebate(post); // a debate opens for a contract change (ADR-0040)
     }
     if (changed) {
-      shareMembers(); // 멤버 목록의 직접 충돌 표시
+      shareMembers(); // direct conflict marker in the member list
       shareInbox();
     }
   };
 
   /**
-   * 러너가 올린 합쳐 돌려 보기의 판정을 그 쌍의 열린 간접 충돌 알림에 붙인다(ADR-0035, ADR-0036). 판정이 나면(돌려 보는 중도 지난 결과도 아닌 것) 두 작업의 편지함에 다시 넣는다.
-   * - 빠진 파일 없이 깨짐이면 확인됨, 빠진 파일 없이 통과면 알림을 풀림으로 닫고 그 쌍을 붙든다(`held`). 그 밖의 판정은 추정으로 둔다.
-   * - 붙든 쌍은 열린 알림이 없다. 다른 지문의 판정이 나면 놓아주고, 통과가 아니면 새 알림을 세워 그 판정을 붙인다.
-   * - 열린 알림도 붙든 쌍도 없으면 버린다. 확인됨은 다음 판정이 날 때까지 남는다(돌려 보는 중이나 지난 결과로는 바뀌지 않는다).
+   * Attaches the verdict of a merge run a runner sent to the open indirect conflict alert of that pair (ADR-0035, ADR-0036). When a verdict lands (not running, not stale), it goes back into both works' inboxes.
+   * - Broken with no missing files is confirmed. Passing with no missing files closes the alert as resolved and holds the pair (`held`). Any other verdict stays a guess.
+   * - A held pair has no open alert. A verdict for a different fingerprint releases it, and if it isn't a pass, a new alert is raised with that verdict.
+   * - With no open alert and no held pair, drop it. Confirmed stays until the next verdict (running or stale results don't change it).
    */
   const attachRun = (
     repo: string,
@@ -2005,7 +2033,7 @@ export async function startServer(options: {
     const flip = JSON.stringify([login, branch]) > JSON.stringify([theirs.login, theirs.branch]);
     const [a, b] = flip ? [theirs, mine] : [mine, theirs];
     const key = `indirect ${JSON.stringify([a.login, a.branch, b.login, b.branch])}`;
-    // 판정 수(지표). 열린 알림이 없어도 돌린 것이라 센다. 돌려 보는 중과 같은 지문의 다시 올림은 세지 않는다.
+    // Verdict count (metric). Counted even with no open alert, since it ran. Running and re-sends of the same fingerprint aren't counted.
     if (run.verdict !== "running")
       db.prepare(
         "INSERT OR IGNORE INTO merge_runs (fingerprint, verdict, at, workspace) VALUES (?, ?, ?, ?)",
@@ -2013,7 +2041,7 @@ export async function startServer(options: {
     const finished = run.verdict !== "running" && !run.stale;
     const closes = finished && run.verdict === "pass" && run.omitted.length === 0;
     type Row = { id: number; works: string; files: string; run: string | null; confirmed: number };
-    // 판정은 그 쌍을 계산하는 쪽(쓰는 쪽) 러너의 것만 받는다. 다른 쪽이 보낸 것은 버린다.
+    // Only take verdicts from the runner on the side that computes the pair (the using side). Drop the other side's.
     const computes = (row: Row) =>
       (JSON.parse(row.files) as AlertSymbol[]).some((symbol) =>
         computedBy("indirect", symbol, JSON.parse(row.works)).includes(login),
@@ -2039,7 +2067,7 @@ export async function startServer(options: {
       )
         return;
       if (closes) {
-        // 다시 돌려도 통과다. 닫힌 알림의 판정만 새것으로 둔다.
+        // Passing again is still a pass. Only update the verdict of the closed alert.
         db.prepare("UPDATE alerts SET run = ? WHERE id = ?").run(
           JSON.stringify({ ...run, login, at: new Date(now).toISOString() }),
           held.id,
@@ -2049,13 +2077,13 @@ export async function startServer(options: {
         return;
       }
       db.prepare("UPDATE alerts SET held = 0 WHERE id = ?").run(held.id);
-      reconcile(repo); // 그 쌍을 아직 올리고 있으면 새 알림이 선다
+      reconcile(repo); // if it's still raising that pair, a new alert appears
       row = openRow();
       if (!row || !computes(row)) return;
     }
     const next = { ...run, login };
     const { at: _, ...known } = row.run ? (JSON.parse(row.run) as AlertRun) : {};
-    if (JSON.stringify(known) === JSON.stringify(next)) return; // 같은 것을 다시 올렸다
+    if (JSON.stringify(known) === JSON.stringify(next)) return; // same thing sent again
     const confirmed = finished
       ? Number(run.verdict === "broken" && run.omitted.length === 0)
       : row.confirmed;
@@ -2071,7 +2099,7 @@ export async function startServer(options: {
       row.id,
     );
     if (confirmed !== row.confirmed) {
-      // 확인됨 라벨을 붙이거나 뗀다(ADR-0039). 논의가 되면 이슈를 연다.
+      // Add or remove the Confirmed label (ADR-0039). If it becomes Discuss, open the issue.
       const post = db
         .prepare(
           "SELECT c.id, c.labels FROM channels c JOIN messages m ON m.id = c.alert WHERE m.alert = ?",
@@ -2086,17 +2114,17 @@ export async function startServer(options: {
         post.id,
       );
       syncSoon(post.id);
-      openDebate(post.id); // 확인되면 토론이 열린다(ADR-0040)
+      openDebate(post.id); // a debate opens once confirmed (ADR-0040)
     }
     shareAlert(row.id);
     if (!finished) return;
     deliver(repo, row.id, JSON.parse(row.works), now);
     shareInbox();
     shareRuns(repo, login);
-    if (closes || confirmed !== row.confirmed) shareMembers(); // 멤버 목록의 "합치면 깨짐"
+    if (closes || confirmed !== row.confirmed) shareMembers(); // "breaks when merged" in the member list
   };
 
-  /** 이 멤버의 그 레포 러너들에 서버에 붙은 그 멤버의 판정들을 보낸다(`runs`). 같은 지문은 다시 돌리지 않게 한다. `to`를 주면 그 연결에만. */
+  /** Sends this member's runners in that repo the verdicts the server holds for that member (`runs`). Makes them not re-run the same fingerprint. With `to`, only that connection. */
   const shareRuns = (repo: string, login: string, to?: WSContext) => {
     const runs = (
       db
@@ -2119,7 +2147,7 @@ export async function startServer(options: {
         socket.send(frame);
   };
 
-  /** 알림이 생기거나 바뀌거나 풀렸다. 두 작업의 편지함에 넣는다. 아직 넘겨주지 않은 같은 알림의 소식은 새 것으로 바꾼다. */
+  /** An alert was created, changed, or resolved. Puts it in both works' inboxes. Replaces news of the same alert that hasn't been handed over yet with the new one. */
   const deliver = (repo: string, alert: number, works: WorkRef[], now: number) => {
     for (const { login, branch } of works) {
       db.prepare("DELETE FROM inbox WHERE login = ? AND branch = ? AND alert = ?").run(
@@ -2138,7 +2166,7 @@ export async function startServer(options: {
   };
 
   const inboxMs = options.inboxMs ?? INBOX_MS;
-  /** 멤버의 그 레포 편지함 전부: 만료되지 않은 것을 들어온 순서로. */
+  /** All of a member's inbox in that repo: the unexpired ones, in arrival order. */
   const inboxOf = (repo: string, login: string): InboxItem[] =>
     (
       db
@@ -2164,7 +2192,7 @@ export async function startServer(options: {
         ? { ...head, kind: "alert", alert: alertView(row) }
         : { ...head, ...JSON.parse(row.news) };
     });
-  /** 토론의 소식을 토론의 두 작업의 편지함에 넣는다(`only`가 있으면 그 자리들에만). */
+  /** Puts debate news in the inboxes of the debate's two works (only those seats if `only` is given). */
   const debateNews = (
     debate: number,
     news: Omit<Extract<InboxItem, { kind: "debate" }>, "id" | "branch" | "at">,
@@ -2184,9 +2212,9 @@ export async function startServer(options: {
     }
     shareInbox();
   };
-  /** 러너마다 마지막으로 보낸 편지함. 같은 것을 다시 보내지 않는다. */
+  /** The last inbox sent to each runner. Doesn't resend the same one. */
   const sentInbox = new Map<WSContext, string>();
-  /** 편지함이 달라진 러너에 그 멤버의 편지함을 보낸다. `to`(막 붙은 러너)에는 같아도 보낸다. */
+  /** Sends that member's inbox to runners whose inbox changed. To `to` (a runner that just attached), send even if it's the same. */
   const shareInbox = (to?: WSContext) => {
     for (const [socket, { login, repo }] of runners) {
       if (socket.readyState !== 1) continue; // OPEN
@@ -2215,7 +2243,7 @@ export async function startServer(options: {
     text: row.text,
     at: new Date(row.at).toISOString(),
   });
-  /** 질문에 답이나 실패를 적고 묻는 작업의 편지함에 넣는다. 이미 적은 것(만료로 지운 것 포함)이면 그대로 둔다. */
+  /** Records an answer or failure on a question and puts it in the asking work's inbox. If it's already recorded (including ones deleted on expiry), leaves it alone. */
   const settleQuestion = (
     id: number,
     answer: Extract<InboxItem, { kind: "answer" }>["answer"],
@@ -2243,8 +2271,8 @@ export async function startServer(options: {
     shareInbox();
   };
   /**
-   * 멤버의 그 레포 러너 가운데 마지막에 붙은 것이 그 실행기(고르지 않았으면 첫째 실행기)로 답할 수 있으면 그 연결과 실행기.
-   * 실행기를 하나도 알리지 않은 러너는 답할 수 없는 것으로 친다(자리를 비운 것과 같다).
+   * The connection and executor of the member's last-attached runner in that repo, if it can answer with that executor (the first executor if none was picked).
+   * A runner that reported no executors can't answer (same as being away).
    */
   const answererOf = (target: string, executor: ExecutorId | null, repo: string) => {
     const found = [...runners].findLast(
@@ -2259,8 +2287,8 @@ export async function startServer(options: {
     return { socket, executor: executor ?? (runner.executors[0] as ExecutorId) };
   };
   /**
-   * 멤버(`target`)에게 남은 질문(답이 없고 만료되지 않았고 아직 보내지 않은 것)을 그 멤버의 러너에 보낸다. 묻는 순서대로다.
-   * 스위치가 꺼져 있으면 보내지 않고 실패로 묻는 쪽 편지함에 넣는다. 받을 러너가 없으면 남겨 둔다.
+   * Sends the remaining questions (unanswered, unexpired, not yet sent) for the member (`target`) to that member's runner, in the order they were asked.
+   * If the switch is off, doesn't send and puts a failure in the asker's inbox. If there's no runner to receive, keeps them.
    */
   const dispatchQuestions = (target: string) => {
     const rows = db
@@ -2272,7 +2300,10 @@ export async function startServer(options: {
       if (db.prepare("SELECT 1 FROM ask_off WHERE login = ?").get(target)) {
         settleQuestion(row.id, {
           state: "failed",
-          error: { code: "refused", message: `${target}이 남의 질문에 답하지 않게 해 두었다` },
+          error: {
+            code: "refused",
+            message: `${target} set their agent not to answer other people's questions`,
+          },
         });
         continue;
       }
@@ -2287,7 +2318,7 @@ export async function startServer(options: {
       questionsSent.set((JSON.parse(frame) as { id: string }).id, { ...answerer, id: row.id });
       answerer.socket.send(frame);
     }
-    shareMembers(); // 답하는 중
+    shareMembers(); // answering
   };
   type SeatRow = {
     debate: number;
@@ -2312,35 +2343,35 @@ export async function startServer(options: {
     decided: number | null;
     expired: number;
   };
-  /** 토론의 라운드 수(문답 A13). 서버 설정으로 줄일 수 있다. */
+  /** Number of debate rounds (Q&A A13). The server config can lower it. */
   const debateRounds = Math.max(1, options.debateRounds ?? DEBATE_ROUNDS);
-  /** 러너에 보내고 입장을 기다리는 토론 참여 요청. 키는 보낸 `debate`의 id다. 연결이 끊기거나 서버가 다시 뜨면 잃고, 러너가 붙을 때 다시 보낸다. */
+  /** Debate join requests sent to a runner that are waiting for a stance. The key is the sent `debate` id. Lost if the connection drops or the server restarts, and resent when the runner attaches. */
   const debatesSent = new Map<
     string,
     { socket: WSContext; executor: ExecutorId; debate: number; seat: number; proxy: string | null }
   >();
-  /** 자리가 라운드마다 낸 입장. */
+  /** The stance each seat gave per round. */
   const stancesOf = (seat: SeatRow): Stance[] => {
     const stored = seat.stance === null ? [] : JSON.parse(seat.stance);
     return Array.isArray(stored) ? stored : [stored];
   };
   const seatsOf = (debate: number) =>
     db.prepare("SELECT * FROM seats WHERE debate = ? ORDER BY seat").all(debate) as SeatRow[];
-  /** 토론의 레포: 그 포스트의 레포다. */
+  /** The debate's repo: the post's repo. */
   const debateRepo = (debate: number) =>
     (
       db
         .prepare("SELECT c.repo FROM debates d JOIN channels c ON c.id = d.post WHERE d.id = ?")
         .get(debate) as { repo: string }
     ).repo;
-  /** 안이 되는 자리: 입장을 하나라도 낸 자리, 섞어 둔 순서(`flip`)대로. 첫 라운드의 입장이 공개된 뒤로 바뀌지 않는다. */
+  /** The seats that become options: seats that gave at least one stance, in shuffled order (`flip`). Doesn't change once the first round's stances are public. */
   const optionSeats = (row: DebateRow, seats: SeatRow[]) =>
     (row.flip ? [...seats].reverse() : seats).filter((seat) => stancesOf(seat).length > 0);
-  /** 공개된 라운드 수: 그 라운드에 기다리는 자리가 있으면 그 라운드는 아직 가린다. */
+  /** Number of public rounds: a round stays hidden while any seat is still waiting in it. */
   const shownOf = (row: DebateRow, seats: SeatRow[]) =>
     seats.some((seat) => seat.state === "waiting") ? row.round - 1 : row.round;
   /**
-   * 포스트의 토론. 라운드의 입장은 그 라운드에 기다리는 자리가 없을 때 싣는다. 안의 주인도 함께 싣고, 화면이 결론 전까지 덮어 둔다(ADR-0040, #202).
+   * A post's debate. A round's stances are included once no seat is waiting in that round. Includes the option's owner too, and the screen covers it until the conclusion (ADR-0040, #202).
    */
   const debateOf = (post: string): Debate | null => {
     const row = db.prepare("SELECT * FROM debates WHERE post = ?").get(post) as
@@ -2403,8 +2434,8 @@ export async function startServer(options: {
       : null;
   };
   /**
-   * 포스트에 증거 라벨이 붙었으면 토론을 연다(ADR-0040). 중요도와 상관없다. 이미 열린 토론이 있으면 그대로 둔다.
-   * 자리는 알림의 두 작업이다. 자동 참여 스위치(묻기 스위치)를 끈 주인의 자리는 나오지 않는다. 안의 순서는 무작위로 섞는다.
+   * Opens a debate if the post got an evidence label (ADR-0040). Importance doesn't matter. If a debate is already open, leaves it.
+   * The seats are the alert's two works. The seat of an owner who turned off the auto-join switch (the ask switch) doesn't show up. The order of options is shuffled.
    */
   const openDebate = (post: string, requested = false) => {
     const row = db
@@ -2435,9 +2466,9 @@ export async function startServer(options: {
       post: { id: post, name: channelName(post) },
     });
     for (const work of works) dispatchDebates(work.login);
-    advance(debate); // 두 자리가 다 나오지 않으면 바로 끝난다
+    advance(debate); // if neither seat shows up, it ends right away
   };
-  /** 토론의 자리 하나를 이 라운드에서 끝낸다(입장을 냈거나 내지 못했다). 이미 끝났으면 그대로 둔다. */
+  /** Finishes one seat of a debate for this round (it gave a stance or couldn't). If it's already finished, leaves it. */
   const settleSeat = (
     debate: number,
     seat: number,
@@ -2463,9 +2494,9 @@ export async function startServer(options: {
     shareDebates();
   };
   /**
-   * 라운드에 기다리는 자리가 없으면 다음으로 간다(ADR-0040, 구현 7장). 두 자리가 다 냈고 라운드가 남았으면 반박 라운드를 연다.
-   * 아니면 끝낸다: 마지막 입장의 실험이 한 안만 통과했으면 그 안이, 아니면 마지막 입장에 검증된 근거가 있는 안이 하나뿐이면 그 안이 결론이고,
-   * 아니면 사람이 고를 차례다. 낸 입장이 없으면 끝난다.
+   * If no seat is waiting in the round, moves on (ADR-0040, implementation section 7). If both seats gave one and rounds remain, opens a rebuttal round.
+   * Otherwise it ends: if the last stance's experiment passed for only one option, that option is the conclusion; else if only one option has verified evidence in the last stance, that one is;
+   * else it's a person's turn to pick. Ends if no stance was given.
    */
   const advance = (debate: number) => {
     const row = db.prepare("SELECT * FROM debates WHERE id = ?").get(debate) as DebateRow;
@@ -2478,7 +2509,7 @@ export async function startServer(options: {
       db.prepare("UPDATE seats SET state = 'waiting' WHERE debate = ? AND state = 'submitted'").run(
         debate,
       );
-      // 부재자의 러너가 붙어 있으면 진짜 에이전트가 이 라운드부터 대행의 자리를 이어받는다(문답 A18).
+      // If the absent person's runner is attached, the real agent takes over the proxy seat from this round (Q&A A18).
       for (const seat of going)
         if (seat.proxy !== null && answererOf(seat.login, null, debateRepo(debate))) {
           db.prepare("UPDATE seats SET proxy = NULL WHERE debate = ? AND seat = ?").run(
@@ -2495,12 +2526,12 @@ export async function startServer(options: {
         going.map((seat) => seat.seat),
       );
       for (const seat of going) dispatchDebates(seat.proxy ?? seat.login);
-      syncSoon(row.post); // 지난 라운드가 공개됐다
+      syncSoon(row.post); // the previous round went public
       return;
     }
     const options = optionSeats(row, seats);
     const lastOf = (seat: SeatRow) => stancesOf(seat).at(-1);
-    // 실험이 한 안만 통과했으면 그 안, 아니면 검증된 근거가 한 안에만 있으면 그 안이다(ADR-0040의 순서).
+    // If the experiment passed for only one option, that one; else if verified evidence is only in one option, that one (the order in ADR-0040).
     const passed = options.filter((seat) => lastOf(seat)?.experiment?.verdict === "pass");
     const backed = options.filter((seat) =>
       lastOf(seat)?.evidence.some((e) => e.mark === "verified"),
@@ -2521,10 +2552,10 @@ export async function startServer(options: {
         options.length > 0 ? "choosing" : "ended",
         debate,
       );
-      syncSoon(row.post); // 마지막 라운드가 공개됐다
+      syncSoon(row.post); // the last round went public
     }
   };
-  /** 결론이 났다: 두 작업의 편지함에 소식을 넣고 이슈에 올린다. */
+  /** A conclusion was reached: puts the news in both works' inboxes and posts it to the issue. */
   const concluded = (debate: number) => {
     const row = db.prepare("SELECT * FROM debates WHERE id = ?").get(debate) as DebateRow;
     const winner = seatsOf(debate).find((seat) => seat.seat === row.winner);
@@ -2538,8 +2569,8 @@ export async function startServer(options: {
     syncSoon(row.post);
   };
   /**
-   * 멤버(`login`)의 기다리는 자리에 토론 참여 요청을 그 멤버의 러너에 보낸다. 반박 라운드면 지난 라운드의 두 입장을 싣는다.
-   * 스위치가 꺼졌으면 보내지 않고 나오지 않는 자리로 둔다. 받을 러너가 없으면 남겨 두고 붙을 때 보낸다.
+   * Sends a debate join request to the runner of the member (`login`) for their waiting seat. For a rebuttal round, includes both stances from the previous round.
+   * If the switch is off, doesn't send and leaves the seat as one that doesn't show up. If there's no runner to receive, keeps it and sends it when one attaches.
    */
   const dispatchDebates = (login: string) => {
     const rows = db
@@ -2554,7 +2585,7 @@ export async function startServer(options: {
     const off = new Set<number>();
     for (const row of rows) {
       if (sent.has(`${row.debate} ${row.seat}`)) continue;
-      // 대행은 부른 멤버가 일부러 부른 것이라 스위치를 보지 않는다(문답 A12).
+      // A proxy was called on purpose by the member who called it, so it ignores the switch (Q&A A12).
       if (row.proxy === null && db.prepare("SELECT 1 FROM ask_off WHERE login = ?").get(login)) {
         db.prepare("UPDATE seats SET state = 'off' WHERE debate = ? AND seat = ?").run(
           row.debate,
@@ -2574,7 +2605,7 @@ export async function startServer(options: {
         executor: answerer.executor,
         branch: row.branch,
         post: { id: row.post, name: channelName(row.post) },
-        // 토론의 입장은 검토 없이 공개로 올라가므로, 멤버가 아닌 사람이 GitHub에 단 댓글은 넣지 않는다.
+        // Debate stances go public without review, so comments posted on GitHub by non-members aren't included.
         messages: recentOf(row.post).filter(
           (m) =>
             !(
@@ -2604,9 +2635,9 @@ export async function startServer(options: {
       answerer.socket.send(frame);
     }
     for (const debate of off) advance(debate);
-    shareMembers(); // 답하는 중
+    shareMembers(); // answering
   };
-  /** 멤버의 GitHub 프로필 이름. 모르면 `login`이다. */
+  /** A member's GitHub profile name. `login` if unknown. */
   const nameOf = (login: string) =>
     (
       db.prepare("SELECT name FROM people WHERE login = ?").get(login) as
@@ -2614,14 +2645,14 @@ export async function startServer(options: {
         | undefined
     )?.name ?? login;
 
-  /** 레포마다 웹에 마지막으로 보낸 멤버 목록. 같은 것을 다시 보내지 않는다. */
+  /** The last member list sent to the webs per repo. Doesn't resend the same one. */
   const sentMembers = new Map<string, string>();
   /**
-   * 레포마다 멤버 목록이 달라졌으면 그 레포를 고른 웹 모두에게 보낸다. 그대로면 `to`(막 붙은 웹)에게만 보낸다.
-   * 상황이 바뀌는 곳은 `shareSituation`이 부르고, 에이전트만 바뀌는 곳(문답의 시작과 끝)은 따로 부른다.
-   * `works`는 레포마다 이미 읽은 작업이다.
+   * If a repo's member list changed, sends it to every web that picked that repo. If unchanged, sends only to `to` (a web that just attached).
+   * `shareSituation` calls it where the situation changes, and where only agents change (a Q&A starting and ending) calls it separately.
+   * `works` is the work already read per repo.
    */
-  // ponytail: 달라질 때마다 레포마다 목록 전부를 보낸다. 멤버와 작업이 많아지면 사람마다의 차이만 보낸다.
+  // ponytail: every change sends the whole list per repo. When members and work grow, send only per-person diffs.
   const shareMembers = (to?: WSContext, works = new Map<string, WorkView[]>()) => {
     for (const repo of allRepos()) {
       const members = membersView(repo, works.get(repo) ?? worksView(repo));
@@ -2633,13 +2664,13 @@ export async function startServer(options: {
         if (watcher.repo === repo && open(socket, watcher) && (changed || socket === to))
           socket.send(frame);
     }
-    shareDebates(); // 러너가 붙거나 떨어지면 기다리는 자리의 `away`가 바뀐다
+    shareDebates(); // when a runner attaches or detaches, a waiting seat's `away` changes
   };
 
-  /** 웹에 마지막으로 보낸 포스트마다의 토론과 요청. 같은 것을 다시 보내지 않는다. */
+  /** The last debates and requests sent to the webs per post. Doesn't resend the same one. */
   const sentDebates = new Map<string, string>();
-  /** 토론이나 요청이 바뀐 포스트를 붙어 있는 웹 모두에 보낸다. */
-  // ponytail: 부를 때마다 토론 전부를 다시 계산한다. 토론이 수백 개가 되면 바뀐 포스트만 넘겨받는다.
+  /** Sends posts whose debate or request changed to every attached web. */
+  // ponytail: every call recomputes all debates. When there are hundreds, take only the changed posts.
   const shareDebates = () => {
     const posts = db
       .prepare("SELECT post FROM debates UNION SELECT post FROM debate_requests")
@@ -2654,7 +2685,7 @@ export async function startServer(options: {
   };
 
   const durations = { ...PRESENCE_DURATIONS, ...options.presenceDurations };
-  /** 고른 접속 상태가 끝날 때 온라인으로 돌릴 타이머. 사람마다 하나이고, 다시 고르면 바꾼다. */
+  /** The timer that turns a person back online when the picked status ends. One per person, replaced when they pick again. */
   const expiries = new Map<string, ReturnType<typeof setTimeout>>();
   const expireAt = (login: string, until: number | null) => {
     clearTimeout(expiries.get(login));
@@ -2673,24 +2704,24 @@ export async function startServer(options: {
     );
     expiries.set(login, timer);
   };
-  // 서버가 다시 떴으면 남은 것을 다시 건다. 그사이 끝난 것은 바로 온라인으로 돌아온다.
+  // If the server restarted, re-arm what's left. Ones that ended meanwhile go back online right away.
   for (const { login, until } of db
     .prepare("SELECT login, until FROM profiles WHERE until IS NOT NULL")
     .all() as { login: string; until: number }[]) {
     expireAt(login, until);
   }
 
-  /** 레포마다 러너에 마지막으로 보낸 상황. 같은 것을 다시 보내지 않는다. */
+  /** The last situation sent to runners per repo. Doesn't resend the same one. */
   const sent = new Map<string, string>();
   /**
-   * 상황(작업 전부)이 달라졌으면 붙어 있는 러너 모두에게 보낸다. 그대로면 `to`(막 붙은 러너)에게만 보낸다.
-   * 상황을 바꾸는 곳(관측, 상태 한 줄, 오프라인, 멤버 자격, GitHub 따라가기)마다 부른다.
-   * 닫히는 중인 연결(내보낸 멤버의 러너)에는 보내지 않는다.
+   * If the situation (all work) changed, sends it to every attached runner. If unchanged, sends only to `to` (a runner that just attached).
+   * Called wherever the situation changes (observation, status line, offline, membership, following GitHub).
+   * Doesn't send to closing connections (runners of removed members).
    */
-  // ponytail: 달라질 때마다 작업 전부(내용 포함)를 러너마다 보낸다. 멤버와 큰 작업이 많아지면 작업마다의 차이만 보낸다.
+  // ponytail: every change sends all work (with content) to each runner. When members and big work grow, send only per-work diffs.
   const shareSituation = (to?: WSContext) => {
     const all = new Map(allRepos().map((repo) => [repo, worksView(repo)]));
-    shareMembers(undefined, all); // 멤버 목록은 상황에서 나온다
+    shareMembers(undefined, all); // the member list comes from the situation
     for (const [repo, works] of all) {
       const claims = claimsView(repo);
       const json = JSON.stringify([works, claims]);
@@ -2707,22 +2738,22 @@ export async function startServer(options: {
     }
   };
 
-  /** `error`를 보내고 1008로 닫는다. 러너와 웹의 `error`는 같은 형식이다. */
+  /** Sends `error` and closes with 1008. A runner's and a web's `error` have the same shape. */
   const refuse = (socket: WSContext, error: ContractError, re?: string) => {
     socket.send(encode(serverToRunner, "error", error, re));
     socket.close(1008, error.code);
   };
 
-  /** 세션 하나를 끝낸다. 그 세션으로 붙은 러너와 웹의 실시간 연결은 `error`를 받고 끊긴다. */
+  /** Ends one session. The runner and web live connections that attached with that session get an `error` and drop. */
   const endSession = (sessionHash: string, error: ContractError) => {
     db.prepare("DELETE FROM sessions WHERE hash = ?").run(sessionHash);
     for (const [socket, runner] of runners) if (runner.hash === sessionHash) refuse(socket, error);
     for (const [socket, watcher] of watchers)
       if (watcher.hash === sessionHash) refuse(socket, error);
-    shareSituation(); // 세션이 하나도 남지 않은 멤버의 작업은 보이지 않는다
+    shareSituation(); // work of a member with no sessions left is hidden
   };
 
-  /** 서버가 듣는 주소. 뜬 뒤에 정해진다. */
+  /** The address the server listens on. Set after it starts. */
   let url = "";
 
   const app = createApp((authorization) => {
@@ -2733,8 +2764,8 @@ export async function startServer(options: {
   mount(app, api.health, () => ({ contract: CONTRACT_VERSION }));
 
   /**
-   * 멤버가 워크스페이스의 레포마다 push 권한이 있는지 `token`으로 읽어 적는다(ADR-0043). GitHub이 답하지 못한 레포는 지난 것을 둔다.
-   * `push`는 권한이 있는 레포, `unknown`은 답하지 못한 레포다.
+   * Reads with `token` whether the member has push access to each repo in the workspace and records it (ADR-0043). For repos GitHub didn't answer, keeps the old value.
+   * `push` is the repos with access, `unknown` the repos it didn't answer for.
    */
   const readAccess = async (login: string, token: string) => {
     const push: string[] = [];
@@ -2742,7 +2773,7 @@ export async function startServer(options: {
     for (let repo of allRepos()) {
       let can = await github.canPush(token, repo);
       if (stopped) break;
-      // 같은 이름의 다른 레포(id가 다르다)에는 권한이 없는 것으로 본다. 옮기지도 않는다.
+      // A different repo with the same name (different id) is treated as no access. It isn't carried over either.
       if (can?.id !== undefined && !sameRepo(repo, can.id)) can = { push: false, name: repo };
       if (can && can.name !== repo && moveRepo(repo, can.name)) repo = can.name;
       if (can?.account)
@@ -2761,8 +2792,8 @@ export async function startServer(options: {
   };
 
   /**
-   * 레포마다인 API를 부른 레포(ADR-0043): `REPO_HEADER`에 실린 것 가운데 부른 사람에게 보이는 첫 레포,
-   * 머리말이 없으면 보이는 첫 레포다. 없으면 `not_found`다.
+   * The repo of a per-repo API call (ADR-0043): the first repo in `REPO_HEADER` that the caller can see,
+   * or the first visible repo if there's no header. `not_found` if none.
    */
   const repoOf = (c: Context<Env>) => {
     const login = c.get("login") as string;
@@ -2779,23 +2810,23 @@ export async function startServer(options: {
     if (!found)
       throw new ContractFailure({
         code: "not_found",
-        message: `보이는 레포가 없다${wanted.length > 0 ? `: ${wanted.join(", ")}` : ""}`,
+        message: `No repo you can see${wanted.length > 0 ? `: ${wanted.join(", ")}` : ""}`,
       });
     return found;
   };
-  /** `WORKSPACE_HEADER`에 실린 워크스페이스. 없으면 없다. 부른 사람의 워크스페이스가 아니면 `not_found`다. */
+  /** The workspace in `WORKSPACE_HEADER`. None if absent. `not_found` if it isn't one of the caller's workspaces. */
   const workspaceHeader = (c: Context<Env>, login: string) => {
     const wanted = c.req.header(WORKSPACE_HEADER)?.trim().toLowerCase();
     if (wanted && !workspacesOf(login).includes(wanted))
       throw new ContractFailure({
         code: "not_found",
-        message: `들어가 있지 않은 워크스페이스다: ${wanted}`,
+        message: `You're not in that workspace: ${wanted}`,
       });
     return wanted || undefined;
   };
   /**
-   * 워크스페이스마다인 API(채널, 포럼, 지표)와 방문을 부른 워크스페이스(ADR-0043): `WORKSPACE_HEADER`, 없으면 `REPO_HEADER`가 고른 레포의 워크스페이스,
-   * 그것도 없으면 들어간 첫 워크스페이스다. 레포마다인 API는 이 워크스페이스의 레포만 고른다(`repoOf`).
+   * The workspace of a per-workspace API call (channels, forums, metrics) and visits (ADR-0043): `WORKSPACE_HEADER`, else the workspace of the repo `REPO_HEADER` picked,
+   * else the first workspace they're in. Per-repo APIs only pick repos in this workspace (`repoOf`).
    */
   const workspaceOf = (c: Context<Env>) => {
     const login = c.get("login") as string;
@@ -2809,7 +2840,7 @@ export async function startServer(options: {
       .flatMap((w) => mine.find((repo) => repo.toLowerCase() === w) ?? []);
     const found = named[0] ?? mine[0];
     if (!found)
-      throw new ContractFailure({ code: "not_found", message: "들어간 워크스페이스가 없다" });
+      throw new ContractFailure({ code: "not_found", message: "You're not in any workspace" });
     return ownerOf(found);
   };
 
@@ -2818,8 +2849,8 @@ export async function startServer(options: {
     for (const [device, pending] of logins)
       if (pending.expiresAt < now || now - pending.polledAt > ABANDONED_LOGIN_MS)
         logins.delete(device);
-    // Fly 앞단은 Fly-Client-IP를 덮어써 보낸다(배포에서 확인할 것). Fly 위에서 돌 때만 믿고, 아니면 연결의 주소다.
-    // Fly가 아닌 곳에서 믿으면 요청마다 헤더를 바꿔 주소마다의 상한을 넘을 수 있다.
+    // The Fly front end overwrites Fly-Client-IP. Trust it only when running on Fly (check on deploy); otherwise use the connection's address.
+    // Trusting it elsewhere would let someone change the header per request and get past the per-address limit.
     const socketAddress =
       (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming
         ?.socket?.remoteAddress ?? "";
@@ -2830,10 +2861,10 @@ export async function startServer(options: {
     if (logins.size + startingLogins >= MAX_PENDING_LOGINS || mine >= MAX_PENDING_PER_CLIENT) {
       throw new ContractFailure({
         code: "internal",
-        message: "로그인이 밀려 있다. 잠시 뒤 다시 하라",
+        message: "Too many logins are waiting. Try again in a bit",
       });
     }
-    // GitHub을 기다리기 전에 전체와 주소마다의 자리를 잡는다. 기다리는 사이에 온 요청도 그 자리를 센다.
+    // Take the overall and per-address slots before waiting on GitHub. Requests that arrive during the wait count against those slots too.
     startingLogins++;
     startingFrom.set(client, (startingFrom.get(client) ?? 0) + 1);
     const started = await github.startDevice().finally(() => {
@@ -2865,11 +2896,11 @@ export async function startServer(options: {
       logins.delete(device);
       throw new ContractFailure({
         code: "unauthorized",
-        message: "기기 인증이 끝났다. 로그인을 다시 하라",
+        message: "Device auth is done. Log in again",
       });
     }
     pending.polledAt = Date.now();
-    // 너무 자주 물으면 GitHub에 넘기지 않는다(GitHub의 slow_down을 부르지 않는다).
+    // If it asks too often, don't pass it to GitHub (don't trigger GitHub's slow_down).
     if (Date.now() < pending.nextPollAt) return { pending: true as const };
     const polled = await github.pollDevice(pending.deviceCode);
     if ("pending" in polled) {
@@ -2882,27 +2913,27 @@ export async function startServer(options: {
       throw new ContractFailure({ code: "unauthorized", message: polled.error });
 
     const { id, login, name, avatar } = await github.user(polled.token);
-    // GitHub 이름은 바꾸면 다른 사람이 가져갈 수 있다. 이 이름을 다른 계정이 쓰던 것이면 그 사람의 것을 이어받지 않게 막는다.
+    // A GitHub name can be taken by someone else once it's changed. If another account used this name, block it so this person doesn't inherit that account's stuff.
     const known = db.prepare("SELECT github_id FROM people WHERE login = ?").get(login) as
       | { github_id: number | null }
       | undefined;
     if (known?.github_id != null && known.github_id !== id)
       throw new ContractFailure({
         code: "forbidden",
-        message: `${login}는 이 서버에서 다른 GitHub 계정이 쓰던 이름이라 들어올 수 없다`,
+        message: `${login} can't join: another GitHub account used that name on this server`,
       });
     const access = await readAccess(login, polled.token);
     if (access.unknown.length > 0 && access.push.length === 0) {
       throw new ContractFailure({
         code: "internal",
-        message: "GitHub에서 push 권한을 확인하지 못했다. 잠시 뒤 다시 하라",
+        message: "Couldn't check push access on GitHub. Try again in a bit",
       });
     }
     if (access.push.length === 0) {
       throw new ContractFailure({
         code: "forbidden",
-        // 서버의 레포 이름은 싣지 않는다. 들어오지 못한 사람에게 비공개 레포의 이름이 새지 않는다.
-        message: `${login}는 이 서버의 워크스페이스 레포 어디에도 push 권한이 없어 들어올 수 없다`,
+        // Don't include the server's repo names. A private repo's name doesn't leak to someone who couldn't join.
+        message: `${login} can't join: no push access to any of this server's workspace repos`,
       });
     }
     const session = randomBytes(32).toString("hex");
@@ -2914,7 +2945,7 @@ export async function startServer(options: {
     db.prepare(
       "INSERT OR REPLACE INTO people (login, name, avatar, github_id) VALUES (?, ?, ?, ?)",
     ).run(login, name ?? login, avatar, id);
-    shareSituation(); // 빠졌다 돌아온 멤버의 작업이 다시 보인다
+    shareSituation(); // work of a member who left and came back shows again
     return { session, login };
   });
 
@@ -2935,10 +2966,10 @@ export async function startServer(options: {
     };
   });
 
-  // 브라우저 대신 서버가 키를 붙여 GIPHY에 묻는다. 키는 서버 밖으로 나가지 않고, 찾은 결과는 쌓아 두지 않는다(ADR-0044).
+  // The server adds the key and asks GIPHY instead of the browser. The key never leaves the server, and results aren't stored (ADR-0044).
   mount(app, api.gifs, ({ query }) => {
     if (!options.giphy) {
-      throw new ContractFailure({ code: "not_found", message: "이 서버에는 GIPHY 키가 없다" });
+      throw new ContractFailure({ code: "not_found", message: "This server has no GIPHY key" });
     }
     return options.giphy.search(query).then((gifs) => ({ gifs }));
   });
@@ -2966,18 +2997,18 @@ export async function startServer(options: {
     };
   });
 
-  /** 넣고 빼는 레포. 그 레포의 GitHub Admin이 아니면 `forbidden`이다. */
+  /** Adds or removes a repo. `forbidden` unless they're a GitHub Admin of that repo. */
   const mustAdmin = async (login: string, token: string, repo: string) => {
     const admin = await github.canAdmin(token, repo);
     if (admin === undefined)
       throw new ContractFailure({
         code: "github_failed",
-        message: `GitHub에서 ${repo}의 Admin인지 확인하지 못했다. 잠시 뒤 다시 하라`,
+        message: `Couldn't check on GitHub whether you're an Admin of ${repo}. Try again in a bit`,
       });
     if (!admin)
       throw new ContractFailure({
         code: "forbidden",
-        message: `${login}는 ${repo}의 Admin이 아니라 레포를 넣거나 뺄 수 없다`,
+        message: `${login} isn't an Admin of ${repo}, so they can't add or remove it`,
       });
   };
 
@@ -2986,22 +3017,22 @@ export async function startServer(options: {
     if (!accounts.has(repo.split("/")[0]?.toLowerCase() ?? ""))
       throw new ContractFailure({
         code: "forbidden",
-        message: `${repo.split("/")[0]}는 이 서버가 받는 GitHub 계정이 아니다`,
+        message: `${repo.split("/")[0]} isn't a GitHub account this server accepts`,
       });
     await mustAdmin(login, callerToken(c), repo);
-    // 넣을 때 GitHub id를 적는다. 전에 있던 같은 이름의 다른 레포면 그 레포의 것이 이어지지 않게 막는다(#315).
+    // Record the GitHub id when adding. If a different repo with the same name was here before, block it so that repo's stuff isn't carried over (#315).
     const found = await github.canPush(callerToken(c), repo);
     if (found?.id !== undefined && !sameRepo(repo, found.id))
       throw new ContractFailure({
         code: "forbidden",
-        message: `${repo}는 전에 이 서버에 있던 같은 이름의 다른 레포라 넣을 수 없다`,
+        message: `${repo} is a different repo with the same name as one this server had before, so it can't be added`,
       });
     db.prepare("INSERT OR IGNORE INTO repos (name, at) VALUES (?, ?)").run(repo, Date.now());
     const name = (db.prepare("SELECT name FROM repos WHERE name = ?").get(repo) as { name: string })
       .name;
     ensureWorkspace(name);
     seedLabels(name);
-    // push 권한은 다음 확인을 기다리지 않고 지금 들어온 멤버마다 읽는다.
+    // Read push access now for each member who's in, without waiting for the next check.
     await Promise.all(
       (
         db
@@ -3022,7 +3053,7 @@ export async function startServer(options: {
     if (!found)
       throw new ContractFailure({
         code: "github_failed",
-        message: "GitHub에서 Admin인 레포를 읽지 못했다. 잠시 뒤 다시 하라",
+        message: "Couldn't read the repos you're Admin of on GitHub. Try again in a bit",
       });
     const added = new Set(
       (db.prepare("SELECT name FROM repos").all() as { name: string }[]).map((row) =>
@@ -3041,19 +3072,25 @@ export async function startServer(options: {
     const found = db.prepare("SELECT name FROM repos WHERE name = ?").get(repo) as
       | { name: string }
       | undefined;
-    // 보이지 않는 레포는 없는 레포와 같게 답한다. 다른 워크스페이스에 어떤 레포가 있는지 새지 않는다.
+    // A repo you can't see gets the same answer as one that doesn't exist. Which repos another workspace has doesn't leak.
     if (!found || !sees(login, found.name))
-      throw new ContractFailure({ code: "not_found", message: `없는 레포다: ${repo}` });
+      throw new ContractFailure({ code: "not_found", message: `No such repo: ${repo}` });
     await mustAdmin(login, callerToken(c), found.name);
-    // 그 레포의 것은 지우지 않는다. 다시 넣으면 돌아온다.
+    // That repo's stuff isn't deleted. It comes back if the repo is added again.
     db.prepare("DELETE FROM repos WHERE name = ?").run(found.name);
     db.prepare("DELETE FROM access WHERE repo = ?").run(found.name);
     for (const [socket, runner] of runners)
       if (runner.repo === found.name)
-        refuse(socket, { code: "forbidden", message: `${found.name}가 워크스페이스에서 빠졌다` });
+        refuse(socket, {
+          code: "forbidden",
+          message: `${found.name} was removed from the workspace`,
+        });
     for (const [socket, watcher] of watchers)
       if (watcher.repo === found.name)
-        refuse(socket, { code: "forbidden", message: `${found.name}가 워크스페이스에서 빠졌다` });
+        refuse(socket, {
+          code: "forbidden",
+          message: `${found.name} was removed from the workspace`,
+        });
     shareSituation();
     return { repos: reposOf(login) };
   });
@@ -3061,12 +3098,12 @@ export async function startServer(options: {
   mount(app, api.logout, (_, c) => {
     endSession(hash(bearer(c.req.header("authorization")) as string), {
       code: "unauthorized",
-      message: "로그아웃해 세션이 끝났다",
+      message: "You logged out, so the session ended",
     });
     return {};
   });
 
-  /** 작업의 에이전트를 바꾼다(ADR-0015). 마지막에 보낸 실행기가 이긴다. */
+  /** Changes the work's agent (ADR-0015). The last executor sent wins. */
   const setWorkAgent = (repo: string, login: string, branch: string, executor: ExecutorId) =>
     db
       .prepare(
@@ -3118,7 +3155,7 @@ export async function startServer(options: {
     const login = c.get("login") as string;
     if (on) db.prepare("DELETE FROM ask_off WHERE login = ?").run(login);
     else db.prepare("INSERT OR IGNORE INTO ask_off (login) VALUES (?)").run(login);
-    dispatchDebates(login); // 끄면 아직 보내지 않은 자리가 나오지 않는 자리가 된다
+    dispatchDebates(login); // turning it off makes seats not yet sent into seats that don't show up
     return { on };
   });
 
@@ -3143,7 +3180,7 @@ export async function startServer(options: {
   mount(app, api.settings, (_, c) => {
     const login = c.get("login") as string;
     const repo = repoOf(c);
-    // 답한 것만 센다. 남겨 두고 아직 답하지 않았거나 답하지 못한 질문은 세지 않는다.
+    // Count only answered ones. Kept questions that aren't answered yet or couldn't be answered aren't counted.
     const answered = db
       .prepare(
         `SELECT login, text, at FROM questions
@@ -3169,7 +3206,7 @@ export async function startServer(options: {
           : null,
       },
       mergeCheck: {
-        // ponytail: 레포마다 멤버 하나에 러너 하나로 본다(hello와 같다). 마지막에 붙은 러너의 것이다.
+        // ponytail: one runner per member per repo (same as hello). It's the last one attached.
         runner:
           [...runners.values()].findLast((r) => r.login === login && r.repo === repo)?.mergeCheck ??
           ("offline" as const),
@@ -3184,19 +3221,19 @@ export async function startServer(options: {
     };
   });
 
-  /** 에이전트는 주인만 부른다. */
+  /** Only the owner can call an agent. */
   const mustOwn = (agent: string, login: string) => {
     if (agent !== login) {
       throw new ContractFailure({
         code: "forbidden",
-        message: `${agent}의 에이전트는 ${agent}만 부를 수 있다`,
+        message: `Only ${agent} can call ${agent}'s agent`,
       });
     }
   };
 
   /**
-   * `agent`의 `executor`를 돌리는 러너의 연결. 같은 멤버의 러너가 여럿이면 마지막에 붙은 것이 답한다.
-   * 레포의 것(포스트)이면 그 레포의 러너만 답한다(ADR-0043). 꺼져 있으면 쌓아 두지 않고 `runner_offline`이다.
+   * The connection of the runner that runs `agent`'s `executor`. If the same member has several runners, the last attached one answers.
+   * For something in a repo (a post), only that repo's runner answers (ADR-0043). If it's off, nothing is queued and it's `runner_offline`.
    */
   const runnerOf = (agent: string, executor: ExecutorId, repo?: string, workspace?: string) => {
     const found = [...runners].findLast(
@@ -3209,15 +3246,15 @@ export async function startServer(options: {
     if (!found) {
       throw new ContractFailure({
         code: "runner_offline",
-        message: `${agent}의 ${repo ? `${repo} ` : ""}${EXECUTOR_NAMES[executor]} 러너가 꺼져 있다. 요청은 쌓아 두지 않는다`,
+        message: `${agent}'s ${repo ? `${repo} ` : ""}${EXECUTOR_NAMES[executor]} runner is off. Requests aren't queued`,
       });
     }
     return found[0];
   };
 
   /**
-   * 러너에 넘길 채널의 최근 대화, 오래된 것부터 `CHANNEL_CONTEXT`개까지. 포스트면 맨 앞에 그 알림을 둔다.
-   * 알림의 번호가 포스트의 글보다 앞이라 러너는 채널 세션의 첫 턴에만 넘긴다.
+   * The channel's recent conversation to pass to the runner, oldest first, up to `CHANNEL_CONTEXT`. For a post, the alert goes first.
+   * The alert's number comes before the post's messages, so the runner only passes it on the first turn of a channel session.
    */
   const recentOf = (channel: string) => {
     const alert = postAlert(channel);
@@ -3235,10 +3272,10 @@ export async function startServer(options: {
     mustOwn(agent, c.get("login") as string);
     mustWrite(channel, c);
     visit(agent, channelWorkspace(channel) ?? workspaceOf(c));
-    // 포스트와 레포 채널은 그 레포의 러너가, 워크스페이스 채널은 그 워크스페이스에서 마지막에 붙은 러너가 답한다(ADR-0043).
+    // For posts and repo channels, that repo's runner answers; for workspace channels, the last runner attached in that workspace (ADR-0043).
     const socket = runnerOf(agent, executor, channelRepo(channel), channelWorkspace(channel));
-    // 채널 대화는 이 문답이 채널에 서기 전에 읽는다. `@호출`의 질문이 데이터로 한 번 더 들어가지 않는다.
-    // ponytail: 첫 턴 뒤에 알림이 고쳐져도 그 채널 세션에는 다시 넘기지 않는다. 고친 알림이 필요해지면 러너가 알림만 따로 다시 넘긴다.
+    // The channel conversation is read before this Q&A lands in the channel. The `@call` question doesn't go in again as data.
+    // ponytail: if the alert is edited after the first turn, it isn't passed to that channel session again. If the edited alert becomes needed, the runner passes the alert again on its own.
     const recent = recentOf(channel);
     const name = channelName(channel);
     const at = Date.now();
@@ -3266,9 +3303,9 @@ export async function startServer(options: {
     });
     asks.set((JSON.parse(frame) as { id: string }).id, { socket, login: agent, executor, qa: id });
     socket.send(frame);
-    const shared = shareQa(id); // 같은 멤버의 다른 화면에도, `@호출`이면 채널의 모두에게
+    const shared = shareQa(id); // to the same member's other screens too, and to everyone in the channel if it's an `@call`
     if (visibility === "public") posted(channel);
-    shareMembers(); // 답하는 중
+    shareMembers(); // answering
     return shared;
   });
 
@@ -3278,7 +3315,7 @@ export async function startServer(options: {
     visit(agent, workspaceOf(c));
     const socket = runnerOf(agent, executor, repo);
     const messages = recentOf(post);
-    // 토론의 결론이 났으면 그 안을 초안의 근거로 싣는다(ADR-0040)
+    // If the debate reached a conclusion, include that option as the draft's basis (ADR-0040)
     const debate = debateOf(post);
     const won = debate?.conclusion && debate.options[debate.conclusion.option];
     const last = won?.stances.at(-1);
@@ -3304,7 +3341,7 @@ export async function startServer(options: {
     };
     drafting.set(draft.id, { socket, login: agent, executor, draft });
     socket.send(frame);
-    shareMembers(); // 답하는 중
+    shareMembers(); // answering
     return { draft };
   });
 
@@ -3313,7 +3350,7 @@ export async function startServer(options: {
     if (!found || found.login !== c.get("login")) {
       throw new ContractFailure({
         code: "not_found",
-        message: `쓰는 중인 내 초안이 아니다: ${id}`,
+        message: `Not your draft in progress: ${id}`,
       });
     }
     found.socket.send(encode(serverToRunner, "stopDraft", { id }));
@@ -3322,16 +3359,20 @@ export async function startServer(options: {
 
   mount(app, api.postQa, ({ qa, text }, c) => {
     const login = c.get("login") as string;
-    // 남의 문답은 있어도 없는 것으로 답한다. 비공개 DM이 있다는 것도 새지 않는다.
+    // Someone else's Q&A is answered as if it doesn't exist. It doesn't leak that a private DM exists.
     const row = db.prepare(`${QAS} WHERE id = ? AND login = ?`).get(qa, login) as QaRow | undefined;
-    if (!row) throw new ContractFailure({ code: "not_found", message: `없는 문답이다: ${qa}` });
+    if (!row) throw new ContractFailure({ code: "not_found", message: `No such Q&A: ${qa}` });
     if (row.visibility === "public") {
-      throw new ContractFailure({ code: "conflict", message: "이미 채널에 올린 문답이다" });
+      throw new ContractFailure({
+        code: "conflict",
+        message: "That Q&A is already posted to a channel",
+      });
     }
     if (qaView(row).answer.state !== "answered") {
       throw new ContractFailure({
         code: "invalid_request",
-        message: "답이 온 문답만 채널에 올린다. 질문과 답이 함께 올라간다",
+        message:
+          "Only answered Q&As can be posted to a channel. The question and answer go up together",
       });
     }
     db.exec("BEGIN");
@@ -3356,11 +3397,11 @@ export async function startServer(options: {
     const rows = db
       .prepare(`${QAS} WHERE login = ? AND channel = ? ORDER BY id DESC LIMIT ?`)
       .all(c.get("login") as string, channel, HISTORY_PAGE) as QaRow[];
-    // ponytail: 최근 50개만 준다. 더 오래된 DM을 다시 볼 일이 생기면 history처럼 `before`로 넘겨 읽는다.
+    // ponytail: gives only the latest 50. If someone needs to see older DMs again, read them with `before` like history.
     return { qas: rows.reverse().map(qaView) };
   });
 
-  /** 채널 하나를 계약의 채널로. */
+  /** Turns one channel into the contract's channel. */
   const channelView = (row: {
     id: string;
     name: string;
@@ -3376,8 +3417,8 @@ export async function startServer(options: {
   });
 
   /**
-   * `login`에게 보이는 채널. 포럼의 레포 조건에서 `login`에게 보이지 않는 레포는 빼고, 조건이 있는데 하나도 안 보이면 없다.
-   * 비공개 레포의 이름이 권한 없는 멤버에게 새지 않게 한다(DESIGN.md 93-C).
+   * The channels `login` can see. Drops repos from a forum's repo filter that `login` can't see, and if there's a filter but none are visible, the forum is gone.
+   * Keeps a private repo's name from leaking to members without access (DESIGN.md 93-C).
    */
   const channelFor = (login: string, row: Parameters<typeof channelView>[0]) => {
     const view = channelView(row);
@@ -3389,7 +3430,7 @@ export async function startServer(options: {
       if (!seen.length) return undefined;
       filter = { ...filter, repos: seen };
     }
-    // 라벨 이름도 같다. 보이는 레포에 없고 안 보이는 레포에만 있는 라벨 이름은 뺀다. 아무 레포에도 없는 이름은 남긴다.
+    // Same for label names. Drop label names that are only in repos they can't see and not in any visible repo. Keep names that are in no repo.
     if ("labels" in filter) {
       const hidden = new Set(
         (
@@ -3406,7 +3447,7 @@ export async function startServer(options: {
     }
     return { ...view, filter } as Channel;
   };
-  /** 워크스페이스의 웹마다 그 사람에게 보이는 채널을 보낸다. 이제 안 보이는 사람에게는 이미 받았을 수 있어 지우라고 보낸다. */
+  /** Sends each web in the workspace the channels that person can see. For people who can't see one anymore, sends a delete, since they may already have it. */
   const broadcastChannel = (workspace: string, row: Parameters<typeof channelView>[0]) => {
     for (const [socket, watcher] of watchers) {
       if (watcher.workspace !== workspace || !open(socket, watcher)) continue;
@@ -3427,14 +3468,14 @@ export async function startServer(options: {
         )
         .all(ALERTS, workspaceOf(c)) as Parameters<typeof channelView>[0][]
     )
-      // 레포 채널은 그 레포가 보이는 멤버만 보고, 포럼의 레포 조건도 보이는 레포만 보인다.
+      // A repo channel is seen only by members who can see that repo, and a forum's repo filter only shows visible repos.
       .flatMap((row) => {
         const login = c.get("login") as string;
         return row.repo && !sees(login, row.repo) ? [] : (channelFor(login, row) ?? []);
       }),
   }));
 
-  /** 이름이 `id` 아닌 채널과 같은 층(워크스페이스, 또는 `repo`)에서 겹치면 `conflict`다. 이름은 대소문자를 가리지 않는다. */
+  /** `conflict` if the name overlaps with a channel other than `id` at the same level (workspace, or `repo`). Names are case-insensitive. */
   const mustBeNew = (workspace: string, name: string, id = "", repo = "") => {
     if (
       db
@@ -3443,7 +3484,7 @@ export async function startServer(options: {
         )
         .get(workspace, repo, name, id)
     ) {
-      throw new ContractFailure({ code: "conflict", message: `#${name} 채널이 이미 있다` });
+      throw new ContractFailure({ code: "conflict", message: `A #${name} channel already exists` });
     }
   };
 
@@ -3451,7 +3492,7 @@ export async function startServer(options: {
     const login = c.get("login") as string;
     visit(login, workspaceOf(c));
     const workspace = workspaceOf(c);
-    // 레포 채널은 이 워크스페이스의 보이는 레포에만 만든다(대소문자는 들어간 레포의 이름으로 맞춘다).
+    // A repo channel is only made in a visible repo of this workspace (case is matched to the joined repo's name).
     const found =
       repo === undefined
         ? undefined
@@ -3459,7 +3500,7 @@ export async function startServer(options: {
             (r) => r.toLowerCase() === repo.toLowerCase() && ownerOf(r) === workspace,
           );
     if (repo !== undefined && !found)
-      throw new ContractFailure({ code: "not_found", message: `보이는 레포가 아니다: ${repo}` });
+      throw new ContractFailure({ code: "not_found", message: `Not a repo you can see: ${repo}` });
     mustBeNew(workspace, name, "", found);
     const channel = {
       id: randomBytes(8).toString("hex"),
@@ -3479,8 +3520,8 @@ export async function startServer(options: {
     return { channel };
   });
 
-  /** 포럼이 바뀌면 포스트마다 보이는 포럼이 바뀌니 알림 줄을 웹 모두에 다시 보낸다. */
-  // ponytail: 워크스페이스의 포스트 전부를 다시 보낸다. 포스트가 많아 무거워지면 보이는 포럼이 바뀐 것만 보낸다.
+  /** When a forum changes, each post's visible forums change, so resend the alert line to every web. */
+  // ponytail: resends every post in the workspace. If there are so many posts it gets heavy, send only the ones whose visible forums changed.
   const shareForums = (workspace: string) => {
     for (const { alert } of db
       .prepare(
@@ -3490,7 +3531,7 @@ export async function startServer(options: {
       shareAlert(alert);
   };
 
-  /** 이 워크스페이스의 포럼(`ALERTS`는 빼고)이 없거나 `login`에게 보이지 않으면 `not_found`다. 있으면 그 포럼의 거르기를 돌려준다. */
+  /** `not_found` if this workspace has no such forum (not counting `ALERTS`) or `login` can't see it. Otherwise returns that forum's filter. */
   const mustBeForum = (login: string, workspace: string, id: string) => {
     const row = db
       .prepare(
@@ -3498,12 +3539,12 @@ export async function startServer(options: {
       )
       .get(id, workspace) as Parameters<typeof channelView>[0] | undefined;
     if (!row || !channelFor(login, row)) {
-      throw new ContractFailure({ code: "not_found", message: `없는 포럼이다: ${id}` });
+      throw new ContractFailure({ code: "not_found", message: `No such forum: ${id}` });
     }
     return JSON.parse(row.filter as string) as ForumFilter;
   };
 
-  /** 포럼을 새로 넣거나(`id`가 없으면) 고치고, 웹마다 그 사람에게 보이는 꼴로 알린다. `old`는 고치는 포럼의 지금 거르기다. */
+  /** Adds a new forum (no `id`) or edits one, and tells each web in the form that person can see. `old` is the forum's current filter when editing. */
   const saveForum = (
     login: string,
     workspace: string,
@@ -3513,18 +3554,18 @@ export async function startServer(options: {
     old?: ForumFilter,
   ) => {
     mustBeNew(workspace, name, id);
-    // 레포 조건은 부른 사람에게 보이는 이 워크스페이스의 레포여야 한다(들어간 레포의 이름으로 맞춘다). 안 보이는 레포는 없는 레포와 같게 거절한다.
+    // The repo filter must be repos in this workspace that the caller can see (matched to the joined repo's name). A repo they can't see is rejected the same as one that doesn't exist.
     const mine = reposOf(login).filter((r) => ownerOf(r) === workspace);
     const repos = (input.repos ?? []).map((repo) => {
       const found = mine.find((r) => r.toLowerCase() === repo.toLowerCase());
       if (!found)
         throw new ContractFailure({
           code: "invalid_request",
-          message: `이 워크스페이스의 레포가 아니다: ${repo}`,
+          message: `Not a repo in this workspace: ${repo}`,
         });
       return found;
     });
-    // 부른 사람에게 보이지 않던 레포 조건은 고쳐도 지워지지 않고 남는다. 조건을 비우면(모든 레포) 다 지운다.
+    // Repo filters the caller couldn't see stay even after an edit. Clearing the filter (all repos) removes them all.
     if (repos.length) repos.push(...(old?.repos ?? []).filter((r) => !sees(login, r)));
     const { repos: _, ...rest } = input;
     const filter = (repos.length ? { ...rest, repos } : rest) as ForumFilter;
@@ -3599,7 +3640,7 @@ export async function startServer(options: {
       .map(({ ms, ...news }) => ({ at: new Date(ms).toISOString(), ...news }));
     return { news } as ReplyOf<typeof api.feed>;
   });
-  /** 레포의 알림 줄(`WHERE` 뒤에 붙인다)로 포스트와 그 알림 메시지를 읽는다. */
+  /** Reads posts and their alert messages by the repo's alert line (appended after `WHERE`). */
   const postsWhere = (repo: string, where: string, ...args: number[]) =>
     (
       db
@@ -3623,18 +3664,18 @@ export async function startServer(options: {
     )?.repo;
     const [found] = sees(login, repo) ? postsWhere(repo as string, " AND m.id = ?", alert) : [];
     if (!found)
-      throw new ContractFailure({ code: "not_found", message: `없는 알림이다: ${alert}` });
+      throw new ContractFailure({ code: "not_found", message: `No such alert: ${alert}` });
     return found;
   });
 
-  /** 결정의 레포: 그 포스트의 레포다. 없는 결정이면 없다. */
+  /** The decision's repo: the post's repo. None if there's no such decision. */
   const decisionRepo = (id: number | bigint) =>
     (
       db
         .prepare("SELECT c.repo FROM decisions d JOIN channels c ON c.id = d.post WHERE d.id = ?")
         .get(id) as { repo: string } | undefined
     )?.repo;
-  /** 결정 하나를 읽는다. */
+  /** Reads one decision. */
   const decisionOf = (id: number | bigint) =>
     decisionView(
       (
@@ -3646,7 +3687,7 @@ export async function startServer(options: {
       ).decision,
     );
 
-  /** 결정 PR에 일어난 일을 결정의 포스트에 한 줄 올린다. 포럼의 알림 줄로는 올리지 않는다(ADR-0027). `by`는 그 일을 한 사람이다. */
+  /** Posts one line to the decision's post about what happened to the decision PR. Not posted as a forum alert line (ADR-0027). `by` is who did it. */
   const announce = (
     decision: number | bigint,
     event: Extract<ChannelMessage, { kind: "decision" }>["event"],
@@ -3663,7 +3704,7 @@ export async function startServer(options: {
     shareRow(db.prepare(`${MESSAGES} WHERE m.id = ?`).get(lastInsertRowid) as MessageRow);
   };
 
-  /** 열린 결정 PR이 머지되거나 닫혔다. 이미 알았으면 아무것도 하지 않는다. */
+  /** An open decision PR was merged or closed. Does nothing if it already knew. */
   const settleDecision = (decision: number | bigint, state: "accepted" | "closed", by?: string) => {
     const { changes } = db
       .prepare("UPDATE decisions SET state = ? WHERE id = ? AND state = 'proposed'")
@@ -3672,7 +3713,7 @@ export async function startServer(options: {
   };
 
   const hourMs = options.hourMs ?? 3_600_000;
-  /** 결정의 창을 지금부터 같은 길이로 다시 연다. 막히거나 멈춘 것도 지운다. */
+  /** Reopens the decision's window from now with the same length. Clears blocked or stalled too. */
   const restartWindow = (id: number) => {
     const { span } = db.prepare("SELECT span FROM decisions WHERE id = ?").get(id) as {
       span: string;
@@ -3682,7 +3723,7 @@ export async function startServer(options: {
       id,
     );
   };
-  /** 이의가 모두 거둬졌으면 창을 처음부터 다시 연다(ADR-0025). */
+  /** If all objections were withdrawn, reopens the window from the start (ADR-0025). */
   const reopenIfClear = (id: number) => {
     if (db.prepare("SELECT 1 FROM objections WHERE decision = ?").get(id)) return;
     restartWindow(id);
@@ -3690,16 +3731,16 @@ export async function startServer(options: {
   };
 
   /**
-   * 머지할 때가 됐으면 정리한 사람의 토큰으로 머지한다: 걸린 이의가 없고, 창이 닫혔거나 결정자가 모두 동의했을 때(ADR-0029).
-   * GitHub이 막으면 `blocked`, 토큰이 듣지 않거나(401, 403) 정리한 사람의 세션이 없으면 `stalled`다. 까닭이 바뀔 때만 한 줄 올리고,
-   * 다음 부름(주기마다)에 다시 해 본다. 같은 결정을 두 번 함께 머지하지 않는다.
+   * Merges with the organizer's token when it's time: no objection standing, and the window closed or all deciders agreed (ADR-0029).
+   * `blocked` if GitHub blocks it, `stalled` if the token doesn't work (401, 403) or the organizer has no session. Posts a line only when the reason changes,
+   * and tries again on the next call (every interval). Never merges the same decision twice together.
    */
   const merging = new Set<number>();
   const tryMerge = async (id: number) => {
     if (merging.has(id)) return;
     const decision = decisionOf(id);
     if (decision.state !== "proposed" || decision.closes === null) return;
-    if (decision.awaiting?.length) return; // 대행이 낀 결정은 부재자가 확인할 때까지 머지하지 않는다(ADR-0040)
+    if (decision.awaiting?.length) return; // a decision with a proxy isn't merged until the absent person confirms (ADR-0040)
     const all = decision.deciders.length > 0 && decision.deciders.every((d) => d.agreed);
     const closes = Date.parse(decision.closes);
     const now = Date.now();
@@ -3713,7 +3754,7 @@ export async function startServer(options: {
         ? await github
             .merge(session.github_token, decisionRepo(id) as string, decision.pull.number)
             .catch((error: Error) => ({ reason: error.message }))
-        : { reason: `${decision.login}가 로그인해 있지 않다` };
+        : { reason: `${decision.login} isn't logged in` };
       if (stopped) return;
       if ("merged" in merged) {
         db.prepare("UPDATE decisions SET early = ?, stuck = NULL WHERE id = ?").run(
@@ -3736,7 +3777,7 @@ export async function startServer(options: {
     }
   };
 
-  /** 결정 파일의 내용. 결정자는 로그인들이고 이름은 지금의 프로필 이름이다. */
+  /** The decision file's content. Deciders are logins, and names are the current profile names. */
   const decisionFile = (
     number: string,
     post: string,
@@ -3747,25 +3788,25 @@ export async function startServer(options: {
     return [
       `# ${number}. ${fields.title}`,
       "",
-      `- 결정자: ${named.join(", ")}`,
-      `- 출처: ${options.publicUrl ?? url}/#${post}`,
+      `- Deciders: ${named.join(", ")}`,
+      `- Source: ${options.publicUrl ?? url}/#${post}`,
       "",
-      "## 맥락",
+      "## Context",
       "",
       fields.context,
       "",
-      "## 결정",
+      "## Decision",
       "",
       fields.decision,
       "",
-      "## 결과",
+      "## Consequences",
       "",
       fields.consequences,
       "",
     ].join("\n");
   };
 
-  /** 부른 세션의 GitHub 토큰. */
+  /** The calling session's GitHub token. */
   const callerToken = (c: { req: { header(name: string): string | undefined } }) =>
     (
       db
@@ -3774,19 +3815,19 @@ export async function startServer(options: {
     ).github_token;
 
   /**
-   * 정리한 멤버의 토큰으로 결정 PR을 연다(ADR-0025): 기본 브랜치에서 새 브랜치를 따 결정 파일(과 필요하면 AGENTS.md 한 줄)을
-   * 커밋 하나로 올리고, 기본 브랜치로 PR을 연다. 번호는 기본 브랜치의 결정 파일과 아직 열린 결정 PR의 것 다음이다.
+   * Opens a decision PR with the organizer's token (ADR-0025): branches off the default branch, commits the decision file (and a line in AGENTS.md if needed)
+   * in one commit, and opens a PR to the default branch. The number follows the highest of the default branch's decision files and open decision PRs.
    */
   mount(app, api.proposeDecision, async ({ post, window, ...fields }, c) => {
     const login = c.get("login") as string;
     visit(login, workspaceOf(c));
     const repo = seenPost(login, post);
     const token = callerToken(c);
-    // 결정자: 그 포스트에서 말한 멤버(글과 공개된 문답)와, 정리해 결정 줄을 세우는 멤버.
+    // Deciders: members who spoke in that post (posts and public Q&As), and the member who organizes and sets up the decision line.
     const deciders = (
       db
         .prepare(
-          // GitHub에서 들여온 댓글의 쓴 사람은 그 레포의 지금 멤버일 때만 결정자다.
+          // A comment imported from GitHub counts its author as a decider only if they're a current member of that repo.
           `SELECT login FROM messages WHERE channel = ? AND login != '' AND decision IS NULL
            AND (github = 0 OR login IN ${MEMBERS})
            GROUP BY login ORDER BY MIN(id)`,
@@ -3794,7 +3835,7 @@ export async function startServer(options: {
         .all(post, repo) as { login: string }[]
     ).map((row) => row.login);
     if (!deciders.includes(login)) deciders.push(login);
-    // 대행이 낀 토론이면 부재자도 결정자이고, 확인할 때까지 머지하지 않는다(ADR-0040).
+    // With a proxy in the debate, the absent member is also a decider, and we don't merge until they confirm (ADR-0040).
     const absent = [
       ...new Set(
         (
@@ -3847,18 +3888,18 @@ export async function startServer(options: {
         base: base.name,
         title: subject,
         body: [
-          `Omagari 포스트에서 정리한 결정이다. 이 PR이 머지되면 결정이 수락된다.`,
+          `This is a decision written up from an Omagari post. When this PR is merged, the decision is accepted.`,
           "",
-          `- 결정 파일: \`${path}\``,
-          `- 정리한 사람: ${name} (@${login})`,
-          `- 출처: ${options.publicUrl ?? url}/#${post}`,
-          `- 이의 창: ${windowName(window)}`,
+          `- Decision file: \`${path}\``,
+          `- Written up by: ${name} (@${login})`,
+          `- Source: ${options.publicUrl ?? url}/#${post}`,
+          `- Objection window: ${windowName(window)}`,
         ].join("\n"),
       });
     } catch (error) {
       throw new ContractFailure({
         code: "github_failed",
-        message: `${login}의 GitHub 토큰으로 결정 PR을 열지 못했다: ${(error as Error).message}`,
+        message: `Couldn't open the decision PR with ${login}'s GitHub token: ${(error as Error).message}`,
       });
     }
     const at = Date.now();
@@ -3884,14 +3925,14 @@ export async function startServer(options: {
         ).lastInsertRowid,
     );
     announce(id, "opened");
-    await tryMerge(id); // "바로"면 곧이어 머지한다
+    await tryMerge(id); // "Right away" merges immediately
     return { decision: decisionOf(id) };
   });
 
-  /** `login`에게 보이는 열린 결정 하나의 날 줄. 없으면 `not_found`, 머지되거나 닫혔으면 `conflict`다. */
+  /** One open decision row visible to `login`. `not_found` if there is none, `conflict` if it's merged or closed. */
   const openDecision = (id: number, login: string) => {
     if (!sees(login, decisionRepo(id)))
-      throw new ContractFailure({ code: "not_found", message: `없는 결정이다: ${id}` });
+      throw new ContractFailure({ code: "not_found", message: `No such decision: ${id}` });
     const row = db
       .prepare("SELECT login, post, path, branch, deciders, state FROM decisions WHERE id = ?")
       .get(id) as
@@ -3904,9 +3945,12 @@ export async function startServer(options: {
           state: string;
         }
       | undefined;
-    if (!row) throw new ContractFailure({ code: "not_found", message: `없는 결정이다: ${id}` });
+    if (!row) throw new ContractFailure({ code: "not_found", message: `No such decision: ${id}` });
     if (row.state !== "proposed")
-      throw new ContractFailure({ code: "conflict", message: `이미 끝난 결정이다: ${id}` });
+      throw new ContractFailure({
+        code: "conflict",
+        message: `That decision is already done: ${id}`,
+      });
     return row;
   };
 
@@ -3918,7 +3962,7 @@ export async function startServer(options: {
       if (!(JSON.parse(row.deciders) as string[]).includes(login))
         throw new ContractFailure({
           code: "forbidden",
-          message: `${login}는 이 결정의 결정자가 아니라 동의할 수 없다. 이의만 낸다`,
+          message: `${login} isn't a decider on this decision, so they can't agree. They can only object`,
         });
       if (login !== row.login) {
         const { changes } = db
@@ -3938,7 +3982,7 @@ export async function startServer(options: {
         .prepare("DELETE FROM objections WHERE decision = ? AND login = ? AND via = 'post'")
         .run(id, login);
       if (changes === 0)
-        throw new ContractFailure({ code: "not_found", message: `${login}가 낸 이의가 없다` });
+        throw new ContractFailure({ code: "not_found", message: `${login} has no objection here` });
       reopenIfClear(id);
       announce(id, "withdrawn", { by: login });
     }
@@ -3946,12 +3990,12 @@ export async function startServer(options: {
     return { decision: decisionOf(id) };
   });
 
-  /** 정리한 사람만 고치고 버린다. */
+  /** Only the one who wrote it up can edit or discard it. */
   const organizerOnly = (row: { login: string }, login: string, what: string) => {
     if (row.login !== login)
       throw new ContractFailure({
         code: "forbidden",
-        message: `결정은 정리한 사람(${row.login})만 ${what}`,
+        message: `Only the one who wrote up the decision (${row.login}) can ${what}`,
       });
   };
 
@@ -3959,10 +4003,10 @@ export async function startServer(options: {
     const login = c.get("login") as string;
     visit(login, workspaceOf(c));
     const row = openDecision(id, login);
-    organizerOnly(row, login, "고친다");
+    organizerOnly(row, login, "edit it");
     const number = basename(row.path).slice(0, 4);
     try {
-      if (!row.branch) throw new Error("결정 PR의 브랜치를 모른다");
+      if (!row.branch) throw new Error("Don't know the decision PR's branch");
       await github.addCommit(callerToken(c), decisionRepo(id) as string, {
         branch: row.branch,
         message: `docs(decisions): ${fields.title}`,
@@ -3976,10 +4020,10 @@ export async function startServer(options: {
     } catch (error) {
       throw new ContractFailure({
         code: "github_failed",
-        message: `${login}의 GitHub 토큰으로 결정을 고쳐 올리지 못했다: ${(error as Error).message}`,
+        message: `Couldn't push the decision edit with ${login}'s GitHub token: ${(error as Error).message}`,
       });
     }
-    // 고친 결정에는 다시 동의를 받고, 창도 처음부터 다시 연다(ADR-0031).
+    // An edited decision needs agreement again, and the window starts over (ADR-0031).
     db.prepare("UPDATE decisions SET title = ? WHERE id = ?").run(fields.title, id);
     db.prepare("DELETE FROM agreements WHERE decision = ?").run(id);
     restartWindow(id);
@@ -3992,7 +4036,7 @@ export async function startServer(options: {
     const login = c.get("login") as string;
     visit(login, workspaceOf(c));
     const row = openDecision(id, login);
-    organizerOnly(row, login, "버린다");
+    organizerOnly(row, login, "discard it");
     const { pull } = db.prepare("SELECT pull FROM decisions WHERE id = ?").get(id) as {
       pull: number;
     };
@@ -4001,7 +4045,7 @@ export async function startServer(options: {
     } catch (error) {
       throw new ContractFailure({
         code: "github_failed",
-        message: `${login}의 GitHub 토큰으로 결정 PR을 닫지 못했다: ${(error as Error).message}`,
+        message: `Couldn't close the decision PR with ${login}'s GitHub token: ${(error as Error).message}`,
       });
     }
     settleDecision(id, "closed", login);
@@ -4038,32 +4082,32 @@ export async function startServer(options: {
     const seats = row ? seatsOf(row.id) : [];
     const target = seats.find((s) => s.seat === seat);
     if (!row || !target)
-      throw new ContractFailure({ code: "not_found", message: `없는 토론이나 자리다: ${post}` });
-    // 같은 사람의 두 작업이 낀 토론은 주인이 늘 있어 대행이 해당하지 않는다(ADR-0041).
+      throw new ContractFailure({ code: "not_found", message: `No such debate or seat: ${post}` });
+    // A debate with two works by the same person always has an owner, so a proxy doesn't apply (ADR-0041).
     if (seats.every((s) => s.login === target.login))
       throw new ContractFailure({
         code: "conflict",
-        message: "같은 사람의 두 작업이 낀 토론에는 대행을 부르지 않는다",
+        message: "Can't call a proxy in a debate with two works by the same person",
       });
     if (row.state !== "open" || !["waiting", "off"].includes(target.state))
       throw new ContractFailure({
         code: "conflict",
-        message: "이번 라운드에 기다리는 자리가 아니다",
+        message: "That seat isn't waiting this round",
       });
     if (target.login === login)
       throw new ContractFailure({
         code: "conflict",
-        message: "자기 자리에는 대행을 부르지 않는다",
+        message: "Can't call a proxy for your own seat",
       });
     if (!answererOf(login, null, repo))
       throw new ContractFailure({
         code: "runner_offline",
-        message: `${login}의 러너가 붙어 있지 않아 대행을 띄울 수 없다`,
+        message: `${login}'s runner isn't connected, so a proxy can't start`,
       });
     db.prepare(
       "UPDATE seats SET proxy = ?, state = 'waiting', error = NULL WHERE debate = ? AND seat = ?",
     ).run(login, row.id, seat);
-    // 주인이나 앞선 대행에게 이미 보낸 요청의 답은 받지 않는다.
+    // Answers to a request already sent to the owner or an earlier proxy are not accepted.
     for (const [id, sent] of debatesSent)
       if (sent.debate === row.id && sent.seat === seat) debatesSent.delete(id);
     dispatchDebates(login);
@@ -4079,9 +4123,9 @@ export async function startServer(options: {
       )
       .get(post) as { id: string; repo: string } | undefined;
     if (!found || !sees(login, found.repo))
-      throw new ContractFailure({ code: "not_found", message: `없는 포스트다: ${post}` });
+      throw new ContractFailure({ code: "not_found", message: `No such post: ${post}` });
     if (db.prepare("SELECT 1 FROM debates WHERE post = ?").get(found.id))
-      throw new ContractFailure({ code: "conflict", message: "이미 열린 토론이 있다" });
+      throw new ContractFailure({ code: "conflict", message: "A debate is already open" });
     const opened = agenda.trim() !== "" && grounds.trim() !== "";
     db.prepare(
       "INSERT OR REPLACE INTO debate_requests (post, login, agenda, grounds, opened, at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -4101,32 +4145,35 @@ export async function startServer(options: {
       | undefined;
     const picked = row && optionSeats(row, seatsOf(row.id))[option];
     if (!row || !picked)
-      throw new ContractFailure({ code: "not_found", message: `없는 토론이나 안이다: ${post}` });
-    // 먼저 고른 것만 결론이 된다. 고를 차례인지는 바꾸는 문장에서 본다.
+      throw new ContractFailure({
+        code: "not_found",
+        message: `No such debate or proposal: ${post}`,
+      });
+    // Only the first pick becomes the conclusion. Whether it's their turn to pick is checked in the statement that updates it.
     const { changes } = db
       .prepare(
         "UPDATE debates SET state = 'concluded', winner = ?, by = 'choice', chooser = ?, decided = ? WHERE id = ? AND state = 'choosing'",
       )
       .run(picked.seat, login, Date.now(), row.id);
     if (!changes)
-      throw new ContractFailure({ code: "conflict", message: "고를 차례인 토론이 아니다" });
+      throw new ContractFailure({ code: "conflict", message: "Not a debate waiting for a pick" });
     concluded(row.id);
     shareDebates();
     return { debate: debateOf(post) as Debate };
   });
 
-  // 라벨(ADR-0039). 이름, 색, 설명은 부른 멤버의 토큰으로 GitHub 라벨을 바꾸고, 중요도는 Omagari에만 둔다.
+  // Labels (ADR-0039). Name, color, and description change the GitHub label with the calling member's token; importance lives only in Omagari.
   mount(app, api.labels, (_, c) => ({ labels: labelsView(repoOf(c)) }));
-  /** GitHub이 받지 않은 것을 `github_failed`로. */
+  /** Turn what GitHub rejected into `github_failed`. */
   const onGitHub = async <T>(login: string, what: string, ask: (token: string) => Promise<T>) => {
     const token = tokenOf(login);
     try {
-      if (!token) throw new Error("세션이 없다");
+      if (!token) throw new Error("No session");
       return await ask(token);
     } catch (error) {
       throw new ContractFailure({
         code: "github_failed",
-        message: `${login}의 GitHub 토큰으로 ${what}: ${(error as Error).message}`,
+        message: `${login}'s GitHub token ${what}: ${(error as Error).message}`,
       });
     }
   };
@@ -4134,8 +4181,8 @@ export async function startServer(options: {
     const login = c.get("login") as string;
     const repo = repoOf(c);
     if (labelRow(repo, name))
-      throw new ContractFailure({ code: "conflict", message: `라벨이 이미 있다: ${name}` });
-    const made = await onGitHub(login, "라벨을 만들지 못했다", (token) =>
+      throw new ContractFailure({ code: "conflict", message: `Label already exists: ${name}` });
+    const made = await onGitHub(login, "couldn't create the label", (token) =>
       github.createLabel(token, repo, { name, color, description }),
     );
     db.prepare(
@@ -4148,21 +4195,24 @@ export async function startServer(options: {
     const login = c.get("login") as string;
     const repo = repoOf(c);
     const row = labelRow(repo, name);
-    if (!row) throw new ContractFailure({ code: "not_found", message: `없는 라벨이다: ${name}` });
+    if (!row) throw new ContractFailure({ code: "not_found", message: `No such label: ${name}` });
     if (
       next.name !== undefined &&
       labelRow(repo, next.name) &&
       labelRow(repo, next.name)?.id !== row.id
     )
-      throw new ContractFailure({ code: "conflict", message: `라벨이 이미 있다: ${next.name}` });
+      throw new ContractFailure({
+        code: "conflict",
+        message: `Label already exists: ${next.name}`,
+      });
     if (next.name !== undefined || next.color !== undefined || next.description !== undefined) {
       const wanted = {
         name: next.name ?? row.name,
         color: next.color ?? row.color,
         description: next.description ?? row.description,
       };
-      // 아직 GitHub에 없는 기본 라벨이면 고친 값으로 만든다.
-      const made = await onGitHub(login, "라벨을 고치지 못했다", (token) =>
+      // A default label not on GitHub yet is created with the edited values.
+      const made = await onGitHub(login, "couldn't edit the label", (token) =>
         row.github === null
           ? github.createLabel(token, repo, wanted)
           : github.updateLabel(token, repo, row.name, wanted),
@@ -4179,7 +4229,7 @@ export async function startServer(options: {
         repo,
         label.name,
       );
-      // 그 라벨을 단 포스트의 중요도가 바뀐다. 논의가 되면 이슈를 연다.
+      // The importance of posts with that label changes. If it becomes Discuss, open the issue.
       for (const { id } of db
         .prepare(
           "SELECT c.id FROM channels c WHERE c.alert IS NOT NULL AND c.repo = ? AND EXISTS (SELECT 1 FROM json_each(c.labels) j WHERE j.value = ?)",
@@ -4201,7 +4251,7 @@ export async function startServer(options: {
       .get(post) as { alert: number };
     const names = labels.map((name) => {
       const row = labelRow(repo, name);
-      if (!row) throw new ContractFailure({ code: "not_found", message: `없는 라벨이다: ${name}` });
+      if (!row) throw new ContractFailure({ code: "not_found", message: `No such label: ${name}` });
       return row.name;
     });
     db.prepare("UPDATE channels SET labels = ? WHERE id = ?").run(
@@ -4209,12 +4259,12 @@ export async function startServer(options: {
       post,
     );
     sharePost(post);
-    syncSoon(post); // 이슈 라벨을 맞추거나, 논의가 되었으면 이슈를 연다
-    openDebate(post); // 증거 라벨을 붙였으면 토론이 열린다(ADR-0040)
+    syncSoon(post); // Match the issue labels, or open the issue if it became Discuss
+    openDebate(post); // Adding an evidence label opens the debate (ADR-0040)
     return { post: postsWhere(repo, " AND m.id = ?", found.alert)[0].post };
   });
 
-  /** 부른 사람에게 보이는 채널의 종류. 없거나 보이지 않는 레포의 포스트면 `not_found`다. */
+  /** The kind of channel visible to the caller. `not_found` if it doesn't exist or is a post of a repo they can't see. */
   const mustExist = (channel: string, c: Context<Env>) => {
     const login = c.get("login") as string;
     const found = db
@@ -4222,7 +4272,7 @@ export async function startServer(options: {
       .get(channel) as
       | { kind: ChannelKind; repo: string | null; workspace: string | null }
       | undefined;
-    // 채팅 채널과 포럼은 그 워크스페이스에 들어간 멤버만 본다. 포스트는 그 레포가 보이는 멤버만 본다.
+    // Only members who joined the workspace see chat channels and forums. Only members who can see the repo see its posts.
     if (
       !found ||
       (found.repo !== null && !sees(login, found.repo)) ||
@@ -4230,16 +4280,16 @@ export async function startServer(options: {
         found.workspace !== null &&
         !workspacesOf(login).includes(found.workspace))
     ) {
-      throw new ContractFailure({ code: "not_found", message: `없는 채널이다: ${channel}` });
+      throw new ContractFailure({ code: "not_found", message: `No such channel: ${channel}` });
     }
     return found.kind;
   };
-  /** 글, DM, `@호출`은 포럼에 쓰지 못하고 포스트 안에서만 쓴다(ADR-0027). */
+  /** Articles, DMs, and `@mentions` can't be written in a forum, only inside a post (ADR-0027). */
   const mustWrite = (channel: string, c: Context<Env>) => {
     if (mustExist(channel, c) === "forum") {
       throw new ContractFailure({
         code: "invalid_request",
-        message: "포럼에는 쓸 수 없다. 포스트 안에서 쓴다",
+        message: "Can't write in a forum. Write inside a post",
       });
     }
   };
@@ -4248,7 +4298,7 @@ export async function startServer(options: {
     const login = c.get("login") as string;
     mustExist(channel, c);
     visit(login, workspaceOf(c));
-    // 알림 줄의 자리(`ALERTS`)는 레포마다의 줄이 섞여 있다. 보이는 레포 가운데 부른 워크스페이스의 것만 준다.
+    // The alert line's place (`ALERTS`) mixes lines from every repo. Give only those of the called workspace among visible repos.
     const rows = db
       .prepare(
         `${MESSAGES} WHERE m.channel = ? AND m.id < ?
@@ -4281,11 +4331,11 @@ export async function startServer(options: {
 
   mount(app, api.react, ({ message, emoji, on }, c) => {
     const login = c.get("login") as string;
-    // 볼 수 없는 메시지는 없는 메시지와 같게 답한다(#239). 채널을 볼 수 있는지는 `mustExist`가 가린다.
+    // A message you can't see gets the same answer as one that doesn't exist (#239). `mustExist` decides whether the channel is visible.
     const row = db.prepare(`${MESSAGES} WHERE m.id = ?`).get(message) as MessageRow | undefined;
     const missing = () =>
-      new ContractFailure({ code: "not_found", message: `없는 메시지다: ${message}` });
-    // 알림 줄의 자리(`ALERTS`)는 레포마다의 줄이 섞여 있으니 줄의 레포도 본다.
+      new ContractFailure({ code: "not_found", message: `No such message: ${message}` });
+    // The alert line's place (`ALERTS`) mixes lines from every repo, so check the line's repo too.
     if (!row || (row.repo !== null && !sees(login, row.repo))) throw missing();
     try {
       mustExist(row.channel, c);
@@ -4295,7 +4345,7 @@ export async function startServer(options: {
     if (row.alert !== null || row.decision !== null) {
       throw new ContractFailure({
         code: "invalid_request",
-        message: "알림 줄과 결정 줄에는 반응을 달 수 없다",
+        message: "Can't react to alert or decision lines",
       });
     }
     const now = Date.now();
@@ -4319,7 +4369,7 @@ export async function startServer(options: {
   });
 
   mount(app, api.metrics, ({ days }, c) => {
-    // 지표는 부른 워크스페이스의 것만이다(ADR-0043).
+    // Metrics are only for the called workspace (ADR-0043).
     const workspace = workspaceOf(c);
     const now = Date.now();
     const range = Array.from({ length: days }, (_, i) => dayOf(now - (days - 1 - i) * DAY_MS));
@@ -4332,7 +4382,7 @@ export async function startServer(options: {
           .all(workspace, range[0] ?? "") as { day: string; n: number }[]
       ).map(({ day, n }) => [day, n]),
     );
-    // 문답은 물은 시각으로 센다. 답하지 못한 문답도 물은 것이라 센다. 내용은 읽지 않는다.
+    // Q&A is counted by the time it was asked. Unanswered Q&A counts too, since it was asked. Content isn't read.
     const asked = db
       .prepare(
         "SELECT at FROM qas WHERE at > ? AND channel IN (SELECT id FROM channels WHERE workspace = ?)",
@@ -4350,7 +4400,7 @@ export async function startServer(options: {
       }[],
       ({ at }) => dayOf(at),
     );
-    // 토론은 열린 날, 결론이 난 날, 열린 토론의 포스트에 결정 PR이 선 것을 센다. 내용은 읽지 않는다.
+    // Debates are counted by opening day, conclusion day, and when a decision PR stands on an open debate's post. Content isn't read.
     const since = now - (days + 1) * DAY_MS;
     const debates = db
       .prepare(
@@ -4398,35 +4448,35 @@ export async function startServer(options: {
     };
   });
 
-  /** hello를 마쳤다. 시간 제한을 푼다. */
+  /** hello is done. Remove the time limit. */
   const greet = (socket: WSContext) => {
     const raw = socket.raw as WebSocket | undefined;
     if (!raw) return;
     clearTimeout(ungreeted.get(raw));
     ungreeted.delete(raw);
   };
-  /** hello를 마치지 않은 연결이 hello보다 큰 프레임을 보냈으면 닫는다. */
+  /** Close a connection that hasn't finished hello if it sends a frame bigger than hello. */
   const tooBigBeforeHello = (socket: WSContext, data: unknown) => {
     const raw = socket.raw as WebSocket | undefined;
     if (!raw || !ungreeted.has(raw)) return false;
     const size =
       typeof data === "string" ? Buffer.byteLength(data) : (data as ArrayBuffer).byteLength;
     if (size <= MAX_HELLO_BYTES) return false;
-    socket.close(1009, "hello가 너무 크다");
+    socket.close(1009, "hello is too big");
     return true;
   };
 
-  // 웹의 실시간 연결. hello 하나를 받으면 welcome과 끊긴 사이의 메시지, 지금의 멤버 목록을 보내고,
-  // 그 뒤로는 메시지는 쌓이는 대로, 멤버 목록은 달라질 때마다 보낸다.
-  // 이 처리기는 끝까지 동기라 welcome의 seq, 다시 보낸 것, 이어 보낼 것 사이에 빠지는 메시지가 없다.
-  // ponytail: 끊긴 사이의 것을 개수 상한 없이 다 보낸다. 오래 끊겼던 웹이 많아 무거워지면 상한을 두고 넘으면 다시 읽으라고 알린다.
+  // The web's live connection. On one hello it sends the welcome, the messages missed while disconnected, and the current member list,
+  // then sends messages as they come and the member list whenever it changes.
+  // This handler is synchronous to the end, so no message slips between the welcome's seq, the resent ones, and the ones that follow.
+  // ponytail: sends everything missed while disconnected with no count cap. If long-disconnected webs get heavy, add a cap and tell them to reload past it.
   app.get(
     LIVE_SOCKET,
     upgradeWebSocket(() => ({
       onMessage({ data }, socket) {
-        // hello를 마치지 않은 연결의 큰 프레임은 읽지 않는다.
+        // Don't read big frames from a connection that hasn't finished hello.
         if (tooBigBeforeHello(socket, data)) return;
-        // 웹은 hello만 보낸다. 그 밖의 것은 고장 난 웹이라 닫는다.
+        // The web only sends hello. Anything else means a broken web, so close.
         const decoded = decode(webToServer, data);
         if ("error" in decoded) return refuse(socket, decoded.error, decoded.re);
         const { id, payload } = decoded.message;
@@ -4434,7 +4484,7 @@ export async function startServer(options: {
         if (!login) {
           return refuse(
             socket,
-            { code: "unauthorized", message: "세션이 없거나 끝났다. 다시 로그인하라" },
+            { code: "unauthorized", message: "No session or it ended. Log in again" },
             id,
           );
         }
@@ -4443,11 +4493,11 @@ export async function startServer(options: {
         if (space !== undefined && !mine.some((r) => ownerOf(r) === space)) {
           return refuse(
             socket,
-            { code: "not_found", message: `들어가 있지 않은 워크스페이스다: ${payload.workspace}` },
+            { code: "not_found", message: `Not in that workspace: ${payload.workspace}` },
             id,
           );
         }
-        // 연결은 한 워크스페이스의 것만 받는다: 고른 레포의, 아니면 고른 워크스페이스의, 아니면 첫 워크스페이스의 것이다.
+        // A connection takes one workspace only: the chosen repo's, else the chosen workspace's, else the first workspace's.
         const repo = payload.repo
           ? mine.find(
               (r) =>
@@ -4458,12 +4508,12 @@ export async function startServer(options: {
         if (repo === undefined) {
           return refuse(
             socket,
-            { code: "not_found", message: `보이는 레포가 아니다: ${payload.repo}` },
+            { code: "not_found", message: `Not a visible repo: ${payload.repo}` },
             id,
           );
         }
         const workspace = ownerOf(repo);
-        // 이 워크스페이스의 마지막 메시지 번호. 다른 워크스페이스의 번호는 새지 않는다.
+        // The last message number of this workspace. Other workspaces' numbers don't leak.
         const { seq } = db
           .prepare(
             `SELECT COALESCE(MAX(m.id), 0) AS seq FROM messages m LEFT JOIN alerts a ON a.id = m.alert
@@ -4474,8 +4524,8 @@ export async function startServer(options: {
         };
         socket.send(encode(serverToWeb, "welcome", { seq }, id));
         if (payload.after !== undefined) {
-          // 끊긴 사이에 답이 온 공개 문답도 다시 보낸다. `after`를 받은 뒤에 끊겼으니 그 메시지가 선 뒤에 답이 온 것이면 넉넉히 덮는다.
-          // 끊긴 사이에 고친 알림과, 끊긴 사이에 포스트의 글 수가 바뀐 알림도 다시 보낸다.
+          // Also resend public Q&A that was answered while disconnected. Disconnect came after `after`, so cover generously if the answer came after that message stood.
+          // Also resend alerts edited while disconnected, and alerts whose post's article count changed while disconnected.
           const missed = db
             .prepare(
               `${MESSAGES} WHERE m.id > ? OR q.settled >= (SELECT at FROM messages WHERE id = ?)
@@ -4500,7 +4550,7 @@ export async function startServer(options: {
         shareMembers(socket);
       },
       onClose(_, socket) {
-        // 그 사람의 마지막 창이었으면 오프라인이 된다.
+        // If it was that person's last window, they go offline.
         if (watchers.delete(socket) && !stopped) shareMembers();
       },
     })),
@@ -4510,15 +4560,15 @@ export async function startServer(options: {
     RUNNER_SOCKET,
     upgradeWebSocket(() => ({
       onMessage({ data }, socket) {
-        // 닫는 중인 연결(세션이 끝나 거절한 것 포함)의 메시지는 받지 않는다.
+        // Don't accept messages from a connection that is closing (including ones refused because the session ended).
         if (socket.readyState !== 1) return;
         if (!runners.has(socket) && tooBigBeforeHello(socket, data)) return;
         const decoded = decode(runnerToServer, data);
-        // hello를 마치지 않은 연결이 계약과 다른 것을 보내면 닫는다.
+        // Close a connection that hasn't finished hello if it sends something that breaks the contract.
         if ("error" in decoded && !runners.has(socket) && decoded.error.code !== "version_mismatch")
           return refuse(socket, decoded.error, decoded.re);
         if ("error" in decoded) {
-          // 계약 버전이 다른 러너에는 그 러너도 읽는 꼴로 이 서버의 버전을 실어 거절한다. 러너가 할 일을 알린다.
+          // A runner with a different contract version gets refused with this server's version, in a shape it can read too. That tells the runner what to do.
           if (decoded.error.code === "version_mismatch") {
             socket.send(encodeVersionMismatch(decoded.error.message, version, decoded.re));
             socket.close(1008, "version_mismatch");
@@ -4532,13 +4582,13 @@ export async function startServer(options: {
           if (!login) {
             return refuse(
               socket,
-              { code: "unauthorized", message: "세션이 없거나 끝났다. 다시 로그인하라" },
+              { code: "unauthorized", message: "No session or it ended. Log in again" },
               message.id,
             );
           }
-          // 원격 가운데 워크스페이스에 있는 레포(ADR-0043). 한 레포는 워크스페이스 하나에만 있다.
+          // The repos among the remotes that are in the workspace (ADR-0043). A repo belongs to only one workspace.
           const workspace = allRepos();
-          // 옮겨진 레포의 옛 원격도 새 이름으로 읽는다(GitHub이 옛 주소를 넘겨 준다).
+          // A moved repo's old remote is read as the new name too (GitHub forwards the old address).
           const inWorkspace = repos.flatMap(
             (r) => workspace.find((w) => w.toLowerCase() === current(r).toLowerCase()) ?? [],
           );
@@ -4548,8 +4598,8 @@ export async function startServer(options: {
               socket,
               {
                 code: "forbidden",
-                // 없는 레포와 권한 없는 레포를 같게 답한다. 서버의 레포 이름도, 남의 레포가 들어 있는지도 새지 않는다.
-                message: `이 폴더는 ${login}에게 보이는 워크스페이스 레포의 폴더가 아니다(GitHub 원격: ${repos.join(", ")}). 워크스페이스에 없으면 그 레포의 Admin이 넣고, 있으면 push 권한이 있어야 한다`,
+                // A missing repo and a repo without permission get the same answer. It leaks neither the server's repo names nor whether someone else's repo is there.
+                message: `This folder isn't a workspace repo visible to ${login} (GitHub remote: ${repos.join(", ")}). If it isn't in the workspace, that repo's Admin can add it. If it is, you need push permission`,
               },
               message.id,
             );
@@ -4561,7 +4611,7 @@ export async function startServer(options: {
             repo,
             login,
           );
-          // ponytail: 멤버 하나에 러너 하나로 본다. 기기 둘에서 실행기가 다른 러너를 켜면 나중에 붙은 쪽의 것만 남는다.
+          // ponytail: one runner per member. If two devices run runners with different executors, only the later one stays.
           db.prepare("DELETE FROM agents WHERE login = ?").run(login);
           const known = db.prepare("INSERT OR IGNORE INTO agents (login, executor) VALUES (?, ?)");
           for (const executor of executors) known.run(login, executor);
@@ -4569,14 +4619,14 @@ export async function startServer(options: {
           shareSituation(socket);
           shareInbox(socket);
           shareRuns(repo, login, socket);
-          dispatchQuestions(login); // 오프라인 사이에 남겨 둔 질문
-          dispatchDebates(login); // 오프라인 사이에 열린 토론
+          dispatchQuestions(login); // Questions left while offline
+          dispatchDebates(login); // Debates opened while offline
           return;
         }
         const runner = runners.get(socket);
         if (!runner) {
-          // hello를 마치지 않은 연결의 메시지는 받지 않는다.
-          refuse(socket, { code: "unauthorized", message: "hello를 먼저 보내라" }, message.id);
+          // Don't accept messages from a connection that hasn't finished hello.
+          refuse(socket, { code: "unauthorized", message: "Send hello first" }, message.id);
         } else if (message.kind === "checkCommand") {
           db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run(
             `check ${runner.repo}`,
@@ -4603,12 +4653,12 @@ export async function startServer(options: {
           const now = Date.now();
           const linesJson = lines ? JSON.stringify(lines) : null;
           db.exec("BEGIN");
-          // 같은 작업의 같은 곳은 하나다. 다시 걸면 새로 건 것으로 바꾼다.
+          // The same place in the same work is one claim. Claiming again replaces it with the new one.
           db.prepare(
             `DELETE FROM claims WHERE repo = ? AND login = ? AND branch = ? AND path = ? AND unit = ?
              AND symbol IS ? AND lines IS ?`,
           ).run(repo, login, branch, path, unit, symbol ?? null, linesJson);
-          // 같은 작업의 같은 심볼에 걸린 옛 계획은 새 계획이 대체한다. 그 계획의 알림은 쓰는 쪽 러너가 다시 계산해 고쳐진다.
+          // A new plan replaces the old plan on the same symbol in the same work. Its alerts are fixed when the writing runner recomputes them.
           if (plan)
             db.prepare(
               "UPDATE claims SET plan = NULL WHERE repo = ? AND login = ? AND branch = ? AND plan ->> '$.symbol' = ?",
@@ -4636,7 +4686,7 @@ export async function startServer(options: {
             JSON.stringify(claim),
             now,
           );
-          // 겹침은 양쪽 작업의 편지함에 넣는다. 각자 자기 선점이 `mine`이다.
+          // An overlap goes into the inbox of both works. Each one's own claim is `mine`.
           const put = db.prepare(
             "INSERT INTO inbox (repo, login, branch, news, at) VALUES (?, ?, ?, ?, ?)",
           );
@@ -4672,16 +4722,15 @@ export async function startServer(options: {
           ) => socket.send(encode(serverToRunner, "questioned", payload, message.id));
           const fail = (code: ContractError["code"], text: string) =>
             socket.send(encode(serverToRunner, "error", { code, message: text }, message.id));
-          if (to === runner.login)
-            return fail("invalid_request", "자기 에이전트에게는 묻지 않는다");
-          // 묻기는 레포 안의 것이다. 받는 쪽도 그 레포의 러너가 답한다.
+          if (to === runner.login) return fail("invalid_request", "Can't ask your own agent");
+          // Asking stays inside a repo. The receiving side's runner for that repo answers too.
           if (!db.prepare(`SELECT 1 FROM ${MEMBERS} WHERE login = ?`).get(runner.repo, to))
-            return fail("not_found", `${runner.repo}의 멤버가 아니다: ${to}`);
+            return fail("not_found", `Not a member of ${runner.repo}: ${to}`);
           if (
             executor &&
             !db.prepare("SELECT 1 FROM agents WHERE login = ? AND executor = ?").get(to, executor)
           ) {
-            return fail("not_found", `${to}에게 ${EXECUTOR_NAMES[executor]} 에이전트가 없다`);
+            return fail("not_found", `${to} has no ${EXECUTOR_NAMES[executor]} agent`);
           }
           if (db.prepare("SELECT 1 FROM ask_off WHERE login = ?").get(to))
             return reply({ state: "refused" });
@@ -4718,7 +4767,7 @@ export async function startServer(options: {
             shareSituation();
           }
         } else {
-          // 문답이나 초안의 답, 실패. 그것을 보낸 연결에서 온 것만 받는다.
+          // An answer to Q&A or a draft, or a failure. Only accept it from the connection that was sent it.
           const re = message.re ?? "";
           const question = questionsSent.get(re);
           const debate = debatesSent.get(re);
@@ -4729,7 +4778,7 @@ export async function startServer(options: {
               debate.seat,
               message.kind === "stance"
                 ? {
-                    // 대행 표시는 서버가 붙인다. 러너가 보낸 것은 버린다.
+                    // The server adds the proxy mark. Whatever the runner sent is dropped.
                     stance: {
                       ...message.payload,
                       proxy: debate.proxy
@@ -4742,7 +4791,7 @@ export async function startServer(options: {
                   : {
                       error: {
                         code: "invalid_message",
-                        message: "토론에 입장 대신 다른 것이 왔다",
+                        message: "Got something else instead of a stance in the debate",
                       },
                     },
             );
@@ -4757,7 +4806,10 @@ export async function startServer(options: {
                   ? { state: "failed", error: message.payload }
                   : {
                       state: "failed",
-                      error: { code: "invalid_message", message: "질문에 답 대신 초안이 왔다" },
+                      error: {
+                        code: "invalid_message",
+                        message: "Got a draft instead of an answer to the question",
+                      },
                     },
               question.executor,
             );
@@ -4769,9 +4821,9 @@ export async function startServer(options: {
               settleDraft(re, { state: "failed", error: message.payload });
           } else if (asks.get(re)?.socket !== socket) {
             if (message.kind === "error")
-              console.warn("러너가 서버의 메시지를 거절했다:", message.payload);
+              console.warn("The runner refused a server message:", message.payload);
           } else if (message.kind === "answer") {
-            // 어느 레포의 러너가 본 코드인지 붙인다. 워크스페이스 채널의 답은 이것으로 레포를 안다.
+            // Attach which repo's runner saw this code. Answers in a workspace channel use it to know the repo.
             const repo = runners.get(socket)?.repo;
             settle(re, {
               state: "answered",
@@ -4788,7 +4840,7 @@ export async function startServer(options: {
         runners.delete(socket);
         sentInbox.delete(socket);
         if (runner && reports.delete(socket) && !stopped) reconcile(runner.repo);
-        // 그 멤버의 그 레포 러너가 다 떨어졌으면 그 레포에서 오프라인이다. 마지막 관측과 상태 한 줄은 이 시각 기준으로 남는다.
+        // If all of that member's runners for that repo dropped, they're offline in that repo. The last observation and status line are kept as of this time.
         if (
           runner &&
           !stopped &&
@@ -4801,19 +4853,19 @@ export async function startServer(options: {
           );
           shareSituation();
         }
-        // 떨어진 러너에 보낸 질문은 남겨 두고, 그 멤버의 러너가 다시 붙으면 다시 보낸다.
+        // Questions sent to the dropped runner stay, and are sent again when the member's runner reconnects.
         for (const [id, question] of questionsSent)
           if (question.socket === socket) questionsSent.delete(id);
         for (const [id, debate] of debatesSent)
           if (debate.socket === socket) debatesSent.delete(id);
-        // 떨어진 러너의 답은 오지 않는다. 기다리던 초안과 문답을 실패로 둔다.
+        // The dropped runner's answers won't come. Mark the drafts and Q&A it was waiting on as failed.
         for (const [id, { socket: to, login }] of drafting) {
           if (to !== socket) continue;
           settleDraft(id, {
             state: "failed",
             error: {
               code: "runner_offline",
-              message: `${login}의 러너가 초안을 쓰기 전에 떨어졌다`,
+              message: `${login}'s runner dropped before writing the draft`,
             },
           });
         }
@@ -4823,7 +4875,7 @@ export async function startServer(options: {
             state: "failed",
             error: {
               code: "runner_offline",
-              message: `${ask.login}의 러너가 답하기 전에 떨어졌다`,
+              message: `${ask.login}'s runner dropped before answering`,
             },
           });
         }
@@ -4832,10 +4884,10 @@ export async function startServer(options: {
   );
 
   const sockets = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
-  // 연결의 생사: 주기마다 ping을 보내고, 다음 주기까지 pong이 없으면 끊는다.
-  // 잠든 기기처럼 close 없이 사라진 러너도 이렇게 오프라인이 된다. 러너(내장 WebSocket)는 pong을 알아서 보낸다.
+  // Connection liveness: send a ping every period, and cut the connection if no pong arrives by the next period.
+  // A runner that vanishes without a close, like a sleeping device, goes offline this way too. The runner (built-in WebSocket) sends pong on its own.
   const alive = new WeakSet<WebSocket>();
-  /** hello를 마치지 않은 연결과 그 시간 제한. hello를 마치면 빠진다. */
+  /** Connections that haven't finished hello and their time limit. Finishing hello removes them. */
   const ungreeted = new Map<WebSocket, ReturnType<typeof setTimeout>>();
   sockets.on("connection", (socket) => {
     alive.add(socket);
@@ -4857,8 +4909,8 @@ export async function startServer(options: {
     }
   }, options.heartbeatMs ?? HEARTBEAT_MS);
 
-  // 레포마다 push 권한을 다시 읽는다(ADR-0043). 권한을 잃은 레포의 러너와 웹은 내보내고, 어느 레포에도 권한이 없는 세션은 지운다.
-  // GitHub이 답하지 못한 레포는 지난 것을 두고 다음 주기에 다시 본다.
+  // Re-read push permission for each repo (ADR-0043). Kick the runners and webs of repos that lost permission, and delete sessions with permission to no repo.
+  // For a repo GitHub couldn't answer about, keep the last result and look again next period.
   let stopped = false;
   let checking = false;
   const recheck = setInterval(async () => {
@@ -4870,8 +4922,8 @@ export async function startServer(options: {
         login: string;
         github_token: string;
       }[];
-      // GitHub에서 바꾼 이름과 프로필 사진을 따라간다. 토큰마다 읽고, 못 읽으면 지난 것을 둔다.
-      // 토큰의 GitHub 이름이 세션의 것과 다르면 그 세션을 끝낸다. 옛 이름을 새로 가진 다른 사람이 그 줄과 권한을 이어받지 않는다.
+      // Follow the name and profile picture changed on GitHub. Read per token; if it can't be read, keep the last one.
+      // If the token's GitHub name differs from the session's, end that session. Someone else who takes the old name doesn't inherit that line and permissions.
       let renamed = false;
       const ended = new Set<string>();
       const people = new Set<string>();
@@ -4882,7 +4934,7 @@ export async function startServer(options: {
           ended.add(row.hash);
           endSession(row.hash, {
             code: "unauthorized",
-            message: `GitHub 이름이 ${row.login}에서 ${user.login}로 바뀌었다. 다시 로그인하라`,
+            message: `GitHub name changed from ${row.login} to ${user.login}. Log in again`,
           });
         }
         if (user?.login !== row.login || people.has(row.login)) continue;
@@ -4908,30 +4960,30 @@ export async function startServer(options: {
         if (access.push.length > 0 || access.unknown.length > 0) continue;
         endSession(row.hash, {
           code: "forbidden",
-          message: `${row.login}는 이제 워크스페이스 레포 어디에도 push 권한이 없어 빠졌다`,
+          message: `${row.login} was removed: no push permission on any workspace repo anymore`,
         });
       }
       for (const [socket, runner] of runners)
         if (!sees(runner.login, runner.repo))
           refuse(socket, {
             code: "forbidden",
-            message: `${runner.login}는 이제 ${runner.repo}에 push 권한이 없다`,
+            message: `${runner.login} no longer has push permission on ${runner.repo}`,
           });
       for (const [socket, watcher] of watchers)
         if (watcher.repo && !sees(watcher.login, watcher.repo))
           refuse(socket, {
             code: "forbidden",
-            message: `${watcher.login}는 이제 ${watcher.repo}에 push 권한이 없다`,
+            message: `${watcher.login} no longer has push permission on ${watcher.repo}`,
           });
-      shareSituation(); // 권한을 잃은 레포의 작업은 보이지 않는다
+      shareSituation(); // Work in a repo that lost permission is no longer shown
     } catch (error) {
-      console.error("push 권한을 다시 확인하지 못했다:", error);
+      console.error("Couldn't re-check push permission:", error);
     } finally {
       checking = false;
     }
   }, options.recheckMs ?? RECHECK_MS);
 
-  /** 레포의 멤버들의 GitHub 토큰, 나중에 들어온 세션의 것부터. */
+  /** GitHub tokens of a repo's members, newest session first. */
   const repoTokens = (repo: string) =>
     (
       db
@@ -4940,7 +4992,7 @@ export async function startServer(options: {
         )
         .all(repo) as { github_token: string }[]
     ).map((session) => session.github_token);
-  /** 멤버의 GitHub 토큰(마지막에 들어온 세션의 것). 세션이 없으면 없다. */
+  /** A member's GitHub token (from their latest session). None if they have no session. */
   const tokenOf = (login: string) =>
     (
       db
@@ -4948,8 +5000,8 @@ export async function startServer(options: {
         .get(login) as { github_token: string } | undefined
     )?.github_token;
 
-  /** 포스트의 이슈 제목: 부딪힌 파일(또는 심볼)과 종류. 사람은 넣지 않는다(DESIGN.md "부딪힘 포럼"). */
-  /** 러너가 보낸 이름(경로, 심볼, 브랜치)을 이슈의 한 줄 코드로 쓸 수 있게: 줄바꿈과 백틱을 접고 길이를 자른다. */
+  /** The post's issue title: the conflicting file (or symbol) and the kind. No people (DESIGN.md "Conflict forum"). */
+  /** Make a name sent by the runner (path, symbol, branch) safe as inline code in an issue: fold newlines and backticks, and cut the length. */
   const inline = (text: string) =>
     text
       .replace(/[\s`]+/g, " ")
@@ -4962,7 +5014,7 @@ export async function startServer(options: {
         : alert.symbols[0]?.name;
     return `${inline(first ?? alert.works[0].branch)} ${ALERT_LABELS[alert.kind]}`;
   };
-  /** 포스트의 이슈 본문: 알림의 두 작업과 곳, 그리고 포스트 링크. */
+  /** The post's issue body: the alert's two works and places, and a link to the post. */
   const issueBody = (alert: Alert, link: string) => {
     const places =
       alert.kind === "direct"
@@ -4970,74 +5022,74 @@ export async function startServer(options: {
         : alert.symbols.map((symbol) => `\`${inline(symbol.name)}\``);
     const [a, b] = alert.works;
     return [
-      "Omagari가 올린 포스트예요. 포스트의 글은 이 이슈의 댓글로, 이 이슈의 댓글은 포스트의 글로 맞춰져요.",
+      "This is a post Omagari opened. The post's articles sync to this issue's comments, and this issue's comments sync to the post's articles.",
       "",
-      `- 종류: ${ALERT_LABELS[alert.kind]}`,
-      `- 작업: ${inline(a.name)} (\`${inline(a.branch)}\`) ↔ ${inline(b.name)} (\`${inline(b.branch)}\`)`,
-      `- 곳: ${places.join(", ")}${alert.more > 0 ? ` 외 ${alert.more}곳` : ""}`,
+      `- Kind: ${ALERT_LABELS[alert.kind]}`,
+      `- Works: ${inline(a.name)} (\`${inline(a.branch)}\`) ↔ ${inline(b.name)} (\`${inline(b.branch)}\`)`,
+      `- Places: ${places.join(", ")}${alert.more > 0 ? ` and ${alert.more} more` : ""}`,
       "",
-      `포스트: ${link}`,
+      `Post: ${link}`,
     ].join("\n");
   };
-  /** 판정 댓글의 글: 확인됨, 확인됨에서 벗어남, 통과로 닫힘. 검사 명령과, 올라와 있으면 출력의 끝이 있다. */
+  /** The verdict comment text: confirmed, moved off confirmed, or closed as passed. It has the check command and, if uploaded, the end of the output. */
   const verdictBody = (state: string, run: AlertRun) => {
     const head =
       state === "confirmed"
-        ? "🔴 합쳐 돌려 보니 깨졌어요. 확인됨 라벨을 붙였어요."
+        ? "🔴 The merge run broke. Added the Confirmed label."
         : state === "passed"
-          ? "🟢 합쳐 돌려 보니 통과했어요. 알림을 풀림으로 닫았어요."
-          : `⚪ 다시 돌린 판정이 "${MERGE_RUN_LABELS[run.verdict]}"이라 확인됨 라벨을 뗐어요.`;
+          ? "🟢 The merge run passed. Closed the alert as resolved."
+          : `⚪ The rerun's verdict is "${MERGE_RUN_LABELS[run.verdict]}", so I removed the Confirmed label.`;
     const fence = "`".repeat(
       Math.max(3, ...[...(run.output ?? "").matchAll(/`+/g)].map((m) => m[0].length + 1)),
     );
     return [
       head,
-      ...(run.check ? ["", `검사 명령: \`${run.check}\``] : []),
+      ...(run.check ? ["", `Check command: \`${run.check}\``] : []),
       ...(state === "confirmed" && run.output ? ["", fence, run.output.trimEnd(), fence] : []),
     ].join("\n");
   };
 
-  /** 토론의 입장 하나를 이슈 댓글로: AI가 쓴 글 표시(DESIGN.md "AI가 쓴 글")와 주장, 근거(표시와 함께). */
+  /** One stance in a debate as an issue comment: the AI-written mark (DESIGN.md "AI-written text"), the claim, and the evidence (with its marks). */
   const stanceBody = (seat: SeatRow, round: number, stance: Stance) => {
     const model = [stance.model, stance.effort && `effort ${stance.effort}`]
       .filter(Boolean)
       .join(" · ");
-    const changed = stance.changed && (stance.changed.reason ?? "사유 없음");
+    const changed = stance.changed && (stance.changed.reason ?? "no reason given");
     return [
       "> [!NOTE]",
-      `> 🤖 **AI가 쓴 답** · ${nameOf(seat.login)}의 에이전트${stance.proxy ? ` · 대행: ${stance.proxy.name}이(가) 불렀어요` : ""}${model ? ` (${model})` : ""} · 토론 ${round + 1}라운드`,
-      ...(stance.context === "none" ? ["> 맥락 없이 참여했어요."] : []),
-      ...(changed ? [`> 지난 입장을 바꿨어요: ${changed}`] : []),
+      `> 🤖 **AI-written answer** · ${nameOf(seat.login)}'s agent${stance.proxy ? ` · proxy: called by ${stance.proxy.name}` : ""}${model ? ` (${model})` : ""} · debate round ${round + 1}`,
+      ...(stance.context === "none" ? ["> Joined without context."] : []),
+      ...(changed ? [`> Changed their earlier stance: ${changed}`] : []),
       "",
       stance.claim,
       ...(stance.evidence.length > 0
-        ? ["", "근거", ...stance.evidence.map((e) => `- ${e.text} (${EVIDENCE_MARKS[e.mark]})`)]
+        ? ["", "Evidence", ...stance.evidence.map((e) => `- ${e.text} (${EVIDENCE_MARKS[e.mark]})`)]
         : []),
     ].join("\n");
   };
   /**
-   * 토론의 결론 댓글: 이긴 쪽과 어느 길로 났는지. 아무 멤버의 토큰으로도 달리므로 서버가 지은 글만 싣는다.
-   * 이긴 주장은 그 입장을 쓴 사람의 계정으로 단 입장 댓글에 이미 있다.
+   * The debate's conclusion comment: the winner and how it was decided. It's posted with any member's token, so it only carries text the server wrote.
+   * The winning claim is already in the stance comment posted from the account of whoever wrote that stance.
    */
   const conclusionBody = (debate: DebateRow, seats: SeatRow[]) => {
     const winner = seats.find((seat) => seat.seat === debate.winner);
     const how =
       debate.by === "experiment"
-        ? "실험을 통과한 쪽이 하나여서"
+        ? "only one side passed the experiment"
         : debate.by === "evidence"
-          ? "검증된 근거가 있는 쪽이 하나여서"
-          : `${debate.chooser ? nameOf(debate.chooser) : "멤버"}가 골라서`;
+          ? "only one side has verified evidence"
+          : `${debate.chooser ? nameOf(debate.chooser) : "a member"} picked it`;
     return [
-      `⚖️ 토론이 끝났어요. ${how} 이 안이 결론이 됐어요.`,
+      `⚖️ The debate is over: ${how}. This proposal is the conclusion.`,
       ...(winner
-        ? ["", `이긴 쪽: ${inline(nameOf(winner.login))}의 브랜치 \`${inline(winner.branch)}\``]
+        ? ["", `Winner: branch \`${inline(winner.branch)}\` of ${inline(nameOf(winner.login))}`]
         : []),
     ].join("\n");
   };
 
   /**
-   * 포스트의 글 하나를 이슈 댓글로. 사람의 글은 그대로, 공개된 문답은 올린 사람의 글 뒤에 AI가 쓴 답이라는 표시(DESIGN.md "AI가 쓴 글")와
-   * 질문, 답을 붙인다. 아직 답이 오지 않은 문답이면 없다(답이 오면 올린다). 답하지 못한 문답은 올리지 않는다.
+   * One article of a post as an issue comment. A person's text goes as is. For public Q&A, after the poster's text it adds the AI-written mark (DESIGN.md "AI-written text"), then
+   * the question and the answer. If the Q&A hasn't been answered yet, there's nothing (it's posted when the answer comes). Unanswered Q&A that failed isn't posted.
    */
   const commentBody = (message: ChannelMessage) => {
     if (message.kind === "text") return message.text;
@@ -5049,22 +5101,22 @@ export async function startServer(options: {
     return [
       ...(message.text ? [message.text, ""] : []),
       "> [!NOTE]",
-      `> 🤖 **AI가 쓴 답** · ${message.name}의 ${EXECUTOR_NAMES[executor]}${model ? ` (${model})` : ""}`,
-      ...question.split("\n").map((line, i) => `> ${i === 0 ? "물음: " : ""}${line}`),
+      `> 🤖 **AI-written answer** · ${message.name}'s ${EXECUTOR_NAMES[executor]}${model ? ` (${model})` : ""}`,
+      ...question.split("\n").map((line, i) => `> ${i === 0 ? "Question: " : ""}${line}`),
       "",
       answer.text,
     ].join("\n");
   };
 
   /**
-   * 포스트와 GitHub 이슈를 맞춘다(ADR-0032). 포스트마다:
-   * 1. 이슈가 없고 알림이 풀리지 않은 논의 포스트면 포스트의 라벨을 달아 연다(ADR-0039). 중요도가 내려가도 연 이슈는 닫지 않는다. 알림의 두 사람 가운데 세션이 있는 사람의 토큰으로, 없으면 아무 멤버의 것으로 연다.
-   * 2. 아직 올리지 않은 글을 쓴 사람의 토큰으로 댓글로 올린다. 그 사람의 세션이 없으면 들어올 때까지 둔다.
-   * 3. 이슈의 제목, 라벨, 열림을 읽고, 모르는 댓글을 포스트의 글로 들인다.
-   * 4. 알림이 풀렸고 이슈가 열려 있으면 한 번 닫는다. 사람이 다시 열면 두고, 알림이 풀렸고 이슈도 닫힌 포스트는 더 따라가지 않는다.
-   * GitHub이 받지 않으면 그 포스트는 다음 주기에 다시 한다.
+   * Match posts and GitHub issues (ADR-0032). For each post:
+   * 1. If there's no issue and it's a Discuss post whose alert isn't resolved, open one with the post's labels (ADR-0039). An issue that's already open isn't closed if importance drops. It opens with the token of whichever of the alert's two people has a session, else any member's.
+   * 2. Post articles not yet uploaded go up as comments, with the token of whoever wrote them. If that person has no session, wait until they join.
+   * 3. Read the issue's title, labels, and open state, and take comments we don't know as post articles.
+   * 4. If the alert is resolved and the issue is open, close it once. If a person reopens it, leave it; a post whose alert is resolved and issue is closed isn't followed anymore.
+   * If GitHub doesn't accept it, that post is retried next period.
    */
-  // ponytail: 주기마다 따라가는 이슈 하나에 GitHub 요청 둘이다. 포스트가 많아져 요청 한도가 걱정되면 GitHub 앱의 웹훅으로 바꾼다.
+  // ponytail: each followed issue costs two GitHub requests per period. If many posts make the rate limit a worry, switch to a GitHub app webhook.
   const syncIssues = async (only?: Set<string>) => {
     const rows = db
       .prepare(
@@ -5094,18 +5146,18 @@ export async function startServer(options: {
       const { alert } = view;
       const { repo } = row;
       const logins = alert.works.map((work) => work.login);
-      // 알림의 두 사람의 토큰부터, 그다음 그 레포의 다른 멤버들의 것. GitHub이 받지 않으면(토큰 무효) 다음 것으로 한다.
+      // Start with the tokens of the alert's two people, then the repo's other members. If GitHub rejects one (invalid token), go to the next.
       const tokens = [...new Set([...logins.map(tokenOf), ...repoTokens(repo)])].filter(
         (token): token is string => token !== undefined,
       );
-      /** 토큰을 차례로 넣어 GitHub이 처음 답한 것. 모두 받지 않으면 없다. 마지막 까닭을 남긴다. */
+      /** The first answer GitHub gives as we try tokens in turn. None if none accepts. Keeps the last reason. */
       const answered = async <T>(
         ask: (token: string) => Promise<T | undefined>,
         first?: string,
       ) => {
         for (const token of first ? [first, ...tokens] : tokens) {
           const result = await ask(token).catch((error: Error) => {
-            console.error("포스트의 이슈를 GitHub에서 다루지 못했다:", error.message);
+            console.error("Couldn't handle the post's issue on GitHub:", error.message);
             return undefined;
           });
           if (stopped) return undefined;
@@ -5117,10 +5169,10 @@ export async function startServer(options: {
       const resolved = alert.resolved !== null;
       let number = row.issue;
       if (number === null) {
-        // 풀린 뒤나 참고 포스트에는 열지 않는다(ADR-0039). 포스트의 라벨을 함께 단다.
+        // Don't open one after it's resolved or for an FYI post (ADR-0039). Put the post's labels on it too.
         const labels: string[] = JSON.parse(row.labels ?? "[]");
         if (resolved || row.importance !== "discuss") continue;
-        // 포스트가 보이는 첫 포럼으로 잇는다. 나중에 포럼이 바뀌어도 이슈의 글은 그대로다.
+        // Link to the first forum where the post is visible. If forums change later, the issue's text stays as is.
         const link = `${options.publicUrl ?? url}/#${view.post.forums[0] ?? ALERTS}/${row.message}`;
         const title = issueTitle(alert);
         const opened = (
@@ -5137,7 +5189,7 @@ export async function startServer(options: {
         shareAlert(row.alert);
       } else if (resolved && row.issue_open === 0) continue;
 
-      // 2. 포스트의 글을 댓글로. 결정 PR 줄과 들어온 댓글은 올리지 않는다.
+      // 2. Post articles as comments. Decision PR lines and incoming comments aren't uploaded.
       const unsent = db
         .prepare(
           `${MESSAGES} WHERE m.channel = ? AND m.comment IS NULL AND m.decision IS NULL ORDER BY m.id`,
@@ -5150,14 +5202,14 @@ export async function startServer(options: {
         const made = await github.comment(writer, repo, number, body).catch((e: Error) => e);
         if (stopped) return;
         if (made instanceof Error) {
-          console.error("포스트의 글을 이슈 댓글로 올리지 못했다:", made.message);
+          console.error("Couldn't post the post's article as an issue comment:", made.message);
           continue;
         }
         db.prepare("UPDATE messages SET comment = ? WHERE id = ?").run(made.id, message.id);
       }
 
-      // 토론의 공개된 입장과 결론을 댓글로(ADR-0040, 문답 A21). 가린 라운드는 공개될 때 가고, 입장은 그 에이전트 주인의 토큰으로 올린다.
-      // 주인의 세션이 없으면 들어올 때까지 두고, 입장이 다 올라가야 결론을 올린다.
+      // Post the debate's public stances and conclusion as comments (ADR-0040, Q&A A21). A hidden round goes when it's revealed, and a stance goes with the token of that agent's owner.
+      // If the owner has no session, wait until they join, and post the conclusion only after all stances are up.
       const debate = db.prepare("SELECT * FROM debates WHERE post = ?").get(row.id) as
         | DebateRow
         | undefined;
@@ -5185,7 +5237,11 @@ export async function startServer(options: {
               : undefined;
             if (stopped) return;
             if (!made || made instanceof Error) {
-              if (made) console.error("토론의 입장을 이슈 댓글로 올리지 못했다:", made.message);
+              if (made)
+                console.error(
+                  "Couldn't post the debate's stance as an issue comment:",
+                  made.message,
+                );
               allSent = false;
               continue;
             }
@@ -5202,13 +5258,13 @@ export async function startServer(options: {
         }
       }
 
-      // 판정을 이슈에 맞춘다(#134): 확인됨이면 라벨과 댓글, 확인됨에서 벗어나거나 통과로 닫히면 라벨을 떼고 댓글. 판정을 올린 러너의 멤버 토큰으로 한다.
-      // 라벨을 먼저 맞추고 댓글을 달아야 마친 것으로 적는다. GitHub이 받지 않으면 다음 주기에 다시 한다(라벨은 거듭해도 같다).
+      // Match the verdict to the issue (#134): if confirmed, label and comment; if it moves off confirmed or closes as passed, remove the label and comment. Done with the token of the member whose runner uploaded the verdict.
+      // Count it as done only after the label is matched and then the comment is posted. If GitHub doesn't accept it, retry next period (repeating a label is harmless).
       if (alert.kind !== "direct" && alert.run) {
         const { run } = alert;
         const passed = resolved && run.verdict === "pass" && run.omitted.length === 0;
         const next = alert.confirmed ? "confirmed" : passed ? "passed" : "cleared";
-        // 확인되지 않은 채 지난 알림에는 말할 것이 없다. 통과로 닫힌 것은 확인됨이었든 아니든 검사 명령을 남긴다.
+        // An alert that went by without being confirmed has nothing to say. One closed as passed leaves the check command, whether it was confirmed or not.
         if (next !== row.verdict && (next !== "cleared" || row.verdict === "confirmed")) {
           const first = tokenOf(run.login);
           const labeled = await answered(
@@ -5236,8 +5292,8 @@ export async function startServer(options: {
         }
       }
 
-      // 포스트에서 붙이고 뗀 라벨을 이슈에 올린다(ADR-0039): 마지막으로 읽은 이슈 라벨과 다른 것만. 하나라도 받지 않으면
-      // 이번에는 이슈의 라벨을 들이지 않는다(다음 주기에 다시 올린다).
+      // Push labels added and removed on the post to the issue (ADR-0039): only those that differ from the last issue labels we read. If any one isn't accepted,
+      // don't take in the issue's labels this time (we push again next period).
       const mine = db
         .prepare("SELECT labels, issue_labels FROM channels WHERE id = ?")
         .get(row.id) as { labels: string | null; issue_labels: string | null };
@@ -5255,7 +5311,7 @@ export async function startServer(options: {
         pushed &&= done !== undefined;
       }
 
-      // 3. 이슈를 읽고 모르는 댓글을 들인다. GitHub에서 바꾼 이슈 라벨은 포스트가 따라간다.
+      // 3. Read the issue and take in comments we don't know. Issue labels changed on GitHub are followed by the post.
       let changed = false;
       const read = await answered((token) => github.issue(token, repo, number));
       if (stopped) return;
@@ -5272,7 +5328,7 @@ export async function startServer(options: {
           issue_open: number;
           labels: string | null;
         };
-        // 올린 뒤 GitHub에서 붙거나 떨어진 것만 포스트에 옮긴다. 기다리는 사이 포스트에서 바꾼 것은 남아 다음에 올라간다.
+        // Only carry over to the post what got added or removed on GitHub after we pushed. Changes made on the post while waiting stay and go up next time.
         const now: string[] = JSON.parse(known.labels ?? "[]");
         const theirs = issue.labels;
         const labels = pushed
@@ -5309,11 +5365,12 @@ export async function startServer(options: {
         changed = true;
       }
 
-      // 4. 알림이 풀렸으면 이슈를 한 번 닫는다.
+      // 4. If the alert is resolved, close the issue once.
       if (read && issue?.open && resolved && row.issue_closed === null) {
         const closed = await github.closeIssue(read.token, repo, number).catch((e: Error) => e);
         if (stopped) return;
-        if (closed instanceof Error) console.error("포스트의 이슈를 닫지 못했다:", closed.message);
+        if (closed instanceof Error)
+          console.error("Couldn't close the post's issue:", closed.message);
         else {
           db.prepare("UPDATE channels SET issue_open = 0, issue_closed = ? WHERE id = ?").run(
             Date.now(),
@@ -5326,8 +5383,8 @@ export async function startServer(options: {
     }
   };
   /**
-   * 레포의 GitHub 라벨을 읽어 라벨 목록에 맞춘다(ADR-0039). GitHub 라벨의 id로 짝을 지어, GitHub에서 이름을 바꾸면 포스트의 라벨도 바뀐다.
-   * GitHub에서 지운 라벨은 목록과 이슈 없는 포스트에서 빠진다. 기본 라벨(종류 넷과 확인됨)은 지워져도 남기고, 레포에 없으면 만든다.
+   * Read the repo's GitHub labels and match the label list to them (ADR-0039). Pair them by GitHub label id, so renaming on GitHub renames the post's label too.
+   * A label deleted on GitHub leaves the list and posts without an issue. Default labels (the four kinds and Confirmed) stay even if deleted, and are created if the repo lacks them.
    */
   const syncLabels = async () => {
     for (const repo of allRepos()) {
@@ -5345,7 +5402,24 @@ export async function startServer(options: {
       if (theirs) break;
     }
     if (!theirs || !token) return;
-    seedLabels(repo); // 기본 라벨의 이름을 GitHub에서 바꿨으면 다시 만든다
+    // Default labels were Korean before ADR-0045. Rename them on GitHub (a rename keeps them on issues), then here.
+    // If the English name already exists on GitHub, the Korean one stays as a plain label.
+    for (const [from, to] of Object.entries(KOREAN_LABELS)) {
+      const old: RepoLabel | undefined = theirs.find((l) => l.name === from);
+      if (old && !theirs.some((l) => l.name.toLowerCase() === to.toLowerCase())) {
+        const renamed: RepoLabel | void = await github
+          .updateLabel(token, repo, from, {
+            name: to,
+            color: old.color,
+            description: old.description,
+          })
+          .catch((error: Error) => console.error("Couldn't rename the label:", error.message));
+        if (stopped) return;
+        if (renamed) theirs = theirs.map((l) => (l.id === renamed.id ? renamed : l));
+      }
+    }
+    englishLabels(repo, theirs);
+    seedLabels(repo); // recreate a default label if it was renamed on GitHub
     let changed = false;
     const seen = new Set<number>();
     for (const label of theirs) {
@@ -5377,7 +5451,7 @@ export async function startServer(options: {
         known.color !== label.color ||
         known.description !== label.description
       ) {
-        // 같은 id나 이름의 다른 줄이 있으면(지웠다 다시 만듦) 비켜 둔다.
+        // If another line has the same id or name (deleted and recreated), step aside.
         db.prepare(
           "UPDATE labels SET github = NULL WHERE repo = ? AND github = ? AND rowid != ?",
         ).run(repo, label.id, known.id);
@@ -5401,7 +5475,7 @@ export async function startServer(options: {
     }[]) {
       if (row.github !== null && seen.has(row.github)) continue;
       if (!defaults.includes(row.name)) {
-        // GitHub에서 지웠다. 이슈가 있는 포스트는 이슈를 따라간다.
+        // Deleted on GitHub. A post with an issue follows the issue.
         db.prepare("DELETE FROM labels WHERE rowid = ?").run(row.id);
         for (const post of editPostLabels(
           repo,
@@ -5418,7 +5492,9 @@ export async function startServer(options: {
           color: row.color,
           description: row.description,
         })
-        .catch((error: Error) => console.error("기본 라벨을 만들지 못했다:", error.message));
+        .catch((error: Error) =>
+          console.error("Couldn't create the default labels:", error.message),
+        );
       if (stopped) return;
       if (!made) continue;
       db.prepare("UPDATE labels SET github = ?, color = ?, description = ? WHERE rowid = ?").run(
@@ -5432,8 +5508,8 @@ export async function startServer(options: {
     if (changed) shareLabels(repo);
   };
   /**
-   * 이슈 맞추기를 돌린다. `post`를 주면 그 포스트만, 주지 않으면(주기마다) 모두다. 도는 중이면 끝난 뒤 모아 둔 것을 한 번 더 돈다.
-   * 포스트에 글이 서거나 답이 오거나 알림이 생기면 그 포스트로 부른다.
+   * Run issue syncing. With `post`, only that post; without it (every period), all of them. If one is running, run once more after it ends with what piled up.
+   * Call it for a post when an article stands, an answer arrives, or an alert appears.
    */
   let syncing = false;
   let waiting: Set<string> | "all" | undefined;
@@ -5448,9 +5524,9 @@ export async function startServer(options: {
         const only = waiting;
         waiting = undefined;
         if (only === "all")
-          await syncLabels().catch((error) => console.error("라벨을 맞추지 못했다:", error));
+          await syncLabels().catch((error) => console.error("Couldn't sync labels:", error));
         await syncIssues(only === "all" ? undefined : only).catch((error) =>
-          console.error("이슈를 맞추지 못했다:", error),
+          console.error("Couldn't sync issues:", error),
         );
       }
       syncing = false;
@@ -5458,9 +5534,9 @@ export async function startServer(options: {
   };
 
   /**
-   * 알림이 포스트로 설 때 기본 브랜치의 `.github/labeler.yml` 경로 규칙에 맞는 팀 라벨을 단다(ADR-0039). 이미 선 포스트에는 다시 달지 않는다.
-   * 레포에 있는 라벨(목록에 있는 것)만 단다. 파일이 없거나 읽지 못하면 종류 라벨만 남는다.
-   * ponytail: 기본 브랜치의 커밋이 바뀔 때만 파일을 다시 읽는다(알림이 설 때마다 GitHub 요청 하나). 지금은 한 판만 기억한다.
+   * When an alert stands as a post, add team labels that match the path rules in the default branch's `.github/labeler.yml` (ADR-0039). A post that already stands doesn't get them again.
+   * Only add labels the repo has (ones in the list). If the file is missing or can't be read, only the kind label stays.
+   * ponytail: re-reads the file only when the default branch's commit changes (one GitHub request each time an alert stands). Remembers just one version for now.
    */
   const labelers = new Map<string, { sha: string; source: string | null }>();
   const attachTeamLabels = async (post: string) => {
@@ -5508,18 +5584,19 @@ export async function startServer(options: {
       );
       sharePost(post);
     } catch (error) {
-      console.error("팀 라벨을 달지 못했다:", error);
+      console.error("Couldn't add team labels:", error);
     }
   };
 
-  // 오프라인 7일이 지난 멤버의 관측과 상태 한 줄을 지우고, 작업마다의 초안 PR 제목과 머지 여부를 GitHub에서 읽는다.
-  // 머지되면 그 브랜치에서 머지 전에 쓴 줄을 지운다. 머지 뒤에 같은 브랜치에 새로 쓴 줄은 남는다.
-  // ponytail: 주기마다 브랜치 하나에 GitHub 요청 하나다. 작업이 많아져 요청 한도가 걱정되면 GitHub 앱의 웹훅으로 바꾼다.
+  // Delete observations and status lines of members offline for 7 days, and read each work's draft PR title and merge state from GitHub.
+  // When merged, delete the lines written before the merge on that branch. Lines newly written on the same branch after the merge stay.
+  // ponytail: one GitHub request per branch each period. If many works make the rate limit a worry, switch to a GitHub app webhook.
+  for (const repo of allRepos()) englishLabels(repo); // before the first label sync
   let following = false;
   const follow = setInterval(async () => {
     if (following) return;
     following = true;
-    syncSoon(); // 포스트의 이슈를 맞춘다(ADR-0032). 따로 돈다.
+    syncSoon(); // Match the posts' issues (ADR-0032). Runs separately.
     try {
       const forgotten = "SELECT repo, login FROM offline WHERE since < ?";
       const cutoff = Date.now() - (options.forgetMs ?? FORGET_MS);
@@ -5527,7 +5604,7 @@ export async function startServer(options: {
       db.exec("BEGIN");
       db.prepare(`DELETE FROM works WHERE (repo, login) IN (${forgotten})`).run(cutoff);
       db.prepare(`DELETE FROM lines WHERE (repo, login) IN (${forgotten})`).run(cutoff);
-      // 선점은 지우지 않고 "오래됨"으로 둔다. 오래됨이 된 지 `forgetMs`가 더 지나면 지운다(Room의 오래됨 표시와 7일 만료).
+      // Claims aren't deleted; they're set to "stale". Once stale for `forgetMs` more, they're deleted (Room's stale mark and 7-day expiry).
       db.prepare(
         `UPDATE claims SET stale = ? WHERE stale IS NULL AND (repo, login) IN (${forgotten})`,
       ).run(now, cutoff);
@@ -5535,14 +5612,14 @@ export async function startServer(options: {
       db.prepare("DELETE FROM claims WHERE stale < ?").run(now - (options.forgetMs ?? FORGET_MS));
       db.prepare("DELETE FROM inbox WHERE at <= ?").run(now - inboxMs);
       db.prepare("DELETE FROM feed WHERE at <= ?").run(now - inboxMs);
-      db.prepare("DELETE FROM questions WHERE at <= ?").run(now - inboxMs); // 답이 없으면 만료
-      // 끝나지 않은 토론은 만료로 끝난다(ADR-0040). 보낸 요청의 답은 `settleSeat`이 받지 않는다.
+      db.prepare("DELETE FROM questions WHERE at <= ?").run(now - inboxMs); // Expire if unanswered
+      // Unfinished debates end by expiry (ADR-0040). `settleSeat` doesn't accept answers to requests already sent.
       db.prepare(
         "UPDATE debates SET state = 'ended', expired = 1 WHERE state = 'open' AND at <= ?",
       ).run(now - (options.debateMs ?? INBOX_MS));
       db.exec("COMMIT");
-      shareInbox(); // 만료된 소식이 빠진다
-      shareDebates(); // 만료된 토론
+      shareInbox(); // Expired items drop out
+      shareDebates(); // Expired debates
 
       const branches = db
         .prepare(
@@ -5559,7 +5636,7 @@ export async function startServer(options: {
         const pulls = await github.pulls(token, repo, branch);
         if (stopped) return;
         if (!pulls) {
-          // GitHub이 답하지 못하면 지난번 것을 둔다.
+          // If GitHub can't answer, keep the last one.
           const known = drafts.get(key);
           if (known !== undefined) next.set(key, known);
           continue;
@@ -5575,14 +5652,14 @@ export async function startServer(options: {
             branch,
             merged,
           );
-          // 머지된 브랜치의 선점은 저절로 풀린다. 머지 뒤에 같은 브랜치에 새로 건 것은 남는다.
+          // A merged branch's claims release themselves. Ones newly placed on the same branch after the merge stay.
           releaseClaims("repo = ? AND branch = ? AND at < ?", repo, branch, merged);
         }
       }
       drafts = next;
       shareSituation();
 
-      // 열린 결정 PR이 머지되거나 닫혔는지 읽는다. 정리한 멤버의 토큰으로, 그 멤버의 세션이 없으면 다른 멤버의 것으로 읽는다.
+      // Read whether open decision PRs were merged or closed. Use the token of the member who wrote it up, or another member's if that member has no session.
       const open = db
         .prepare(
           `SELECT d.id, d.pull, c.repo, COALESCE(
@@ -5592,7 +5669,7 @@ export async function startServer(options: {
            WHERE d.state = 'proposed' AND c.repo IN (SELECT name FROM repos)`,
         )
         .all() as { id: number; pull: number; repo: string; token: string | null }[];
-      // 열린 것은 GitHub의 변경 요청 리뷰를 이의로 맞추고(ADR-0025), 창이 닫혔으면 머지한다.
+      // For open ones, treat GitHub's request-changes reviews as objections (ADR-0025), and merge if the window is closed.
       for (const { id, pull: number, repo, token } of open) {
         if (!token) continue;
         const pull = await github.pull(token, repo, number);
@@ -5609,7 +5686,7 @@ export async function startServer(options: {
               .prepare("SELECT login FROM objections WHERE decision = ? AND via = 'github'")
               .all(id) as { login: string }[]
           ).map((row) => row.login);
-          // GitHub의 변경 요청 리뷰는 그 레포의 지금 멤버가 단 것만 이의다.
+          // A GitHub request-changes review counts as an objection only if a current member of that repo left it.
           const member = (l: string) =>
             !!db.prepare(`SELECT 1 FROM ${MEMBERS} WHERE login = ?`).get(repo, l);
           for (const login of requested.filter((l) => member(l) && !known.includes(l))) {
@@ -5629,13 +5706,13 @@ export async function startServer(options: {
         await tryMerge(id);
       }
     } catch (error) {
-      console.error("상태 한 줄을 따라가지 못했다:", error);
+      console.error("Couldn't follow the status line:", error);
     } finally {
       following = false;
     }
   }, options.followMs ?? FOLLOW_MS);
 
-  // 빌드한 웹 화면(ADR-0042). API가 아닌 경로에서 파일을 내고, 없는 경로는 화면의 첫 파일로 보낸다.
+  // The built web UI (ADR-0042). Serve files on non-API paths, and send unknown paths to the screen's first file.
   if (options.webDir) {
     const root = relative(process.cwd(), options.webDir) || ".";
     app.use("*", serveStatic({ root }));
@@ -5655,7 +5732,7 @@ export async function startServer(options: {
 
   return {
     url,
-    /** 이 서버의 버전(`git describe --tags`). 계약 버전이 다른 러너를 거절할 때 싣는다. */
+    /** This server's version (`git describe --tags`). Included when refusing a runner with a different contract version. */
     version,
     async stop() {
       stopped = true;

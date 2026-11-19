@@ -84,12 +84,12 @@ test("토론의 공개된 입장과 결론이 이슈 댓글로 가고(가린 라
       assert.match(all, opened, `종료 코드 ${code}\nstdout: ${stdout}\nstderr: ${stderr}`);
     });
   await new Promise((resolve) => setTimeout(resolve, 300));
-  assert.equal(issue.comments.filter((c) => c.body.includes("AI가 쓴 답")).length, 0);
+  assert.equal(issue.comments.filter((c) => c.body.includes("AI-written answer")).length, 0);
 
   // 다 모여 공개되면 입장이 각자 그 주인의 이름으로, AI가 쓴 답 표시를 달고 간다. 그 뒤 반박 라운드의 입장도 공개될 때 간다.
   gate.resolve();
   const posted = await eventually(() => {
-    const stances = issue.comments.filter((c) => c.body.includes("AI가 쓴 답"));
+    const stances = issue.comments.filter((c) => c.body.includes("AI-written answer"));
     assert.equal(stances.length, 6);
     return stances;
   });
@@ -97,11 +97,11 @@ test("토론의 공개된 입장과 결론이 이슈 댓글로 가고(가린 라
     for (const round of [1, 2, 3]) {
       const found = posted.find((c) => c.body.includes(`${who}의 ${round}라운드 주장`));
       assert.equal(found?.login, who);
-      assert.match(found?.body ?? "", /^> \[!NOTE\]\n> 🤖 \*\*AI가 쓴 답\*\* · /);
-      assert.match(found?.body ?? "", /근거\n- 부분 환불 요구가 늘었다 \(미검증\)/);
+      assert.match(found?.body ?? "", /^> \[!NOTE\]\n> 🤖 \*\*AI-written answer\*\* · /);
+      assert.match(found?.body ?? "", /Evidence\n- 부분 환불 요구가 늘었다 \(Unverified\)/);
     }
   // 결론은 아직 없다: 검증된 근거가 없어 사람이 고를 차례다.
-  assert.equal(issue.comments.filter((c) => c.body.includes("토론이 끝났어요")).length, 0);
+  assert.equal(issue.comments.filter((c) => c.body.includes("The debate is over")).length, 0);
 
   // 사람이 고르면 결론이 댓글 하나로 간다. 같은 것은 다시 가지 않는다.
   const post = (await call(world.owner, api.posts)).posts.find(
@@ -110,12 +110,12 @@ test("토론의 공개된 입장과 결론이 이슈 댓글로 가고(가린 라
   assert.ok(post);
   await call(as, api.chooseDebate, { post: post.channel, option: 0 });
   const ended = await eventually(() => {
-    const found = issue.comments.filter((c) => c.body.includes("토론이 끝났어요"));
+    const found = issue.comments.filter((c) => c.body.includes("The debate is over"));
     assert.equal(found.length, 1);
     return found[0];
   });
   assert.equal(ended?.login, "alice");
-  assert.match(ended?.body ?? "", /alice가 골라서/);
+  assert.match(ended?.body ?? "", /alice picked it/);
   // 결론 댓글은 서버가 지은 글만 싣는다. 이긴 주장은 그 사람의 입장 댓글에 있다.
   assert.doesNotMatch(ended?.body ?? "", /라운드 주장/);
   await new Promise((resolve) => setTimeout(resolve, 300));
@@ -227,16 +227,16 @@ test("대행이 낸 입장은 부재자가 아니라 부른 사람의 계정으�
   const bobDesk = await member("bob", "elsewhere", bob);
   await eventually(() => call(bobDesk.as, api.proxyDebate, found));
   await eventually(() => {
-    const stances = issue.comments.filter((c) => c.body.includes("AI가 쓴 답"));
+    const stances = issue.comments.filter((c) => c.body.includes("AI-written answer"));
     assert.equal(stances.length, 2);
     const mine = stances.find((c) => c.body.includes("owner의 주장"));
     assert.equal(mine?.login, "owner");
-    assert.ok(!mine?.body.includes("대행"));
+    assert.ok(!mine?.body.includes("proxy:"));
     const proxied = stances.find((c) => c.body.includes("대행의 주장"));
     assert.equal(proxied?.login, "bob");
     assert.match(
       proxied?.body ?? "",
-      /> 🤖 \*\*AI가 쓴 답\*\* · alice의 에이전트 · 대행: bob이\(가\) 불렀어요/,
+      /> 🤖 \*\*AI-written answer\*\* · alice's agent · proxy: called by bob/,
     );
   });
 });

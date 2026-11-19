@@ -305,7 +305,7 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
   const post = arrived.post.channel;
   // 직접 충돌은 참고라 "참고" 포럼에 보인다(ADR-0039).
   const channels = (await call(alice, api.channels)).channels;
-  const reference = channels.find((c) => c.name === "참고")?.id;
+  const reference = channels.find((c) => c.name === "FYI")?.id;
   // 이슈(ADR-0032)는 알림 뒤에 따로 열리므로 여기서는 빼고 본다. 이슈는 issues.test.ts가 본다.
   const noIssue = <T extends { issue: unknown }>({ issue, ...rest }: T) => rest;
   assert.deepEqual(noIssue(arrived.post), {
@@ -314,7 +314,7 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
     count: 0,
     last: null,
     activity: arrived.at,
-    labels: ["직접 충돌"],
+    labels: ["Direct conflict"],
     importance: "reference",
     forums: [reference],
   });
@@ -330,7 +330,7 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
         count: 0,
         last: null,
         activity: arrived.at,
-        labels: ["직접 충돌"],
+        labels: ["Direct conflict"],
         importance: "reference",
         forums: [reference],
         debate: null,
@@ -351,7 +351,7 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
     count: 0,
     last: null,
     activity: arrived.at,
-    labels: ["직접 충돌"],
+    labels: ["Direct conflict"],
     importance: "reference",
     forums: [reference],
   });
@@ -362,14 +362,14 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
 
   // 채널 목록에 포럼이 종류, 거르기와 함께 오고 포스트는 없다. 사람은 포럼의 이름으로 채널을 만들지 못한다.
   const general = await world.channel(world.owner, "일반");
-  const forum = channels.find((c) => c.name === "논의");
+  const forum = channels.find((c) => c.name === "Discuss");
   assert.deepEqual((await call(alice, api.channels)).channels, [
-    { id: forum?.id, name: "논의", kind: "forum", filter: { importance: "discuss" } },
+    { id: forum?.id, name: "Discuss", kind: "forum", filter: { importance: "discuss" } },
+    { id: reference, name: "FYI", kind: "forum", filter: { importance: "reference" } },
     { id: general, name: "일반", kind: "chat" },
-    { id: reference, name: "참고", kind: "forum", filter: { importance: "reference" } },
   ]);
   assert.ok(forum);
-  await assert.rejects(call(alice, api.createChannel, { name: "참고" }), {
+  await assert.rejects(call(alice, api.createChannel, { name: "FYI" }), {
     code: "conflict",
   } satisfies Partial<ContractFailure>);
 
@@ -421,8 +421,8 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
   assert.equal(again?.resume, "session-2", "포스트의 세션을 잇는다");
   // 러너에 넘어간 대화는 포스트의 것이고 맨 위에 알림이 있다.
   const given = inPost?.message ?? "";
-  assert.match(given, /<channel_messages channel="알림 \d+번 포스트">/);
-  assert.match(given, /<alert kind="직접 충돌"[^>]*>\n[^<]*src\/pay\.ts: 3 \/ 3/);
+  assert.match(given, /<channel_messages channel="Post for alert \d+">/);
+  assert.match(given, /<alert kind="Direct conflict"[^>]*>\n[^<]*src\/pay\.ts: 3 \/ 3/);
   assert.match(given, /이 줄은 제가 고칠게요/);
   assert.ok(given.indexOf("<alert") < given.indexOf("이 줄은 제가 고칠게요"));
 
@@ -529,7 +529,7 @@ test("함수의 정의 줄을 바꾸면 그 함수를 쓰는 다른 작업에 �
   await receives(
     world,
     alice.desk.folder,
-    `- Indirect conflict (estimated): my Work and owner's branch "payment". One side changed or removed a definition line of a symbol the other side uses. It's linked by name only, so it may be a different symbol. "refund" (me: 씀 "src/checkout.ts":1, "src/checkout.ts":2 / them: 정의 줄 바꿈 "src/pay.ts":4)`,
+    `- Indirect conflict (estimated): my Work and owner's branch "payment". One side changed or removed a definition line of a symbol the other side uses. It's linked by name only, so it may be a different symbol. "refund" (me: Uses "src/checkout.ts":1, "src/checkout.ts":2 / them: Definition line changed "src/pay.ts":4)`,
   );
 
   // 바꾼 정의 줄을 되돌리면 풀렸다.
@@ -547,7 +547,7 @@ test("함수의 정의 줄을 바꾸면 그 함수를 쓰는 다른 작업에 �
   await receives(
     world,
     alice.desk.folder,
-    `- Resolved: my Work and owner's branch "payment"'s 간접 충돌(추정)`,
+    `- Resolved: my Work and owner's branch "payment"'s Indirect conflict (guessed)`,
   );
 
   // 다시 바꾸면 새 알림이다. 쓰는 쪽 러너가 꺼져 있으면 바꾼 쪽 러너만으로는 풀었다고 보지 않는다.
@@ -616,12 +616,12 @@ test("두 작업에 같은 이름의 새 정의가 생기면 중복 구현이 �
   await receives(
     world,
     world.repo.folder,
-    `- Duplicate work: my Work and alice's branch "refund" each made a new definition with the same name. "split" (me: 새로 만듦 "src/money.ts":1 / them: 새로 만듦 "src/split.ts":1)`,
+    `- Duplicate work: my Work and alice's branch "refund" each made a new definition with the same name. "split" (me: Added "src/money.ts":1 / them: Added "src/split.ts":1)`,
   );
   await receives(
     world,
     alice.desk.folder,
-    `- Duplicate work: my Work and owner's branch "payment" each made a new definition with the same name. "split" (me: 새로 만듦 "src/split.ts":1 / them: 새로 만듦 "src/money.ts":1)`,
+    `- Duplicate work: my Work and owner's branch "payment" each made a new definition with the same name. "split" (me: Added "src/split.ts":1 / them: Added "src/money.ts":1)`,
   );
 
   // 같은 줄(pay의 본문)을 둘이 고치고, owner는 refund의 정의 줄도 바꾼다. 한 쌍에 세 종류가 따로 선다.

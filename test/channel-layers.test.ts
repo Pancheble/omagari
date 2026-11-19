@@ -196,11 +196,14 @@ test("포럼은 레포로 거르고, 레포의 라벨 이름을 바꾸면 그 �
   // 포럼의 레포 조건. 비면 모든 레포이고 적지도 않는다. 이 워크스페이스의 레포가 아니면 거절한다(대소문자는 맞춘다).
   const forum = async (name: string, filter: object) =>
     (await call(owner, api.createForum, { name, filter: filter as never })).channel;
-  const coreForum = await forum("코어", { labels: ["직접 충돌"], repos: [REPO] });
-  const payForum = await forum("결제", { labels: ["직접 충돌"], repos: [REPO2.toUpperCase()] });
-  const allForum = await forum("전체", { labels: ["직접 충돌"], repos: [] });
-  assert.deepEqual(payForum.filter, { labels: ["직접 충돌"], repos: [REPO2] });
-  assert.deepEqual(allForum.filter, { labels: ["직접 충돌"] });
+  const coreForum = await forum("코어", { labels: ["Direct conflict"], repos: [REPO] });
+  const payForum = await forum("결제", {
+    labels: ["Direct conflict"],
+    repos: [REPO2.toUpperCase()],
+  });
+  const allForum = await forum("전체", { labels: ["Direct conflict"], repos: [] });
+  assert.deepEqual(payForum.filter, { labels: ["Direct conflict"], repos: [REPO2] });
+  assert.deepEqual(allForum.filter, { labels: ["Direct conflict"] });
   await assert.rejects(
     call(owner, api.createForum, { name: "남", filter: { labels: ["a"], repos: [REPO3] } }),
     refused("invalid_request"),
@@ -217,7 +220,7 @@ test("포럼은 레포로 거르고, 레포의 라벨 이름을 바꾸면 그 �
   const forumsOf = async (as: As, repo: string) =>
     (await open(as, repo)).map((p) => [...p.forums].sort());
   const ids = (...forums: { id: string }[]) => forums.map((f) => f.id).sort();
-  const reference = (await call(owner, api.channels)).channels.find((c) => c.name === "참고");
+  const reference = (await call(owner, api.channels)).channels.find((c) => c.name === "FYI");
   assert.ok(reference);
   await eventually(async () => {
     assert.deepEqual(await forumsOf(owner, REPO), [ids(coreForum, allForum, reference)]);
@@ -226,7 +229,7 @@ test("포럼은 레포로 거르고, 레포의 라벨 이름을 바꾸면 그 �
   // 중요도 포럼도 레포로 거른다(고친다).
   const only = await call(owner, api.updateForum, {
     id: reference.id,
-    name: "참고",
+    name: "FYI",
     filter: { importance: "reference", repos: [REPO2] },
   });
   assert.deepEqual(only.channel.filter, { importance: "reference", repos: [REPO2] });
@@ -268,7 +271,7 @@ test("포럼은 레포로 거르고, 레포의 라벨 이름을 바꾸면 그 �
   );
 
   // REPO2에서 라벨 이름을 바꾸면: REPO2만 거르는 포럼은 이름을 바꾸고, 모든 레포를 거르는 포럼은 새 이름을 더하고,
-  await call(on(owner, REPO2), api.editLabel, { name: "직접 충돌", next: { name: "충돌" } });
+  await call(on(owner, REPO2), api.editLabel, { name: "Direct conflict", next: { name: "충돌" } });
   const filterOf = async (id: string) =>
     (await call(owner, api.channels)).channels.find((c) => c.id === id)?.filter;
   assert.deepEqual(await filterOf(payForum.id), { labels: ["충돌"], repos: [REPO2] });
@@ -316,7 +319,7 @@ test("채널이 워크스페이스에만 속하던 판(계약 47)의 DB로 켜�
   world.github.grant("carol", REPO3);
   const carol = await world.login("carol");
   await assert.rejects(call(carol, api.history, { channel: "c1" }), refused("not_found"));
-  assert.deepEqual(await channels(carol), ["forum:논의:", "forum:참고:"]);
+  assert.deepEqual(await channels(carol), ["forum:Discuss:", "forum:FYI:"]);
   assert.equal((await call(owner, api.history, { channel: "alerts" })).messages.length, 1);
 
   // 그 뒤에 만든 워크스페이스 채널은 다시 떠도 레포로 옮겨지지 않는다.

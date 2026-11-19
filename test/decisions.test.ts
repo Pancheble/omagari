@@ -11,7 +11,7 @@ const BASE = Array.from({ length: 5 }, (_, i) => `line ${i + 1}`);
 
 /**
  * owner와 alice가 같은 줄을 고쳐 직접 충돌 알림을 세우고, 그 알림의 포스트를 연다.
- * 포스트와 그 포스트가 보이는 포럼("참고")과 alice를 돌려준다. 결정 PR은 GitHub 쪽 일이라 알림 종류는 무엇이든 된다.
+ * 포스트와 그 포스트가 보이는 포럼("FYI")과 alice를 돌려준다. 결정 PR은 GitHub 쪽 일이라 알림 종류는 무엇이든 된다.
  */
 async function postOf(t: { after: (fn: () => Promise<void>) => void }, hourMs?: number) {
   const world = await startWorld({ observeMs: 50, followMs: 50, hourMs });
@@ -40,7 +40,7 @@ async function postOf(t: { after: (fn: () => Promise<void>) => void }, hourMs?: 
   await writer(desk.folder)("src/pay.ts", text(BASE.toSpliced(2, 1, "alice")));
 
   const room = await eventually(async () => {
-    const found = (await call(world.owner, api.channels)).channels.find((c) => c.name === "참고");
+    const found = (await call(world.owner, api.channels)).channels.find((c) => c.name === "FYI");
     assert.ok(found, "참고 포럼이 없다");
     return found.id;
   });
@@ -108,7 +108,7 @@ test("포스트에서 결정을 정리하면 정리한 멤버 이름으로 결�
   assert.equal(pull.open, true);
   assert.equal(pull.draft, false);
   assert.equal(pull.title, `docs(decisions): ${DECISION.title}`);
-  assert.match(pull.body ?? "", /이의 창: 하루/);
+  assert.match(pull.body ?? "", /Objection window: 1 day/);
   assert.deepEqual(fake.commits, [
     { branch: pull.branch, message: pull.title, author: "alice", paths: [path, "AGENTS.md"] },
   ]);
@@ -120,25 +120,25 @@ test("포스트에서 결정을 정리하면 정리한 멤버 이름으로 결�
     [
       `# 0001. ${DECISION.title}`,
       "",
-      "- 결정자: Alice Kim (@alice), owner (@owner)",
-      `- 출처: ${world.server.url}/#${post}`,
+      "- Deciders: Alice Kim (@alice), owner (@owner)",
+      `- Source: ${world.server.url}/#${post}`,
       "",
-      "## 맥락",
+      "## Context",
       "",
       DECISION.context,
       "",
-      "## 결정",
+      "## Decision",
       "",
       DECISION.decision,
       "",
-      "## 결과",
+      "## Consequences",
       "",
       DECISION.consequences,
       "",
     ].join("\n"),
   );
   // 레포에 AGENTS.md가 없으니 결정 폴더를 가리키는 한 줄로 만든다. main은 그대로다.
-  assert.match(files.get("AGENTS.md") ?? "", /^결정 기록은 `docs\/decisions\/`에 있다\./);
+  assert.match(files.get("AGENTS.md") ?? "", /^Decision records are in `docs\/decisions\/`\./);
   assert.deepEqual([...(fake.files.get("main")?.keys() ?? [])], []);
 
   // 포스트에 한 줄. 부딪힘 포럼에는 올리지 않는다(ADR-0027). 실시간으로도 간다. 포스트의 글 수에는 들지 않는다.
@@ -231,7 +231,7 @@ test("레포의 AGENTS.md가 결정 폴더를 가리키지 않으면 한 줄을 
   const branch = fake.files.get(fake.pulls[0]?.branch ?? "");
   assert.equal(
     branch?.get("AGENTS.md"),
-    "# 규칙\n\n테스트를 돌린다.\n\n결정 기록은 `docs/decisions/`에 있다. 일을 시작하기 전에 관련 결정을 읽는다.\n",
+    "# 규칙\n\n테스트를 돌린다.\n\nDecision records are in `docs/decisions/`. Read the related decisions before you start work.\n",
   );
 
   main.set("AGENTS.md", "결정은 docs/decisions 에 있다.\n");
@@ -282,7 +282,10 @@ test("바로 머지를 GitHub이 막으면 까닭을 포스트에 알리고, 토
     call(world.owner, api.proposeDecision, { post, ...DECISION, title: "열리지 않을 결정" }),
     (error: ContractFailure) => {
       assert.equal(error.code, "github_failed");
-      assert.match(error.message, /owner의 GitHub 토큰으로 결정 PR을 열지 못했다: HTTP 401/);
+      assert.match(
+        error.message,
+        /Couldn't open the decision PR with owner's GitHub token: HTTP 401/,
+      );
       return true;
     },
   );
@@ -314,10 +317,10 @@ test("고른 길이대로 창이 닫히고 이의가 없으면 Omagari가 머지
   const { world, alice, post } = await postOf(t, HOUR);
   await call(alice, api.send, { channel: post, text: "결제 쪽을 먼저 머지할게요" });
   const windows = [
-    ["1시간", "hour", 1],
-    ["직접 3시간", { amount: 3, unit: "hour" }, 3],
-    ["하루", "day", 24],
-    ["3일", "three_days", 72],
+    ["1 hour", "hour", 1],
+    ["Custom 3 hours", { amount: 3, unit: "hour" }, 3],
+    ["1 day", "day", 24],
+    ["3 days", "three_days", 72],
   ] as const;
   for (const [title, window, hours] of windows) {
     const { decision } = await call(world.owner, api.proposeDecision, {
@@ -332,7 +335,7 @@ test("고른 길이대로 창이 닫히고 이의가 없으면 Omagari가 머지
       assert.equal(Date.parse(decision.closes) - Date.parse(decision.at), hours * HOUR);
     assert.match(
       world.github.pulls.at(-1)?.body ?? "",
-      new RegExp(`이의 창: ${title.replace("직접 ", "")}`),
+      new RegExp(`Objection window: ${title.replace("Custom ", "")}`),
     );
   }
   for (const [title, , hours] of windows) {

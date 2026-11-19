@@ -194,7 +194,7 @@ test("파일을 고치기 직전에 그 파일을 바꾸는 다른 멤버의 작
     const context = await fresh(world, "src/pay.ts");
     assert.match(
       context,
-      /\nThe runner has been disconnected from the server since 방금 전, so this is what it received up to then\.\n/,
+      /\nThe runner has been disconnected from the server since just now, so this is what it received up to then\.\n/,
     );
     return context;
   });

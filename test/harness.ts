@@ -769,12 +769,15 @@ export async function startWorld(
     accept?: string[];
     /** GIF 찾기. 주지 않으면 GIPHY 키가 없는 서버다. 테스트는 가짜 GIPHY(`fakeGiphy`)에 대고 진짜 `realGiphy`를 꽂는다. */
     giphy?: Giphy;
+    /** Fills the fake GitHub before the server first starts (labels and issues an older server left behind). */
+    setup?: (github: ReturnType<typeof fakeGitHub>) => void;
   } = {},
 ) {
   const repo = await tempRepo();
   const data = await mkdtemp(join(tmpdir(), "omagari-server-")); // 서버의 DB와 CLI의 설정
   const cleanup = () => Promise.all([repo.remove(), rm(data, { recursive: true, force: true })]);
   const fake = fakeGitHub();
+  options.setup?.(fake);
   const database = join(data, "omagari.db");
   if (options.seed) {
     const db = new DatabaseSync(database);

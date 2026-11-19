@@ -190,7 +190,7 @@ Used in (my copy, linked by name, so it may be a different symbol):
   "src/use.ts":3
   "web/view.jsx":1
 Other members' Work that is changing the definition line:
-  alice · "main" · "src/pay.ts":1 함수 "pay" changed the definition line
+  alice · "main" · "src/pay.ts":1 Function "pay" changed the definition line
 Other members' Claims that declare a change (with a plan attached):
   none
 `,

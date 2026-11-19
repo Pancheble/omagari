@@ -105,7 +105,7 @@ test("선점에 계획을 붙이면 코드를 바꾸기 전에 쓰는 작업에 
   ]);
   assert.match(
     claimed,
-    /^Claimed on payment: "refund" in "src\/pay.ts" lines 4-6 · plan: 시그니처 변경 "refund" "refund\(amount, reason\)"\n/,
+    /^Claimed on payment: "refund" in "src\/pay.ts" lines 4-6 · plan: Signature change "refund" "refund\(amount, reason\)"\n/,
   );
   const signature = { kind: "signature", symbol: "refund", detail: "refund(amount, reason)" };
   const first = await eventually(async () => {
@@ -131,19 +131,19 @@ test("선점에 계획을 붙이면 코드를 바꾸기 전에 쓰는 작업에 
   await receives(
     world,
     desk.folder,
-    `- Declared Contract change: my Work and owner's branch "payment". One side declared in its Claim that it will change the symbol (the code may not have changed yet), and the other side uses that name. "refund" (me: 씀 "src/checkout.ts":1, "src/checkout.ts":2 / them: 바꾸겠다고 선언함 "src/pay.ts":4 / plan: 시그니처 변경 "refund" "refund(amount, reason)")`,
+    `- Declared Contract change: my Work and owner's branch "payment". One side declared in its Claim that it will change the symbol (the code may not have changed yet), and the other side uses that name. "refund" (me: Uses "src/checkout.ts":1, "src/checkout.ts":2 / them: Declared a change "src/pay.ts":4 / plan: Signature change "refund" "refund(amount, reason)")`,
   );
   await receives(
     world,
     world.repo.folder,
-    `- Declared Contract change: my Work and alice's branch "refund". One side declared in its Claim that it will change the symbol (the code may not have changed yet), and the other side uses that name. "refund" (me: 바꾸겠다고 선언함 "src/pay.ts":4 / them: 씀 "src/checkout.ts":1, "src/checkout.ts":2 / plan: 시그니처 변경 "refund" "refund(amount, reason)")`,
+    `- Declared Contract change: my Work and alice's branch "refund". One side declared in its Claim that it will change the symbol (the code may not have changed yet), and the other side uses that name. "refund" (me: Declared a change "src/pay.ts":4 / them: Uses "src/checkout.ts":1, "src/checkout.ts":2 / plan: Signature change "refund" "refund(amount, reason)")`,
     inboxLines(claimed),
   );
 
   // 쓰는 쪽의 omagari impact가 걸린 계획을 보인다.
   assert.match(
     await omagari(world, ["impact", "refund"], desk.folder),
-    /Other members' Claims that declare a change \(with a plan attached\):\n {2}owner's branch "payment" · "refund" in "src\/pay.ts" lines 4-6 · plan: 시그니처 변경 "refund" "refund\(amount, reason\)"\n/,
+    /Other members' Claims that declare a change \(with a plan attached\):\n {2}owner's branch "payment" · "refund" in "src\/pay.ts" lines 4-6 · plan: Signature change "refund" "refund\(amount, reason\)"\n/,
   );
 
   // 같은 심볼에 다른 곳(줄 범위)으로 새 계획을 걸면 옛 계획을 대체하고, 같은 알림이 새 계획으로 고쳐진다.
@@ -164,12 +164,12 @@ test("선점에 계획을 붙이면 코드를 바꾸기 전에 쓰는 작업에 
   const seen = await receives(
     world,
     desk.folder,
-    `- Declared Contract change cancelled: owner's branch "payment" released the Claim on "refund" (plan: 이름 바꾸기) without carrying out the plan. If you changed anything to fit that plan, undo it or ask them.`,
+    `- Declared Contract change cancelled: owner's branch "payment" released the Claim on "refund" (plan: Rename) without carrying out the plan. If you changed anything to fit that plan, undo it or ask them.`,
   );
   await receives(
     world,
     desk.folder,
-    `- Resolved: my Work and owner's branch "payment"'s 선언된 계약 변경`,
+    `- Resolved: my Work and owner's branch "payment"'s Declared contract change`,
     seen,
   );
   assert.notEqual((await declared(world.owner))[0]?.resolved, null);
@@ -177,7 +177,7 @@ test("선점에 계획을 붙이면 코드를 바꾸기 전에 쓰는 작업에 
   const own = await receives(
     world,
     world.repo.folder,
-    `- Resolved: my Work and alice's branch "refund"'s 선언된 계약 변경`,
+    `- Resolved: my Work and alice's branch "refund"'s Declared contract change`,
     released,
   );
   assert.ok(!own.some((line) => line.includes("cancelled")), JSON.stringify(own));
@@ -209,7 +209,7 @@ test("계획대로 정의 줄을 바꾼 뒤 풀면 취소됨이 가지 않는다
   const seen = await receives(
     world,
     desk.folder,
-    `- Resolved: my Work and owner's branch "payment"'s 선언된 계약 변경`,
+    `- Resolved: my Work and owner's branch "payment"'s Declared contract change`,
   );
   assert.ok(!seen.some((line) => line.includes("cancelled")), JSON.stringify(seen));
 });

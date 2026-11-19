@@ -69,12 +69,12 @@ test("labeler.yml의 경로 규칙에 맞는 팀 라벨이 직접 충돌 포스�
     ]),
     text(["other:", "  - changed-files:", "    - any-glob-to-any-file: 'src/**'"]),
   );
-  assert.deepEqual(labels, ["직접 충돌", "backend"]);
+  assert.deepEqual(labels, ["Direct conflict", "backend"]);
 });
 
 test("labeler.yml이 없거나 틀린 꼴이면 종류 라벨만 붙고 서버는 멈추지 않는다", async () => {
-  assert.deepEqual(await directLabels(undefined), ["직접 충돌"]);
-  assert.deepEqual(await directLabels("- 틀린\n- 꼴"), ["직접 충돌"]);
+  assert.deepEqual(await directLabels(undefined), ["Direct conflict"]);
+  assert.deepEqual(await directLabels("- 틀린\n- 꼴"), ["Direct conflict"]);
 });
 
 test("labeler.yml이 오래 걸리는 꼴이어도 서버를 붙잡지 않고, 그 글롭만 빼고 읽는다", {
@@ -92,7 +92,7 @@ test("labeler.yml이 오래 걸리는 꼴이어도 서버를 붙잡지 않고, �
       `note: ${" ".repeat(60_000)}a\u2028b`,
     ]),
   );
-  assert.deepEqual(labels, ["직접 충돌", "backend"]);
+  assert.deepEqual(labels, ["Direct conflict", "backend"]);
   // 너무 긴 파일은 읽지 않는다.
   const long = text([
     "backend:",
@@ -100,7 +100,7 @@ test("labeler.yml이 오래 걸리는 꼴이어도 서버를 붙잡지 않고, �
     "    - any-glob-to-any-file: 'src/**'",
     `#${"x".repeat(64 * 1024)}`,
   ]);
-  assert.deepEqual(await directLabels(long), ["직접 충돌"]);
+  assert.deepEqual(await directLabels(long), ["Direct conflict"]);
 });
 
 test("간접 충돌과 중복 구현은 심볼이 있는 파일에 맞는 팀 라벨이 붙는다", async (t) => {

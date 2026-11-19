@@ -60,7 +60,7 @@ test("에이전트는 주인만 부른다. 다른 멤버가 남의 에이전트�
 
   await assert.rejects(call(alice, api.ask, ask), {
     code: "forbidden",
-    message: "owner의 에이전트는 owner만 부를 수 있다",
+    message: "Only owner can call owner's agent",
   });
   await assert.rejects(call(world.server, api.ask, ask), { code: "unauthorized" });
   await assert.rejects(world.ask(world.owner, "없는 채널", "거기 있나?"), { code: "not_found" });
@@ -77,12 +77,12 @@ test("러너가 꺼진 에이전트에게 보낸 문답은 바로 러너가 꺼�
 
   await assert.rejects(world.ask(alice, channel, "거기 있나?"), {
     code: "runner_offline",
-    message: /alice의 Claude Code 러너가 꺼져 있다/,
+    message: /alice's Claude Code runner is off/,
   });
   // 러너를 켜도 그 러너가 돌리지 않는 실행기의 에이전트는 꺼져 있다.
   await assert.rejects(world.ask(world.owner, channel, "Codex야?", "codex"), {
     code: "runner_offline",
-    message: /owner의 Codex 러너가 꺼져 있다/,
+    message: /owner's Codex runner is off/,
   });
   assert.deepEqual((await call(alice, api.dms, { channel })).qas, []);
 
@@ -120,7 +120,7 @@ test("러너가 답하기 전에 떨어지거나 서버가 다시 뜨면 기다�
   assert.partialDeepStrictEqual(await world.settled(world.owner, dropped), {
     answer: {
       state: "failed",
-      error: { code: "runner_offline", message: "owner의 러너가 답하기 전에 떨어졌다" },
+      error: { code: "runner_offline", message: "owner's runner dropped before answering" },
     },
   });
 
@@ -132,7 +132,10 @@ test("러너가 답하기 전에 떨어지거나 서버가 다시 뜨면 기다�
   assert.partialDeepStrictEqual(await world.settled(world.owner, restarted), {
     answer: {
       state: "failed",
-      error: { code: "runner_offline", message: "서버가 다시 떠서 답을 받지 못했다" },
+      error: {
+        code: "runner_offline",
+        message: "The server restarted, so the answer never arrived",
+      },
     },
   });
 });

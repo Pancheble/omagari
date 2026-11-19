@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { api, type ContractFailure, call } from "@omagari/contract";
 import { eventually, startWorld, writer } from "./harness.ts";
@@ -24,24 +25,24 @@ test("라벨은 레포의 GitHub 라벨이고 팀이 라벨마다 중요도를 �
     assert.deepEqual(
       labels.map((l) => [l.name, l.importance]),
       [
-        ["간접 충돌", "reference"],
+        ["Confirmed", "discuss"],
+        ["Contract change", "discuss"],
+        ["Direct conflict", "reference"],
+        ["Duplicate work", "reference"],
+        ["Indirect conflict", "reference"],
         ["결제", "reference"],
-        ["계약 변경", "discuss"],
-        ["중복 구현", "reference"],
-        ["직접 충돌", "reference"],
-        ["확인됨", "discuss"],
       ],
     );
     assert.deepEqual(sorted(fake.labels.map((l) => l.name)), [
-      "간접 충돌",
+      "Confirmed",
+      "Contract change",
+      "Direct conflict",
+      "Duplicate work",
+      "Indirect conflict",
       "결제",
-      "계약 변경",
-      "중복 구현",
-      "직접 충돌",
-      "확인됨",
     ]);
   });
-  assert.deepEqual((await call(world.owner, api.labels)).labels[1], {
+  assert.deepEqual((await call(world.owner, api.labels)).labels[5], {
     name: "결제",
     color: "0e8a16",
     description: "결제 모듈",
@@ -96,9 +97,9 @@ test("라벨은 레포의 GitHub 라벨이고 팀이 라벨마다 중요도를 �
   // 참고 포스트에 붙인 라벨은 Omagari에만 있다. 없는 라벨은 붙이지 못한다.
   const labeled = await call(alice, api.setPostLabels, {
     post: post.channel,
-    labels: ["직접 충돌", "보안"],
+    labels: ["Direct conflict", "보안"],
   });
-  assert.deepEqual(labeled.post.labels, ["직접 충돌", "보안"]);
+  assert.deepEqual(labeled.post.labels, ["Direct conflict", "보안"]);
   assert.equal(labeled.post.importance, "reference");
   await assert.rejects(
     call(alice, api.setPostLabels, { post: post.channel, labels: ["없는 라벨"] }),
@@ -117,7 +118,7 @@ test("라벨은 레포의 GitHub 라벨이고 팀이 라벨마다 중요도를 �
     assert.equal(fake.issues.length, 1);
     return fake.issues[0];
   });
-  assert.deepEqual(issue.labels, ["직접 충돌", "보안"]);
+  assert.deepEqual(issue.labels, ["Direct conflict", "보안"]);
   assert.equal((await directPost(world.owner))?.importance, "discuss");
 
   // Omagari에서 이름과 색을 고치면 GitHub 라벨이 바뀌고, 포스트의 라벨 이름도 따라 바뀐다. 중요도는 남는다.
@@ -133,7 +134,7 @@ test("라벨은 레포의 GitHub 라벨이고 팀이 라벨마다 중요도를 �
   });
   assert.ok(fake.labels.some((l) => l.name === "security" && l.color === "000000"));
   assert.ok(!fake.labels.some((l) => l.name === "보안"));
-  assert.deepEqual((await directPost(world.owner))?.labels, ["직접 충돌", "security"]);
+  assert.deepEqual((await directPost(world.owner))?.labels, ["Direct conflict", "security"]);
 
   // 포스트에서 붙이고 떼면 이슈 라벨이 바뀐다.
   await call(alice, api.setPostLabels, { post: post.channel, labels: ["security", "결제"] });
@@ -142,11 +143,11 @@ test("라벨은 레포의 GitHub 라벨이고 팀이 라벨마다 중요도를 �
   assert.deepEqual((await directPost(world.owner))?.labels, ["security", "결제"]);
 
   // GitHub에서 이슈 라벨을 바꾸면 다음 주기에 포스트가 따라간다.
-  issue.labels = ["security", "직접 충돌"];
+  issue.labels = ["security", "Direct conflict"];
   await eventually(async () =>
     assert.deepEqual(sorted((await directPost(world.owner))?.labels ?? []), [
+      "Direct conflict",
       "security",
-      "직접 충돌",
     ]),
   );
 
@@ -159,7 +160,10 @@ test("라벨은 레포의 GitHub 라벨이고 팀이 라벨마다 중요도를 �
     const { labels } = await call(world.owner, api.labels);
     assert.equal(labels.find((l) => l.name === "sec")?.importance, "discuss");
     assert.ok(!labels.some((l) => l.name === "security"));
-    assert.deepEqual(sorted((await directPost(world.owner))?.labels ?? []), ["sec", "직접 충돌"]);
+    assert.deepEqual(sorted((await directPost(world.owner))?.labels ?? []), [
+      "Direct conflict",
+      "sec",
+    ]);
   });
   await call(alice, api.editLabel, { name: "sec", next: { importance: "reference" } });
   await new Promise((resolve) => setTimeout(resolve, 200));
@@ -167,4 +171,56 @@ test("라벨은 레포의 GitHub 라벨이고 팀이 라벨마다 중요도를 �
   assert.equal(now?.importance, "reference");
   assert.equal(now?.issue?.open, true);
   assert.equal(fake.issues.length, 1);
+});
+
+test("Korean default labels from before ADR-0045 are renamed to English on GitHub and in Omagari, and their posts and issues keep them", async (t) => {
+  const world = await startWorld({
+    followMs: 50,
+    seed: await readFile(new URL("./contract47.sql", import.meta.url), "utf8"),
+    setup: (fake) => {
+      for (const name of ["직접 충돌", "확인됨", "중복 구현", "Duplicate work"])
+        fake.createLabel(name);
+      fake.issues.push({
+        number: 101,
+        title: "pay.ts",
+        body: "",
+        labels: ["직접 충돌", "확인됨"],
+        open: true,
+        author: "alice",
+        comments: [],
+      });
+    },
+  });
+  t.after(world.stop);
+  const fake = world.github;
+
+  await eventually(async () => {
+    assert.deepEqual(sorted(fake.labels.map((l) => l.name)), [
+      "Confirmed",
+      "Contract change",
+      "Direct conflict",
+      "Duplicate work",
+      "Indirect conflict",
+      "중복 구현",
+    ]);
+    // The post keeps its label and the importance the team set on the Korean one.
+    assert.deepEqual(
+      (await call(world.owner, api.posts)).posts.map((p) => [p.channel, p.labels, p.importance]),
+      [["p1", ["Direct conflict"], "discuss"]],
+    );
+  });
+  // A rename keeps the label on issues. The English "Duplicate work" was already there, so the Korean one stays a plain label.
+  assert.deepEqual(fake.issues[0]?.labels, ["Direct conflict", "Confirmed"]);
+  const { labels } = await call(world.owner, api.labels);
+  assert.deepEqual(
+    labels.map((l) => [l.name, l.importance]),
+    [
+      ["Confirmed", "discuss"],
+      ["Contract change", "discuss"],
+      ["Direct conflict", "discuss"],
+      ["Duplicate work", "reference"],
+      ["Indirect conflict", "reference"],
+      ["중복 구현", "reference"],
+    ],
+  );
 });

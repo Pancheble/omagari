@@ -74,7 +74,7 @@ test("계정 둘의 레포를 한 서버에 띄우면 워크스페이스가 둘�
   );
   const listed = async (as: As) => (await call(as, api.channels)).channels;
   const forumsA = (await listed(alice)).filter((c) => c.kind === "forum").map((c) => c.name);
-  assert.deepEqual(forumsA, ["논의", "참고"]);
+  assert.deepEqual(forumsA, ["Discuss", "FYI"]);
   const idsA = (await listed(in_(owner, A))).map((c) => c.id);
   const idsB = (await listed(in_(owner, B))).map((c) => c.id);
   assert.equal(idsA.length, 3);
@@ -346,7 +346,7 @@ test("워크스페이스가 하나이던 판(계약 46)의 DB로 켜도 있던 �
   const { posts } = await call(owner, api.posts);
   assert.deepEqual(
     posts.map((p) => [p.channel, p.labels, p.importance, p.count]),
-    [["p1", ["직접 충돌"], "discuss", 1]],
+    [["p1", ["Direct conflict"], "discuss", 1]],
   );
   assert.deepEqual(
     (await call(owner, api.decisions)).decisions.map((d) => d.title),
@@ -369,7 +369,7 @@ test("워크스페이스가 하나이던 판(계약 46)의 DB로 켜도 있던 �
 
   // 새 워크스페이스에는 기본 포럼만 있고 옛것은 하나도 없다. 같은 이름의 채널을 새로 만들 수 있다.
   const other = in_(owner, B);
-  assert.deepEqual(await channels(other), ["forum:논의", "forum:참고"]);
+  assert.deepEqual(await channels(other), ["forum:Discuss", "forum:FYI"]);
   assert.deepEqual((await call(other, api.posts)).posts, []);
   assert.deepEqual((await call(other, api.decisions)).decisions, []);
   const chat = (await call(other, api.createChannel, { name: "일반" })).channel.id;
@@ -389,7 +389,7 @@ test("워크스페이스가 하나이던 판(계약 46)의 DB로 켜도 있던 �
   await world.restartServer();
   await eventually(async () => {
     assert.deepEqual(await channels(owner), ["chat:일반", "forum:논의", "forum:참고"]);
-    assert.deepEqual(await channels(in_(owner, B)), ["chat:일반", "forum:논의", "forum:참고"]);
+    assert.deepEqual(await channels(in_(owner, B)), ["chat:일반", "forum:Discuss", "forum:FYI"]);
   });
   assert.deepEqual(
     (await call(owner, api.posts)).posts.map((p) => p.channel),

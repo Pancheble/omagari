@@ -143,7 +143,7 @@ test("한 사람의 두 브랜치 사이에도 간접 충돌(추정)과 중복 �
 
   await eventually(async () => {
     const [indirect] = await open(world, "indirect");
-    assert.ok(indirect && indirect.kind !== "direct", "간접 충돌이 아직 없다");
+    assert.ok(indirect && indirect.kind !== "direct", "Indirect conflict이 아직 없다");
     assert.deepEqual(indirect.works, [PAYMENT, REFUND]);
     assert.deepEqual(
       indirect.symbols.map((s) => s.name),
@@ -152,7 +152,7 @@ test("한 사람의 두 브랜치 사이에도 간접 충돌(추정)과 중복 �
   });
   await eventually(async () => {
     const [duplicate] = await open(world, "duplicate");
-    assert.ok(duplicate && duplicate.kind !== "direct", "중복 구현이 아직 없다");
+    assert.ok(duplicate && duplicate.kind !== "direct", "Duplicate work이 아직 없다");
     assert.deepEqual(duplicate.works, [PAYMENT, REFUND]);
     assert.deepEqual(
       duplicate.symbols.map((s) => s.name),
