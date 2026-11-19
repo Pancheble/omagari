@@ -2,20 +2,21 @@ import { EXECUTOR_NAMES, type ExecutorId, type MemberView, type Qa } from "@omag
 import { X } from "lucide-react";
 import { type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
 import { Composer, type ComposerGifs } from "./conversation.tsx";
+import { t } from "./i18n.ts";
 import { Mark } from "./members.tsx";
 
 type Agent = MemberView["agents"][number];
 
-/** 글쇠 앞에서 `@`로 시작하는 낱말. `@`는 맨 앞이나 공백 뒤에 있어야 한다(메일 주소의 @는 아니다). */
+/** The word starting with `@` right before the caret. The `@` must be at the start or after whitespace (an @ in an email address doesn't count). */
 const TRIGGER = /(?:^|\s)@(\S*)$/;
 
 /**
- * 채널의 입력 칸과 `@호출`. `@`를 치면 바로 위에 내 연결된 에이전트 메뉴(app-popover)가 열린다. DM 칸의 고르기와 같은 규칙이다:
- * 러너가 꺼진 에이전트는 나오지 않고, 하나여도 한 줄짜리 메뉴로 고른다. 없으면 메뉴가 그렇다고 알린다.
- * 고르면 친 `@…`는 지워지고 입력 칸 앞에 그 에이전트가 토큰으로 선다. 토큰이 있으면 보내는 글은 그 에이전트에게 모두가 보게 묻는 질문이다.
- * 메뉴는 WAI-ARIA 콤보박스(목록)다: 초점은 입력 칸에 두고 위아래 화살표로 고르고, Enter나 Tab으로 넣고, Esc로 닫는다.
- * DM의 문답을 붙이면(`attached`) 입력 칸 맨 위 줄에 그 문답(app-qa-attachment)이 서고 글은 그 아래 줄에 쓴다(DESIGN.md "채널에 올리기").
- * 붙인 문답은 토큰과 함께 두지 않는다: 붙이면 토큰을 지우고(친 글은 둔다), 붙어 있는 동안은 `@`로 메뉴가 열리지 않는다.
+ * The channel composer and `@call`. Typing `@` opens a menu (app-popover) of your connected Agents right above it. Same rules as picking in the DM pane:
+ * Agents whose Runner is off don't show, and even a single Agent is picked from a one-line menu. If there are none, the menu says so.
+ * Picking one deletes the typed `@…` and puts that Agent before the textarea as a token. With a token, what you send is a question to that Agent, asked in front of everyone.
+ * The menu is a WAI-ARIA combobox (listbox): focus stays in the textarea, arrow keys move, Enter or Tab inserts, Esc closes.
+ * When a DM Q&A is attached (`attached`), it sits on the top line of the composer (app-qa-attachment) and the note goes on the line below (DESIGN.md "Posting to a channel").
+ * An attached Q&A never sits with a token: attaching clears the token (the typed text stays), and while attached, `@` doesn't open the menu.
  */
 export function CallComposer({
   label,
@@ -31,16 +32,16 @@ export function CallComposer({
   gifs,
 }: {
   label: string;
-  /** 내 에이전트 전부. 꺼진 것도 온다. */
+  /** All of your Agents, including ones that are off. */
   agents: Agent[];
-  /** 내 이름. 붙인 문답의 "지은의 Claude Code"에 쓴다. */
+  /** Your name. Used in the attached Q&A's "Jieun's Claude Code". */
   owner: string;
   value: string;
   onChange: (text: string) => void;
-  /** 부른 에이전트. 없으면 사람끼리의 메시지다. */
+  /** The called Agent. Without one, it's a message between people. */
   token?: ExecutorId;
   onToken: (executor?: ExecutorId) => void;
-  /** 붙인 DM 문답. 있으면 보내는 글은 그 문답과 함께 채널에 올리는 한마디다. */
+  /** The attached DM Q&A. If present, what you send is a note posted to the channel with that Q&A. */
   attached?: Qa;
   onDetach: () => void;
   onSubmit: () => void;
@@ -50,9 +51,9 @@ export function CallComposer({
   const list = useId();
   const title = useId();
   const connected = agents.filter((agent) => agent.state !== "offline");
-  /** 친 `@`의 자리와 그 뒤에 친 글. */
+  /** Where the typed `@` is, and what was typed after it. */
   const [trigger, setTrigger] = useState<{ at: number; query: string }>();
-  /** Esc로 닫은 `@`의 자리. 그 자리의 `@`로는 다시 열지 않는다. */
+  /** Where the `@` closed with Esc is. That `@` doesn't open the menu again. */
   const [dismissed, setDismissed] = useState<number>();
   const [active, setActive] = useState(0);
 
@@ -68,8 +69,8 @@ export function CallComposer({
     (connected.length === 0 || options.length > 0);
   const current = options[Math.min(active, options.length - 1)];
 
-  // 문답을 붙이면(바꿔 붙여도) 토큰과 열린 메뉴를 거두고 글 줄로 간다.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 붙인 문답이 바뀔 때만 한다
+  // When a Q&A is attached (even swapped), drop the token and any open menu and go to the text line.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only when the attached Q&A changes
   useEffect(() => {
     if (!attached) return;
     onToken(undefined);
@@ -78,7 +79,7 @@ export function CallComposer({
   }, [attached?.id]);
 
   /**
-   * 글이 바뀌거나 글쇠가 움직이면 `@`를 다시 찾는다. 이미 부른 에이전트나 붙인 문답이 있으면 찾지 않는다(한 번에 하나만 부르고, 문답과 함께 부르지 않는다).
+   * Look for `@` again when the text changes or the caret moves. Skip if an Agent is already called or a Q&A is attached (one call at a time, and never together with a Q&A).
    */
   const sync = (element: HTMLTextAreaElement) => {
     const before = element.value.slice(0, element.selectionStart);
@@ -103,7 +104,7 @@ export function CallComposer({
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.nativeEvent.isComposing || event.keyCode === 229) return; // 한글을 조합하는 중
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return; // composing text with an IME
     const { selectionStart, selectionEnd } = event.currentTarget;
     if (
       (token || attached) &&
@@ -139,20 +140,18 @@ export function CallComposer({
     (connected.length === 0 ? (
       <div className="menu call-menu" role="status">
         <p className="call-empty">
-          <strong className="call-empty-title">연결된 에이전트가 없어요</strong>
-          <span className="call-empty-text">
-            이 기기에서 러너를 켜면 @로 내 에이전트를 불러 모두가 보게 물을 수 있어요.
-          </span>
+          <strong className="call-empty-title">{t.conversation.call.noAgentsTitle}</strong>
+          <span className="call-empty-text">{t.conversation.call.noAgentsBody}</span>
         </p>
       </div>
     ) : (
       <div className="menu call-menu">
         <p className="call-menu-title" id={title}>
-          모두가 보게 묻기
+          {t.conversation.call.menuTitle}
         </p>
         <div id={list} role="listbox" aria-labelledby={title}>
           {options.map((agent, i) => (
-            // biome-ignore lint/a11y/useKeyWithClickEvents: 글쇠는 입력 칸이 받는다(콤보박스)
+            // biome-ignore lint/a11y/useKeyWithClickEvents: the textarea takes the keys (combobox)
             <div
               key={agent.executor}
               id={`${list}-${agent.executor}`}
@@ -160,7 +159,7 @@ export function CallComposer({
               aria-selected={agent === current}
               tabIndex={-1}
               className="menu-item"
-              // 눌러도 입력 칸의 초점이 떠나지 않는다.
+              // pressing doesn't move focus out of the textarea
               onPointerDown={(event) => event.preventDefault()}
               onPointerMove={() => setActive(i)}
               onClick={() => pick(agent)}
@@ -168,7 +167,9 @@ export function CallComposer({
               <Mark agent={agent} aria-hidden />
               <span className="agent-name">{EXECUTOR_NAMES[agent.executor]}</span>
               <span className={agent.state === "answering" ? "agent-state busy" : "agent-state"}>
-                {agent.state === "answering" ? "답하는 중…" : "쉬는 중"}
+                {agent.state === "answering"
+                  ? t.conversation.call.answering
+                  : t.conversation.call.idle}
               </span>
             </div>
           ))}
@@ -178,7 +179,13 @@ export function CallComposer({
 
   return (
     <Composer
-      label={attached ? "한마디 덧붙이기 (선택)" : name ? `${name}에게 모두가 보게 묻기` : label}
+      label={
+        attached
+          ? t.conversation.call.addNote
+          : name
+            ? t.conversation.call.askEveryone(name)
+            : label
+      }
       sendable={!!attached}
       value={value}
       onChange={(text) => {
@@ -203,13 +210,13 @@ export function CallComposer({
               aria-hidden
             />
             <strong className="qa-attachment-owner">
-              {owner}의 {EXECUTOR_NAMES[attached.executor]}
+              {t.conversation.call.attachedOwner(owner, EXECUTOR_NAMES[attached.executor])}
             </strong>
             <span className="qa-attachment-question">{attached.question}</span>
             <button
               type="button"
               className="call-token-remove qa-attachment-remove"
-              aria-label="올릴 문답 빼기"
+              aria-label={t.conversation.call.removeAttached}
               onClick={() => {
                 onDetach();
                 area.current?.focus();
@@ -226,7 +233,7 @@ export function CallComposer({
               <button
                 type="button"
                 className="call-token-remove"
-                aria-label={`${name} 부르기 취소`}
+                aria-label={t.conversation.call.cancelCall(name ?? "")}
                 onClick={() => {
                   onToken(undefined);
                   area.current?.focus();

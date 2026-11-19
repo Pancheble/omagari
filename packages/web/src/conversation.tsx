@@ -31,39 +31,39 @@ import { useEmojiInput } from "./emoji-input.tsx";
 import { AlertLine } from "./forum.tsx";
 import { GifButton, MessageGif } from "./gif.tsx";
 import { giphyId, giphyUrl } from "./giphy.ts";
-import { language } from "./i18n.ts";
+import { language, t } from "./i18n.ts";
 import type { LiveState } from "./live.ts";
 import { Person } from "./profile-card.tsx";
 import { ReactButton, Reactions } from "./reactions.tsx";
 import { VerdictStrip } from "./verdict.tsx";
 import { Avatar, personName } from "./workspace.tsx";
 
-/** 채널 하나의 대화. 실시간으로 받은 것은 불러오는 중에도 쌓아 두고, 지난 대화를 받으면 번호로 합친다. */
+/** One channel's conversation. Live messages pile up even while loading, and older ones merge in by id. */
 export type View = {
   status: "loading" | "ready" | "error";
   messages: ChannelMessage[];
-  /** 더 오래된 메시지가 서버에 남아 있을 수 있다. */
+  /** Older messages may still be on the server. */
   more: boolean;
-  /** 더 오래된 메시지를 불러오는 중이다. */
+  /** Older messages are loading. */
   older?: boolean;
 };
 
-/** 같은 사람이 이 안에 이어 쓴 메시지는 이름과 아바타 없이 묶는다. */
+/** Messages from the same person within this window group together, without a name and avatar. */
 const GROUP_MS = 5 * 60_000;
-/** 위로 이만큼 남았으면 더 오래된 메시지를 미리 불러온다. */
+/** Load older messages ahead of time when this many pixels of scroll are left. */
 const OLDER_PX = 400;
 
 const dayOf = (iso: string) => new Date(iso).toDateString();
 const midnight = (date: Date) =>
   new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
 
-/** 날짜 구분선의 글: "오늘", "어제", "11월 9일 (월)", 올해가 아니면 연도를 붙인다. */
+/** Text of the day divider: "Today", "Yesterday", "Mon, Nov 9", with the year when it isn't this year. */
 function dayLabel(iso: string) {
   const date = new Date(iso);
   const today = new Date();
   const days = Math.round((midnight(today) - midnight(date)) / 86_400_000);
-  if (days === 0) return "오늘";
-  if (days === 1) return "어제";
+  if (days === 0) return t.conversation.today;
+  if (days === 1) return t.conversation.yesterday;
   return date.toLocaleDateString(language, {
     year: date.getFullYear() === today.getFullYear() ? undefined : "numeric",
     month: "long",
@@ -77,7 +77,7 @@ export const timeOf = (iso: string) =>
 export const fullTime = (iso: string) =>
   new Date(iso).toLocaleString(language, { dateStyle: "long", timeStyle: "short" });
 
-/** 채널 머리 띠의 왼쪽: `# 채널 이름`과 멤버 수. 채널의 멤버는 워크스페이스의 멤버 모두다. */
+/** Left side of the channel header: `# channel name` and the member count. A channel's members are everyone in the workspace. */
 export function ChannelTitle({ channel, members }: { channel: Channel; members?: number }) {
   return (
     <div className="channel-title">
@@ -85,30 +85,32 @@ export function ChannelTitle({ channel, members }: { channel: Channel; members?:
         <Hash className="channel-mark" size={20} aria-hidden />
         <span>{channel.name}</span>
       </h2>
-      {members !== undefined && <span className="channel-members">멤버 {members}명</span>}
+      {members !== undefined && (
+        <span className="channel-members">{t.conversation.members(members)}</span>
+      )}
     </div>
   );
 }
 
 /**
- * 채널에서 그 문답의 메시지로 스크롤하고 잠깐 칠한다(app-message-highlight). DM의 "보기"와 올린 뒤가 쓴다.
- * 아직 그려지지 않았으면 false다.
+ * Scrolls to that Q&A's message in the channel and briefly highlights it (app-message-highlight). Used by the DM's "View" and after posting.
+ * Returns false if it isn't drawn yet.
  */
 export function flash(qa: number) {
   const row = document.querySelector<HTMLElement>(`[data-qa="${qa}"]`);
   if (!row) return false;
   row.scrollIntoView({ block: "center" });
   row.classList.remove("highlight");
-  void row.offsetWidth; // 다시 칠하면 처음부터 칠한다
+  void row.offsetWidth; // repaint so the highlight restarts
   row.classList.add("highlight");
   return true;
 }
 
 /**
- * 대화 칸의 머리 띠 아래: 알림 띠, 메시지 목록, 입력 칸. 채널을 아직 모르면(처음 붙는 중) 뼈대만 보인다.
- * 입력 칸에서 내 에이전트를 `@호출`하면 메시지 대신 그 에이전트에게 모두가 보게 묻는다.
- * DM의 문답이 붙어 있으면(`attached`) 쓴 글과 함께 그 문답을 채널에 올린다. 글은 없어도 된다.
- * 보내지 못한 메시지나 질문은 입력 칸에 (부른 에이전트나 붙인 문답과 함께) 되돌려 두고, 알림 띠의 "다시 시도"가 다시 보낸다.
+ * Below the conversation header: notice banners, the message list, and the composer. If the channel isn't known yet (first connect), only the skeleton shows.
+ * `@call`ing your Agent in the composer asks that Agent in front of everyone instead of sending a message.
+ * If a DM Q&A is attached (`attached`), it is posted to the channel along with the note. The note can be empty.
+ * A message or question that failed to send goes back into the composer (with the called Agent or attached Q&A), and the banner's "Try again" sends it again.
  */
 export function Conversation({
   channel,
@@ -135,49 +137,49 @@ export function Conversation({
   channel?: Channel;
   view?: View;
   live: LiveState;
-  /** 멤버 목록. 내 에이전트(`@호출`)와 문답한 에이전트의 지금 상태를 여기서 읽는다. */
+  /** Member list. Your Agents (`@call`) and the current state of the Agent that answered a Q&A are read from here. */
   members?: MemberView[];
   me: string;
-  /** 입력 칸의 안내 글. 없으면 "#채널에 메시지 보내기". 포스트는 제목으로 쓴다. */
+  /** Composer hint. Defaults to "Send a message to # channel". A post uses its title. */
   label?: string;
-  /** 첫 글인 알림이 고쳐진 시각(포스트). */
+  /** When the alert that is the first message was edited (post). */
   edited?: string;
-  /** 포스트의 결정 상태 띠. 결정 PR이 열렸으면 대화 위에 늘 붙는다. */
+  /** A post's decision status strip. Always sits above the conversation while a decision PR is open. */
   strip?: {
     decision: Decision;
     onRespond: (response: "agree" | "object" | "withdraw") => Promise<void>;
     onRevise: () => void;
     onDiscard: () => Promise<void>;
   };
-  /** 간접 충돌 포스트의 판정 띠. 러너가 판정을 올린 적이 없으면 없다. 결정 상태 띠 위에 붙는다. */
+  /** Verdict strip of an indirect-conflict post. Absent if no Runner has posted a verdict. Sits above the decision strip. */
   verdict?: ComponentProps<typeof VerdictStrip>;
-  /** 포스트의 토론 띠. 판정 띠 위에 붙는다. */
+  /** A post's discussion strip. Sits above the verdict strip. */
   debate?: ReactNode;
-  /** 대화 맨 아래에 쌓이는 것(포스트의 토론 카드). */
+  /** What piles up at the bottom of the conversation (a post's discussion card). */
   tail?: ReactNode;
-  /** 입력 칸에 붙인 DM 문답. DM 칸도 함께 보므로 워크스페이스가 갖는다. */
+  /** The DM Q&A attached to the composer. The workspace holds it because the DM pane is shown too. */
   attached?: Qa;
   onAttach: Dispatch<SetStateAction<Qa | undefined>>;
   onSend: (text: string) => Promise<void>;
   onCall: (executor: ExecutorId, question: string) => Promise<void>;
-  /** 문답을 채널에 올린다. `text`는 함께 쓴 글이고 비어 있으면 글 없이 올린다. */
+  /** Posts a Q&A to the channel. `text` is the accompanying note; if empty, it posts without one. */
   onPost: (qa: Qa, text: string) => Promise<void>;
   onRetry: () => void;
   onOlder: () => void;
-  /** GIF 찾기(서버를 거친다). 서버에 GIPHY 키가 없으면 없고, 입력 칸에 GIF 버튼이 없다. */
+  /** GIF search (goes through the server). Absent without a GIPHY key on the server, and the composer has no GIF button. */
   searchGifs?: (query: string) => Promise<Gif[]>;
-  /** 메시지(`message`, 번호)에 반응을 달거나(`on`) 뗀다. */
+  /** Adds (`on`) or removes a reaction on a message (`message`, its id). */
   onReact: (message: number, emoji: string, on: boolean) => Promise<void>;
 }) {
   const [text, setText] = useState("");
   const [token, setToken] = useState<ExecutorId>();
-  /** 보내지 못한 것. GIF면 "다시 시도"가 그 GIF를 다시 보낸다. */
+  /** What failed to send. For a GIF, "Try again" sends that GIF again. */
   const [failure, setFailure] = useState<{ text: string; gif?: string }>();
   const scroller = useRef<HTMLDivElement>(null);
   const agentsOf = (login: string) => members?.find((member) => member.login === login)?.agents;
-  /** 방금 올린 문답. 그 메시지가 그려지면 스크롤하고 칠한다. */
+  /** The Q&A just posted. Scroll to it and highlight it once its message is drawn. */
   const [posted, setPosted] = useState<number>();
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 메시지가 새로 그려질 때마다 다시 찾는다
+  // biome-ignore lint/correctness/useExhaustiveDependencies: look again each time messages are redrawn
   useEffect(() => {
     if (posted !== undefined && flash(posted)) setPosted(undefined);
   }, [posted, view]);
@@ -191,7 +193,7 @@ export function Conversation({
     setToken(undefined);
     onAttach(undefined);
     setFailure(undefined);
-    scroller.current?.scrollTo({ top: 0 }); // 거꾸로 쌓는 목록이라 0이 맨 아래다
+    scroller.current?.scrollTo({ top: 0 }); // the list stacks in reverse, so 0 is the bottom
     try {
       if (qa) {
         await onPost(qa, message);
@@ -199,14 +201,15 @@ export function Conversation({
       } else await (called ? onCall(called, message) : onSend(message));
     } catch (error) {
       const offline = error instanceof ContractFailure && error.code === "runner_offline";
+      const f = t.conversation.failed;
       setFailure({
         text: qa
-          ? "채널에 올리지 못했어요"
+          ? f.post
           : !called
-            ? "메시지를 보내지 못했어요"
+            ? f.send
             : offline
-              ? `${EXECUTOR_NAMES[called]} 러너가 꺼져 있어 지금은 물을 수 없어요`
-              : "질문을 보내지 못했어요",
+              ? f.runnerOff(EXECUTOR_NAMES[called])
+              : f.ask,
       });
       setText((now) => now || message);
       setToken((now) => now ?? called);
@@ -214,27 +217,27 @@ export function Conversation({
     }
   };
 
-  /** 고른 GIF를 GIPHY 주소 한 줄로 바로 보낸다. 입력 칸에 쓰던 글은 그대로 둔다(DESIGN.md "GIF"). */
+  /** Sends the picked GIF straight away as a single GIPHY URL. Whatever was typed in the composer stays (DESIGN.md "GIF"). */
   const sendGif = async (url: string) => {
     setFailure(undefined);
     scroller.current?.scrollTo({ top: 0 });
     try {
       await onSend(url);
     } catch {
-      setFailure({ text: "GIF를 보내지 못했어요", gif: url });
+      setFailure({ text: t.conversation.failed.gif, gif: url });
     }
   };
 
   const react = (message: number, emoji: string, on: boolean) =>
     void onReact(message, emoji, on).catch(() =>
-      setFailure({ text: on ? "반응을 달지 못했어요" : "반응을 떼지 못했어요" }),
+      setFailure({ text: on ? t.conversation.failed.react : t.conversation.failed.unreact }),
     );
 
   return (
     <>
       {live === "reconnecting" && (
         <div className="banner info" role="status">
-          서버에 다시 붙는 중…
+          {t.conversation.reconnecting}
         </div>
       )}
       {failure && (
@@ -245,7 +248,7 @@ export function Conversation({
             className="banner-action"
             onClick={() => void (failure.gif ? sendGif(failure.gif) : send())}
           >
-            다시 시도
+            {t.conversation.retry}
           </button>
         </div>
       )}
@@ -256,19 +259,19 @@ export function Conversation({
         <Skeleton />
       ) : view.status === "error" ? (
         <div className="empty">
-          <h2>메시지를 불러오지 못했어요</h2>
-          <p>네트워크를 확인하고 다시 시도해 주세요.</p>
+          <h2>{t.conversation.loadFailedTitle}</h2>
+          <p>{t.conversation.loadFailedBody}</p>
           <button type="button" className="button outline" onClick={onRetry}>
-            다시 시도
+            {t.conversation.retry}
           </button>
         </div>
       ) : view.messages.length === 0 ? (
         <div className="empty">
-          <h2># {channel.name}에 아직 메시지가 없어요</h2>
-          <p>첫 메시지를 보내거나, 내 에이전트에게 먼저 물어보세요.</p>
+          <h2>{t.conversation.emptyTitle(channel.name)}</h2>
+          <p>{t.conversation.emptyBody}</p>
         </div>
       ) : (
-        // 목록을 거꾸로 쌓는 칸(column-reverse)에 넣어, 처음부터 맨 아래가 보이고 위에 오래된 것을 붙여도 보던 자리가 그대로다.
+        // The list sits in a reversed stack (column-reverse), so the bottom shows first and older messages added on top leave the view where it was.
         <div
           className="scroller"
           ref={scroller}
@@ -277,12 +280,12 @@ export function Conversation({
             if (scrollHeight - clientHeight + scrollTop < OLDER_PX) onOlder();
           }}
         >
-          <div className="log" role="log" aria-label={`# ${channel.name}의 메시지`}>
+          <div className="log" role="log" aria-label={t.conversation.logLabel(channel.name)}>
             {view.older && <SkeletonRow />}
             {view.messages.map((message, i) => {
               const previous = view.messages[i - 1];
               const newDay = !previous || dayOf(previous.at) !== dayOf(message.at);
-              // 문답은 묶지 않고, 문답 다음의 글은 머리를 다시 단다.
+              // A Q&A never groups, and the message after a Q&A gets its header again.
               const grouped =
                 !newDay &&
                 message.kind === "text" &&
@@ -320,7 +323,7 @@ export function Conversation({
       )}
       {channel && (
         <CallComposer
-          label={label ?? `# ${channel.name}에 메시지 보내기`}
+          label={label ?? t.conversation.sendTo(channel.name)}
           agents={agentsOf(me) ?? []}
           owner={members?.find((member) => member.login === me)?.name ?? me}
           value={text}
@@ -340,8 +343,8 @@ export function Conversation({
 }
 
 /**
- * 입력 칸(app-composer). 줄이 늘면 커지고 최대 높이(CSS)를 넘으면 칸 안에서 스크롤한다. Enter는 보내기, Shift+Enter는 줄바꿈.
- * 열리면 바로 쓸 수 있게 초점을 둔다. 터치 화면에서는 자판이 갑자기 올라오지 않게 초점을 옮기지 않는다.
+ * The composer (app-composer). It grows with lines and scrolls inside past its max height (CSS). Enter sends, Shift+Enter breaks a line.
+ * It takes focus on open so you can type right away. On touch screens focus doesn't move, so the keyboard doesn't pop up suddenly.
  */
 export function Composer({
   label,
@@ -361,37 +364,37 @@ export function Composer({
   value: string;
   onChange: (text: string) => void;
   onSubmit: () => void;
-  /** 입력 칸을 부른 쪽도 쓸 때(초점, 글쇠 자리) 넘긴다. */
+  /** Pass this when the caller also uses the textarea (focus, caret position). */
   area?: RefObject<HTMLTextAreaElement | null>;
-  /** 입력 칸 앞에 둘 것(`@호출`의 토큰). */
+  /** What goes before the textarea (the `@call` token). */
   before?: ReactNode;
-  /** 입력 칸 위에 뜨는 메뉴(`@호출`의 에이전트 메뉴). */
+  /** A menu floating above the textarea (the `@call` Agent menu). */
   menu?: ReactNode;
-  /** 입력 칸에 더할 속성. `onKeyDown`은 먼저 불리고, 막으면(preventDefault) 보내기와 줄바꿈을 하지 않는다. */
+  /** Extra props for the textarea. `onKeyDown` runs first, and if it prevents default, neither send nor line break happens. */
   textarea?: ComponentProps<"textarea">;
-  /** 글 아래 줄 왼쪽에 둘 것(DM의 모델·effort 칩). 있으면 입력 칸이 두 줄이 되고 보내기 버튼은 아래 줄 오른쪽 끝에 선다. */
+  /** What goes at the left of the line under the text (the DM's model and effort chips). If present, the composer becomes two lines and the send button sits at the right end of the lower one. */
   tools?: ReactNode;
-  /** 글이 없어도 보낼 수 있다(붙인 문답). */
+  /** Can be sent without text (an attached Q&A). */
   sendable?: boolean;
-  /** 이모지 버튼과 `:` 자동 완성을 둔다(채널과 포스트의 입력 칸. DM 칸에는 두지 않는다). */
+  /** Adds the emoji button and `:` autocomplete (channel and post composers, not the DM pane). */
   emoji?: boolean;
-  /** GIF 버튼(이모지 버튼 앞). 서버에 GIPHY 키가 있을 때 채널과 포스트의 입력 칸에만 둔다. */
+  /** GIF button (before the emoji button). Only in channel and post composers, when the server has a GIPHY key. */
   gifs?: ComposerGifs;
 }) {
   const own = useRef<HTMLTextAreaElement>(null);
   const area = given ?? own;
   const picker = useEmojiInput(area, value, onChange, !!emoji);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 글이 바뀔 때마다 높이를 다시 잰다
+  // biome-ignore lint/correctness/useExhaustiveDependencies: measure the height again whenever the text changes
   useLayoutEffect(() => {
     if (area.current) fitHeight(area.current);
   }, [value]);
 
-  // 폭이 바뀌어도 다시 잰다. 처음 그릴 때 칸이 좁거나 숨겨져 있었으면 안내 글이 접힌 채 높이가 잡혀 있다.
-  // 높이를 바꾸면 다시 불리니 같은 폭이면 넘어간다. 불린 자리에서 바로 높이를 바꾸면 브라우저가
-  // "ResizeObserver loop" 오류를 내므로 다음 프레임에 잰다.
-  // ponytail: field-sizing: content가 Baseline 널리 쓰임이 되면(Vite 기본 빌드 대상이 받치면) 이 감시와 fitHeight를 CSS 한 줄로 바꾼다.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 열릴 때 한 번만 건다
+  // Measure again when the width changes too. If the box was narrow or hidden on first draw, the hint wrapped and the height was set for that.
+  // Changing the height calls this again, so skip when the width is the same. Changing the height right inside the callback makes the browser
+  // raise a "ResizeObserver loop" error, so measure on the next frame.
+  // ponytail: once field-sizing: content is widely available in Baseline (and Vite's default build target supports it), replace this observer and fitHeight with one line of CSS.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: attach once on open
   useLayoutEffect(() => {
     const element = area.current;
     if (!element) return;
@@ -410,7 +413,7 @@ export function Composer({
     };
   }, []);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 열릴 때 한 번만 초점을 둔다
+  // biome-ignore lint/correctness/useExhaustiveDependencies: focus once on open
   useEffect(() => {
     if (matchMedia("(pointer: fine)").matches) area.current?.focus();
   }, []);
@@ -420,7 +423,7 @@ export function Composer({
     if (event.defaultPrevented) return;
     textarea?.onKeyDown?.(event);
     if (event.defaultPrevented) return;
-    // 한글을 조합하는 중의 Enter는 글자를 끝내는 것이다. Safari는 그때 isComposing 없이 229를 낸다.
+    // Enter while composing text with an IME just finishes the character. Safari reports 229 without isComposing then.
     if (event.nativeEvent.isComposing || event.keyCode === 229) return;
     if (event.key !== "Enter" || event.shiftKey) return;
     event.preventDefault();
@@ -476,7 +479,7 @@ export function Composer({
       <button
         type="submit"
         className="send-button"
-        aria-label="보내기"
+        aria-label={t.conversation.send}
         disabled={!sendable && !value.trim()}
       >
         <ArrowUp size={18} aria-hidden />
@@ -490,16 +493,16 @@ export type ComposerGifs = {
   onPick: (gif: Gif) => void;
 };
 
-/** 입력 칸 높이를 글에 맞춘다. 최대 높이는 CSS가 막는다. */
+/** Fits the textarea height to its text. CSS caps the max height. */
 function fitHeight(element: HTMLTextAreaElement) {
   element.style.height = "auto";
   element.style.height = `${element.scrollHeight}px`;
 }
 
 /**
- * 메시지 한 줄. 글은 React가 글자로만 넣는다. 든 HTML이나 스크립트는 실행되지 않고 그대로 보인다.
- * 문답(올린 것과 `@호출`)은 올린 사람의 메시지다: 늘 머리를 달고, 함께 쓴 글(있으면) 아래에 접힌 줄을 둔다(DESIGN.md "문답").
- * `state`는 문답한 에이전트의 지금 상태다.
+ * One message. React inserts the text as plain characters only, so any HTML or script in it doesn't run and shows as is.
+ * A Q&A (posted or `@call`ed) is a message from whoever posted it: it always has a header, with a collapsed line under the accompanying note (if any) (DESIGN.md "Q&A").
+ * `state` is the current state of the Agent that answered.
  */
 function Message({
   message,
@@ -514,16 +517,16 @@ function Message({
   me: string;
   onReact: (emoji: string, on: boolean) => void;
 }) {
-  // GIPHY 주소 하나뿐인 글은 그림으로 보인다. 문답에 함께 쓴 글은 그대로다.
+  // A message that is just one GIPHY URL shows as a picture. A note written with a Q&A stays as text.
   const gif = message.kind === "text" ? giphyId(message.text) : undefined;
-  /** 동작 띠의 팔레트가 열려 있으면 마우스가 떠나도 띠를 둔다. */
+  /** While the action bar's palette is open, keep the bar even if the mouse leaves. */
   const [picking, setPicking] = useState(false);
   return (
     <article
       className={`message${grouped ? " grouped" : ""}${picking ? " picking" : ""}`}
       data-qa={message.kind === "qa" ? message.qa.id : undefined}
     >
-      <div className="message-tools" role="toolbar" aria-label="메시지 동작">
+      <div className="message-tools" role="toolbar" aria-label={t.conversation.messageActions}>
         <ReactButton
           className="message-tool"
           size={16}
@@ -550,7 +553,7 @@ function Message({
               {timeOf(message.at)}
             </time>
             {message.kind === "text" && message.github && (
-              <span className="badge outline" title="이슈에 GitHub에서 단 댓글">
+              <span className="badge outline" title={t.conversation.fromGithub}>
                 GitHub
               </span>
             )}
@@ -575,9 +578,9 @@ export const SkeletonRow = () => (
   </div>
 );
 
-/** 불러오는 중: 메시지 세 개만큼의 회색 뼈대. */
+/** Loading: gray bones the size of three messages. */
 const Skeleton = () => (
-  <div className="skeleton" role="status" aria-busy="true" aria-label="메시지를 불러오는 중">
+  <div className="skeleton" role="status" aria-busy="true" aria-label={t.conversation.loading}>
     <SkeletonRow />
     <SkeletonRow />
     <SkeletonRow />

@@ -1,4 +1,7 @@
 import type { CheckReading, Importance } from "@omagari/contract";
+import { channelsEn } from "./channels.en.ts";
+import { conversationEn } from "./conversation.en.ts";
+import { dmEn } from "./dm.en.ts";
 
 type CheckProblem = Extract<CheckReading, { problem: unknown }>["problem"];
 
@@ -485,4 +488,9 @@ export const en = {
       draftFailed: "Couldn't ask for a draft. Try again in a bit?",
     },
   },
+  channels: channelsEn,
+
+  conversation: conversationEn,
+
+  dm: dmEn,
 };

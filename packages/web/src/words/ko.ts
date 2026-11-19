@@ -1,4 +1,7 @@
 import type { Words } from "../i18n.ts";
+import { channelsKo } from "./channels.ko.ts";
+import { conversationKo } from "./conversation.ko.ts";
+import { dmKo } from "./dm.ko.ts";
 
 /** 받침이 있으면 앞, 없으면 뒤: 지은이 / 민수가. */
 export const josa = (name: string, withFinal: string, without: string) => {
@@ -468,4 +471,9 @@ export const ko: Words = {
       draftFailed: "초안을 쓰게 하지 못했어요. 잠시 뒤 다시 시도해 주세요.",
     },
   },
+  channels: channelsKo,
+
+  conversation: conversationKo,
+
+  dm: dmKo,
 };
