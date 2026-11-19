@@ -271,7 +271,7 @@ test("omagari install이 Codex에도 두 훅과 상태 한 줄 스킬을 깔고 
   const folder = world.repo.folder;
   const situation = await eventually(async () => {
     const said = await runInstalled(world, start ?? "", codexInput.sessionStart(folder));
-    assert.match(said, /<omagari-situation>\n- alice · branch "main" · "pay\.ts 수정 중"/);
+    assert.match(said, /<omagari-situation>\n- alice · branch "main" · "Editing pay\.ts"/);
     return said;
   });
   assert.equal(await runInstalled(world, claudeStart, claudeInput.sessionStart(folder)), situation);

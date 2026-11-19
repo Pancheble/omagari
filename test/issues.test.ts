@@ -58,7 +58,7 @@ test("포스트에 종류 라벨이 붙고, 논의 포스트 하나가 GitHub �
     assert.ok(found, "아직 포스트가 없다");
     return found;
   });
-  assert.deepEqual(direct.labels, ["직접 충돌"]);
+  assert.deepEqual(direct.labels, ["Direct conflict"]);
   assert.equal(direct.importance, "reference");
   await eventually(async () =>
     assert.match(
@@ -87,20 +87,20 @@ test("포스트에 종류 라벨이 붙고, 논의 포스트 하나가 GitHub �
     assert.ok(found?.issue, "아직 이슈가 없다");
     return found;
   });
-  assert.deepEqual(post.labels, ["계약 변경"]);
+  assert.deepEqual(post.labels, ["Contract change"]);
   assert.equal(post.importance, "discuss");
   assert.equal(fake.issues.length, 1);
   const [issue] = fake.issues;
   assert.ok(["owner", "alice"].includes(issue.author));
-  assert.equal(issue.title, "refund 계약 변경");
-  assert.deepEqual(issue.labels, ["계약 변경"]);
+  assert.equal(issue.title, "refund Contract change");
+  assert.deepEqual(issue.labels, ["Contract change"]);
   // 이슈의 링크는 포스트가 보이는 첫 포럼("논의")의 그 포스트다.
   assert.match(issue.body, new RegExp(`/#${post.forums[0]}/${post.alert}$`));
   assert.deepEqual(post.issue, {
     number: issue.number,
     url: `https://github.com/omagari-test/space/issues/${issue.number}`,
-    title: "refund 계약 변경",
-    labels: ["계약 변경"],
+    title: "refund Contract change",
+    labels: ["Contract change"],
     open: true,
   });
 
@@ -156,8 +156,8 @@ test("포스트에 종류 라벨이 붙고, 논의 포스트 하나가 GitHub �
         "참고로 붙여요",
         "",
         "> [!NOTE]",
-        "> 🤖 **AI가 쓴 답** · owner의 Claude Code",
-        "> 물음: 부분 환불은?",
+        "> 🤖 **AI-written answer** · owner's Claude Code",
+        "> Question: 부분 환불은?",
         "",
         "부분 환불은 refund()에서 계산해요",
       ].join("\n"),
@@ -179,7 +179,7 @@ test("포스트에 종류 라벨이 붙고, 논의 포스트 하나가 GitHub �
     ]);
     const now = await postOf(world.owner, "declared");
     assert.equal(now?.issue?.title, "refund의 reason 필드");
-    assert.deepEqual(now?.issue?.labels, ["계약 변경", "결제"]);
+    assert.deepEqual(now?.issue?.labels, ["Contract change", "결제"]);
   });
   // 들어온 댓글은 다시 올리지 않고, 올린 글은 두 번 올리지 않는다.
   await new Promise((resolve) => setTimeout(resolve, 300));

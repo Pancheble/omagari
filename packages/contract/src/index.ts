@@ -1,27 +1,27 @@
-// 계약: 러너와 서버가 주고받는 메시지, 웹이 쓰는 API. 모든 조각이 이 정의 하나를 쓴다.
-// 객체는 모두 `z.strictObject`로 적는다. 계약에 없는 종류도, 계약에 없는 키도 받지 않는다.
+// Contract: the messages the runner and server exchange, and the API the web uses. Every piece uses this one definition.
+// Every object is written as `z.strictObject`. Unknown kinds and unknown keys are both rejected.
 import * as z from "zod";
 
-/** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
+/** Contract version. Sent in every envelope; a different one is rejected. Bump it on every breaking change. */
 export const CONTRACT_VERSION = 54;
 
-/** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
+/** Error shape. Shared by the runner/server `error` message and the HTTP error body (`{ error }`). */
 export const ContractError = z.strictObject({
   code: z.enum([
-    "invalid_message", // 봉투나 내용이 계약과 다르다
-    "unknown_kind", // 계약에 없는 종류다
-    "version_mismatch", // 계약의 버전이 다르다
-    "invalid_request", // HTTP 요청의 본문이 계약과 다르다
-    "unauthorized", // 로그인하지 않았거나 세션이 끝났다
-    "forbidden", // 멤버가 아니거나, 워크스페이스의 레포가 아닌 폴더다
+    "invalid_message", // The envelope or its content breaks the contract
+    "unknown_kind", // The kind is not in the contract
+    "version_mismatch", // The contract version differs
+    "invalid_request", // The HTTP request body breaks the contract
+    "unauthorized", // Not logged in, or the session ended
+    "forbidden", // Not a member, or the folder is not a workspace repo
     "not_found",
     "internal",
-    "executor_failed", // 에이전트 실행기가 실패했거나 답 없이 끝났다
-    "runner_offline", // 그 에이전트의 러너가 서버에 붙어 있지 않다. 문답은 쌓아 두지 않는다
-    "refused", // 받는 쪽이 남의 질문에 답하지 않게 해 두었다(ADR-0024)
-    "turn_timeout", // 러너 세션의 한 턴이 시간 상한을 넘어 끊겼다
-    "conflict", // 이미 있다(같은 이름의 채널)
-    "github_failed", // GitHub이 요청을 받지 않았다(멤버의 토큰이 무효, 권한 없음, GitHub이 답하지 못함)
+    "executor_failed", // The agent executor failed or ended without an answer
+    "runner_offline", // That agent's runner is not connected to the server. Q&A is not queued
+    "refused", // The receiving side turned off answering others' questions (ADR-0024)
+    "turn_timeout", // One turn of a runner session hit the time limit and was cut off
+    "conflict", // Already exists (a channel with the same name)
+    "github_failed", // GitHub rejected the request (invalid member token, no permission, GitHub could not answer)
   ]),
   message: z.string(),
 });
@@ -35,9 +35,9 @@ export class ContractFailure extends Error {
   }
 }
 
-// --- 러너와 서버 사이의 메시지 ---
+// --- Messages between the runner and the server ---
 
-/** 모든 메시지의 봉투. `re`는 이 메시지가 답하는 메시지의 `id`다. */
+/** Envelope of every message. `re` is the `id` of the message this one answers. */
 const Envelope = z.strictObject({
   v: z.number(),
   id: z.string(),
@@ -49,24 +49,24 @@ const Envelope = z.strictObject({
 type Payloads = Record<string, z.ZodType>;
 
 /**
- * 공유 수준: 관측이 서버에 올리는 범위. 주인이 러너마다 고르고, 기본은 full이다(ADR-0007).
- * declared는 바뀐 파일의 경로를 모두 올리고 내용은 그 작업이 선점한 경로 안의 것만, intent는 작업(브랜치)과 상태 한 줄만 올린다.
- * 선점은 공유 수준과 상관없이 올라간다.
+ * Share level: how much an observation uploads to the server. The owner picks it per runner; the default is full (ADR-0007).
+ * declared uploads every changed file path but contents only inside paths that work claimed; intent uploads only the work (branch) and the status line.
+ * Claims go up regardless of share level.
  */
 export const ShareLevel = z.enum(["full", "declared", "intent"]);
 export type ShareLevel = z.infer<typeof ShareLevel>;
 
 /**
- * 관측한 파일 하나: 지금 내용, 지운 파일, 또는 경로만 보낸 파일과 그 까닭.
- * `binary`는 글이 아니거나(UTF-8이 아니거나 NUL이 있다) 파일이 아니거나 읽지 못한 것,
- * `too_large`는 파일 하나의 상한이나 합계의 상한을 넘은 것(ADR-0007),
- * `share`는 공유 수준이 내용을 내보내지 않는 것이다.
+ * One observed file: its current content, a deleted file, or a file sent as a path only, with the reason.
+ * `binary` is not text (not UTF-8, or has a NUL), not a file, or unreadable;
+ * `too_large` went over the per-file or total limit (ADR-0007);
+ * `share` is a file the share level does not send content for.
  */
 /**
- * 정의 줄 하나: 이름 붙은 심볼을 선언하는 줄(GLOSSARY). 러너가 tree-sitter로 TypeScript, TSX, JavaScript 파일에서 뽑는다(ADR-0026).
- * 메서드의 이름은 `클래스.메서드`다. `line`은 그 작업의 사본에서의 줄(1부터)이고, `removed`면 기준 커밋의 판에서의 줄이다.
- * `change`는 기준 커밋의 판과 견준 것이다: 새로 생겼다(`added`), 정의 줄이 바뀌었다(`changed`), 없어졌다(`removed`).
- * 없으면 정의 줄이 그대로다(본문만 바뀐 것 포함).
+ * One definition line: a line that declares a named symbol (GLOSSARY). The runner extracts it from TypeScript, TSX, and JavaScript files with tree-sitter (ADR-0026).
+ * A method's name is `Class.method`. `line` is the line in that work's copy (from 1); for `removed` it is the line in the base commit's version.
+ * `change` is compared with the base commit's version: newly created (`added`), definition line changed (`changed`), gone (`removed`).
+ * When absent, the definition line is unchanged (including body-only changes).
  */
 export const Definition = z.strictObject({
   name: z.string(),
@@ -76,27 +76,27 @@ export const Definition = z.strictObject({
 });
 export type Definition = z.infer<typeof Definition>;
 
-/** 사람이 읽는 정의의 종류. */
+/** Human-readable definition kind. */
 export const DEFINITION_KINDS = {
-  function: "함수",
-  method: "메서드",
-  class: "클래스",
-  interface: "인터페이스",
-  type: "타입",
-  enum: "열거형",
+  function: "Function",
+  method: "Method",
+  class: "Class",
+  interface: "Interface",
+  type: "Type",
+  enum: "Enum",
 } as const satisfies Record<Definition["kind"], string>;
 
 export const ObservedFile = z.union([
   z.strictObject({
     path: z.string(),
     content: z.string(),
-    /** 이 파일의 정의 줄. 내용을 올리는 파일 가운데 읽을 수 있는 언어이고 정의가 있을 때만 있다. */
+    /** Definition lines in this file. Only present for files whose content is uploaded, in a readable language, and with definitions. */
     definitions: z.array(Definition).optional(),
   }),
   z.strictObject({
     path: z.string(),
     deleted: z.literal(true),
-    /** 기준 커밋의 판에 있던 정의 줄(모두 `removed`). 내용을 올리는 경로(full, declared의 선점한 경로)일 때만 있다. */
+    /** Definition lines that were in the base commit's version (all `removed`). Only present for paths whose content is uploaded (full, or declared's claimed paths). */
     definitions: z.array(Definition).optional(),
   }),
   z.strictObject({ path: z.string(), omitted: z.enum(["binary", "too_large", "share"]) }),
@@ -104,23 +104,23 @@ export const ObservedFile = z.union([
 export type ObservedFile = z.infer<typeof ObservedFile>;
 
 /**
- * 작업 하나(멤버 + 브랜치)의 관측. 기준 커밋 이후 그 브랜치가 바꾼 파일이다: 커밋한 것, 안 한 것, 추적하지 않는 새 파일.
- * 경로는 그 작업 폴더(등록한 폴더나 연결된 워크트리)의 최상위에서 본 것이다. 정의 줄은 내용과 같은 규칙으로 싣는다(ADR-0026).
+ * Observation of one work (member + branch). The files that branch changed since the base commit: committed, uncommitted, and untracked new files.
+ * Paths are relative to the top of that work's folder (a registered folder or a linked worktree). Definition lines are included under the same rule as content (ADR-0026).
  */
 export const Work = z.strictObject({
   branch: z.string(),
-  /** 기준 커밋. 이 브랜치와 기본 브랜치(원격 추적)가 갈라진 지점이다(ADR-0002). 커밋의 전체 id(SHA-1이나 SHA-256)만 받는다. */
+  /** Base commit. The point where this branch and the default branch (remote tracking) diverged (ADR-0002). Only a full commit id (SHA-1 or SHA-256) is accepted. */
   base: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
-  /** 이 관측의 공유 수준. intent의 빈 `files`는 바뀐 것이 없다는 뜻이 아니라 보내지 않았다는 뜻이다. */
+  /** Share level of this observation. An empty `files` in intent does not mean nothing changed; it means nothing was sent. */
   share: ShareLevel,
   files: z.array(ObservedFile),
 });
 export type Work = z.infer<typeof Work>;
 
 /**
- * 작업마다 이름 옆에 보이는 "~하는 중" 한 줄(ADR-0010). 서버가 이 순서로 고른다:
- * 에이전트가 쓴 줄(`at`은 쓴 시각) → 초안 PR 제목 → 고치는 파일("payment.ts 외 3개 수정 중") → 바뀐 것이 없으면 없음(null).
- * 순서의 맨 앞인 오프라인은 작업의 `offlineSince`로 따로 온다. 그때 이 줄은 그 시각 기준으로 남은 것이다.
+ * The one "working on..." line shown next to each work's name (ADR-0010). The server picks in this order:
+ * the line the agent wrote (`at` is when it was written) → draft PR title → the files being edited ("editing payment.ts and 3 more") → none if nothing changed (null).
+ * Offline, which comes first in the order, arrives separately as the work's `offlineSince`. This line is then what was left as of that time.
  */
 export const StatusLine = z.discriminatedUnion("source", [
   z.strictObject({ source: z.literal("agent"), text: z.string(), at: z.string() }),
@@ -130,8 +130,8 @@ export const StatusLine = z.discriminatedUnion("source", [
 export type StatusLine = z.infer<typeof StatusLine>;
 
 /**
- * 멤버들이 보는 작업 하나: 그 관측과 상태 한 줄. 웹(`api.works`)과 러너(`situation`)가 같이 쓴다.
- * 러너가 떨어진 멤버의 작업은 `offlineSince`(떨어진 시각) 기준으로 남고, 7일이 지나면 지워진다.
+ * One work members see: its observation and its status line. The web (`api.works`) and the runner (`situation`) share it.
+ * A member's work whose runner dropped is kept as of `offlineSince` (when it dropped) and deleted after 7 days.
  */
 export const WorkView = z.strictObject({
   login: z.string(),
@@ -141,22 +141,22 @@ export const WorkView = z.strictObject({
 });
 export type WorkView = z.infer<typeof WorkView>;
 
-/** 에이전트가 쓰는 상태 한 줄의 길이 상한. 줄바꿈과 겹친 공백은 공백 하나로 접는다. */
+/** Max length of the status line an agent writes. Newlines and repeated spaces fold into one space. */
 export const MAX_STATUS_CHARS = 200;
 
-/** 에이전트 세션을 돌리는 실행기. 에이전트는 주인과 실행기 한 쌍이라 실행기마다 하나다(ADR-0015). */
+/** The executor that runs agent sessions. An agent is an owner-executor pair, so there is one per executor (ADR-0015). */
 export const ExecutorId = z.enum(["claude-code", "codex"]);
 export type ExecutorId = z.infer<typeof ExecutorId>;
 
-/** 사람이 읽는 실행기 이름. 에이전트는 "지은의 Claude Code"처럼 사람과 함께 부른다(ADR-0015). */
+/** Human-readable executor name. An agent is called together with its person, like "Jieun's Claude Code" (ADR-0015). */
 export const EXECUTOR_NAMES = {
   "claude-code": "Claude Code",
   codex: "Codex",
 } as const satisfies Record<ExecutorId, string>;
 
 /**
- * 실행기가 고를 수 있게 알린 모델 하나. `id`는 실행기에 그대로 넘기는 값, `name`은 사람이 읽는 이름이다.
- * `efforts`는 이 모델에 고를 수 있는 effort 값이고, 비어 있으면 effort를 고르지 않는다.
+ * One model an executor announced as selectable. `id` is passed to the executor as is; `name` is the human-readable name.
+ * `efforts` are the effort values selectable for this model; if empty, effort is not chosen.
  */
 export const ModelChoice = z.strictObject({
   id: z.string(),
@@ -166,8 +166,8 @@ export const ModelChoice = z.strictObject({
 export type ModelChoice = z.infer<typeof ModelChoice>;
 
 /**
- * 실행기 하나의 고를 거리(ADR-0020). 러너가 붙을 때 실행기에 물어 알린다. 실행기마다 다르고, 모델에 따라 effort 값도 다르다.
- * `efforts`는 모델을 "기본"(실행기 자기 설정)으로 둘 때 고를 수 있는 effort 값이다. 알리지 못했으면 둘 다 비어 있다.
+ * What can be chosen for one executor (ADR-0020). The runner asks the executor and reports it when it connects. It differs per executor, and effort values differ per model.
+ * `efforts` are the effort values selectable when the model is left at "default" (the executor's own setting). If they could not be reported, both are empty.
  */
 export const Choices = z.strictObject({
   models: z.array(ModelChoice),
@@ -176,7 +176,7 @@ export const Choices = z.strictObject({
 export type Choices = z.infer<typeof Choices>;
 
 /**
- * 문답에 고른 모델과 effort. 없는 것은 "기본"이라 실행기 자기 설정을 따른다. 러너는 알린 고를 거리에 없는 값이면 실행기를 띄우지 않는다.
+ * The model and effort chosen for a Q&A. Missing ones are "default", so the executor's own setting applies. The runner does not start the executor if a value is not in the reported choices.
  */
 export const ModelPick = z.strictObject({
   model: z.string().optional(),
@@ -184,24 +184,24 @@ export const ModelPick = z.strictObject({
 });
 export type ModelPick = z.infer<typeof ModelPick>;
 
-/** 보낼 때 답장으로 단다(ADR-0047): 원래 메시지의 번호와, 그 사람을 부를지(기본은 부른다). */
+/** Sent as a reply (ADR-0047): the original message's number, and whether to notify its author (default: notify). */
 export const Replying = z.strictObject({
   replyTo: z.number().int().optional(),
   notify: z.boolean().default(true),
 });
 
 /**
- * 다른 멤버에게 보이는 사람의 접속 상태. 웹 창이 하나도 열려 있지 않거나 "오프라인으로 보이기"를 골랐으면 offline이다.
- * 사람의 것이다. 에이전트의 러너가 붙어 있는지(`MemberView.agents`)와 따로 간다.
+ * A person's connection state as other members see it. offline when no web window is open or they chose "appear offline".
+ * It belongs to the person. It is separate from whether the agent's runner is connected (`MemberView.agents`).
  */
 export const Presence = z.enum(["online", "away", "dnd", "offline"]);
 export type Presence = z.infer<typeof Presence>;
 
-/** 사람이 스스로 고르는 접속 상태. invisible은 "오프라인으로 보이기"다. 고른 사람 자신의 웹도 offline으로 받는다. */
+/** The connection state a person picks themselves. invisible is "appear offline". The picker's own web also receives offline. */
 export const ChosenPresence = z.enum(["online", "away", "dnd", "invisible"]);
 export type ChosenPresence = z.infer<typeof ChosenPresence>;
 
-/** 고른 접속 상태가 온라인으로 돌아오기까지의 시간. 고르지 않으면 직접 바꿀 때까지다. */
+/** How long until a picked connection state goes back to online. If not set, it lasts until changed by hand. */
 export const PresenceDuration = z.enum(["15m", "1h", "8h", "24h", "3d"]);
 export type PresenceDuration = z.infer<typeof PresenceDuration>;
 export const PRESENCE_DURATIONS = {
@@ -213,39 +213,39 @@ export const PRESENCE_DURATIONS = {
 } as const satisfies Record<PresenceDuration, number>;
 
 /**
- * 상태 메시지의 길이 상한. 코드 포인트로 센다(이모지 하나가 1~몇 자다). Slack의 상태 글 상한 100자를 따랐다.
- * 줄바꿈과 겹친 공백은 공백 하나로 접는다.
+ * Max length of the status message, counted in code points (one emoji is 1 to several). Follows Slack's 100-character status limit.
+ * Newlines and repeated spaces fold into one space.
  */
 export const MAX_STATUS_MESSAGE_CHARS = 100;
 
 const graphemes = new Intl.Segmenter();
 /**
- * 상태 메시지의 이모지 칸에 들어갈 수 있는지: 글자 묶음(grapheme) 하나이고 그림 문자다(국기와 키캡 포함).
- * `\p{RGI_Emoji}`는 런타임의 유니코드 판보다 새 이모지를 모르지만, 그림 문자 자리는 미리 잡혀 있어 새 이모지도 받는다.
+ * Whether something fits the status message's emoji slot: a single grapheme that is a pictographic character (flags and keycaps included).
+ * `\p{RGI_Emoji}` doesn't know emoji newer than the runtime's Unicode version, but the pictographic slots are reserved ahead of time, so new emoji are accepted.
  */
 export const isEmoji = (text: string) =>
   [...graphemes.segment(text)].length === 1 &&
   /\p{Extended_Pictographic}|\p{Regional_Indicator}|\u20E3/u.test(text);
 
 /**
- * 멤버 목록의 한 사람: 이름, 접속 상태와 상태 메시지, 실행기마다의 에이전트, 작업마다의 상태 한 줄. 웹의 멤버 목록이 이것만으로 그린다.
- * 작업의 바뀐 파일과 내용은 싣지 않는다. 그것은 `api.works`에 있다.
+ * One person in the member list: name, connection state and status message, an agent per executor, and a status line per work. The web's member list draws from this alone.
+ * It does not carry a work's changed files and content. Those are in `api.works`.
  */
 export const MemberView = z.strictObject({
   login: z.string(),
-  /** GitHub 프로필의 이름. 비워 두었으면 `login`과 같다. */
+  /** Name on the GitHub profile. If left empty, same as `login`. */
   name: z.string(),
-  /** GitHub 프로필 사진 주소. 로그인할 때와 10분마다 다시 읽는다. 없으면 null이고 웹은 이니셜을 쓴다. */
+  /** GitHub profile picture URL. Re-read at login and every 10 minutes. null if none, and the web uses initials. */
   avatar: z.string().nullable(),
   presence: Presence,
-  /** 사람이 쓴 상태 메시지. 쓴 그대로이고(HTML이 들어 있어도 바꾸지 않는다) 접속 상태와 상관없이 보인다. 없으면 null. */
+  /** Status message the person wrote. Kept as written (HTML is not altered) and shown regardless of connection state. null if none. */
   message: z.string().nullable(),
-  /** 상태 메시지의 이모지 한 칸. 글과 따로 두고, 화면은 글 앞에 쓴다. 없으면 null. */
+  /** The status message's emoji slot. Kept apart from the text; the screen shows it before the text. null if none. */
   emoji: z.string().nullable(),
   /**
-   * 러너가 붙을 때 알린 실행기마다 에이전트 하나. 러너를 켠 적이 없으면 비어 있다.
-   * 러너가 붙어 있으면 online, 그중 받은 문답에 아직 답하지 않았으면(줄을 선 것 포함) answering("답하는 중")이다.
-   * `choices`는 붙어 있는 러너가 그 실행기에 물어 알린 고를 거리다. 주인의 DM 입력 칸이 쓴다. 꺼져 있으면 비어 있다.
+   * One agent per executor the runner reported when it connected. Empty if a runner has never been turned on.
+   * online while the runner is connected; answering ("answering") if it has not yet answered a Q&A it received (queued ones included).
+   * `choices` is what the connected runner asked that executor and reported. The owner's DM input box uses it. Empty when off.
    */
   agents: z.array(
     z.strictObject({
@@ -254,70 +254,70 @@ export const MemberView = z.strictObject({
       choices: Choices,
     }),
   ),
-  /** 러너가 떨어진 시각. 작업과 상태 한 줄은 이 시각 기준으로 남은 것이다. 붙어 있거나 켠 적이 없으면 null. */
+  /** When the runner dropped. The works and status lines are kept as of this time. null if connected or never turned on. */
   offlineSince: z.string().nullable(),
   works: z.array(
     z.strictObject({
       branch: z.string(),
-      /** 이 작업의 에이전트: 그 브랜치에서 마지막으로 훅이나 `status set`을 보낸 실행기. 관측만 있으면 null이다(ADR-0015). */
+      /** This work's agent: the executor that last sent a hook or `status set` on that branch. null if there is only an observation (ADR-0015). */
       executor: ExecutorId.nullable(),
       line: StatusLine.nullable(),
-      /** 이 작업에 직접 충돌(줄이 부딪히는 것이 확인된 알림)이 걸려 있다. 풀리면 false로 돌아온다. */
+      /** A direct conflict (an alert where lines are confirmed to collide) is on this work. Goes back to false when resolved. */
       conflict: z.boolean(),
-      /** 이 작업에 합쳐 돌려 보니 깨져 확인된 간접 충돌이 걸려 있다("합치면 깨짐"). 다음 판정으로 확인됨에서 벗어나거나 알림이 풀리면 false로 돌아온다. */
+      /** An indirect conflict confirmed broken by a merge run is on this work ("breaks when merged"). Goes back to false when the next verdict clears the confirmed state or the alert resolves. */
       broken: z.boolean(),
     }),
   ),
 });
 export type MemberView = z.infer<typeof MemberView>;
 
-/** 멤버 목록 전부, 이름 순. `api.members`의 답이고, 실시간 연결의 `members`로도 온다. */
+/** The whole member list, by name. The answer to `api.members`, and also arrives as `members` on the live connection. */
 export const Members = z.strictObject({ members: z.array(MemberView) });
 
 /**
- * 채널의 종류(ADR-0027, ADR-0039). 채팅 채널은 멤버 모두가 읽고 쓴다. 포럼 채널은 포스트를 담지 않고 거르기(`filter`)로 고른 보기다.
- * 사람은 포럼에 쓰지 못하고 포스트 안에서만 쓴다. 처음엔 "논의"와 "참고" 포럼이 있고, 멤버 누구나 포럼을 만들고 고치고 지운다.
+ * Channel kind (ADR-0027, ADR-0039). A chat channel is read and written by every member. A forum channel holds no posts; it is a view picked by a filter (`filter`).
+ * People can't write in a forum, only inside a post. At first there are the "Discuss" and "FYI" forums, and any member can create, edit, and delete forums.
  */
 export const ChannelKind = z.enum(["chat", "forum"]);
 export type ChannelKind = z.infer<typeof ChannelKind>;
 
-/** 채널 이름의 길이 상한. 앞뒤 공백은 떼고, 줄바꿈과 겹친 공백은 공백 하나로 접는다. */
+/** Max length of a channel name. Leading and trailing spaces are trimmed; newlines and repeated spaces fold into one space. */
 export const MAX_CHANNEL_NAME_CHARS = 80;
 const ChannelName = z
   .string()
   .transform((name) => name.replace(/\s+/g, " ").trim())
   .pipe(z.string().min(1).max(MAX_CHANNEL_NAME_CHARS));
-/** 메시지 하나의 길이 상한. 앞뒤 공백은 뗀다. */
+/** Max length of one message. Leading and trailing spaces are trimmed. */
 export const MAX_MESSAGE_CHARS = 4000;
-/** 문답을 채널에 올리며 함께 쓰는 글. 글 메시지처럼 앞뒤 공백을 떼고 길이를 막되, 비면 없는 것이다. */
+/** Text written along with posting a Q&A to a channel. Trimmed and length-limited like a text message, but empty means none. */
 const Note = z
   .string()
   .trim()
   .max(MAX_MESSAGE_CHARS)
   .optional()
   .transform((text) => text || undefined);
-/** 피드에서 한 번에 읽는 최근 소식의 수. */
+/** How many recent items the feed reads at a time. */
 export const FEED_PAGE = 20;
-/** 지난 대화를 한 번에 읽는 수. */
+/** How many past messages are read at a time. */
 export const HISTORY_PAGE = 50;
 
 /**
- * 문답의 답이 본 코드: 러너가 그 턴을 시작할 때 등록한 폴더에 체크아웃되어 있던 것(1단계 질문 A12).
- * `dirty`면 커밋하지 않은 변경(추적하지 않는 새 파일 포함)도 함께 본 답이라 "커밋 + 작업 중 변경"으로 보인다.
+ * The code a Q&A answer saw: what was checked out in the folder the runner registered when it started that turn (phase 1 question A12).
+ * If `dirty`, the answer also saw uncommitted changes (untracked new files included), so it shows as "commit + work in progress changes".
  */
 export const Source = z.strictObject({
-  /** 브랜치. 브랜치가 아니면(detached HEAD) null이다. */
+  /** Branch. null if it is not a branch (detached HEAD). */
   branch: z.string().nullable(),
   commit: z.string(),
   dirty: z.boolean(),
-  /** 답한 러너의 레포 `owner/name`. 서버가 답을 받을 때 붙인다. 워크스페이스 채널의 답은 어느 레포를 본 것인지 이것으로 안다. */
+  /** The answering runner's repo `owner/name`. The server attaches it when it receives the answer. A workspace channel's answer uses this to tell which repo it looked at. */
   repo: z.string().optional(),
 });
 export type Source = z.infer<typeof Source>;
 
 /**
- * 러너 세션의 답. `model`은 답한 모델의 사람이 읽는 이름, `effort`는 그 턴에 고른 effort다.
- * "기본"으로 물어 실행기가 실제 모델을 알려 주지 않았거나 effort를 고르지 않았으면 없다(모르면 배지를 달지 않는다).
+ * A runner session's answer. `model` is the human-readable name of the model that answered; `effort` is the effort chosen for that turn.
+ * Missing if it was asked as "default" and the executor did not report the actual model, or no effort was chosen (no badge when unknown).
  */
 const Reply = z.strictObject({
   text: z.string(),
@@ -326,28 +326,28 @@ const Reply = z.strictObject({
   effort: z.string().optional(),
 });
 
-/** 채널 세션의 첫 턴에 넘기는 채널 대화의 최대 수. 그 뒤의 턴은 지난 턴 이후의 것만 넘긴다(구현 3장). */
+/** Max number of channel messages passed on a channel session's first turn. Later turns only pass what came after the last turn (implementation ch. 3). */
 export const CHANNEL_CONTEXT = 50;
 
 /**
- * 문답의 공개 범위. 비공개(DM)는 묻는 사람만 보고, 공개는 채널의 모두가 본다.
- * DM으로 물은 문답은 비공개로 시작해 주인이 채널에 올리면 공개가 되고, `@호출`은 처음부터 공개다. 공개를 비공개로 되돌리지는 않는다.
+ * A Q&A's visibility. Private (DM) is seen only by the asker; public is seen by everyone in the channel.
+ * A Q&A asked by DM starts private and becomes public when the owner posts it to the channel; an `@mention` is public from the start. Public never goes back to private.
  */
 export const Visibility = z.enum(["private", "public"]);
 export type Visibility = z.infer<typeof Visibility>;
 
 /**
- * 문답 하나: 질문과 그 답, 공개 범위. DM과 `@호출`은 같은 채널 세션이 답하고 공개 범위만 다르다(ADR-0015).
- * `answer`는 답을 기다리는 중(`pending`, 줄을 선 것 포함), 답함, 또는 답하지 못함(`turn_timeout`은 끊긴 답)이다.
+ * One Q&A: a question, its answer, and visibility. A DM and an `@mention` are answered by the same channel session; only visibility differs (ADR-0015).
+ * `answer` is waiting for an answer (`pending`, queued ones included), answered, or could not answer (`turn_timeout` is a cut-off answer).
  */
 export const Qa = z.strictObject({
-  /** 워크스페이스 전체에서 늘어나기만 하는 번호. 채널 안의 순서다. */
+  /** A number that only grows across the whole workspace. It is the order within a channel. */
   id: z.number(),
   channel: z.string(),
-  /** 물은 에이전트. 묻는 사람의 에이전트 가운데 하나다. */
+  /** The agent asked. One of the asker's agents. */
   executor: ExecutorId,
   question: z.string(),
-  /** 물은 시각 */
+  /** When it was asked */
   at: z.string(),
   visibility: Visibility,
   answer: z.discriminatedUnion("state", [
@@ -358,23 +358,23 @@ export const Qa = z.strictObject({
 });
 export type Qa = z.infer<typeof Qa>;
 
-/** 줄 범위 하나. 1부터 세고 끝을 포함한다. 지운 줄만 있는 곳은 그 앞 줄로 적는다. */
+/** One line range. Counted from 1, end included. A place with only deleted lines is written as the line before it. */
 export const LineRange = z.strictObject({ from: z.number(), to: z.number() });
 export type LineRange = z.infer<typeof LineRange>;
 
 /**
- * 남의 파일 내용을 읽을 수 없는 까닭: 공유 수준과 빠진 파일(`ObservedFile.omitted`), 또는 그 사람의 기준 커밋이 이 기기에 없다(`base`).
+ * Why another person's file content can't be read: the share level and a missing file (`ObservedFile.omitted`), or their base commit is not on this machine (`base`).
  */
 export const Unreadable = z.enum(["share", "binary", "too_large", "base"]);
 export type Unreadable = z.infer<typeof Unreadable>;
 
-/** 알림이 가리키는 작업 하나. `name`은 그 멤버의 GitHub 프로필 이름이다(비워 두었으면 `login`). */
+/** One work an alert points to. `name` is that member's GitHub profile name (`login` if left empty). */
 export const WorkRef = z.strictObject({ login: z.string(), name: z.string(), branch: z.string() });
 export type WorkRef = z.infer<typeof WorkRef>;
 
 /**
- * 알림에 묶인 파일 하나. `lines`는 합치면 부딪히는 줄이고 `works`와 같은 순서로 두 작업 각자의 사본 기준이다.
- * 한쪽이 지우고 다른 쪽이 고쳤으면 줄 없이 부딪힌다. 상대의 내용을 읽을 수 없으면 `unknown`과 까닭이고, "부딪힐 수 있음"이다.
+ * One file tied to an alert. `lines` are the lines that collide when merged, based on each work's own copy, in the same order as `works`.
+ * If one side deleted it and the other edited it, it conflicts without lines. If the other side's content can't be read, it is `unknown` with the reason, meaning "may conflict".
  */
 export const AlertFile = z.union([
   z.strictObject({ path: z.string(), lines: z.tuple([z.array(LineRange), z.array(LineRange)]) }),
@@ -382,12 +382,12 @@ export const AlertFile = z.union([
 ]);
 export type AlertFile = z.infer<typeof AlertFile>;
 
-/** 알림 하나에 이름을 적는 파일(심볼 알림이면 심볼)의 수. 넘는 것은 `more`로 센다(Room과 같다). */
+/** How many files (or symbols, for a symbol alert) an alert names. The rest are counted as `more` (same as Room). */
 export const ALERT_FILES = 8;
 
 /**
- * 심볼이 한 작업에 있는 곳 하나. `line`은 그 작업의 사본 기준이다(`removed`면 기준 커밋의 판).
- * `uses`는 그 심볼을 쓰는 곳이고, 나머지는 그 작업의 정의 줄의 변경(`Definition.change`)이다.
+ * One place a symbol lives in a work. `line` is based on that work's copy (for `removed`, the base commit's version).
+ * `uses` is where it uses that symbol; the rest are changes to that work's definition line (`Definition.change`).
  */
 export const SymbolPlace = z.strictObject({
   path: z.string(),
@@ -396,18 +396,18 @@ export const SymbolPlace = z.strictObject({
 });
 export type SymbolPlace = z.infer<typeof SymbolPlace>;
 
-/** 사람이 읽는 심볼의 곳. */
+/** Human-readable symbol place. */
 export const PLACE_ROLES = {
-  added: "새로 만듦",
-  changed: "정의 줄 바꿈",
-  removed: "없앰",
-  uses: "씀",
-  declared: "바꾸겠다고 선언함",
+  added: "Added",
+  changed: "Definition line changed",
+  removed: "Removed",
+  uses: "Uses",
+  declared: "Declared a change",
 } as const satisfies Record<SymbolPlace["role"], string>;
 
 /**
- * 바꿀 계약(구현 4장, Room의 선점 계획): 선점에 붙여 코드를 바꾸기 전에 알린다. 종류는 이름 바꾸기, 시그니처 변경, 삭제, 추가다.
- * `symbol`은 바꿀 심볼의 이름(메서드는 `클래스.메서드`), `detail`은 무엇으로 바꾸는지 사람이 쓴 한 줄이다.
+ * A contract about to change (implementation ch. 4, Room's claim plan): attached to a claim and announced before the code changes. The kinds are rename, signature change, delete, and add.
+ * `symbol` is the name of the symbol to change (`Class.method` for a method); `detail` is a one-line human-written note on what it becomes.
  */
 export const Plan = z.strictObject({
   kind: z.enum(["rename", "signature", "delete", "add"]),
@@ -416,50 +416,50 @@ export const Plan = z.strictObject({
 });
 export type Plan = z.infer<typeof Plan>;
 
-/** 사람이 읽는 계획의 종류. */
+/** Human-readable plan kind. */
 export const PLAN_KINDS = {
-  rename: "이름 바꾸기",
-  signature: "시그니처 변경",
-  delete: "삭제",
-  add: "추가",
+  rename: "Rename",
+  signature: "Signature change",
+  delete: "Delete",
+  add: "Add",
 } as const satisfies Record<Plan["kind"], string>;
 
 /**
- * 알림에 묶인 심볼 하나. `places`는 `works`와 같은 순서로 두 작업 각자의 곳이다.
- * 간접 충돌(추정)은 한 작업이 정의 줄을 바꾸거나 없앴고(`changed`, `removed`) 다른 작업이 그 이름을 쓴다(`uses`).
- * 서로 상대가 바꾼 것을 쓰면 같은 이름이 방향마다 하나씩 있다. 중복 구현은 두 작업 모두 새로 만들었다(`added`).
- * 선언된 계약 변경은 한 작업이 선점에 계획(`plan`)을 붙였고(`declared`, 선점한 곳) 다른 작업이 그 이름을 쓴다(`uses`). 코드가 아직 바뀌지 않았어도 온다.
+ * One symbol tied to an alert. `places` are each of the two works' places, in the same order as `works`.
+ * An indirect conflict (guessed) is when one work changed or removed a definition line (`changed`, `removed`) and the other work uses that name (`uses`).
+ * If each uses what the other changed, there is one of the same name per direction. Duplicate work is when both works newly created it (`added`).
+ * A declared contract change is when one work attached a plan (`plan`) to its claim (`declared`, the claimed place) and the other work uses that name (`uses`). It arrives even if the code has not changed yet.
  */
 export const AlertSymbol = z.strictObject({
   name: z.string(),
   places: z.tuple([z.array(SymbolPlace), z.array(SymbolPlace)]),
-  /** 선언된 계약 변경에만 있다: 선언한 계획. */
+  /** Only on a declared contract change: the plan that was declared. */
   plan: Plan.optional(),
 });
 export type AlertSymbol = z.infer<typeof AlertSymbol>;
 
-/** 사람이 읽는 알림의 종류. 간접 충돌은 이름으로만 이어 잘못 이을 수 있어 "추정"이다(ADR-0023). */
+/** Human-readable alert kind. An indirect conflict is a "guess" because it is linked by name only and can link wrongly (ADR-0023). */
 export const ALERT_KINDS = {
-  direct: "직접 충돌",
-  indirect: "간접 충돌(추정)",
-  duplicate: "중복 구현",
-  declared: "선언된 계약 변경",
+  direct: "Direct conflict",
+  indirect: "Indirect conflict (guessed)",
+  duplicate: "Duplicate work",
+  declared: "Declared contract change",
 } as const satisfies Record<Alert["kind"], string>;
 
-/** 포럼 태그와 배지에 쓰는 짧은 종류 이름. 포스트의 이슈를 열 때 이 이름의 라벨을 단다(ADR-0032). */
+/** Short kind names used for forum tags and badges. When a post's issue is opened, a label with this name is attached (ADR-0032). */
 export const ALERT_LABELS = {
-  direct: "직접 충돌",
-  indirect: "간접 충돌",
-  duplicate: "중복 구현",
-  declared: "계약 변경",
+  direct: "Direct conflict",
+  indirect: "Indirect conflict",
+  duplicate: "Duplicate work",
+  declared: "Contract change",
 } as const satisfies Record<Alert["kind"], string>;
 
-/** 합쳐 돌려 보기가 깨져 확인된 포스트에 붙는 라벨(ADR-0035, ADR-0039). 확인이 풀리면 뗀다. */
-export const CONFIRMED_LABEL = "확인됨";
+/** Label put on a post confirmed broken by a merge run (ADR-0035, ADR-0039). Removed when the confirmation clears. */
+export const CONFIRMED_LABEL = "Confirmed";
 
 /**
- * 포스트의 중요도(ADR-0039). 라벨마다 하나이고, 포스트는 그 라벨 중 가장 높은 것을 따른다. 논의인 포스트만 GitHub 이슈를 연다.
- * 참고는 보기만 하고 에이전트가 편지함으로 받는다. 편지함은 중요도와 상관없다.
+ * A post's importance (ADR-0039). One per label; a post follows the highest of its labels. Only Discuss posts open a GitHub issue.
+ * FYI is view-only, and the agent receives it in its inbox. The inbox is independent of importance.
  */
 export const Importance = z.enum(["reference", "discuss"]);
 export type Importance = z.infer<typeof Importance>;
@@ -474,12 +474,12 @@ export const Prefs = z.strictObject({ language: Language });
 export type Prefs = z.infer<typeof Prefs>;
 export const DEFAULT_PREFS: Prefs = { language: "en" };
 export const IMPORTANCE_LABELS = {
-  reference: "참고",
-  discuss: "논의",
+  reference: "FYI",
+  discuss: "Discuss",
 } as const satisfies Record<Importance, string>;
-/** 처음부터 논의인 라벨. 나머지 라벨과 새로 만든 라벨은 참고다. */
+/** Labels that start as Discuss. The other labels and newly created labels are FYI. */
 export const DISCUSS_LABELS: readonly string[] = [CONFIRMED_LABEL, ALERT_LABELS.declared];
-/** 레포에 없으면 서버가 만드는 기본 라벨(종류 넷과 확인됨)의 색. */
+/** Colors of the default labels the server creates when the repo lacks them (the four kinds and Confirmed). */
 export const DEFAULT_LABEL_COLORS: Record<string, string> = {
   [ALERT_LABELS.direct]: "d93f0b",
   [ALERT_LABELS.indirect]: "fbca04",
@@ -488,11 +488,11 @@ export const DEFAULT_LABEL_COLORS: Record<string, string> = {
   [CONFIRMED_LABEL]: "b60205",
 };
 
-/** GitHub 라벨의 색: `#` 없는 16진수 여섯 자리. */
+/** A GitHub label color: six hex digits without `#`. */
 const LabelColor = z.string().regex(/^[0-9a-fA-F]{6}$/);
 /**
- * 라벨(ADR-0039). 레포의 GitHub 라벨 그 자체다. 이름, 색, 설명은 GitHub이 원본이고 서버가 주기마다 읽는다.
- * 중요도는 GitHub 라벨에 칸이 없어 Omagari에 둔다. 팀에 하나라 모두에게 같다.
+ * A label (ADR-0039). It is the repo's GitHub label itself. GitHub is the source of the name, color, and description, and the server reads them every cycle.
+ * GitHub labels have no field for importance, so Omagari keeps it. It is one per team, so the same for everyone.
  */
 export const Label = z.strictObject({
   name: z.string(),
@@ -504,9 +504,9 @@ export type Label = z.infer<typeof Label>;
 const LabelName = z.string().trim().min(1).max(50);
 
 /**
- * 포럼의 거르기(ADR-0039, ADR-0043): 중요도가 같거나, 라벨 목록 가운데 하나라도 포스트에 붙어 있으면 그 포럼에 보인다.
- * `repos`(`owner/name`)가 있고 비지 않았으면 그 레포의 포스트만이다. 없거나 비면 모든 레포다.
- * 포스트는 맞는 포럼마다 보이고, 어느 포럼에도 맞지 않으면 "다른 포스트"다(`Post.forums`가 빈 것).
+ * A forum's filter (ADR-0039, ADR-0043): a post shows in that forum if its importance matches, or if it has at least one of the labels in the list.
+ * If `repos` (`owner/name`) is present and not empty, only posts from those repos. If absent or empty, every repo.
+ * A post shows in every forum it matches, and if it matches no forum it is in "Other posts" (`Post.forums` empty).
  */
 const ForumRepos = z.array(z.string().trim().min(1)).optional();
 export const ForumFilter = z.union([
@@ -515,7 +515,7 @@ export const ForumFilter = z.union([
 ]);
 export type ForumFilter = z.infer<typeof ForumFilter>;
 
-/** 포스트가 거르기에 맞나. */
+/** Whether a post matches the filter. */
 export const shows = (
   filter: ForumFilter,
   post: { labels: string[]; importance: Importance; repo: string },
@@ -526,8 +526,8 @@ export const shows = (
     : filter.labels.some((label) => post.labels.includes(label)));
 
 /**
- * 채널. 포럼이면 거르기(`filter`)가 있다. 채팅 채널은 `repo`(`owner/name`)가 있으면 그 레포의 채널이라
- * 그 레포에 push 권한이 있는 멤버만 보고, 없으면 워크스페이스의 채널이라 워크스페이스의 멤버 모두가 읽는다(ADR-0043).
+ * A channel. A forum has a filter (`filter`). A chat channel with a `repo` (`owner/name`) is that repo's channel,
+ * seen only by members with push permission on that repo; without one it is a workspace channel, read by every member of the workspace (ADR-0043).
  */
 export const Channel = z.strictObject({
   id: z.string(),
@@ -538,24 +538,24 @@ export const Channel = z.strictObject({
 });
 export type Channel = z.infer<typeof Channel>;
 
-/** 검사 명령을 돌린 판정. 통과(0으로 끝남), 깨짐(0이 아닌 코드), 돌리지 못함(설정 없음, 샌드박스 없음, 준비 명령 실패, 상한에서 끊김). */
+/** The verdict of running the check command. Pass (exit 0), broken (nonzero exit), couldn't run (no config, no sandbox, setup command failed, cut off at the limit). */
 export const Verdict = z.enum(["pass", "broken", "not_run"]);
 export type Verdict = z.infer<typeof Verdict>;
 export const VERDICT_LABELS = {
-  pass: "통과",
-  broken: "깨짐",
-  not_run: "돌리지 못함",
+  pass: "Pass",
+  broken: "Broken",
+  not_run: "Couldn't run",
 } as const satisfies Record<Verdict, string>;
 
 /**
- * 합쳐 돌려 보기의 판정 하나(ADR-0036). 간접 충돌(추정)을 계산한 러너가 두 작업을 합쳐 검사 명령을 돌리고 올린다.
- * `running`은 돌려 보는 중이다. `fingerprint`는 두 작업의 내용과 검사 명령으로 만든 지문이고, 같은 지문은 다시 돌리지 않는다.
- * `stale`은 돌린 뒤(도는 중 포함) 두 작업의 내용이 바뀌어 지난 결과라는 뜻이다. 잠잠해지면 다시 돌린다.
- * `omitted`는 상대의 내용이 빠져(공유 수준, 크기, 바이너리) 그 파일 없이 돌린 경로다. `output`은 출력의 끝(끝 25줄)이고 공유 수준이 full인 러너만 올린다.
- * `check`는 돌린 검사 명령이다. 읽지 못했으면 없다. `ms`는 걸린 시간(밀리초)이고 돌려 보는 중이면 없다.
- * 판정은 ADR-0035를 따른다. 합친 것이 깨지면 내 작업만, 상대 작업만으로 한 번씩 더 돌린다. 둘 다 통과하면 `broken`(깨짐),
- * 어느 한쪽이 혼자서도 깨지면 `unclear`(가릴 수 없음)이고 `alone`에 혼자서도 깨진 쪽을 적는다. `mine`은 돌린 러너의 작업, `theirs`는 상대 작업이다.
- * 혼자 돌린 것을 돌리지 못했으면(상한에서 끊김 등) 판정은 `not_run`이고 까닭이 붙는다.
+ * One merge run verdict (ADR-0036). The runner that computed an indirect conflict (guessed) merges the two works, runs the check command, and uploads it.
+ * `running` means it is running. `fingerprint` is a fingerprint made from the two works' content and the check command; the same fingerprint is not run again.
+ * `stale` means that after the run (including while running) the two works' content changed, so it is an old result. It runs again once things settle.
+ * `omitted` is the paths where the other side's content was missing (share level, size, binary) and it ran without that file. `output` is the end of the output (last 25 lines) and only a runner with share level full uploads it.
+ * `check` is the check command that ran. Missing if it could not be read. `ms` is the time taken in milliseconds and is missing while running.
+ * The verdict follows ADR-0035. If the merged result breaks, it runs once more with only my work and once with only the other work. If both pass, it is `broken`,
+ * and if either breaks alone it is `unclear` (can't tell), with `alone` naming the side that broke alone. `mine` is the running runner's work and `theirs` is the other work.
+ * If the alone runs could not run (cut off at the limit, etc.), the verdict is `not_run` with a reason.
  */
 export const MergeRun = z.strictObject({
   verdict: z.enum(["running", ...Verdict.options, "unclear"]),
@@ -570,15 +570,15 @@ export const MergeRun = z.strictObject({
 });
 export type MergeRun = z.infer<typeof MergeRun>;
 export const MERGE_RUN_LABELS = {
-  running: "돌려 보는 중",
+  running: "Running",
   ...VERDICT_LABELS,
-  unclear: "가릴 수 없음",
+  unclear: "Can't tell",
 } as const satisfies Record<MergeRun["verdict"], string>;
-/** 판정이 난 것들(돌려 보는 중이 아닌 것). 지표가 판정별로 센다. */
+/** Verdicts that are settled (not running). The metrics count by verdict. */
 export const RunVerdict = z.enum(["pass", "broken", "unclear", "not_run"]);
 export type RunVerdict = z.infer<typeof RunVerdict>;
 
-/** 알림에 붙은 판정: 러너가 올린 것과, 돌린 멤버(`login`)와 올라온 시각(`at`). */
+/** The verdict attached to an alert: what the runner uploaded, plus the member (`login`) who ran it and when it arrived (`at`). */
 export const AlertRun = z.strictObject({ ...MergeRun.shape, login: z.string(), at: z.string() });
 export type AlertRun = z.infer<typeof AlertRun>;
 
@@ -589,11 +589,11 @@ const alertCommon = {
 };
 
 /**
- * 알림: 두 작업 한 쌍과 부딪힘의 종류마다 하나(ADR-0023). 종류는 직접 충돌(`direct`), 간접 충돌(추정, `indirect`), 중복 구현(`duplicate`),
- * 선언된 계약 변경(`declared`)이다.
- * 러너들이 계산해 올린 것을 서버가 묶는다. 부딪힘이 바뀌면 같은 알림이 고쳐지고, 다 풀리면 `resolved`(풀린 시각)가 한 번 적히고 닫힌다.
- * 닫힌 뒤 다시 부딪히면 새 알림이다. 직접 충돌의 `files`는 부딪히는 것이 확인된 파일부터 경로 순으로, 나머지 둘의 `symbols`는 이름 순으로
- * `ALERT_FILES`개까지 적고, 나머지는 `more`다.
+ * An alert: one per pair of works and conflict kind (ADR-0023). The kinds are direct conflict (`direct`), indirect conflict (guessed, `indirect`), duplicate work (`duplicate`),
+ * and declared contract change (`declared`).
+ * The server groups what the runners computed and uploaded. When the conflict changes, the same alert is updated; when it all clears, `resolved` (the cleared time) is written once and it closes.
+ * If they conflict again after it closes, it is a new alert. A direct conflict's `files` lists up to `ALERT_FILES` of them, files confirmed to collide first, then by path; the other two kinds' `symbols` are listed by name
+ * up to `ALERT_FILES`, and the rest is `more`.
  */
 export const Alert = z.discriminatedUnion("kind", [
   z.strictObject({
@@ -605,11 +605,11 @@ export const Alert = z.discriminatedUnion("kind", [
     kind: z.enum(["indirect", "duplicate", "declared"]),
     ...alertCommon,
     symbols: z.array(AlertSymbol).max(ALERT_FILES),
-    /** 간접 충돌(추정)에만 있다: 그 쌍을 합쳐 돌려 본 마지막 판정. 아직 돌리지 않았으면 없다. */
+    /** Only on an indirect conflict (guessed): the last verdict of a merge run on that pair. Missing if not run yet. */
     run: AlertRun.optional(),
     /**
-     * 간접 충돌(추정)에만 있다: 합쳐 돌려 보니 깨져 확인됐다(빠진 파일 없이 `broken`). 다음 판정이 나올 때까지 남는다.
-     * 빠진 파일 없이 통과하면 알림은 풀림으로 닫히고 `run`에 통과한 검사 명령이 남는다(ADR-0035).
+     * Only on an indirect conflict (guessed): a merge run showed it breaks, so it is confirmed (`broken` with no missing files). Stays until the next verdict.
+     * If it passes with no missing files, the alert closes as resolved and the passing check command is left in `run` (ADR-0035).
      */
     confirmed: z.boolean().optional(),
   }),
@@ -617,11 +617,11 @@ export const Alert = z.discriminatedUnion("kind", [
 export type Alert = z.infer<typeof Alert>;
 
 /**
- * 선점 하나(ADR-0008): 작업(멤버 + 브랜치)이 고칠 곳. 아무것도 막지 않고 알리기만 한다.
- * 단위는 심볼(정의 이름으로 찾은 줄 범위), 줄 범위, 파일 전체(기준 커밋에 없던 새 파일), 폴더(`path`가 `/`로 끝난다)다.
- * `path`는 레포 최상위에서 본 경로, `lines`는 선점한 사람의 사본에서 건 때의 줄(1부터, 끝 포함)이고 심볼과 줄 범위에만 있다.
- * `id`는 서버 전체에서 늘어나기만 하는 번호다. `stale`은 주인이 오프라인으로 오래(7일) 있어 "오래됨"으로 보이는 것이고, 그 뒤 7일이면 지워진다.
- * 브랜치가 머지되거나 지워지면 저절로 풀린다. `plan`은 붙인 계획(바꿀 계약)이다. 한 작업에서 같은 심볼의 계획은 하나이고, 새로 걸면 옛 것을 대체한다.
+ * One claim (ADR-0008): a place a work (member + branch) will edit. It blocks nothing and only tells people.
+ * The unit is a symbol (a line range found by definition name), a line range, a whole file (a new file not in the base commit), or a folder (`path` ends in `/`).
+ * `path` is relative to the repo's top, and `lines` are the lines in the claimer's copy when it was made (from 1, end included), only for symbols and line ranges.
+ * `id` is a number that only grows across the whole server. `stale` is when the owner has been offline a long time (7 days) and it shows as "old"; 7 days after that it is deleted.
+ * It resolves by itself when the branch is merged or deleted. `plan` is the attached plan (the contract to change). A work has one plan per symbol, and a new one replaces the old.
  */
 export const Claim = z.strictObject({
   id: z.number(),
@@ -638,13 +638,13 @@ export const Claim = z.strictObject({
 export type Claim = z.infer<typeof Claim>;
 
 /**
- * 내 사본에서 본 남의 선점. `lines`는 상대의 판과 내 판의 줄 차이로 옮긴 내 사본의 줄이다.
- * 상대의 판을 읽을 수 없으면(공유 수준, 빠진 파일, 내 기기에 없는 기준 커밋) 상대의 줄 그대로이고 `approx`("대략")다.
+ * Another person's claim as seen in my copy. `lines` are the lines in my copy, shifted by the line difference between their version and mine.
+ * If their version can't be read (share level, missing file, base commit not on my machine), the lines are theirs as is and `approx` ("roughly") is set.
  */
 export const SeenClaim = z.strictObject({ ...Claim.shape, approx: z.boolean() });
 export type SeenClaim = z.infer<typeof SeenClaim>;
 
-/** 선점을 걸 곳: 경로와, 심볼 이름이나 줄 범위 가운데 하나. 둘 다 없으면 새 파일의 전체나 폴더(`/`로 끝나거나 있는 폴더)다. */
+/** Where to claim: a path, and either a symbol name or a line range. With neither, it is a whole new file or a folder (ends in `/` or an existing folder). */
 const ClaimTarget = z.strictObject({
   branch: z.string().min(1),
   path: z.string().min(1),
@@ -653,27 +653,27 @@ const ClaimTarget = z.strictObject({
 });
 
 /**
- * 편지함에 넣어 둔 소식을 넘겨준 것이 확인되지 않아도 남겨 두는 시간. 지나면 만료한다(Room의 14일, 2단계 질문 A7).
- * 묻기의 답(ADR-0024)도 같은 시간을 쓴다.
+ * How long inbox items are kept even without confirmation they were handed over. After that they expire (Room's 14 days, phase 2 question A7).
+ * Answers to asks (ADR-0024) use the same time.
  */
 export const INBOX_MS = 14 * 24 * 60 * 60_000;
 
-/** 설정 창의 "내 에이전트가 답한 것"이 세는 날 수(`api.settings`). 묻기를 `INBOX_MS`보다 짧게 센다. */
+/** Number of days counted in settings' "What my agent answered" (`api.settings`). Counts asks over a shorter period than `INBOX_MS`. */
 export const ANSWERED_DAYS = 7;
 
 /**
- * 편지함의 소식 하나(GLOSSARY): 작업(`branch`, 받는 러너의 멤버의 것)의 에이전트에게 직접 넘겨줄 것. 종류는 내 작업과의 부딪힘 알림(네 종류 모두), 내 선점과 겹친 선점, 내가 쓰는 계약의 선언된 변경의 취소다.
- * 알림이 생기고, 바뀌고, 풀릴 때마다 두 작업의 편지함에 들어간다. 아직 넘겨주지 않은 같은 알림의 소식은 새 것으로 바뀐다(`id`도 새로 받는다).
- * `id`는 서버 전체에서 늘어나기만 하는 번호이고 넘겨준 확인(`delivered`)이 가리킨다. `at`은 들어온 시각, `alert`는 들어온 때의 알림이다.
+ * One inbox item (GLOSSARY): something to hand directly to the agent of a work (`branch`, owned by the receiving runner's member). The kinds are a conflict alert with my work (all four kinds), a claim that overlaps mine, and cancellation of a declared change to a contract I use.
+ * It goes into both works' inboxes whenever an alert is created, changed, or resolved. An item for the same alert not yet handed over is replaced with the new one (it gets a new `id` too).
+ * `id` only grows across the whole server and is what the delivery confirmation (`delivered`) points to. `at` is when it came in and `alert` is the alert as of then.
  */
 const InboxHead = { id: z.number(), branch: z.string(), at: z.string() };
 
-/** 묻기에서 남의 질문을 담는 길이 상한. 채널 메시지와 같다. */
+/** Max length of another person's question in an ask. Same as a channel message. */
 export const MAX_QUESTION_CHARS = 4000;
 
 /**
- * 묻기(ADR-0024)의 질문 하나. 묻는 작업의 에이전트가 다른 멤버(`to`)의 에이전트에게 보낸 것이다. `id`는 서버 전체에서 늘어나기만 하는 번호다.
- * `executor`는 답하는(답할) 받는 쪽 실행기다. 묻는 쪽이 고르지 않았고 아직 보내지 못했으면 null이다.
+ * One question in an ask (ADR-0024). The asking work's agent sent it to another member's (`to`) agent. `id` is a number that only grows across the whole server.
+ * `executor` is the receiving side's executor that answers (will answer). null if the asker did not choose and it has not been sent yet.
  */
 export const Question = z.strictObject({
   id: z.number(),
@@ -685,11 +685,11 @@ export const Question = z.strictObject({
 export type Question = z.infer<typeof Question>;
 export const InboxItem = z.discriminatedUnion("kind", [
   z.strictObject({ ...InboxHead, kind: z.literal("alert"), alert: Alert }),
-  /** 내 선점(`mine`)과 다른 작업의 선점(`theirs`)이 겹친다. 줄은 각자의 사본에서 건 때의 것이다. 나중에 건 쪽이 알아내 양쪽에 넣는다. */
+  /** My claim (`mine`) and another work's claim (`theirs`) overlap. The lines are from each one's copy when it was made. Whoever claimed later finds out and puts it in both. */
   z.strictObject({ ...InboxHead, kind: z.literal("overlap"), mine: Claim, theirs: Claim }),
   /**
-   * 이 작업이 물은 질문(`omagari ask`)의 답. 받는 쪽 러너 세션이 답했거나, 답하지 못했다(`error`: 실행기 실패, 받는 쪽이 그사이 스위치를 끔).
-   * 14일 안에 답이 오지 않은 질문은 소식 없이 만료한다.
+   * The answer to a question this work asked (`omagari ask`). The receiving runner's session answered, or could not (`error`: executor failed, the receiving side turned the switch off in the meantime).
+   * A question with no answer within 14 days expires without a notice.
    */
   z.strictObject({
     ...InboxHead,
@@ -701,13 +701,13 @@ export const InboxItem = z.discriminatedUnion("kind", [
     ]),
   }),
   /**
-   * 다른 작업이 계획(`claim.plan`)을 이루지 못한 채 선점을 풀었다: 그 선언된 계약 변경은 취소됐다. 그 계획의 알림을 받은 작업에 넣는다.
-   * 정의 줄이 계획대로 바뀐 뒤 풀었거나 브랜치가 머지되어 풀린 것은 취소가 아니다.
+   * Another work released its claim without carrying out its plan (`claim.plan`): that declared contract change is cancelled. Goes to the works that got an alert for that plan.
+   * Releasing after the definition line changed as planned, or because the branch merged, is not a cancellation.
    */
   z.strictObject({ ...InboxHead, kind: z.literal("cancelled"), claim: Claim }),
   /**
-   * 이 작업이 낀 토론의 소식(ADR-0040): 열렸다(`opened`), 내 차례다(`turn`, 반박 라운드가 열렸고 `round`번째 입장을 낼 차례), 결론이 났다(`concluded`, 어느 길로 났는지 `by`).
-   * 토론의 두 작업 모두에게 간다. 안의 주인은 결론이 난 뒤에만 밝혀지므로 `concluded`만 이긴 쪽(`winner`, 작업의 `branch`)을 싣는다.
+   * News of a debate this work is in (ADR-0040): it opened (`opened`), it is my turn (`turn`, a rebuttal round opened and it is time for the `round`th stance), it concluded (`concluded`, by which path in `by`).
+   * It goes to both works in the debate. The owners inside are only revealed after it concludes, so only `concluded` carries the winner (`winner`, the work's `branch`).
    */
   z.strictObject({
     ...InboxHead,
@@ -722,10 +722,10 @@ export const InboxItem = z.discriminatedUnion("kind", [
 export type InboxItem = z.infer<typeof InboxItem>;
 
 /**
- * 포스트와 맞춘 GitHub 이슈(ADR-0032). 논의 포스트 하나가 이슈 하나다(ADR-0039). 제목, 라벨, 열림·닫힘은 GitHub에서 읽은 것이고
- * 사람이 GitHub에서 바꾸면 다음 주기에 따라온다. 포스트의 글은 이슈 댓글로 가고, 이슈 댓글은 포스트의 글로 들어온다.
- * 참고 포스트이거나 이슈를 아직 열지 못했으면(GitHub이 받지 않음, 토큰 있는 멤버가 없음) 포스트의 `issue`가 null이다.
- * 이슈를 연 뒤 중요도가 내려가도 이슈는 닫지 않는다. 닫는 것은 알림이 풀릴 때뿐이다.
+ * The GitHub issue matched to a post (ADR-0032). One Discuss post is one issue (ADR-0039). The title, labels, and open/closed state are read from GitHub, and
+ * if a person changes them on GitHub, they follow on the next cycle. A post's messages go to issue comments, and issue comments come in as a post's messages.
+ * If it is an FYI post or the issue could not be opened yet (GitHub did not accept it, no member has a token), the post's `issue` is null.
+ * Even if importance drops after the issue was opened, the issue is not closed. It only closes when the alert resolves.
  */
 export const PostIssue = z.strictObject({
   number: z.number(),
@@ -737,57 +737,57 @@ export const PostIssue = z.strictObject({
 export type PostIssue = z.infer<typeof PostIssue>;
 
 /**
- * 알림의 포스트(ADR-0027). 알림 하나에 포스트 하나이고, 알림이 포럼에 올라올 때 함께 생긴다. 포스트의 첫 글이 그 알림이다.
- * 포스트는 채널처럼 동작한다: `channel`을 채널 자리에 넣어 글 쓰기, 지난 대화, DM, `@호출`, 채널에 올리기를 그대로 쓴다.
- * 채널 목록(`api.channels`)에는 없다. `alert`는 알림이 선 채널 메시지의 번호, `count`는 포스트에 선 글(글과 공개된 문답)의 수다.
- * 포럼 목록이 그리는 요약도 여기 있다: `last`는 마지막 글(알림은 빼고, 글이 없으면 `null`)의 쓴 사람과 한 줄,
- * `activity`는 마지막 글이 선 시각(글이 없으면 알림이 올라온 시각)이다. 올라온 시각은 알림 메시지의 `at`이다.
+ * An alert's post (ADR-0027). One post per alert, created together when the alert shows up in a forum. The post's first message is that alert.
+ * A post behaves like a channel: put `channel` where a channel goes to use writing, past messages, DM, `@mention`, and posting to a channel as they are.
+ * It is not in the channel list (`api.channels`). `alert` is the number of the channel message the alert sits in, and `count` is the number of messages (messages and public Q&As) in the post.
+ * It also holds the summary the forum list draws: `last` is the author and one line of the last message (not counting the alert; `null` if none),
+ * and `activity` is when the last message was posted (when the alert arrived if none). The arrival time is the alert message's `at`.
  */
 export const Post = z.strictObject({
   channel: z.string(),
-  /** 이 포스트의 레포 `owner/name`. */
+  /** This post's repo `owner/name`. */
   repo: z.string(),
   alert: z.number(),
   count: z.number(),
   last: z.strictObject({ login: z.string(), name: z.string(), line: z.string() }).nullable(),
   activity: z.string(),
   issue: PostIssue.nullable(),
-  /** 포스트의 라벨(ADR-0039). 알림이 설 때 종류 라벨이 붙고, 확인되면 확인됨이 붙는다. 이슈가 없으면 Omagari에만 있다. */
+  /** The post's labels (ADR-0039). The kind label is attached when the alert is created, and Confirmed when confirmed. If there is no issue, they exist only in Omagari. */
   labels: z.array(z.string()),
-  /** 라벨 중 가장 높은 중요도. */
+  /** The highest importance among the labels. */
   importance: Importance,
-  /** 이 포스트가 보이는 포럼의 id, 이름 순. 비었으면 "다른 포스트"다. 라벨이나 중요도, 포럼이 바뀌면 알림 줄이 실시간 연결로 다시 온다. */
+  /** Ids of the forums this post shows in, by name. If empty, it is in "Other posts". When labels, importance, or forums change, the alert line arrives again on the live connection. */
   forums: z.array(z.string()),
 });
 export type Post = z.infer<typeof Post>;
 
-/** 증거 라벨(ADR-0040). 포스트에 이것이 붙으면 토론이 저절로 열린다. 라벨의 중요도와 상관없고 팀이 바꿀 수 없다. */
+/** Evidence label (ADR-0040). When a post gets this, a debate opens by itself. It is independent of the label's importance and the team can't change it. */
 export const EVIDENCE_LABELS: readonly string[] = [CONFIRMED_LABEL, ALERT_LABELS.declared];
 
 /**
- * 입장의 근거 하나에 붙는 표시(구현 7장, 문답 A15). 입장을 낸 쪽의 러너가 자기 레포에서 본다. 서버는 판단하지 않는다.
- * 참조(커밋, `파일:줄`, 결정 파일)가 있으면 검증됨, 없으면 존재하지 않음, 참조가 아닌 자유 서술은 미검증이다.
+ * A mark on one piece of a stance's evidence (implementation ch. 7, Q&A A15). The runner of the side that gave the stance checks it in its own repo. The server doesn't judge.
+ * With a reference (a commit, `file:line`, a decision file) it is verified; if the reference doesn't exist it is missing; free text that is not a reference is unverified.
  */
 export const EvidenceMark = z.enum(["verified", "unverified", "missing"]);
 export type EvidenceMark = z.infer<typeof EvidenceMark>;
 export const EVIDENCE_MARKS = {
-  verified: "검증됨",
-  unverified: "미검증",
-  missing: "존재하지 않음",
+  verified: "Verified",
+  unverified: "Unverified",
+  missing: "Doesn't exist",
 } as const satisfies Record<EvidenceMark, string>;
 
-/** 근거 하나: 에이전트가 쓴 그대로(`text`)와 표시. */
+/** One piece of evidence: exactly what the agent wrote (`text`), and its mark. */
 export const Evidence = z.strictObject({ text: z.string(), mark: EvidenceMark });
 export type Evidence = z.infer<typeof Evidence>;
 
-/** 실험에 얹는 패치의 상한(글자). 넘으면 돌리지 않고 잘라 남긴다. */
+/** Max size of a patch put on an experiment (characters). If over, it doesn't run and is kept truncated. */
 export const MAX_PATCH_CHARS = 64_000;
 
 /**
- * 토론의 실험(ADR-0040, 문답 A14): 에이전트가 입장에 붙인 패치(`git apply`로 얹는 unified diff)를, 그 입장을 낸 러너가 합쳐 돌려 보기와 같은 임시 워크트리에서
- * 두 작업을 합친 것 위에 얹어 샌드박스 안에서 검사 명령으로 돌린 판정이다. 그 입장의 검증된 근거다. 실험 브랜치는 만들지도 푸시하지도 않는다.
- * 돌리지 못했으면(검사 명령이나 샌드박스가 없다, 합쳐지지 않는다, 패치가 얹어지지 않는다, 상대 작업이 관측되지 않는다) `not_run`과 까닭이다.
- * `check`는 돌린 검사 명령이다. 읽지 못했으면 없다.
+ * A debate experiment (ADR-0040, Q&A A14): the verdict from taking the patch an agent attached to a stance (a unified diff applied with `git apply`), and the runner that gave that stance runs it in the same temporary worktree as a merge run,
+ * puts it on top of the merge of the two works, and runs the check command inside the sandbox. It is that stance's verified evidence. The experiment branch is neither created nor pushed.
+ * If it could not run (no check command or sandbox, they don't merge, the patch doesn't apply, the other work is not observed), it is `not_run` with a reason.
+ * `check` is the check command that ran. Missing if it could not be read.
  */
 export const Experiment = z.strictObject({
   patch: z.string().max(MAX_PATCH_CHARS),
@@ -799,25 +799,25 @@ export const Experiment = z.strictObject({
 export type Experiment = z.infer<typeof Experiment>;
 
 /**
- * 토론의 입장 하나(ADR-0040): 주장과 근거 목록. `context`는 맥락을 어떻게 이어받았나다: 주인이 그 브랜치에서 쓰던 최근 작업 세션을
- * 읽기 전용으로 갈라 띄웠다(`session`), 갈라 띄우지 못해 초안 PR의 계획, diff, 관련 결정만 갖고 냈다(`none`, "맥락 없이 참여").
- * `model`과 `effort`는 답한 것이다(`Reply`와 같다).
+ * One stance in a debate (ADR-0040): a claim and a list of evidence. `context` is how it picked up context: it forked the owner's recent work session on that branch
+ * read-only and started it (`session`), or it could not fork and gave its stance with only the draft PR's plan, diff, and related decisions (`none`, "joined without context").
+ * `model` and `effort` are what answered (same as `Reply`).
  */
 export const Stance = z.strictObject({
   claim: z.string().min(1),
   evidence: z.array(Evidence),
   context: z.enum(["session", "none"]),
   /**
-   * 반박 라운드에서 지난 라운드의 자기 입장을 바꿨다고 에이전트가 밝혔다(구현 7장). `reason`은 바꾼 사유(새 근거)다.
-   * 사유 없이 바뀐 입장(`changed`가 있고 `reason`이 없다)은 화면에 "사유 없이 바뀜"으로 표시한다. 첫 라운드와 유지한 입장에는 없다.
+   * The agent said it changed its own stance from the previous round in a rebuttal round (implementation ch. 7). `reason` is the reason for the change (new evidence).
+   * A stance that changed without a reason (`changed` is set and `reason` is not) shows "changed without a reason" on screen. Not present in the first round or in a stance that held.
    */
   changed: z.strictObject({ reason: z.string().min(1).optional() }).optional(),
   /**
-   * 대행이 낸 입장이다(ADR-0040, 문답 A18). 부재자 대신 부른 멤버이고, 그 멤버의 러너가 그 멤버의 사용량으로 냈다.
-   * 서버가 붙인다. 러너가 보낸 값은 버린다.
+   * A stance given by a stand-in (ADR-0040, Q&A A18). A member called in for the absentee, and that member's runner gave it on that member's usage.
+   * The server attaches it. A value the runner sent is dropped.
    */
   proxy: z.strictObject({ login: z.string(), name: z.string() }).optional(),
-  /** 입장에 패치를 붙였으면 그 실험. */
+  /** The experiment, if a patch was attached to the stance. */
   experiment: Experiment.optional(),
   model: z.string().optional(),
   effort: z.string().optional(),
@@ -825,9 +825,9 @@ export const Stance = z.strictObject({
 export type Stance = z.infer<typeof Stance>;
 
 /**
- * 토론의 자리 하나: 부딪힌 작업(`login`의 `branch`)의 주인 에이전트. `state`는 지금 라운드에서 입장을 기다린다(러너가 꺼져 있으면 붙을 때 보낸다),
- * 냈다, 주인이 자동 참여 스위치(묻기 스위치, ADR-0024)를 꺼 두어 나오지 않는다("토론 참여를 껐어요"), 내지 못했다(`error`)다.
- * 자리에는 입장이 없다. 입장은 주인을 가린 안(`DebateOption`)에 있다.
+ * One seat in a debate: the owner's agent of the conflicting work (`branch` of `login`). `state` is waiting for a stance in the current round (sent when the runner connects if it is off),
+ * gave one, did not show up because the owner turned off the auto-join switch (the ask switch, ADR-0024) ("turned off joining debates"), or could not give one (`error`).
+ * A seat has no stance. The stances are in the owner-hidden option (`DebateOption`).
  */
 export const DebateSeat = z.strictObject({
   login: z.string(),
@@ -835,17 +835,17 @@ export const DebateSeat = z.strictObject({
   branch: z.string(),
   state: z.enum(["waiting", "submitted", "off", "failed"]),
   error: ContractError.optional(),
-  /** 이 자리에 부른 대행(부른 멤버). 다음 라운드를 열 때 주인의 러너가 붙어 있으면 진짜 에이전트가 이어받아 사라진다. */
+  /** The stand-in called to this seat (the member who called). When the next round opens, if the owner's runner is connected, the real agent takes over and this goes away. */
   proxy: z.strictObject({ login: z.string(), name: z.string() }).optional(),
-  /** 기다리는 자리인데 낼 러너(대행이면 부른 멤버의 것)가 붙어 있지 않다. 붙으면 참여 요청을 보내 이어서 낸다. */
+  /** A waiting seat whose runner to give it (the caller's, for a stand-in) is not connected. When it connects, a join request is sent and it continues. */
   away: z.literal(true).optional(),
 });
 export type DebateSeat = z.infer<typeof DebateSeat>;
 
 /**
- * 토론의 안 하나: 한 자리의 입장들(끝난 라운드마다 하나, 라운드 순서). 화면은 순서대로 "안 1", "안 2"라 부른다.
- * 어느 자리의 안인지는 서버가 토론을 열 때 섞어 둔다(ADR-0040). `owner`는 안이 공개되면 늘 붙고, 화면이 결론 전까지 스포일러처럼 덮어 둔다(#202).
- * 누른 사람의 화면에서만 열린다. 러너에 보내는 참여 요청에는 주인이 가지 않는다.
+ * One option in a debate: one seat's stances (one per finished round, in round order). The screen calls them "Option 1", "Option 2" in order.
+ * Which seat an option is from was shuffled by the server when it opened the debate (ADR-0040). `owner` is always attached once an option is public, and the screen covers it like a spoiler until the conclusion (#202).
+ * It opens only on the screen of the person who clicked. The owner is not sent in the join request to the runner.
  */
 export const DebateOption = z.strictObject({
   stances: z.array(Stance),
@@ -854,9 +854,9 @@ export const DebateOption = z.strictObject({
 export type DebateOption = z.infer<typeof DebateOption>;
 
 /**
- * 토론의 결론(ADR-0040, 구현 7장): 안(`option`, `options`의 자리)과 정한 길. `experiment`는 마지막 입장의 실험이 한 안만 통과해 서버가 그쪽을 제안한 것(근거보다 먼저),
- * `evidence`는 검증된 근거가 마지막 입장에 한쪽에만 있어
- * 서버가 그쪽을 제안한 것, `choice`는 포스트의 멤버(`chooser`)가 먼저 고른 것이다. 결론은 제안이고, 결정 정리하기의 초안 요청에 실린다(ADR-0028).
+ * A debate's conclusion (ADR-0040, implementation ch. 7): an option (`option`, a seat of `options`) and the path taken. `experiment` is when only one option passed the last stance's experiment and the server proposed that one (before evidence),
+ * `evidence` is when verified evidence is on only one side in the last stance, so
+ * the server proposed that side, and `choice` is one a member of the post (`chooser`) chose first. A conclusion is a proposal and goes into the draft request for writing up a decision (ADR-0028).
  */
 export const DebateConclusion = z.strictObject({
   option: z.number().int().nonnegative(),
@@ -866,16 +866,16 @@ export const DebateConclusion = z.strictObject({
 });
 export type DebateConclusion = z.infer<typeof DebateConclusion>;
 
-/** 토론 라운드 수의 기본값(문답 A13): 가린 첫 라운드와 반박 두 라운드. 서버 설정으로 줄일 수 있다. */
+/** Default number of debate rounds (Q&A A13): a hidden first round and two rebuttal rounds. The server settings can reduce it. */
 export const DEBATE_ROUNDS = 3;
 
 /**
- * 포스트의 토론(ADR-0040, 구현 7장). 포스트에 증거 라벨이 붙으면 서버가 열고, 한 포스트에 토론은 하나다.
- * 진행은 서버가, 판단은 두 주인의 에이전트가 각자 기기에서 한다. 자리는 알림의 두 작업(`Alert.works`)과 같은 순서다.
- * 라운드의 입장은 그 라운드의 자리가 다 낼 때까지(기다리는 자리가 없을 때까지) 서버 API, 웹, 러너 어디에도 내보내지 않는다.
- * `revealed`는 가린 첫 라운드가 공개되었는지다. 두 자리가 다 낸 라운드 뒤에는 다음 라운드(반박)가 돈다. 반박 라운드에는 상대의 지난 입장이 넘어간다.
- * `state`: 라운드가 도는 중(`open`), 마지막 라운드가 끝나 사람이 고를 차례(`choosing`), 결론이 났다(`concluded`),
- * 낸 입장이 하나도 없이 끝났다(`ended`), 열린 지 14일(`INBOX_MS`) 안에 라운드가 끝나지 않아 끝났다(`expired`). 만료되면 끝나지 않은 라운드는 가린 채 둔다. 검증된 근거가 마지막 입장에 한쪽에만 있으면 고르지 않고 그쪽이 결론이 된다.
+ * A post's debate (ADR-0040, implementation ch. 7). The server opens it when a post gets an evidence label, and a post has one debate.
+ * The server runs the process, and the judging is done by the two owners' agents on their own machines. The seats are in the same order as the alert's two works (`Alert.works`).
+ * A round's stances are not exposed to the server API, the web, or the runner until every seat in that round has given theirs (until no seat is waiting).
+ * `revealed` is whether the hidden first round was made public. After a round both seats gave, the next round (rebuttal) runs. The other side's previous stance is passed into a rebuttal round.
+ * `state`: a round is running (`open`), the last round ended and it is a person's turn to choose (`choosing`), it concluded (`concluded`),
+ * it ended with no stance given (`ended`), or no round finished within 14 days (`INBOX_MS`) of opening so it ended (`expired`). On expiry, a round that did not finish stays hidden. If verified evidence is on only one side in the last stance, nobody chooses and that side becomes the conclusion.
  */
 export const Debate = z.strictObject({
   id: z.number(),
@@ -891,8 +891,8 @@ export const Debate = z.strictObject({
 export type Debate = z.infer<typeof Debate>;
 
 /**
- * 토론 요청(ADR-0040, 구현 7장, 문답 A16): 증거 라벨이 없는 포스트에서 멤버(웹)나 에이전트(CLI)가 안건과 근거를 붙여 토론을 열어 달라고 한 것.
- * 안건이나 근거가 비면(`opened`가 false) 토론은 열리지 않고 요청만 포스트에 표시로 남는다. 가장 나중의 요청 하나만 남는다.
+ * A debate request (ADR-0040, implementation ch. 7, Q&A A16): a member (web) or agent (CLI) asked to open a debate on a post without an evidence label, attaching an agenda and evidence.
+ * If the agenda or evidence is empty (`opened` is false), the debate doesn't open and only the request stays marked on the post. Only the latest request is kept.
  */
 export const DebateRequest = z.strictObject({
   login: z.string(),
@@ -905,8 +905,8 @@ export const DebateRequest = z.strictObject({
 export type DebateRequest = z.infer<typeof DebateRequest>;
 
 /**
- * 결정 PR의 이의 창 길이(ADR-0025, ADR-0030). "바로"면 PR을 열자마자 Omagari가 머지한다. "하루"가 기본이다.
- * "직접"은 숫자와 단위(시간, 일)다. 가장 긴 값은 정하지 않았고, `amount`의 상한은 시각이 넘치지 않게 둔 것이다.
+ * Length of a decision PR's objection window (ADR-0025, ADR-0030). "Immediately" means Omagari merges as soon as it opens the PR. "One day" is the default.
+ * "Custom" is a number and a unit (hours, days). The longest value is not decided, and the upper limit of `amount` is set so the time doesn't overflow.
  */
 export const DecisionWindow = z.union([
   z.enum(["now", "hour", "day", "three_days"]),
@@ -915,18 +915,18 @@ export const DecisionWindow = z.union([
 export type DecisionWindow = z.infer<typeof DecisionWindow>;
 
 /**
- * 포스트에서 정리한 결정 하나와 그 결정 PR(ADR-0025). 정리한 멤버(`login`)의 이름으로 레포의 기본 브랜치에 PR이 열린다.
- * `state`는 PR에서 읽는다: 열려 있으면 제안됨(`proposed`), 머지되면 수락됨(`accepted`), 머지 없이 닫히면 `closed`다.
- * `post`는 포스트의 채널, `path`는 결정 파일(`docs/decisions/NNNN-제목.md`)이다.
+ * One decision written up in a post, and its decision PR (ADR-0025). A PR is opened against the repo's default branch in the name of the member who wrote it up (`login`).
+ * `state` is read from the PR: proposed (`proposed`) while open, accepted (`accepted`) once merged, `closed` if closed without a merge.
+ * `post` is the post's channel, and `path` is the decision file (`docs/decisions/NNNN-title.md`).
  *
- * 결정 상태 띠(DESIGN.md)가 그리는 것:
- * - `status`: 제안됨, 이의가 걸림(`objected`, 수는 `objections`), 이의가 모두 거둬져 다시 열림(`reopened`),
- *   창은 닫혔거나 모두 동의했는데 GitHub이 막음(`blocked`), 정리한 사람의 토큰이 듣지 않아 멈춤(`stalled`), 수락됨, 버림(`closed`).
- *   `reason`은 막히거나 멈춘 까닭(GitHub이 준 것)이다.
- * - `closes`: 창이 닫히는 시각. 이의가 걸려 있거나 머지되거나 닫혔으면 null이다. 남은 시간은 이것과 지금의 차이다.
- * - `deciders`: 결정자(ADR-0029)와 동의했는지. 정리한 사람은 늘 동의한 것이다. 동의 수는 `agreed`인 결정자의 수다.
- * - `objections`: 걸린 이의. 포스트에서 낸 것(`post`)과 GitHub의 변경 요청 리뷰(`github`)다. 거두면 빠진다.
- * - `early`: 결정자가 모두 동의해 창이 닫히기 전에 머지했다.
+ * What the decision status strip (DESIGN.md) draws:
+ * - `status`: proposed, objected (`objected`, count in `objections`), reopened after every objection was withdrawn (`reopened`),
+ *   the window closed or everyone agreed but GitHub blocked it (`blocked`), stalled because the writer's token stopped working (`stalled`), accepted, dropped (`closed`).
+ *   `reason` is why it is blocked or stalled (what GitHub gave).
+ * - `closes`: when the window closes. null if an objection is open, or it merged or closed. The time left is the difference between this and now.
+ * - `deciders`: the deciders (ADR-0029) and whether they agreed. The one who wrote it up has always agreed. The agreement count is the number of deciders who are `agreed`.
+ * - `objections`: open objections. Ones made in the post (`post`) and GitHub change-request reviews (`github`). Withdrawing one removes it.
+ * - `early`: merged before the window closed because every decider agreed.
  */
 export const Decision = z.strictObject({
   id: z.number(),
@@ -952,8 +952,8 @@ export const Decision = z.strictObject({
   ),
   early: z.boolean(),
   /**
-   * 대행이 낀 토론(ADR-0040)의 포스트에서 낸 결정이면, 부재자 가운데 아직 확인(동의)하지 않은 사람. 부재자는 결정자에 든다.
-   * 비어 있지 않으면 창이 닫혀도, 다른 결정자가 모두 동의해도 머지하지 않는다. 대행이 끼지 않았으면 없다.
+   * For a decision made in a post with a stand-in in the debate (ADR-0040): the absentees who have not yet confirmed (agreed). Absentees count as deciders.
+   * If not empty, it does not merge even when the window closes or the other deciders all agree. None if no stand-in was involved.
    */
   awaiting: z.array(z.strictObject({ login: z.string(), name: z.string() })).optional(),
   at: z.string(),
@@ -961,8 +961,8 @@ export const Decision = z.strictObject({
 export type Decision = z.infer<typeof Decision>;
 
 /**
- * 메시지에 달린 반응 하나(ADR-0044): 이모지와 그것을 단 멤버들. 멤버는 단 차례로, 반응은 처음 달린 차례로 온다.
- * 이모지 하나에 멤버 하나는 한 번만 단다. 단 사람이 모두 떼면 그 반응은 없다.
+ * One reaction on a message (ADR-0044): an emoji and the members who added it. Members come in the order they added it, and reactions in the order first added.
+ * One member adds one emoji only once. If everyone who added it removes it, the reaction is gone.
  */
 export const Reaction = z.strictObject({
   emoji: z.string(),
@@ -971,9 +971,9 @@ export const Reaction = z.strictObject({
 export type Reaction = z.infer<typeof Reaction>;
 
 /**
- * 답장이 가리키는 원래 메시지(ADR-0047). 같은 채널, 포스트 안의 사람이 쓴 메시지(글이나 공개된 문답)만 가리킨다.
- * `original`은 원래 메시지의 지금 모습이다: 쓴 사람과 첫 줄(문답이면 질문의 첫 줄, `>` 인용 줄은 건너뛴다). 읽을 수 없으면 null이다(지워졌든 볼 수 없든 같다, #239).
- * `notify`는 원래 메시지를 쓴 사람을 부르는지다(보내는 사람이 끌 수 있다). 부르는 것은 #313이 전한다.
+ * The original message a reply points to (ADR-0047). Only a message a person wrote (text or public Q&A) in the same channel or post.
+ * `original` is how the original message looks now: its author and first line (for a Q&A, the question's first line; `>` quote lines are skipped). null if it can't be read (deleted or not visible, same thing, #239).
+ * `notify` is whether to notify the original message's author (the sender can turn it off). #313 delivers the notification.
  */
 export const ReplyTo = z.strictObject({
   id: z.number(),
@@ -983,9 +983,9 @@ export const ReplyTo = z.strictObject({
 export type ReplyTo = z.infer<typeof ReplyTo>;
 
 /**
- * 채널에 쌓인 것 하나. `id`는 워크스페이스 전체에서 늘어나기만 하는 번호라 채널 안의 순서이자,
- * 실시간 연결이 다시 붙을 때 이어 받을 자리(`webToServer.hello`의 `after`)다.
- * 사람이 쓴 글(`text`)과 공개된 문답(`qa`), Omagari가 올린 알림(`alert`)이 같은 번호 줄에 선다.
+ * One item stacked in a channel. `id` is a number that only grows across the whole workspace, so it is both the order within a channel and
+ * the place to resume from when the live connection reconnects (`after` in `webToServer.hello`).
+ * A message people wrote (`text`), a public Q&A (`qa`), and an alert Omagari posted (`alert`) sit on the same numbered line.
  */
 export const ChannelMessage = z.discriminatedUnion("kind", [
   z.strictObject({
@@ -993,22 +993,22 @@ export const ChannelMessage = z.discriminatedUnion("kind", [
     id: z.number(),
     channel: z.string(),
     login: z.string(),
-    /** 쓴 사람의 GitHub 프로필 이름. 비워 두었으면 `login`과 같다. */
+    /** The author's GitHub profile name. If left empty, same as `login`. */
     name: z.string(),
-    /** 쓴 그대로의 글. HTML이 들어 있어도 서버는 바꾸지 않고, 웹은 글자로만 보인다. */
+    /** Text as written. The server doesn't alter it even if it contains HTML, and the web shows it only as text. */
     text: z.string(),
     at: z.string(),
-    /** 포스트의 이슈에 GitHub에서 단 댓글이 들어온 것이다(ADR-0032). `login`은 GitHub 로그인이라 멤버가 아닐 수 있다. */
+    /** A comment added on GitHub to the post's issue came in (ADR-0032). `login` is a GitHub login, so it may not be a member. */
     github: z.literal(true).optional(),
-    /** 달린 반응(`api.react`). 반응이 바뀌면 같은 `id`의 것이 실시간 연결로 다시 온다. */
+    /** Reactions added (`api.react`). When reactions change, the one with the same `id` arrives again on the live connection. */
     reactions: z.array(Reaction),
-    /** 답장이면 그 원래 메시지. GitHub에서 들어온 댓글은 답장이 되지 않는다. */
+    /** For a reply, its original message. Comments that came in from GitHub are never replies. */
     replyTo: ReplyTo.optional(),
   }),
   /**
-   * 공개된 문답: 채널에 올린 DM이나 `@호출`. 질문과 답이 늘 함께 있다. `login`과 `name`은 그 에이전트의 주인(올린 사람)이고,
-   * `at`은 채널에 올라온 시각(`@호출`이면 물은 시각)이다. 답이 오면 같은 `id`의 것이 실시간 연결로 다시 온다.
-   * `text`는 올린 사람이 함께 쓴 글이다. 글 없이 올렸거나 `@호출`이면 없다. 글 메시지의 `text`처럼 웹은 글자로만 보인다.
+   * A public Q&A: a DM or `@mention` posted to the channel. The question and answer are always together. `login` and `name` are the owner (who posted it) of that agent,
+   * and `at` is when it was posted to the channel (when it was asked, for an `@mention`). When the answer arrives, the one with the same `id` arrives again on the live connection.
+   * `text` is text the poster wrote along with it. Missing if posted without text or an `@mention`. Like a text message's `text`, the web shows it only as text.
    */
   z.strictObject({
     kind: z.literal("qa"),
@@ -1019,15 +1019,15 @@ export const ChannelMessage = z.discriminatedUnion("kind", [
     at: z.string(),
     text: z.string().optional(),
     qa: Qa,
-    /** 달린 반응. 글 메시지의 것과 같다. */
+    /** Reactions added. Same as on a text message. */
     reactions: z.array(Reaction),
-    /** 답장 안에서 `@호출`했으면 그 원래 메시지. 원래 메시지는 질문과 함께 에이전트에게 간다. */
+    /** If the `@mention` was made inside a reply, the original message. It goes to the agent along with the question. */
     replyTo: ReplyTo.optional(),
   }),
   /**
-   * Omagari가 올린 알림. 쓴 사람이 없다. 알림이 고쳐지거나 풀리거나 포스트의 글 수가 바뀌면 같은 `id`의 것이 실시간 연결로 다시 온다.
-   * `channel`은 알림 줄이 서는 자리(어느 포럼도 아니고 채널 목록에 없다)이고, `at`은 처음 올린 시각이다.
-   * `post`는 이 알림의 포스트의 요약이다. 보이는 포럼은 `post.forums`다.
+   * An alert Omagari posted. It has no author. When the alert is updated or resolved or the post's message count changes, the one with the same `id` arrives again on the live connection.
+   * `channel` is where the alert line sits (not in any forum and not in the channel list), and `at` is when it was first posted.
+   * `post` is the summary of this alert's post. The forums it shows in are `post.forums`.
    */
   z.strictObject({
     kind: z.literal("alert"),
@@ -1038,11 +1038,11 @@ export const ChannelMessage = z.discriminatedUnion("kind", [
     post: Post.omit({ alert: true }),
   }),
   /**
-   * Omagari가 올린 결정 PR의 한 줄. 결정의 포스트에만 선다(포럼의 알림 줄로는 올리지 않는다, ADR-0027).
-   * `event`는 그때 일어난 일이다: PR이 열렸다, 결정자가 동의했다, 이의가 났다, 이의를 거뒀다, 정리한 사람이 고쳐 올렸다,
-   * 머지됐다, 머지 없이 닫혔다, Omagari가 머지하려 했으나 GitHub이 막았다(`blocked`), 정리한 사람의 토큰이 듣지 않아 멈췄다(`stalled`).
-   * `reason`은 막히거나 멈춘 까닭이다. `by`는 그 일을 한 사람이다(동의, 이의, 거두기, 고쳐 올리기). GitHub의 리뷰면 멤버가 아닐 수 있다.
-   * `decision`은 읽은 때의 결정이라, 지난 줄이어도 `state`는 지금의 것이다. 포스트의 글 수에 들지 않는다.
+   * A decision PR line Omagari posted. It sits only in the decision's post (not posted as a forum alert line, ADR-0027).
+   * `event` is what happened then: the PR opened, a decider agreed, an objection was raised, an objection was withdrawn, the writer pushed a fix,
+   * it merged, it closed without a merge, Omagari tried to merge but GitHub blocked it (`blocked`), or the writer's token stopped working and it stalled (`stalled`).
+   * `reason` is why it was blocked or stalled. `by` is who did it (agree, object, withdraw, push a fix). For a GitHub review, they may not be a member.
+   * `decision` is the decision as of when it was read, so even for a past line `state` is the current one. It doesn't count toward the post's message count.
    */
   z.strictObject({
     kind: z.literal("decision"),
@@ -1068,7 +1068,7 @@ export const ChannelMessage = z.discriminatedUnion("kind", [
 export type ChannelMessage = z.infer<typeof ChannelMessage>;
 
 /**
- * 결정 초안의 네 칸(ADR-0028). 결정 기록(Nygard의 ADR)의 꼴을 따른다. 무엇을 담는지는 러너가 실행기에 주는 지시문에 있다.
+ * The four fields of a decision draft (ADR-0028). It follows the shape of a decision record (Nygard's ADR). What each holds is in the instruction the runner gives the executor.
  */
 export const DraftFields = z.strictObject({
   title: z.string(),
@@ -1079,9 +1079,9 @@ export const DraftFields = z.strictObject({
 export type DraftFields = z.infer<typeof DraftFields>;
 
 /**
- * 결정 초안 하나: 포스트(`post`, 포스트의 채널)의 글과 문답을 내 에이전트가 읽고 쓴 것(ADR-0028). 저장하지 않는 제안이라 서버가 꺼지면 잃는다.
- * `id`는 서버가 정한 것이고 멈출 때(`api.stopDraft`) 쓴다. `read`는 에이전트에 넘긴 포스트의 글(`texts`)과 공개된 문답(`qas`)의 수다.
- * `state`는 쓰는 중, 다 씀(`drafted`, 답한 모델과 effort가 붙는다, `Reply`와 같다), 멈춤, 쓰지 못함이다.
+ * One decision draft: what my agent read from a post's (`post`, the post's channel) messages and Q&A and wrote (ADR-0028). It is an unsaved proposal, so it is lost if the server shuts down.
+ * `id` is set by the server and used when stopping (`api.stopDraft`). `read` is the number of the post's messages (`texts`) and public Q&As (`qas`) passed to the agent.
+ * `state` is writing, done (`drafted`, with the answering model and effort attached, same as `Reply`), stopped, or couldn't write.
  */
 export const Draft = z.strictObject({
   id: z.string(),
@@ -1107,16 +1107,16 @@ const pairCommon = {
   theirs: z.strictObject({ login: z.string(), branch: z.string() }),
 };
 /**
- * 러너가 계산한 부딪힘의 한 쌍: 이 러너의 작업(`branch`)과 다른 멤버의 작업(`theirs`).
- * 직접 충돌은 부딪히거나 읽을 수 없는 파일들, 간접 충돌(추정)과 중복 구현은 심볼들이다.
- * 간접 충돌은 상대가 정의 줄을 바꾼 심볼을 이 러너의 사본에서 쓰는 방향만 싣는다(반대 방향은 상대 러너가 계산한다).
- * 선언된 계약 변경도 같다: 상대의 선점에 붙은 계획의 심볼을 이 러너의 사본에서 쓰는 방향만 싣고, `plan`을 단다.
+ * One pair of conflicts the runner computed: this runner's work (`branch`) and another member's work (`theirs`).
+ * A direct conflict has the files that collide or can't be read; an indirect conflict (guessed) and duplicate work have symbols.
+ * An indirect conflict only carries the direction where this runner's copy uses a symbol whose definition line the other side changed (the other direction is computed by the other runner).
+ * A declared contract change is the same: it only carries the direction where this runner's copy uses the symbol of the plan attached to the other side's claim, and it carries `plan`.
  */
 export const ConflictPair = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("direct"),
     ...pairCommon,
-    /** `mine`은 이 러너의 사본, `theirs`는 상대의 사본 기준 줄이다. */
+    /** `mine` is lines based on this runner's copy, `theirs` on the other side's copy. */
     files: z.array(
       z.union([
         z.strictObject({ path: z.string(), mine: z.array(LineRange), theirs: z.array(LineRange) }),
@@ -1139,12 +1139,12 @@ export const ConflictPair = z.discriminatedUnion("kind", [
 ]);
 export type ConflictPair = z.infer<typeof ConflictPair>;
 
-/** 검사 명령을 두는 설정 파일. 레포 최상위에 커밋하고, 러너는 기본 브랜치(원격 추적)에 머지된 판만 읽는다(ADR-0034). */
+/** The config file that holds the check command. Committed at the repo's top, and the runner reads only the version merged into the default branch (remote tracking) (ADR-0034). */
 export const CHECK_FILE = ".omagari.json";
 
 /**
- * 설정 파일의 꼴: 검사 명령(`check`)과, 선택으로 그 앞에 한 번 돌릴 준비 명령(`setup`). 둘 다 셸 명령 한 줄이다.
- * 모르는 키는 받지 않는다. 키를 잘못 쓴 준비 명령이 말없이 빠지지 않게 하려는 것이다.
+ * Shape of the config file: the check command (`check`), and optionally a setup command (`setup`) to run once before it. Both are one-line shell commands.
+ * Unknown keys are rejected. This is so a setup command with a misspelled key doesn't drop out silently.
  */
 export const CheckConfig = z.strictObject({
   check: z.string().trim().min(1),
@@ -1153,14 +1153,14 @@ export const CheckConfig = z.strictObject({
 export type CheckConfig = z.infer<typeof CheckConfig>;
 
 /**
- * 이 러너의 합쳐 돌려 보기: 켜짐, 꺼 둠(`omagari runner --merge-check off`), 켰지만 이 기기에 샌드박스 도구가 없어 돌리지 않음(ADR-0033, ADR-0034).
+ * This runner's merge run: on, turned off (`omagari runner --merge-check off`), or turned on but not run because this machine has no sandbox tool (ADR-0033, ADR-0034).
  */
 export const MergeCheckState = z.enum(["on", "off", "no_sandbox"]);
 export type MergeCheckState = z.infer<typeof MergeCheckState>;
 
 /**
- * 러너가 기본 브랜치에서 읽은 설정 파일. 읽었으면 `config`, 못 읽었으면 까닭이다:
- * 기본 브랜치를 모른다(`unknown_branch`), 파일이 없다(`missing`), JSON이 아니거나 꼴이 다르다(`invalid`).
+ * The config file the runner read from the default branch. If read, `config`; if not, the reason:
+ * the default branch is unknown (`unknown_branch`), the file is missing (`missing`), or it is not JSON or has the wrong shape (`invalid`).
  */
 export const CheckReading = z.union([
   z.strictObject({ config: CheckConfig }),
@@ -1168,17 +1168,17 @@ export const CheckReading = z.union([
 ]);
 export type CheckReading = z.infer<typeof CheckReading>;
 
-/** 러너가 서버에 보내는 것. 이후의 이슈는 자기 메시지를 여기에 더한다. */
-/** 선점 하나에 싣는 겹친 선점의 최대 수. 넘는 것은 러너가 싣지 않는다. */
+/** What the runner sends to the server. Later issues add their own messages here. */
+/** Max number of overlapping claims carried on one claim. The runner doesn't carry more. */
 export const MAX_OVERLAPS = 100;
 
 export const runnerToServer = {
   /**
-   * 붙자마자 보낸다. `repos`는 러너 폴더의 GitHub 원격이 가리키는 레포(`owner/name`)들이다. 서버는 그 가운데 워크스페이스에 있고
-   * 이 멤버가 push 권한이 있는 첫 레포에 러너를 잇는다(ADR-0043). 그런 레포가 없으면 `forbidden`으로 거절한다.
-   * `executors`는 이 기기에서 러너가 돌릴 수 있는 실행기다. 실행기마다 에이전트가 하나씩 생긴다(ADR-0015).
-   * `choices`는 실행기마다 고를 거리다. 실행기에 묻지 못한 것은 빠진다(ADR-0020).
-   * `mergeCheck`는 이 러너의 합쳐 돌려 보기다. 켜고 끄는 것은 러너에서만 하므로(ADR-0034) 붙을 때 한 번 알린다.
+   * Sent right after connecting. `repos` are the repos (`owner/name`) the runner folders' GitHub remotes point to. The server connects the runner to the first of them that is in the workspace and
+   * the member has push permission on (ADR-0043). If there is no such repo, it refuses with `forbidden`.
+   * `executors` are the executors this runner can run on this machine. One agent is created per executor (ADR-0015).
+   * `choices` is what can be chosen per executor. Ones that could not be asked of the executor are left out (ADR-0020).
+   * `mergeCheck` is this runner's merge run. Turning it on and off is only done on the runner (ADR-0034), so it is announced once when connecting.
    */
   hello: z.strictObject({
     session: z.string(),
@@ -1188,28 +1188,28 @@ export const runnerToServer = {
     mergeCheck: MergeCheckState,
   }),
   /**
-   * 기본 브랜치에서 읽은 설정 파일(검사 명령). 붙을 때마다 한 번, 그 뒤로는 읽은 것이 달라질 때마다 보낸다.
-   * 레포에 하나라 서버는 그 레포의 어느 멤버의 러너가 보냈든 마지막 것을 둔다.
+   * The config file read from the default branch (the check command). Sent once on each connect, then whenever what was read changes.
+   * There is one per repo, so the server keeps the last one, whichever member's runner in that repo sent it.
    */
   checkCommand: CheckReading,
   /**
-   * 관측. 러너가 지금 보는 작업 전부다: 등록한 폴더와 그 연결된 워크트리마다 체크아웃된 브랜치 하나씩(ADR-0006).
-   * 서버는 그 멤버의 작업을 이것으로 바꾼다. 그래서 공유 수준을 낮추면 전에 올린 내용이 서버에서 내려간다.
-   * 붙을 때마다, 그리고 관측이 달라질 때마다 보낸다. 브랜치가 아니면(detached HEAD) 작업이 없다.
+   * Observation. All the works the runner sees now: one checked-out branch per registered folder and per worktree linked to it (ADR-0006).
+   * The server replaces that member's works with this. So lowering the share level removes what was uploaded before from the server.
+   * Sent on each connect and whenever the observation changes. If it is not a branch (detached HEAD), there is no work.
    */
   observation: z.strictObject({ works: z.array(Work) }),
   /**
-   * 부딪힘의 계산(ADR-0023). 직접 충돌은 이 러너의 작업과 다른 멤버의 작업이 함께 바꾼 파일을, 두 작업의 기준 커밋이 갈라진 지점의 판을 조상으로
-   * `git merge-file`로 합쳐 본 결과다. 줄이 부딪히거나 상대 내용을 읽을 수 없는 파일이 있는 쌍만 싣는다. 실리지 않은 쌍은 깨끗하다.
-   * 간접 충돌(추정)은 상대가 정의 줄을 바꾸거나 없앤 심볼을 내 작업의 사본에서 이름으로 찾은 것, 중복 구현은 두 작업에 같은 이름의 새 정의가 생긴 것이다.
-   * 한 쌍과 종류마다 하나다.
-   * 서버는 이 러너의 계산을 이것으로 바꾼다. 붙을 때마다 한 번(비어 있어도), 그 뒤로는 달라질 때마다 보낸다. 공유 수준이 intent인 작업은 싣지 않는다.
+   * Conflict computation (ADR-0023). A direct conflict is the result of merging, with `git merge-file`, the files this runner's work and another member's work both changed, using the version at the point where the two works' base commits diverged as the ancestor.
+   * Only pairs with a file whose lines collide or whose other-side content can't be read are carried. A pair not carried is clean.
+   * An indirect conflict (guessed) is a symbol whose definition line the other side changed or removed, found by name in my work's copy; duplicate work is a new definition of the same name appearing in both works.
+   * One per pair and kind.
+   * The server replaces this runner's computation with this. Sent once on each connect (even if empty), then whenever it changes. Works whose share level is intent are not carried.
    */
   conflicts: z.strictObject({ pairs: z.array(ConflictPair) }),
   /**
-   * 합쳐 돌려 보기의 판정(ADR-0036). 이 러너의 작업(`branch`)과 다른 멤버의 작업(`theirs`)의 간접 충돌(추정)을 합쳐 돌린 것이다.
-   * 돌리기 시작할 때(`running`), 판정이 났을 때, 그 뒤 내용이 바뀌어 지난 결과가 됐을 때 보낸다. 서버는 그 쌍의 열린 간접 충돌 알림에 붙이고,
-   * 열린 알림이 없으면 버린다. 서버가 러너에게 돌리라고 시키는 길은 없다(ADR-0033).
+   * Merge run verdicts (ADR-0036). A merge run of the indirect conflict (guessed) between this runner's work (`branch`) and another member's work (`theirs`).
+   * Sent when a run starts (`running`), when a verdict is made, and when the content changes afterward and it becomes an old result. The server attaches it to that pair's open indirect conflict alert,
+   * and drops it if there is no open alert. There is no way for the server to tell the runner to run (ADR-0033).
    */
   merged: z.strictObject({
     branch: z.string(),
@@ -1217,20 +1217,20 @@ export const runnerToServer = {
     run: MergeRun,
   }),
   /**
-   * 편지함의 소식을 작업 세션이나 CLI에 넘겼다(`inbox`의 `id`들). 서버는 그 멤버의 것만 지운다.
-   * 서버와 끊긴 사이에 넘긴 것은 다시 붙자마자 보낸다. 서브에이전트에게 보여 준 것은 넘긴 것으로 치지 않아 싣지 않는다.
+   * Inbox items were handed to a work session or the CLI (the `id`s of `inbox`). The server clears only that member's.
+   * What was handed over while disconnected is sent as soon as it reconnects. What was shown to a subagent doesn't count as handed over, so it isn't carried.
    */
   delivered: z.strictObject({ ids: z.array(z.number()) }),
   /**
-   * 이 멤버의 작업(`branch`)에서 `executor`의 훅이 불렸다. 작업의 에이전트는 마지막으로 보낸 실행기다(ADR-0015).
-   * 러너는 훅이 실어 온 실행기가 그 작업에 지난번 보낸 것과 다를 때만 보낸다. 서버는 다시 띄워도 남긴다.
+   * A hook of `executor` fired on this member's work (`branch`). The work's agent is the executor that sent last (ADR-0015).
+   * The runner only sends it when the executor the hook carried differs from what it last sent for that work. The server keeps it even across a restart.
    */
   working: z.strictObject({ branch: z.string().min(1), executor: ExecutorId }),
   /**
-   * 선점을 건다(ADR-0008). 서버는 늘 받고 `claimed`(`re`)로 건 선점을 돌려준다. 같은 작업에 같은 곳(경로, 심볼, 줄)의 선점이 있으면 바꾼다.
-   * `overlaps`는 러너가 내 사본의 줄로 옮겨 보고 겹친다고 찾은 남의 선점(`Claim.id`)이다. 서버는 양쪽 작업의 편지함에 겹침을 넣는다.
-   * `unit`과 `lines`는 러너가 정한다(심볼은 정의를 찾은 줄 범위, 새 파일은 파일 전체).
-   * `plan`을 붙이면 같은 작업의 같은 심볼에 붙은 옛 계획을 대체한다.
+   * Sets a claim (ADR-0008). The server always accepts it and returns the claim that was set as `claimed` (`re`). If the same work has a claim on the same place (path, symbol, lines), it replaces it.
+   * `overlaps` are other people's claims (`Claim.id`) the runner shifted into my copy's lines and found to overlap. The server puts the overlap into both works' inboxes.
+   * `unit` and `lines` are set by the runner (for a symbol, the line range where the definition was found; for a new file, the whole file).
+   * If `plan` is set, it replaces an older plan on the same symbol of the same work.
    */
   claim: z.strictObject({
     branch: z.string(),
@@ -1242,9 +1242,9 @@ export const runnerToServer = {
     plan: Plan.optional(),
   }),
   /**
-   * 이 멤버의 작업(`branch`)의 선점을 푼다. `path`가 없으면 그 작업의 선점 모두, 있으면 그 경로의 것(심볼이나 줄을 주면 그것만)이다.
-   * 서버는 `released`(`re`)로 푼 선점을 돌려준다. 러너는 브랜치가 지워지면 저절로 보낸다.
-   * 푼 선점의 계획이 이루어지지 않았으면(그 작업의 정의 줄이 계획대로 바뀌지 않았으면) 그 계획의 알림을 받은 작업의 편지함에 취소(`cancelled`)를 넣는다.
+   * Releases the claims of this member's work (`branch`). Without `path`, all claims of that work; with it, the claims on that path (only that symbol or lines if given).
+   * The server answers with `released` (`re`) holding the released claims. The runner sends this on its own when the branch is deleted.
+   * If a released claim's plan did not come true (the definition lines of that work did not change as planned), the server puts a cancellation (`cancelled`) in the inbox of the work that got that plan's alert.
    */
   release: z.strictObject({
     branch: z.string(),
@@ -1253,8 +1253,8 @@ export const runnerToServer = {
     lines: LineRange.optional(),
   }),
   /**
-   * 이 멤버의 작업(`branch`)의 에이전트가 다른 멤버(`to`)의 에이전트에게 묻는다(ADR-0024). `executor`는 고른 받는 쪽 실행기이고, 없으면 서버가 고른다.
-   * 서버는 `questioned`(`re`)로 바로 답하고, 답은 나중에 그 작업의 편지함(`answer`)으로 넣는다. 자기 자신이나 멤버가 아니면 `error`다.
+   * The agent of this member's work (`branch`) asks the agent of another member (`to`) (ADR-0024). `executor` is the receiving executor you chose; the server picks one if it's missing.
+   * The server answers right away with `questioned` (`re`), and the answer goes into that work's inbox (`answer`) later. Asking yourself or a non-member is an `error`.
    */
   question: z.strictObject({
     branch: z.string().min(1),
@@ -1262,14 +1262,14 @@ export const runnerToServer = {
     executor: ExecutorId.optional(),
     text: z.string().trim().min(1).max(MAX_QUESTION_CHARS),
   }),
-  /** `ask`나 `question`(`re`)에 러너 세션이 답했다. 답하지 못했으면 `error`를 `re`를 붙여 보낸다. */
+  /** A runner session answered an `ask` or `question` (`re`). If it couldn't answer, it sends `error` with `re`. */
   answer: Reply,
   /**
-   * `debate`(`re`)에 낸 입장. 근거 표시는 이 러너가 자기 레포에서 본 것이다. 내지 못했으면 `error`를 `re`를 붙여 보낸다.
-   * 그사이 끊겼으면 서버는 받지 않고, 다시 붙을 때 참여 요청을 다시 보낸다.
+   * The stance given to a `debate` (`re`). Evidence marks are what this runner saw in its own repo. If it couldn't give one, it sends `error` with `re`.
+   * If the runner disconnected in between, the server doesn't accept it and sends the join request again when the runner reconnects.
    */
   stance: Stance,
-  /** `draft`(`re`)의 초안. 쓰지 못했으면 `error`를 `re`를 붙여 보낸다. 멈춘 초안의 답은 서버가 버린다. */
+  /** The draft for `draft` (`re`). If it couldn't write one, it sends `error` with `re`. The server drops the answer of a stopped draft. */
   drafted: z.strictObject({
     ...DraftFields.shape,
     model: z.string().optional(),
@@ -1278,37 +1278,37 @@ export const runnerToServer = {
   error: ContractError,
 } satisfies Payloads;
 
-/** 서버가 러너에 보내는 것. 러너는 여기 있는 종류만 받는다. */
+/** What the server sends to the runner. The runner accepts only the kinds listed here. */
 export const serverToRunner = {
-  /** hello를 받아들였다. 러너는 이 멤버의 에이전트로, 이 레포에 짝지어졌다. */
+  /** Accepts the hello. The runner is paired with this repo as this member's agent. */
   welcome: z.strictObject({ login: z.string(), repo: z.string() }),
   /**
-   * 문답. 러너가 받는 요청은 이것과 결정 초안(`draft`)뿐이다. 물을 에이전트(`executor`), 채널, 질문, 채널 대화만 오고 도구·폴더·세션은 러너가 정한다.
-   * 러너는 채널과 실행기마다 채널 세션 하나를 잇고(ADR-0015), 한 번에 한 턴만 돌리고 나머지는 온 순서대로 줄 세운다.
-   * 포스트도 채널로 온다(`channel.id`가 포스트의 채널). 그래서 포스트의 채널 세션은 같은 채널의 것과 따로 이어 간다.
-   * `recent`는 그 채널의 최근 대화(오래된 것부터 `CHANNEL_CONTEXT`개까지)다. 포스트면 맨 앞이 그 알림이고 뒤가 포스트의 대화다. 러너는 그 채널 세션의 지난 턴 뒤의 것만
-   * 지시가 아닌 데이터로 감싸 넘긴다. 질문은 그 에이전트의 주인이 쓴 것이다.
-   * `model`과 `effort`는 주인이 고른 것이다. 러너는 hello로 알린 고를 거리에 없으면 실행기를 띄우지 않고 오류로 답한다.
+   * Q&A. The runner gets only this and decision drafts (`draft`). Only the agent to ask (`executor`), the channel, the question, and the channel conversation come; the runner decides tools, folders, and sessions.
+   * The runner keeps one channel session per channel and executor (ADR-0015), runs one turn at a time, and queues the rest in arrival order.
+   * Posts come through a channel too (`channel.id` is the post's channel). So a post's channel session is kept apart from the sessions of the same channel.
+   * `recent` is the recent conversation of that channel (oldest first, up to `CHANNEL_CONTEXT`). For a post, the first is its alert and the rest is the post's conversation. The runner wraps only what comes after that channel session's last turn
+   * as data, not instructions. The question was written by the owner of that agent.
+   * `model` and `effort` are what the owner picked. If they aren't among the choices the runner announced in hello, it doesn't start the executor and answers with an error.
    */
   ask: z.strictObject({
     executor: ExecutorId,
     channel: Channel.omit({ kind: true }),
     message: z.string().min(1),
     recent: z.array(ChannelMessage).max(CHANNEL_CONTEXT),
-    /** 답장 안에서 `@호출`했으면 그 원래 메시지(ADR-0047). 러너는 채널 대화처럼 지시가 아닌 데이터로 감싸 질문 앞에 둔다. */
+    /** If the `@mention` was made inside a reply, the original message (ADR-0047). The runner wraps it as data, not instructions, like channel conversation, and puts it before the question. */
     replyTo: ChannelMessage.optional(),
     ...ModelPick.shape,
   }),
   /**
-   * 결정 초안을 써 달라(ADR-0028). `messages`는 포스트의 대화(맨 앞이 그 알림, 오래된 것부터 `CHANNEL_CONTEXT`개까지)다.
-   * 러너는 채널 세션을 잇지 않고 새 러너 세션 하나로, 문답과 같은 줄에 서서 읽기 전용으로 돌린다. 대화는 지시가 아닌 데이터로 감싼다(ADR-0017).
-   * 답은 `drafted`(`re`)다. `model`과 `effort`는 `ask`와 같다.
+   * Write a decision draft (ADR-0028). `messages` is the post's conversation (the first is its alert, oldest first, up to `CHANNEL_CONTEXT`).
+   * The runner doesn't use a channel session; it runs one new runner session read-only, in the same queue as Q&A. The conversation is wrapped as data, not instructions (ADR-0017).
+   * The answer is `drafted` (`re`). `model` and `effort` are the same as in `ask`.
    */
   draft: z.strictObject({
     executor: ExecutorId,
     post: Channel.omit({ kind: true }),
     messages: z.array(ChannelMessage).max(CHANNEL_CONTEXT),
-    /** 포스트의 토론에 결론이 났으면 그 안(주인과 마지막 입장)과 정한 길(ADR-0040). 러너는 데이터로 감싸 초안의 근거로 넘긴다. */
+    /** If the post's debate reached a conclusion, the option (owner and last stance) and the path taken (ADR-0040). The runner wraps it as data and passes it as grounds for the draft. */
     conclusion: z
       .strictObject({
         by: DebateConclusion.shape.by,
@@ -1319,12 +1319,12 @@ export const serverToRunner = {
     ...ModelPick.shape,
   }),
   /**
-   * 토론 참여 요청(ADR-0040). 이 러너의 멤버의 작업(`branch`)이 부딪힌 포스트의 토론 `debate`에서 라운드 `round`의 입장을 낸다.
-   * `messages`는 포스트의 대화(맨 앞이 그 알림, `draft`와 같다)다. 첫 라운드는 가려 상대의 입장이 오지 않는다.
-   * 반박 라운드(2 이상)에는 지난 라운드의 내 입장(`mine`)과 상대의 입장(`theirs`)이 온다. 러너는 상대의 입장을 지시가 아닌 데이터로 감싸 넘기고(ADR-0017),
-   * 입장을 바꾸면 사유를 적게 한다(`Stance.changed`). 러너는 주인이 그 브랜치에서 쓰던 최근 작업 세션을 읽기 전용으로 갈라 띄우고, 안 되면 초안 PR의 계획, diff, 관련 결정만 넣어
-   * "맥락 없이 참여"로 띄운다. 토론 세션은 파일을 고치지 않는다(ADR-0003). 문답과 같은 줄에 서고, 답은 `stance`(`re`)다.
-   * 에이전트가 입장에 패치를 붙이면 러너가 내 작업과 `against`를 합친 것 위에 얹어 실험을 돌리고 `Stance.experiment`로 싣는다.
+   * A request to join a debate (ADR-0040). Gives the stance for round `round` in the `debate` of the post where this runner's member's work (`branch`) conflicted.
+   * `messages` is the post's conversation (the first is its alert, same as `draft`). The first round is blinded, so the other side's stance doesn't come.
+   * Rebuttal rounds (2 and up) get my stance from the last round (`mine`) and the other side's stance (`theirs`). The runner wraps the other side's stance as data, not instructions (ADR-0017),
+   * and asks for a reason when the stance changes (`Stance.changed`). The runner forks the owner's recent work session on that branch read-only; if it can't, it passes only the draft PR's plan, diff, and related decisions
+   * and starts it as "joining without context". A debate session doesn't edit files (ADR-0003). It waits in the same queue as Q&A, and the answer is `stance` (`re`).
+   * If the agent attaches a patch to the stance, the runner runs an experiment on top of my work merged with `against` and sends it as `Stance.experiment`.
    */
   debate: z.strictObject({
     debate: z.number(),
@@ -1336,8 +1336,8 @@ export const serverToRunner = {
     mine: Stance.optional(),
     theirs: Stance.optional(),
     /**
-     * 대행이면 부재자(`for`)와 서버에 올라온 그 사람의 작업(공유 수준대로, 없으면 null). `branch`는 부재자의 브랜치다(ADR-0040, 문답 A17).
-     * 러너는 작업 세션을 갈라 띄우지 않고, 자기 레포에서 이 작업을 지시가 아닌 데이터로 감싸 넘기고 결정은 레포에서 읽게 한다.
+     * For a proxy: the absent member (`for`) and that person's work on the server (per share level, null if none). `branch` is the absent member's branch (ADR-0040, Q&A A17).
+     * The runner doesn't fork a work session; it wraps this work as data, not instructions, in its own repo and has the agent read decisions from the repo.
      */
     proxy: z
       .strictObject({
@@ -1345,29 +1345,29 @@ export const serverToRunner = {
         work: WorkView.nullable(),
       })
       .optional(),
-    /** 상대 자리의 작업. 실험은 이 작업(러너가 받은 `situation`의 관측)을 내 작업과 합친다. */
+    /** The other side's work. The experiment merges this work (the observation in the `situation` the runner got) with my work. */
     against: z.strictObject({ login: z.string(), branch: z.string() }),
   }),
-  /** `draft`(보낸 것의 `id`)를 멈춘다. 줄에 서 있으면 돌리지 않고, 돌고 있으면 실행기를 끈다. 답하지 않는다. */
+  /** Stops `draft` (the `id` of what was sent). If it's queued, it won't run; if it's running, the executor is shut down. No answer. */
   stopDraft: z.strictObject({ id: z.string() }),
   /**
-   * 지금 상황: 워크스페이스의 작업 전부(받는 러너의 멤버 것도 포함, `api.works`와 같은 것)와 선점 전부. 선점은 작업이 관측되지 않아도(브랜치를 바꿔 체크아웃해도) 남는다.
-   * welcome 바로 뒤에 보내고, 그 뒤로는 달라질 때마다 다시 보낸다. 러너는 받아 두고 훅에 내준다(ADR-0005).
+   * Current situation: all works in the workspace (including the receiving runner's member's, same as `api.works`) and all claims. Claims stay even if the work isn't observed (for example after checking out another branch).
+   * Sent right after welcome, and again every time it changes. The runner keeps it and hands it to hooks (ADR-0005).
    */
   situation: z.strictObject({ works: z.array(WorkView), claims: z.array(Claim) }),
-  /** `claim`(`re`)을 받아 건 선점. */
+  /** The claim made for `claim` (`re`). */
   claimed: z.strictObject({ claim: Claim }),
   /**
-   * `question`(`re`)의 답: 받는 쪽 러너에 보냈다(`sent`), 받는 쪽 러너가 오프라인이라 남겨 두었다가 붙으면 보낸다(`offline`, 14일 뒤 만료),
-   * 받는 쪽이 스위치를 꺼 두어 받지 않는다(`refused`, 남기지 않는다).
+   * The answer to `question` (`re`): sent to the receiving runner (`sent`); kept because the receiving runner is offline and sent when it connects (`offline`, expires after 14 days);
+   * not accepted because the receiving side turned the switch off (`refused`, not kept).
    */
   questioned: z.discriminatedUnion("state", [
     z.strictObject({ state: z.enum(["sent", "offline"]), question: Question }),
     z.strictObject({ state: z.literal("refused") }),
   ]),
   /**
-   * 다른 멤버(`from`의 작업)의 에이전트가 이 러너의 멤버의 `executor` 에이전트에게 보낸 질문. 러너는 읽기 전용 러너 세션을 새로 띄워
-   * 질문을 지시가 아닌 데이터로 감싸 넘기고(ADR-0017과 같은 방식), `answer`나 `error`(`re`)로 답한다. 문답과 같은 줄에 선다.
+   * A question from the agent of another member (the work of `from`) to the `executor` agent of this runner's member. The runner starts a new read-only runner session,
+   * wraps the question as data, not instructions (same way as ADR-0017), and answers with `answer` or `error` (`re`). It waits in the same queue as Q&A.
    */
   question: z.strictObject({
     id: z.number(),
@@ -1375,33 +1375,33 @@ export const serverToRunner = {
     executor: ExecutorId,
     text: z.string(),
   }),
-  /** `release`(`re`)로 푼 선점. 없었으면 비어 있다. */
+  /** The claims released by `release` (`re`). Empty if there were none. */
   released: z.strictObject({ claims: z.array(Claim) }),
   /**
-   * 이 러너의 멤버의 편지함 전부(작업마다, 넘겨준 확인이 없고 만료되지 않은 것). welcome 바로 뒤에 보내고, 달라질 때마다 다시 보낸다.
-   * 러너는 받아 두고 훅과 CLI에 내준다.
+   * The whole inbox of this runner's member (per work, items not yet marked delivered and not expired). Sent right after welcome, and again every time it changes.
+   * The runner keeps it and hands it to hooks and the CLI.
    */
   inbox: z.strictObject({ items: z.array(InboxItem) }),
   /**
-   * 서버에 붙은 이 멤버의 합쳐 돌려 보기 판정들(난 것만: 돌려 보는 중과 지난 결과는 빼고). 열린 알림과, 통과로 닫혀 다시 돌릴 때까지 알림을 세우지 않는 쌍의 것이다.
-   * welcome 바로 뒤에 보내고, 판정이 붙을 때마다 다시 보낸다. 러너는 같은 지문을 다시 돌리지 않는다(ADR-0036). 돌리라고 시키는 것이 아니다(ADR-0033).
+   * The merge run verdicts of this member's works that reached the server (only the ones that came out: not those still running or past results). They cover open alerts and pairs closed as pass that don't raise an alert until they are run again.
+   * Sent right after welcome, and again every time a verdict arrives. The runner doesn't rerun the same fingerprint (ADR-0036). This is not an order to run (ADR-0033).
    */
   runs: z.strictObject({ runs: z.array(MergeRun) }),
   error: ContractError,
 } satisfies Payloads;
 
 /**
- * 러너가 붙는 WebSocket 경로. 서버는 hello를 거절하면 `error`를 보낸 뒤 1008로 닫는다.
- * 계약 버전이 달라 거절할 때의 `error`는 `VersionMismatch` 꼴이다.
- * 1008로 닫힌 러너는 다시 붙지 않는다. 그 밖의 이유로 끊기면 다시 붙는다.
+ * The WebSocket path the runner connects to. If the server rejects hello, it sends `error` and closes with 1008.
+ * An `error` for rejecting a different contract version has the `VersionMismatch` shape.
+ * A runner closed with 1008 doesn't reconnect. For any other reason it reconnects.
  */
 export const RUNNER_SOCKET = "/api/runner";
 
 /**
- * 계약 버전이 달라 거절할 때 서버가 보내는 `error`(봉투의 `v`는 서버의 계약 버전이다). ADR-0019.
- * 계약 버전이 다른 러너가 읽으므로 `CONTRACT_VERSION`을 올려도 이 꼴은 바꾸지 않는다. 키는 더하기만 하고,
- * 더한 키를 앞의 러너가 읽을 수 있게 이것만은 모르는 키를 받는다.
- * `version`은 서버의 버전(`git describe --tags`), `contract`는 서버의 계약 버전이다.
+ * The `error` the server sends when it rejects a different contract version (the envelope's `v` is the server's contract version). ADR-0019.
+ * Runners with a different contract version read it, so this shape doesn't change even when `CONTRACT_VERSION` goes up. Keys are only added,
+ * and this is the one that accepts unknown keys, so earlier runners can read added ones.
+ * `version` is the server's version (`git describe --tags`), `contract` is the server's contract version.
  */
 export const VersionMismatch = z.object({
   kind: z.literal("error"),
@@ -1413,7 +1413,7 @@ export const VersionMismatch = z.object({
   }),
 });
 
-/** `VersionMismatch` 프레임을 만든다. `encode`는 이 계약의 `error`(모르는 키가 없다)만 만들어 따로 둔다. */
+/** Builds a `VersionMismatch` frame. `encode` only builds this contract's `error` (which has no unknown keys), so this is kept separate. */
 export function encodeVersionMismatch(message: string, version: string, re?: string) {
   const refusal: z.infer<typeof VersionMismatch> = {
     kind: "error",
@@ -1422,10 +1422,10 @@ export function encodeVersionMismatch(message: string, version: string, re?: str
   return JSON.stringify({ v: CONTRACT_VERSION, id: crypto.randomUUID(), re, ...refusal });
 }
 
-/** HTTP 본문 하나의 상한. 서버는 넘는 것을 읽지 않는다. 더 큰 것이 필요한 이슈가 알고 올린다. */
+/** The limit of one HTTP body. The server doesn't read more. An issue that needs more raises it knowingly. */
 export const MAX_MESSAGE_BYTES = 1024 * 1024;
 
-/** 러너 소켓의 프레임 하나의 상한. 서버는 넘는 것을 읽지 않는다. 관측 하나(내용 합계 8MiB와 경로)가 들어가게 잡았다. */
+/** The limit of one frame on the runner socket. The server doesn't read more. Sized so one observation (8MiB of content in total, plus paths) fits. */
 export const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 
 export type Message<P extends Payloads> = {
@@ -1438,7 +1438,7 @@ export type Message<P extends Payloads> = {
   };
 }[keyof P & string];
 
-/** 보낼 프레임을 만든다. 계약에 없는 종류나 내용은 타입 검사에서 걸리고, 여기서도 던진다. */
+/** Builds a frame to send. A kind or content not in the contract is caught by the type check, and this throws too. */
 export function encode<P extends Payloads, K extends keyof P & string>(
   payloads: P,
   kind: K,
@@ -1454,7 +1454,7 @@ export function encode<P extends Payloads, K extends keyof P & string>(
   });
 }
 
-/** 받은 프레임을 계약으로 읽는다. 계약과 다르면 메시지 대신 돌려보낼 오류를 낸다. */
+/** Reads a received frame with the contract. If it differs from the contract, it returns an error to send back instead of a message. */
 export function decode<P extends Payloads>(
   payloads: P,
   frame: unknown,
@@ -1463,11 +1463,13 @@ export function decode<P extends Payloads>(
   try {
     json = JSON.parse(String(frame));
   } catch {
-    return { error: { code: "invalid_message", message: "JSON이 아니다" } };
+    return { error: { code: "invalid_message", message: "Not JSON" } };
   }
   const envelope = Envelope.safeParse(json);
   if (!envelope.success) {
-    return { error: { code: "invalid_message", message: "봉투가 계약과 다르다" } };
+    return {
+      error: { code: "invalid_message", message: "The envelope doesn't match the contract" },
+    };
   }
   const { v, id, re, kind } = envelope.data;
   const refuse = (code: ContractError["code"], message: string) => ({
@@ -1477,26 +1479,26 @@ export function decode<P extends Payloads>(
   if (v !== CONTRACT_VERSION) {
     return refuse(
       "version_mismatch",
-      `계약 버전이 다르다: 받은 것 ${v}, 여기는 ${CONTRACT_VERSION}`,
+      `Contract version mismatch: got ${v}, this side is ${CONTRACT_VERSION}`,
     );
   }
   if (!Object.hasOwn(payloads, kind)) {
-    return refuse("unknown_kind", `계약에 없는 종류다: ${kind}`);
+    return refuse("unknown_kind", `Not a kind in the contract: ${kind}`);
   }
   const payload = payloads[kind].safeParse(envelope.data.payload);
   if (!payload.success) {
-    return refuse("invalid_message", `${kind}의 내용이 계약과 다르다`);
+    return refuse("invalid_message", `The content of ${kind} doesn't match the contract`);
   }
   return { message: { v, id, re, kind, payload: payload.data } as Message<P> };
 }
 
-// --- CLI와 러너 사이(같은 기기) ---
-// 봉투, `encode`, `decode`는 러너와 서버 사이의 것을 그대로 쓴다.
+// --- Between the CLI and the runner (same machine) ---
+// The envelope, `encode`, and `decode` are the same ones used between the runner and the server.
 
 /**
- * 근처 작업 하나: 고치려는 파일을 바꾸고 있는 다른 멤버의 작업과, 그 파일에서 바꾼 곳.
- * `lines`의 줄 번호는 그 사람의 사본 기준이고(1부터, 끝 포함), 지운 줄만 있는 곳은 그 앞 줄로 적는다.
- * 내용을 읽을 수 없으면 `unknown`과 까닭이다: 공유 수준과 빠진 파일(`ObservedFile.omitted`), 또는 그 사람의 기준 커밋이 이 기기에 없다(`base`).
+ * One nearby work: another member's work that is changing the file you're about to edit, and where they changed it in that file.
+ * Line numbers in `lines` are in that person's copy (1-based, end included); a place with only deleted lines is written as the line before it.
+ * If the content can't be read, it's `unknown` with a reason: the share level and missing files (`ObservedFile.omitted`), or their base commit isn't on this machine (`base`).
  */
 export const NearbyWork = z.strictObject({
   login: z.string(),
@@ -1510,89 +1512,89 @@ export const NearbyWork = z.strictObject({
 });
 export type NearbyWork = z.infer<typeof NearbyWork>;
 
-/** CLI와 훅이 러너에 보내는 것. 러너는 문답과 지금 상황 묻기만 받는다. */
+/** What the CLI and hooks send to the runner. The runner accepts only Q&A and asking for the current situation. */
 export const cliToRunner = {
-  /** 터미널에서 묻는다(`omagari runner ask`). 채널 세션과 따로 터미널 세션 하나를 잇는다. */
+  /** Ask from the terminal (`omagari runner ask`). Keeps one terminal session apart from channel sessions. */
   ask: z.strictObject({ message: z.string().min(1) }),
-  /** 지금 상황을 묻는다. 러너는 서버를 부르지 않고 받아 둔 것으로 바로 답한다. 문답의 줄에 서지 않는다. */
+  /** Asks for the current situation. The runner doesn't call the server; it answers right away with what it has kept. It doesn't wait in the Q&A queue. */
   situation: z.strictObject({ executor: ExecutorId }),
   /**
-   * 파일 하나(`path`, 레포 최상위에서 본 경로)의 근처 작업을 묻는다. 편집 전 훅이 고칠 때마다 부른다.
-   * `situation`처럼 받아 둔 것으로 바로 답하고, 그 파일을 바꾼 다른 멤버의 작업만 준다.
+   * Asks for the nearby works of one file (`path`, relative to the repo root). The pre-edit hook calls it on every edit.
+   * Like `situation`, it answers right away with what it has kept, and gives only the works of other members that changed that file.
    */
   nearby: z.strictObject({
     path: z.string().min(1),
     executor: ExecutorId,
-    /** 고치는 작업. 주면 남의 선점을 이 작업의 사본 줄로 옮기고, 이 작업이 그 파일을 선점했는지 본다. */
+    /** The work doing the editing. If given, moves others' claims onto this work's copy lines and checks whether this work claimed the file. */
     branch: z.string().optional(),
   }),
   /**
-   * 심볼 하나(`omagari impact <심볼>`)를 누가 쓰고 누가 고치는지 묻는다. 메서드는 `클래스.메서드`나 메서드 이름으로 묻는다.
-   * 쓰는 곳은 러너의 사본에서 찾고, 고치는 작업은 받아 둔 상황에서 찾는다.
+   * Asks who uses and who is changing one symbol (`omagari impact <symbol>`). Ask for a method as `Class.method` or by method name.
+   * Where it's used is found in the runner's copy; works that change it are found in the kept situation.
    */
   impact: z.strictObject({
     symbol: z.string().min(1),
-    /** 묻는 작업의 브랜치. 같은 로그인의 같은 브랜치만 빼고, 내 다른 브랜치의 작업은 본다(ADR-0041). */
+    /** The branch of the asking work. Only the same branch of the same login is left out; my other branches' works are seen (ADR-0041). */
     branch: z.string().optional(),
   }),
   /**
-   * 작업(`branch`)의 편지함을 묻는다. 훅과 모든 `omagari` 명령이 부른다. 받아 둔 것으로 바로 답하고, 넘긴 것으로 치지 않는다.
-   * 에이전트에게 넘긴 뒤에 `delivered`로 알린다.
+   * Asks for the inbox of a work (`branch`). Hooks and every `omagari` command call it. It answers right away with what it has kept and doesn't count it as delivered.
+   * Report with `delivered` after handing it to the agent.
    */
   inbox: z.strictObject({
     branch: z.string().min(1),
-    /** 부른 훅의 실행기. 주면 러너가 그 작업의 에이전트로 서버에 알린다(`working`). CLI는 싣지 않는다. */
+    /** The executor of the hook that called. If given, the runner tells the server it is that work's agent (`working`). The CLI doesn't send it. */
     executor: ExecutorId.optional(),
   }),
-  /** 편지함의 소식(`id`들)을 에이전트에게 넘겼다. 러너는 다시 내주지 않고 서버에 알린다. 서브에이전트에게 보여 준 것은 보내지 않는다. */
+  /** Inbox items (`id`s) were handed to the agent. The runner won't hand them out again and tells the server. Items shown to a subagent aren't sent. */
   delivered: z.strictObject({ ids: z.array(z.number()) }),
   /**
-   * 작업(`branch`)의 선점을 건다(`omagari claim`). `path`는 그 작업 폴더의 최상위에서 본 경로다. 러너는 서버에 걸고 답한다.
-   * `plan`은 붙일 계획(바꿀 계약)이다.
+   * Claims for a work (`branch`) (`omagari claim`). `path` is relative to the root of that work's folder. The runner claims on the server and answers.
+   * `plan` is the plan to attach (the contract to change).
    */
   claim: ClaimTarget.extend({ plan: Plan.optional() }),
-  /** 작업의 선점을 푼다(`omagari release`). `path`가 없으면 그 작업의 선점 모두다. */
+  /** Releases a work's claims (`omagari release`). Without `path`, all claims of that work. */
   release: ClaimTarget.partial({ path: true }),
-  /** 작업(`branch`)의 에이전트가 다른 멤버의 에이전트에게 묻는다(`omagari ask`). 러너는 서버에 보내고 서버의 답을 그대로 돌려준다. */
+  /** The agent of a work (`branch`) asks the agent of another member (`omagari ask`). The runner sends it to the server and returns the server's answer as is. */
   question: runnerToServer.question,
   /**
-   * 폴더(`folder`, 그 작업 폴더의 최상위)의 내 작업을 커밋하지 않은 변경까지 임시 워크트리에 옮겨, 기본 브랜치의 검사 명령을
-   * 샌드박스 안에서 한 번 돌린다(`omagari runner check`). 상대 작업은 합치지 않는다. 러너는 서버를 부르지 않는다.
+   * Moves my work in a folder (`folder`, the root of that work's folder), including uncommitted changes, to a temporary worktree, and runs the default branch's check command
+   * once inside the sandbox (`omagari runner check`). It doesn't merge the other work. The runner doesn't call the server.
    */
   check: z.strictObject({ folder: z.string().min(1) }),
 } satisfies Payloads;
 
-/** 러너가 CLI와 훅에 보내는 것. */
+/** What the runner sends to the CLI and hooks. */
 export const runnerToCli = {
   answer: runnerToServer.answer,
-  /** `situation`의 답. 서버에서 받아 둔 것이 아직 없으면 `error`(`runner_offline`)다. */
+  /** The answer to `situation`. If nothing has been received from the server yet, it's `error` (`runner_offline`). */
   situation: z.strictObject({
-    /** 이 러너의 멤버 */
+    /** The member of this runner */
     login: z.string(),
-    /** 서버에서 마지막으로 받은 작업 전부 */
+    /** All works last received from the server */
     works: z.array(WorkView),
-    /** 서버와 끊겼으면 끊긴 시각. `works`는 그 시각까지 받은 것이다. 붙어 있으면 null. */
+    /** If disconnected from the server, the time it disconnected. `works` is what was received up to then. null while connected. */
     disconnectedAt: z.string().nullable(),
-    /** 이 러너가 마지막으로 관측한 내 작업들. 공유 수준과 상관없이 바뀐 파일의 경로가 있다(서버로는 수준대로 나간다). */
+    /** My works this runner observed last. Includes the paths of changed files regardless of share level (they go to the server per level). */
     mine: z.array(Work),
-    /** 서버에서 마지막으로 받은 선점 전부(줄은 각자의 사본 기준) */
+    /** All claims last received from the server (lines are in each person's own copy) */
     claims: z.array(Claim),
   }),
-  /** `nearby`의 답. 근처 작업이 없으면 `works`가 비어 있다. 받아 둔 것이 아직 없으면 `error`(`runner_offline`)다. */
+  /** The answer to `nearby`. If there are no nearby works, `works` is empty. If nothing has been received yet, it's `error` (`runner_offline`). */
   nearby: z.strictObject({
     works: z.array(NearbyWork),
-    /** 그 파일에 걸린 다른 작업의 선점(폴더 선점 포함). 줄은 고치는 작업의 사본으로 옮긴 것이다. */
+    /** Claims of other works on that file (including folder claims). Lines are moved onto the editing work's copy. */
     claims: z.array(SeenClaim),
-    /** 고치는 작업(`branch`)이 그 파일에 선점을 걸었다. `branch`를 주지 않았으면 false다. */
+    /** The editing work (`branch`) claimed that file. false if `branch` wasn't given. */
     claimed: z.boolean(),
-    /** `situation`의 것과 같다. */
+    /** Same as in `situation`. */
     disconnectedAt: z.string().nullable(),
   }),
-  /** `impact`의 답. 받아 둔 것이 아직 없으면 `error`(`runner_offline`)다. */
+  /** The answer to `impact`. If nothing has been received yet, it's `error` (`runner_offline`). */
   impact: z.strictObject({
-    /** 러너의 사본에서 그 이름을 쓰는 곳(정의하는 자리는 뺀다). 이름으로 이어 같은 이름의 다른 심볼도 잡힌다. */
+    /** Places in the runner's copy that use that name (the defining spot is left out). Matching by name also catches other symbols with the same name. */
     uses: z.array(z.strictObject({ path: z.string(), line: z.number() })),
-    /** 그 이름의 정의 줄을 바꾸고 있는(새로 만들거나 바꾸거나 없앤) 다른 멤버의 작업. */
+    /** Works of other members that are changing the definition lines of that name (adding, changing, or removing). */
     works: z.array(
       z.strictObject({
         login: z.string(),
@@ -1602,50 +1604,50 @@ export const runnerToCli = {
         definition: Definition,
       }),
     ),
-    /** 그 이름에 계획(바꿀 계약)을 붙인 다른 멤버의 선점. 코드가 아직 바뀌지 않았어도 있다. */
+    /** Claims of other members that put a plan (a contract to change) on that name. They exist even if the code hasn't changed yet. */
     plans: z.array(Claim),
-    /** `situation`의 것과 같다. */
+    /** Same as in `situation`. */
     disconnectedAt: z.string().nullable(),
   }),
-  /** `inbox`의 답: 그 작업의 소식, 들어온 순서. 받아 둔 것이 아직 없으면 `error`(`runner_offline`)다. */
+  /** The answer to `inbox`: that work's items, in arrival order. If nothing has been received yet, it's `error` (`runner_offline`). */
   inbox: z.strictObject({
-    /** 이 러너의 멤버 */
+    /** The member of this runner */
     login: z.string(),
     items: z.array(InboxItem),
-    /** `situation`의 것과 같다. */
+    /** Same as in `situation`. */
     disconnectedAt: z.string().nullable(),
   }),
-  /** `delivered`를 받았다. */
+  /** `delivered` was received. */
   delivered: z.strictObject({}),
-  /** `claim`의 답: 건 선점과, 내 사본의 줄로 옮겨 보아 겹친 남의 선점. 겹쳐도 걸린다. 서버와 끊겨 있으면 `error`(`runner_offline`)다. */
+  /** The answer to `claim`: the claim made, and other people's claims that overlap when moved onto lines of my copy. It's made even if they overlap. If disconnected from the server, it's `error` (`runner_offline`). */
   claimed: z.strictObject({ claim: Claim, overlaps: z.array(SeenClaim) }),
-  /** `release`의 답: 푼 선점. 없었으면 비어 있다. */
+  /** The answer to `release`: the claims released. Empty if there were none. */
   released: z.strictObject({ claims: z.array(Claim) }),
-  /** `question`의 답(서버의 `questioned`와 같다). 서버와 끊겨 있으면 `error`(`runner_offline`)다. */
+  /** The answer to `question` (same as the server's `questioned`). If disconnected from the server, it's `error` (`runner_offline`). */
   questioned: serverToRunner.questioned,
-  /** `check`의 답. 돌리지 못한 것도 판정(`not_run`)과 까닭으로 온다. */
+  /** The answer to `check`. Even a check that couldn't run comes back as a verdict (`not_run`) with a reason. */
   checked: z.strictObject({
     verdict: Verdict,
-    /** 돌리지 못했으면 그 까닭과 고치는 법. */
+    /** If it couldn't run, the reason and how to fix it. */
     reason: z.string().optional(),
-    /** 설정을 읽은 기본 브랜치(원격 추적, 예: `origin/main`). 모르면 없다. */
+    /** The default branch the config was read from (remote tracking, like `origin/main`). Missing if unknown. */
     branch: z.string().optional(),
-    /** 읽은 설정. 읽지 못했으면 없다. */
+    /** The config that was read. Missing if it couldn't be read. */
     config: CheckConfig.optional(),
-    /** 걸린 시간(밀리초). */
+    /** Time taken (milliseconds). */
     ms: z.number(),
-    /** 마지막으로 돈 명령(준비 명령이 실패했으면 그것) 출력의 끝부분. 아무것도 돌지 않았으면 비어 있다. */
+    /** The tail of the output of the last command that ran (the setup command, if it failed). Empty if nothing ran. */
     output: z.string(),
   }),
   error: ContractError,
 } satisfies Payloads;
 
-// --- 웹이 쓰는 API ---
+// --- API the web uses ---
 
 export type Route = {
   method: "GET" | "POST";
   path: string;
-  /** 로그인 없이 부를 수 있다. 없으면 멤버의 세션(`Authorization: Bearer`)이 있어야 한다. */
+  /** Can be called without login. If not, the member's session (`Authorization: Bearer`) is required. */
   public?: true;
   body?: z.ZodType;
   response: z.ZodType;
@@ -1654,40 +1656,40 @@ export type BodyOf<R extends Route> = R["body"] extends z.ZodType ? z.output<R["
 export type ReplyOf<R extends Route> = z.input<R["response"]>;
 
 /**
- * 레포마다인 API(작업, 멤버, 포스트, 라벨, 결정, 피드)를 어느 레포로 부를지 싣는 머리말(ADR-0043). 값은 `owner/name`이고,
- * 여럿이면 쉼표로 잇는다(CLI는 폴더의 GitHub 원격을 다 싣는다). 그 가운데 부른 사람에게 보이는 첫 레포로 부른다.
- * 없으면 `api.me`의 `repo`로 부른다. 보이는 레포가 없으면 `not_found`다.
+ * A header that says which repo to call a per-repo API (works, members, posts, labels, decisions, feed) for (ADR-0043). The value is `owner/name`;
+ * for several, join them with commas (the CLI sends all GitHub remotes of the folder). It calls with the first of them that the caller can see.
+ * If missing, it calls with the `repo` of `api.me`. If no repo is visible, it's `not_found`.
  */
 export const REPO_HEADER = "omagari-repo";
 
 /**
- * 워크스페이스마다인 API(채널, 포럼, 지표)와 레포마다인 API를 어느 워크스페이스로 부를지 싣는 머리말(ADR-0043). 값은 `Workspace.id`다.
- * 레포마다인 API는 고른 워크스페이스의 레포 가운데서 `REPO_HEADER`로 고른다. 없으면 `REPO_HEADER`가 고른 레포의 워크스페이스이고,
- * 그것도 없으면 `api.workspaces`의 첫째다. 부른 사람의 워크스페이스가 아니면 `not_found`다.
+ * A header that says which workspace to call a per-workspace API (channels, forums, metrics) and a per-repo API for (ADR-0043). The value is `Workspace.id`.
+ * A per-repo API picks the repo with `REPO_HEADER` among the repos of the chosen workspace. If missing, it's the workspace of the repo `REPO_HEADER` picked,
+ * and if that's missing too, the first of `api.workspaces`. If it isn't the caller's workspace, it's `not_found`.
  */
 export const WORKSPACE_HEADER = "omagari-workspace";
 
-/** 워크스페이스: GitHub 계정(조직이나 개인) 하나와 짝지어지고 그 계정의 레포를 넣으면 생긴다(ADR-0043). */
+/** A workspace: paired with one GitHub account (an organization or a person), and created when you add that account's repo (ADR-0043). */
 export const Workspace = z.strictObject({
-  /** 계정 이름의 소문자. `WORKSPACE_HEADER`와 `hello.workspace`에 쓴다. */
+  /** The account name in lowercase. Used in `WORKSPACE_HEADER` and `hello.workspace`. */
   id: z.string(),
-  /** 계정 이름 그대로(`owner/name`의 owner). */
+  /** The account name as is (the owner in `owner/name`). */
   name: z.string(),
   /**
-   * GitHub 계정 종류. 웹은 아바타 모양만 가른다(조직은 네모, 개인은 동그라미). 멤버가 나 하나인지는 이것이 아니라 멤버 수로 정한다.
-   * 멤버의 push 권한을 읽을 때 GitHub에서 함께 읽고, 아직 읽지 못했으면 `organization`이다.
+   * The GitHub account type. The web only uses it for the avatar shape (square for an organization, round for a person). Whether you're the only member is decided by the member count, not this.
+   * Read from GitHub along with members' push permission; `organization` if it hasn't been read yet.
    */
   kind: z.enum(["organization", "user"]),
-  /** GitHub 계정 아바타 주소. 아직 읽지 못했으면 null이고, 웹은 계정 이름 첫 글자를 쓴다. */
+  /** The GitHub account avatar URL. null if it hasn't been read yet; the web uses the first letter of the account name. */
   avatar: z.string().nullable(),
-  /** 이 멤버에게 보이는 이 워크스페이스의 레포들, 넣은 순서. */
+  /** The repos of this workspace that this member can see, in the order they were added. */
   repos: z.array(z.string()),
 });
 export type Workspace = z.output<typeof Workspace>;
 
 /**
- * GIPHY에서 찾은 GIF 하나(ADR-0044). 서버는 GIPHY 응답 가운데 이것만 넘기고 쌓아 두지 않는다.
- * `url`은 찾기 칸에 보일 작은 그림(폭 200px)의 주소이고, 브라우저가 GIPHY에서 바로 받는다.
+ * One GIF found on GIPHY (ADR-0044). The server passes on only this part of the GIPHY response and doesn't store it.
+ * `url` is the address of the small picture (200px wide) shown in the search box, and the browser gets it from GIPHY directly.
  */
 export const Gif = z.strictObject({
   id: z.string().regex(/^[A-Za-z0-9]+$/),
@@ -1698,7 +1700,7 @@ export const Gif = z.strictObject({
 });
 export type Gif = z.output<typeof Gif>;
 
-/** 웹이 쓰는 API. 이후의 이슈는 자기 경로를 여기에 더한다. */
+/** The API the web uses. Later issues add their own paths here. */
 export const api = {
   health: {
     method: "GET",
@@ -1706,7 +1708,7 @@ export const api = {
     public: true,
     response: z.strictObject({ contract: z.number() }),
   },
-  /** GitHub 기기 인증을 연다. 사람은 `verificationUri`에서 `userCode`를 넣고, 부른 쪽은 `loginPoll`로 기다린다. */
+  /** Opens GitHub device authorization. The person enters `userCode` at `verificationUri`, and the caller waits with `loginPoll`. */
   login: {
     method: "POST",
     path: "/api/login",
@@ -1719,8 +1721,8 @@ export const api = {
     }),
   },
   /**
-   * 기기 인증이 끝났는지 본다. 끝났고 그 레포에 push 권한이 있으면 세션을 준다(ADR-0011).
-   * GitHub 토큰은 서버에만 남는다. push 권한이 없으면 `forbidden`이다.
+   * Checks whether device authorization is done. If it's done and the person has push permission on that repo, it gives a session (ADR-0011).
+   * The GitHub token stays only on the server. Without push permission, it's `forbidden`.
    */
   loginPoll: {
     method: "POST",
@@ -1732,29 +1734,29 @@ export const api = {
       z.strictObject({ session: z.string(), login: z.string() }),
     ]),
   },
-  /** 이 세션의 멤버와 워크스페이스. 웹은 새로 고친 뒤 남겨 둔 세션이 아직 쓸 수 있는지 이것으로 본다. */
+  /** The member and workspaces of this session. After a refresh, the web uses this to check whether the session it kept is still usable. */
   me: {
     method: "GET",
     path: "/api/me",
     response: z.strictObject({
       login: z.string(),
-      /** GitHub 프로필의 이름. 비워 두었으면 `login`과 같다. 로그인할 때와 10분마다 다시 읽는다. */
+      /** The name on the GitHub profile. Same as `login` if left blank. Read again at login and every 10 minutes. */
       name: z.string(),
-      /** GitHub 프로필 사진 주소. 없으면 null이다. */
+      /** The GitHub profile picture URL. null if there is none. */
       avatar: z.string().nullable(),
-      /** `REPO_HEADER` 없이 부르면 쓰는 레포 `owner/name`: `repos`의 첫째다(ADR-0043). */
+      /** The repo `owner/name` used when called without `REPO_HEADER`: the first of `repos` (ADR-0043). */
       repo: z.string(),
-      /** 이 멤버가 push 권한이 있어 보이는 워크스페이스의 레포들, 넣은 순서. 로그인할 때와 10분마다 다시 읽는다. */
+      /** The workspace repos this member seems to have push permission on, in the order they were added. Read again at login and every 10 minutes. */
       repos: z.array(z.string()),
-      /** 서버 설정에 GIPHY 키가 있어 `api.gifs`를 쓸 수 있다. 없으면 웹은 GIF 버튼을 두지 않는다(ADR-0044). */
+      /** The server config has a GIPHY key, so `api.gifs` can be used. If not, the web doesn't show a GIF button (ADR-0044). */
       gif: z.boolean(),
       /** My personal settings (`api.setPrefs`). `DEFAULT_PREFS` until I change one. */
       prefs: Prefs,
     }),
   },
   /**
-   * 이 멤버가 들어간 워크스페이스들, 넣은 순서(첫째가 `WORKSPACE_HEADER` 없이 부를 때 쓰는 것이다). 로그인할 때와 10분마다 다시 읽는 push 권한을 따른다.
-   * 워크스페이스끼리는 어느 API 응답과 실시간 연결 메시지에도 섞이지 않는다.
+   * The workspaces this member belongs to, in the order they were added (the first is used when called without `WORKSPACE_HEADER`). Follows the push permission read at login and every 10 minutes.
+   * Workspaces are never mixed in any API response or realtime message.
    */
   workspaces: {
     method: "GET",
@@ -1762,8 +1764,8 @@ export const api = {
     response: z.strictObject({ workspaces: z.array(Workspace) }),
   },
   /**
-   * 워크스페이스에 레포 `owner/name`을 넣는다(ADR-0043). 부른 사람이 그 레포의 GitHub Admin이어야 하고(`forbidden`),
-   * 레포의 계정이 서버 설정의 받을 계정 목록에 있어야 한다(`forbidden`). 답은 부른 사람에게 보이는 레포들이다.
+   * Adds the repo `owner/name` to the workspace (ADR-0043). The caller must be GitHub Admin of that repo (`forbidden`),
+   * and the repo's account must be in the server config's list of accounts it accepts (`forbidden`). The answer is the repos the caller can see.
    */
   addRepo: {
     method: "POST",
@@ -1772,9 +1774,9 @@ export const api = {
     response: z.strictObject({ repos: z.array(z.string()) }),
   },
   /**
-   * 레포 넣기 목록(ADR-0043, 시안 91-A): 고른 워크스페이스 계정의 레포 가운데 부른 사람이 GitHub Admin인 것, 이름 순서.
-   * `added`는 워크스페이스에 넣었는지, `pushers`는 그 레포에 push 권한이 있는 사람 수다. Admin이 아닌 레포는 이름도 수도 싣지 않는다.
-   * 웹은 이것이 비지 않았을 때만 "레포 넣기"를, `added`인 레포에만 레포 메뉴(빼기)를 보인다. GitHub이 답하지 못하면 `github_failed`다.
+   * The list for adding repos (ADR-0043, mockup 91-A): among the repos of the chosen workspace account, the ones where the caller is GitHub Admin, in name order.
+   * `added` says whether it's in the workspace, and `pushers` is the number of people with push permission on that repo. Neither the name nor the count is included for repos where the caller isn't Admin.
+   * The web shows "Add repo" only when this isn't empty, and the repo menu (remove) only for repos with `added`. If GitHub can't answer, it's `github_failed`.
    */
   adminRepos: {
     method: "GET",
@@ -1790,38 +1792,38 @@ export const api = {
       ),
     }),
   },
-  /** 워크스페이스에서 레포를 뺀다. 넣을 때처럼 그 레포의 GitHub Admin만 한다. 그 레포의 것은 지우지 않고 다시 넣으면 돌아온다. */
+  /** Removes a repo from the workspace. Like adding, only that repo's GitHub Admin can do it. Its data isn't deleted and comes back if you add it again. */
   removeRepo: {
     method: "POST",
     path: "/api/repos/remove",
     body: z.strictObject({ repo: z.string() }),
     response: z.strictObject({ repos: z.array(z.string()) }),
   },
-  /** 이 세션을 끝낸다. 같은 멤버의 다른 세션(다른 브라우저, CLI와 러너)은 그대로다. */
+  /** Ends this session. Other sessions of the same member (other browsers, the CLI, and the runner) stay as they are. */
   logout: {
     method: "POST",
     path: "/api/logout",
     response: z.strictObject({}),
   },
   /**
-   * 워크스페이스의 멤버와 그 사람의 접속 상태, 상태 메시지, 에이전트, 작업마다의 상태 한 줄. 이름 순이다.
-   * 달라지면 실시간 연결로도 온다. 멤버가 아니면(세션이 없거나 끝났으면) `unauthorized`다.
+   * The workspace's members with their connection state, status message, agent, and one status line per work. In name order.
+   * It also comes through the realtime connection when it changes. If you aren't a member (no session or it ended), it's `unauthorized`.
    */
   members: {
     method: "GET",
     path: "/api/members",
     response: Members,
   },
-  /** 멤버들의 작업과 그 관측, 상태 한 줄. 바뀐 파일과 그 내용까지 온다. 멤버만 본다. */
+  /** The members' works with their observations and status lines. Changed files and their content come too. Only members see it. */
   works: {
     method: "GET",
     path: "/api/works",
     response: z.strictObject({ works: z.array(WorkView) }),
   },
   /**
-   * 내 작업(`branch`)의 상태 한 줄을 쓴다. 같은 작업에 다시 쓰면 나중에 쓴 것이 남는다.
-   * 그 브랜치가 머지되거나, 관측된 변경이 있다가 0이 되면 지워진다(ADR-0010).
-   * `executor`는 CLI가 돌고 있는 실행기다. 주면 그 작업의 에이전트가 그 실행기로 바뀐다(ADR-0015).
+   * Writes the one-line status of my work (`branch`). Writing again on the same work keeps the later one.
+   * It's erased when that branch is merged, or when observed changes go from some to 0 (ADR-0010).
+   * `executor` is the executor the CLI is running in. If given, that work's agent changes to that executor (ADR-0015).
    */
   setStatus: {
     method: "POST",
@@ -1837,8 +1839,8 @@ export const api = {
     response: z.strictObject({ text: z.string(), at: z.string() }),
   },
   /**
-   * 내 접속 상태를 고른다. `duration`이 지나면 온라인으로 돌아오고, 없으면 직접 바꿀 때까지다(online이면 무시한다).
-   * 멤버 목록이 실시간 연결로 모두에게 간다. 답의 `until`은 온라인으로 돌아오는 시각이다.
+   * Picks my presence. After `duration` passes it goes back to online; without it, it stays until I change it myself (ignored for online).
+   * The member list goes to everyone through the realtime connection. `until` in the answer is the time it goes back to online.
    */
   setPresence: {
     method: "POST",
@@ -1847,8 +1849,8 @@ export const api = {
     response: z.strictObject({ until: z.string().nullable() }),
   },
   /**
-   * 내 상태 메시지를 글과 이모지 한 칸으로 쓴다. 둘을 함께 보내고, 빈 글이면 글을, null이면 이모지를 지운다.
-   * 이모지 칸에는 이모지 하나(글자 묶음 하나)만 받는다. 따로 만료는 없다. 멤버 목록이 실시간 연결로 모두에게 간다.
+   * Writes my status message as text and one emoji slot. Send both together; empty text clears the text, and null clears the emoji.
+   * The emoji slot takes only one emoji (one grapheme). There is no expiry. The member list goes to everyone through the realtime connection.
    */
   setStatusMessage: {
     method: "POST",
@@ -1858,20 +1860,20 @@ export const api = {
         .string()
         .transform((text) => text.replace(/\s+/g, " ").trim())
         .refine((text) => Array.from(text).length <= MAX_STATUS_MESSAGE_CHARS, {
-          message: `상태 메시지는 ${MAX_STATUS_MESSAGE_CHARS}자까지다`,
+          message: `The status message can be up to ${MAX_STATUS_MESSAGE_CHARS} characters`,
         }),
-      emoji: z.string().refine(isEmoji, { message: "이모지 칸에는 이모지 하나만 쓴다" }).nullable(),
+      emoji: z.string().refine(isEmoji, { message: "Use just one emoji" }).nullable(),
     }),
     response: z.strictObject({ message: z.string().nullable(), emoji: z.string().nullable() }),
   },
   /**
-   * 채널 안에서 `agent`(멤버의 로그인)의 `executor` 에이전트에게 묻는다. 에이전트는 주인만 부른다(`forbidden`).
-   * `visibility`가 private(기본)이면 DM, public이면 `@호출`이다. 둘 다 그 채널과 에이전트의 채널 세션이 답한다.
-   * 답을 기다리지 않고 답을 기다리는 문답을 돌려준다. 답은 실시간 연결의 `qa`로 묻는 사람에게 오고,
-   * `@호출`이면 채널에 선 문답(`message`)도 돌려주고 실시간 연결의 `message`로 모두에게 간다(답이 오면 같은 번호로 다시).
-   * 그 에이전트의 러너가 꺼져 있으면 쌓아 두지 않고 바로 `runner_offline`이다. 없는 채널이면 `not_found`.
-   * `model`과 `effort`는 고른 것이고 없으면 "기본"이다. 서버는 그대로 러너에 넘기고, 고를 거리에 없으면 러너가 문답을 실패로 돌려준다.
-   * `replyTo`는 `@호출`(public)에만 쓰고 `send`와 같이 거절한다. 원래 메시지는 `> **login**` 인용으로 질문 앞에 붙어 러너에 간다(ADR-0047).
+   * Asks the `executor` agent of `agent` (a member's login) in a channel. Only the owner can call an agent (`forbidden`).
+   * If `visibility` is private (default) it's a DM; if public it's an `@mention`. Either way, that channel's session of the agent answers.
+   * It doesn't wait for the answer; it returns the Q&A that is waiting for one. The answer reaches the asker through `qa` on the realtime connection,
+   * and for an `@mention` it also returns the Q&A posted in the channel (`message`) and goes to everyone through `message` on the realtime connection (sent again with the same number when the answer arrives).
+   * If that agent's runner is off, it doesn't queue and is `runner_offline` right away. If the channel doesn't exist, `not_found`.
+   * `model` and `effort` are the picks, and "default" if missing. The server passes them to the runner as is, and if they aren't among the choices, the runner fails the Q&A.
+   * `replyTo` is only for a public `@mention` and is refused like in `send`. The original message goes to the runner as a `> **login**` quote before the question (ADR-0047).
    */
   ask: {
     method: "POST",
@@ -1888,10 +1890,10 @@ export const api = {
     response: z.strictObject({ qa: Qa, message: ChannelMessage.optional() }),
   },
   /**
-   * 포스트(`post`, 포스트의 채널)로 내 `executor` 에이전트에게 결정 초안을 쓰게 한다(ADR-0028). 에이전트는 주인만 부른다(`forbidden`).
-   * 답을 기다리지 않고 쓰는 중인 초안(읽을 글과 문답의 수가 붙는다)을 돌려준다. 다 쓰거나, 멈추거나, 쓰지 못하면
-   * 실시간 연결의 `draft`로 요청한 사람에게만 온다. 초안은 저장하지 않는다.
-   * 러너가 꺼져 있으면 쌓아 두지 않고 바로 `runner_offline`이다. 포스트가 아니면 `not_found`. `model`과 `effort`는 `ask`와 같다.
+   * Has my `executor` agent write a decision draft for a post (`post`, the post's channel) (ADR-0028). Only the owner can call an agent (`forbidden`).
+   * It doesn't wait for the answer; it returns the draft being written (with the number of texts to read and Q&As). When it's done, stopped, or couldn't be written,
+   * it comes through `draft` on the realtime connection, only to the person who asked. The draft isn't stored.
+   * If the runner is off, it doesn't queue and is `runner_offline` right away. If it isn't a post, `not_found`. `model` and `effort` are the same as in `ask`.
    */
   draftDecision: {
     method: "POST",
@@ -1905,8 +1907,8 @@ export const api = {
     response: z.strictObject({ draft: Draft }),
   },
   /**
-   * 쓰는 중인 내 초안(`draft`, `Draft.id`)을 멈춘다("그만 쓰기"). 멈춘 초안을 돌려주고 실시간 연결의 `draft`로도 보낸다.
-   * 내 것이 아니거나 이미 끝났으면 `not_found`다.
+   * Stops my draft being written (`draft`, `Draft.id`) ("Stop writing"). Returns the stopped draft and also sends it through `draft` on the realtime connection.
+   * If it isn't mine or is already finished, it's `not_found`.
    */
   stopDraft: {
     method: "POST",
@@ -1915,10 +1917,10 @@ export const api = {
     response: z.strictObject({ draft: Draft }),
   },
   /**
-   * 내 DM의 문답 하나를 채널에 올린다. 질문과 답이 함께 올라가고, 답만 올릴 수는 없다. 공개를 비공개로 되돌리지는 않는다.
-   * `text`는 함께 쓰는 한마디다. 채널에는 올린 사람의 메시지 하나(글과 문답)로 선다. 비우거나 공백뿐이면 글 없이 올린다.
-   * 답이 온 문답만 올린다(`invalid_request`). 이미 올렸으면 `conflict`. 내 문답이 아니면 있어도 `not_found`다.
-   * 채널에 선 문답이 실시간 연결의 `message`로 모두에게, 공개가 된 문답이 `qa`로 나에게 간다.
+   * Posts one Q&A from my DM to the channel. The question and answer go up together; you can't post only the answer. Public isn't turned back to private.
+   * `text` is a note to go with it. In the channel it appears as one message from the poster (text and Q&A). If empty or only whitespace, it's posted without text.
+   * Only a Q&A with an answer can be posted (`invalid_request`). If already posted, `conflict`. If it isn't my Q&A, `not_found` even if it exists.
+   * The Q&A that appeared in the channel goes to everyone through `message` on the realtime connection, and the one that became public goes to me through `qa`.
    */
   postQa: {
     method: "POST",
@@ -1927,8 +1929,8 @@ export const api = {
     response: z.strictObject({ message: ChannelMessage }),
   },
   /**
-   * 채널 안의 내 문답(그 채널의 내 채널 세션들이 답한 것). 비공개(DM)와 내가 공개한 것(올린 것, `@호출`)이 함께 온다. 최근 `HISTORY_PAGE`개를 오래된 것부터 준다. 다른 멤버의 DM은 오지 않는다.
-   * 읽기지만 채널을 본문에 실으려고 POST다. 없는 채널이면 `not_found`.
+   * My Q&As in a channel (answered by my channel sessions in that channel). Private (DM) and ones I made public (posted, `@mention`) come together. Gives the latest `HISTORY_PAGE`, oldest first. Other members' DMs don't come.
+   * It's a read, but POST so the channel goes in the body. If the channel doesn't exist, `not_found`.
    */
   dms: {
     method: "POST",
@@ -1937,8 +1939,8 @@ export const api = {
     response: z.strictObject({ qas: z.array(Qa) }),
   },
   /**
-   * 피드: 최근 소식(`INBOX_MS` 안에 생기거나 바뀐 알림, 걸거나 푼 선점) 가운데 부른 멤버의 작업이 걸리지 않은 것. 걸린 것은 그 작업의 편지함으로 간다.
-   * 새것부터 `FEED_PAGE`개다. `omagari status`의 최근 소식이 이것이다. `at`은 알림이 마지막으로 바뀐 시각이다.
+   * Feed: recent news (alerts created or changed within `INBOX_MS`, claims made or released) that don't involve the calling member's works. The ones that do go to that work's inbox.
+   * `FEED_PAGE` items, newest first. This is the recent news in `omagari status`. `at` is when the alert last changed.
    */
   feed: {
     method: "GET",
@@ -1947,17 +1949,17 @@ export const api = {
       news: z.array(
         z.union([
           z.strictObject({ at: z.string(), alert: Alert }),
-          /** 다른 멤버가 건 선점. `at`은 건 시각이다. */
+          /** A claim made by another member. `at` is when it was made. */
           z.strictObject({ at: z.string(), claim: Claim }),
-          /** 다른 멤버가 푼 선점(브랜치가 머지되거나 지워져 저절로 풀린 것 포함). `at`은 푼 시각이다. */
+          /** A claim released by another member (including ones released on their own because the branch was merged or deleted). `at` is when it was released. */
           z.strictObject({ at: z.string(), released: Claim }),
         ]),
       ),
     }),
   },
   /**
-   * 알림(`alert`, 포럼에 선 알림 메시지의 번호)의 포스트와, 그 첫 글인 알림 메시지(`message`)를 읽는다.
-   * 포스트는 알림이 올라올 때 이미 생겼다. 알림이 아닌 메시지면 `not_found`다.
+   * Reads the post of an alert (`alert`, the number of the alert message in a forum) and its first text, the alert message (`message`).
+   * The post was already created when the alert came up. If it isn't an alert message, `not_found`.
    */
   openPost: {
     method: "POST",
@@ -1966,9 +1968,9 @@ export const api = {
     response: z.strictObject({ post: Post, message: ChannelMessage }),
   },
   /**
-   * 포스트 전부, 알림 순서. 포럼 목록이 한 번에 그리도록 포스트마다 첫 글인 알림 메시지(`message`)가 붙는다:
-   * 알림의 종류, 두 사람과 브랜치, 파일이나 심볼, 풀렸는지(`alert.resolved`)와 올라온 시각(`at`)이 거기 있다. 풀린 포스트도 남는다.
-   * 새 글이 서면 그 알림 줄이 실시간 연결로 다시 오고, 그 `post`가 바뀐 요약이다. `debate`는 포스트의 토론이고 열린 적이 없으면 null이다.
+   * All posts, in alert order. Each post comes with its first text, the alert message (`message`), so the forum list can be drawn at once:
+   * the alert kind, the two people and branches, the file or symbol, whether it was resolved (`alert.resolved`), and when it came up (`at`) are there. Resolved posts stay.
+   * When new text appears, that alert line comes again through the realtime connection, and its `post` is the changed summary. `debate` is the post's debate, and null if one has never been opened.
    */
   posts: {
     method: "GET",
@@ -1984,10 +1986,10 @@ export const api = {
     }),
   },
   /**
-   * 포스트(`post`, 포스트의 채널)의 토론에서 주인이 가려진 안 하나(`option`, `Debate.options`의 자리)를 고른다(ADR-0040).
-   * 포스트의 멤버 누구나 고를 수 있고, 먼저 고른 것이 결론이 된다. 투표나 관문은 없다. 고르면 안마다 주인이 공개된다.
-   * 고를 차례(`choosing`)가 아니면(이미 누가 골랐거나, 라운드가 도는 중이거나, 근거로 결론이 났으면) `conflict`다.
-   * 토론이 없거나 없는 안이면 `not_found`다.
+   * Picks one of the options with the owner hidden (`option`, a slot in `Debate.options`) in the post's debate (`post`, the post's channel) (ADR-0040).
+   * Any member of the post can pick, and the first pick becomes the conclusion. There is no vote or gate. Once picked, the owner of every option is revealed.
+   * If it isn't time to pick (`choosing`) (someone already picked, a round is running, or a conclusion was reached by evidence), it's `conflict`.
+   * If there is no debate or no such option, it's `not_found`.
    */
   chooseDebate: {
     method: "POST",
@@ -1996,10 +1998,10 @@ export const api = {
     response: z.strictObject({ debate: Debate }),
   },
   /**
-   * 포스트의 토론에서 자리 하나(`seat`, `Debate.seats`의 자리)에 대행을 부른다(ADR-0040). 포스트의 멤버 누구나 언제든 부른다.
-   * 부른 멤버의 러너가 그 멤버의 실행기와 사용량으로, 부재자의 초안 PR, 서버에 올라온 관측(공유 수준대로), 결정만 넣어 입장을 낸다.
-   * 이번 라운드에 기다리거나 나오지 않는 자리에만 부른다. 주인에게 이미 보낸 요청의 답은 받지 않는다.
-   * 부른 멤버의 러너가 붙어 있지 않으면 `runner_offline`, 라운드가 도는 토론이 아니거나 이미 낸 자리거나 자기 자리면 `conflict`, 없으면 `not_found`다.
+   * Calls a proxy for one seat (`seat`, a slot in `Debate.seats`) in the post's debate (ADR-0040). Any member of the post can call at any time.
+   * The calling member's runner gives the stance with that member's executor and usage, using only the absent member's draft PR, their observations on the server (per share level), and decisions.
+   * Only seats that are waiting or not showing up this round can be called. The answer to a request already sent to the owner isn't accepted.
+   * If the calling member's runner isn't connected, `runner_offline`; if the debate isn't in a running round, or the seat already gave a stance, or it's their own seat, `conflict`; if it doesn't exist, `not_found`.
    */
   proxyDebate: {
     method: "POST",
@@ -2008,12 +2010,12 @@ export const api = {
     response: z.strictObject({ debate: Debate }),
   },
   /**
-   * 포스트(`post`, 포스트의 채널)에서 결정을 정리해 부른 멤버의 이름으로 결정 PR을 연다(ADR-0025).
-   * 사람이 쓰는 것은 제목, 맥락, 결정, 결과와 창의 길이다. 결정자(그 포스트에서 말한 멤버와 정리한 멤버)와 출처(포스트 링크)는 서버가 붙인다.
-   * 결정 파일은 `docs/decisions/`에 다음 번호로 놓이고, 레포의 AGENTS.md가 그 폴더를 가리키지 않으면 같은 PR에 한 줄을 더한다.
-   * 열리면 포스트에 `decision` 줄(`opened`)이 선다. 창이 닫힐 때 걸린 이의가 없으면 Omagari가 정리한 사람의 토큰으로 머지한다("바로"면 곧이어).
-   * GitHub이 막으면 `blocked` 줄에 까닭을 적고 주기마다 다시 해 본다. 토큰이 듣지 않으면 `stalled` 줄을 적고 다시 로그인할 때까지 멈춘다.
-   * 포스트가 아니면 `not_found`, 부른 멤버의 토큰으로 GitHub이 받지 않으면 `github_failed`다.
+   * Writes up the decision from a post (`post`, the post's channel) and opens a decision PR in the calling member's name (ADR-0025).
+   * What people write is the title, context, decision, consequences, and the window length. The deciders (members who spoke in that post, and the member who wrote it up) and the source (a link to the post) are added by the server.
+   * The decision file is placed in `docs/decisions/` with the next number, and if the repo's AGENTS.md doesn't point to that folder, one line is added in the same PR.
+   * Once it opens, a `decision` line (`opened`) appears in the post. When the window closes with no open objection, Omagari merges it with the token of the member who wrote it up ("right away" follows immediately).
+   * If GitHub blocks it, a `blocked` line gives the reason and it retries every cycle. If the token stops working, a `stalled` line is written and it pauses until the member logs in again.
+   * If it isn't a post, `not_found`; if GitHub doesn't accept the calling member's token, `github_failed`.
    */
   proposeDecision: {
     method: "POST",
@@ -2032,11 +2034,11 @@ export const api = {
     response: z.strictObject({ decision: Decision }),
   },
   /**
-   * 결정 PR에 동의하거나(`agree`), 이의를 내거나(`object`), 내 이의를 거둔다(`withdraw`)(ADR-0025, ADR-0029).
-   * 동의는 결정자만 한다(아니면 `forbidden`). 정리한 사람은 이미 동의한 것이라 다시 해도 그대로다. 결정자가 모두 동의하고 걸린 이의가 없으면 바로 머지한다.
-   * 이의는 아무 멤버나 낸다. 걸린 이의가 하나라도 있으면 머지하지 않는다. 거두기는 이의를 낸 사람만 한다(내 이의가 없으면 `not_found`).
-   * 이의가 모두 거둬지면 창이 처음부터 같은 길이로 다시 열린다. 이미 머지되거나 닫힌 결정이면 `conflict`다.
-   * 동의, 이의, 거두기마다 포스트에 `decision` 줄이 선다. 같은 것을 두 번 하면 그대로이고 줄도 서지 않는다.
+   * Agrees with a decision PR (`agree`), objects (`object`), or withdraws my objection (`withdraw`) (ADR-0025, ADR-0029).
+   * Only deciders can agree (otherwise `forbidden`). The member who wrote it up already agreed, so doing it again changes nothing. If all deciders agree and no objection is open, it merges right away.
+   * Any member can object. With even one open objection, it doesn't merge. Only the member who objected can withdraw (if I have no objection, `not_found`).
+   * When all objections are withdrawn, the window reopens from the start with the same length. If the decision was already merged or closed, `conflict`.
+   * A `decision` line appears in the post for every agreement, objection, and withdrawal. Doing the same thing twice changes nothing and adds no line.
    */
   respondToDecision: {
     method: "POST",
@@ -2048,9 +2050,9 @@ export const api = {
     response: z.strictObject({ decision: Decision }),
   },
   /**
-   * 정리한 사람이 결정을 고쳐 같은 결정 PR에 새 커밋으로 올린다(ADR-0025). 결정 파일의 경로는 그대로다.
-   * 고치면 다른 결정자의 동의는 지워지고 창이 처음부터 같은 길이로 다시 열린다(ADR-0031). 걸린 이의는 그대로다.
-   * 정리한 사람이 아니면 `forbidden`, 이미 머지되거나 닫혔으면 `conflict`, GitHub이 받지 않으면 `github_failed`다.
+   * The member who wrote it up edits the decision and pushes it to the same decision PR as a new commit (ADR-0025). The decision file's path stays the same.
+   * When edited, other deciders' agreements are cleared and the window reopens from the start with the same length (ADR-0031). Open objections stay.
+   * If you aren't the member who wrote it up, `forbidden`; if it was already merged or closed, `conflict`; if GitHub doesn't accept it, `github_failed`.
    */
   reviseDecision: {
     method: "POST",
@@ -2068,8 +2070,8 @@ export const api = {
     response: z.strictObject({ decision: Decision }),
   },
   /**
-   * 정리한 사람이 결정을 버린다: 결정 PR을 머지하지 않고 닫는다. 결정 파일은 기본 브랜치에 들어가지 않는다.
-   * 정리한 사람이 아니면 `forbidden`, 이미 머지되거나 닫혔으면 `conflict`, GitHub이 받지 않으면 `github_failed`다.
+   * The member who wrote it up discards the decision: closes the decision PR without merging. The decision file doesn't go into the default branch.
+   * If you aren't the member who wrote it up, `forbidden`; if it was already merged or closed, `conflict`; if GitHub doesn't accept it, `github_failed`.
    */
   discardDecision: {
     method: "POST",
@@ -2077,15 +2079,15 @@ export const api = {
     body: z.strictObject({ id: z.number().int() }),
     response: z.strictObject({ decision: Decision }),
   },
-  /** 정리한 결정 전부, 정리한 순서. 상태는 서버가 GitHub에서 주기마다 읽은 것이다. */
+  /** All decisions written up, in the order they were written up. The state is what the server read from GitHub every cycle. */
   decisions: {
     method: "GET",
     path: "/api/decisions",
     response: z.strictObject({ decisions: z.array(Decision) }),
   },
   /**
-   * 내 에이전트가 다른 멤버의 질문(`omagari ask`)에 답할지 정하는 스위치(ADR-0024). 기본은 켜짐이다.
-   * 끄면 그 뒤로 오는 질문에 바로 "받지 않는다"를 돌려주고, 남겨 둔 질문도 답하지 않는다(묻는 쪽 편지함에 실패로 간다).
+   * The switch that sets whether my agent answers questions from other members (`omagari ask`) (ADR-0024). On by default.
+   * When off, questions that come after that get "not accepted" right away, and questions already kept aren't answered either (they go to the asker's inbox as a failure).
    */
   setAskSwitch: {
     method: "POST",
@@ -2104,8 +2106,8 @@ export const api = {
     response: Prefs,
   },
   /**
-   * 설정 창이 읽는 것: 내 "남의 질문에 답하기" 스위치(`setAskSwitch`), 내 에이전트가 지난 `ANSWERED_DAYS`일 동안
-   * 남의 질문에 답한 수와 그 가운데 마지막 질문(묻은 멤버와 질문 글, 물은 시각).
+   * What the settings window reads: my "Answer others' questions" switch (`setAskSwitch`), the number of questions from others my agent answered in the last `ANSWERED_DAYS` days,
+   * and the last of those questions (the member who asked, the question text, and the time asked).
    */
   settings: {
     method: "GET",
@@ -2119,9 +2121,9 @@ export const api = {
           .nullable(),
       }),
       /**
-       * 합쳐 돌려 보기(DESIGN.md 설정 창, 시안 30-C). 웹은 읽기만 한다. 켜고 끄는 것은 러너에서 한다(ADR-0034).
-       * `runner`는 내 러너의 것이고, 러너가 붙어 있지 않으면 `offline`이다. 러너가 여럿이면 마지막에 붙은 것이다.
-       * `check`는 러너가 마지막으로 알려 온 레포의 설정 파일이고, 아직 어느 러너도 알려 오지 않았으면 null이다.
+       * Merge run (DESIGN.md settings window, mockup 30-C). The web only reads it. Turning it on and off is done on the runner (ADR-0034).
+       * `runner` is about my runner, and `offline` if no runner is connected. With several runners, it's the last one that connected.
+       * `check` is the repo config file the runner reported last, and null if no runner has reported yet.
        */
       mergeCheck: z.strictObject({
         runner: z.union([MergeCheckState, z.literal("offline")]),
@@ -2129,16 +2131,16 @@ export const api = {
       }),
     }),
   },
-  /** 라벨 전부, 이름 순서(ADR-0039). 레포의 GitHub 라벨을 주기마다 읽은 것과 중요도다. */
+  /** All labels, in name order (ADR-0039). The repo's GitHub labels read every cycle, with their importance. */
   labels: {
     method: "GET",
     path: "/api/labels",
     response: z.strictObject({ labels: z.array(Label) }),
   },
   /**
-   * 라벨을 만든다. 부른 멤버의 토큰으로 레포에 GitHub 라벨을 만들고, 중요도는 참고로 시작한다.
-   * 같은 이름(대소문자를 가리지 않는다)이 있으면 `conflict`, GitHub이 받지 않으면 `github_failed`다.
-   * 실시간 연결이 붙어 있는 웹 모두에 `labels`가 간다.
+   * Creates a label. Creates a GitHub label on the repo with the calling member's token, and importance starts as FYI.
+   * If the same name exists (case-insensitive), `conflict`; if GitHub doesn't accept it, `github_failed`.
+   * `labels` goes to every web client with a realtime connection.
    */
   createLabel: {
     method: "POST",
@@ -2151,9 +2153,9 @@ export const api = {
     response: z.strictObject({ label: Label }),
   },
   /**
-   * 라벨(`name`)을 고친다. 이름, 색, 설명은 부른 멤버의 토큰으로 GitHub 라벨을 고치고(포스트의 라벨 이름도 따라 바뀐다),
-   * 중요도는 Omagari에서만 바꾼다. 멤버 누구나 바꾼다. 중요도가 바뀌면 그 라벨을 단 포스트의 중요도가 다시 계산되고, 논의가 되면 이슈가 열린다.
-   * 없는 라벨이면 `not_found`, 바꾼 이름이 다른 라벨과 같으면 `conflict`, GitHub이 받지 않으면 `github_failed`다.
+   * Edits a label (`name`). Name, color, and description edit the GitHub label with the calling member's token (the label name on posts changes too),
+   * and importance is changed only in Omagari. Any member can change it. When importance changes, the importance of posts with that label is recalculated, and if it becomes Discuss, an issue is opened.
+   * If the label doesn't exist, `not_found`; if the new name is the same as another label's, `conflict`; if GitHub doesn't accept it, `github_failed`.
    */
   editLabel: {
     method: "POST",
@@ -2170,9 +2172,9 @@ export const api = {
     response: z.strictObject({ label: Label }),
   },
   /**
-   * 포스트(`post`, 포스트의 채널)의 라벨을 `labels`로 바꾼다(붙이고 뗀다). 이슈가 있으면 이슈 라벨에도 반영되고,
-   * 이슈가 없으면 Omagari에만 있다가 이슈가 열릴 때 함께 달린다. 바뀐 중요도가 논의면 이슈가 열린다.
-   * 없는 포스트나 라벨이면 `not_found`다. 실시간 연결의 웹에 그 알림 줄이 다시 간다.
+   * Changes the labels of a post (`post`, the post's channel) to `labels` (adds and removes). If there is an issue, it's reflected in the issue's labels too,
+   * and if there isn't, it only exists in Omagari until an issue is opened and gets attached then. If the changed importance is Discuss, an issue is opened.
+   * If the post or label doesn't exist, `not_found`. That alert line goes again to the web on the realtime connection.
    */
   setPostLabels: {
     method: "POST",
@@ -2181,9 +2183,9 @@ export const api = {
     response: z.strictObject({ post: Post }),
   },
   /**
-   * 포스트에 안건(`agenda`)과 근거(`grounds`)를 붙여 토론을 요청한다(`omagari debate`, 웹의 "토론 열기"). `post`는 포스트의 채널 id이거나 알림의 번호다.
-   * 둘 다 비어 있지 않으면 토론이 열려 `debate`로 온다. 하나라도 비면 열지 않고 요청만 포스트에 표시로 남기고 `debate`는 null이다.
-   * 이미 열린 토론이 있으면 `conflict`, 없는 포스트면 `not_found`다. 열린 토론은 증거 라벨로 열린 것과 같은 길을 탄다.
+   * Requests a debate by attaching an agenda (`agenda`) and grounds (`grounds`) to a post (`omagari debate`, "Open debate" on the web). `post` is the post's channel id or the alert's number.
+   * If neither is empty, a debate opens and comes back as `debate`. If either is empty, it doesn't open; it only leaves the request marked on the post and `debate` is null.
+   * If a debate is already open, `conflict`; if the post doesn't exist, `not_found`. An open debate takes the same path as one opened by an evidence label.
    */
   requestDebate: {
     method: "POST",
@@ -2191,16 +2193,16 @@ export const api = {
     body: z.strictObject({ post: z.string().min(1), agenda: z.string(), grounds: z.string() }),
     response: z.strictObject({ debate: Debate.nullable(), request: DebateRequest }),
   },
-  /** 채널 전부(채팅과 포럼), 이름 순서. 포스트는 오지 않는다(`api.posts`). 멤버만 본다. */
+  /** All channels (chat and forums), in name order. Posts don't come (`api.posts`). Only members see it. */
   channels: {
     method: "GET",
     path: "/api/channels",
     response: z.strictObject({ channels: z.array(Channel) }),
   },
   /**
-   * 채팅 채널을 만든다. `repo`가 있으면 그 레포의 채널(그 레포가 보이는 멤버만 만들고 본다, 아니면 `not_found`), 없으면 워크스페이스의 채널이다.
-   * 같은 이름(대소문자를 가리지 않는다)이 같은 층(워크스페이스 채널과 포럼끼리, 레포 채널은 그 레포 안)에 있으면 `conflict`다.
-   * 실시간 연결이 붙어 있는 웹 가운데 그 채널이 보이는 쪽에 `channel`이 간다.
+   * Creates a chat channel. With `repo`, it's that repo's channel (only members who can see that repo create and see it, otherwise `not_found`); without it, it's a workspace channel.
+   * If the same name (case-insensitive) exists on the same level (workspace channels and forums together; a repo channel within that repo), `conflict`.
+   * `channel` goes to the web clients with a realtime connection that can see that channel.
    */
   createChannel: {
     method: "POST",
@@ -2209,11 +2211,11 @@ export const api = {
     response: z.strictObject({ channel: Channel }),
   },
   /**
-   * 포럼을 만든다(ADR-0039). 멤버 누구나 한다. 같은 이름(대소문자를 가리지 않는다)의 채널이나 포럼이 있으면 `conflict`다.
-   * `filter.repos`는 부른 멤버에게 보이는 이 워크스페이스의 레포여야 하고, 아니면(없는 레포와 안 보이는 레포가 같게) `invalid_request`다(`updateForum`도 같다).
-   * 포럼의 `filter.repos`는 받는 멤버에게 보이는 레포만 실리고, 보이는 레포가 하나도 없으면 그 멤버에게는 포럼이 없다(고치기, 지우기도 `not_found`).
-   * 고칠 때 부른 멤버에게 보이지 않던 레포 조건은 남는다.
-   * 실시간 연결이 붙어 있는 웹 모두에 `channel`이 가고, 보이는 포럼이 바뀐 포스트의 알림 줄이 다시 간다.
+   * Creates a forum (ADR-0039). Any member can. If a channel or forum with the same name (case-insensitive) exists, `conflict`.
+   * `filter.repos` must be repos of this workspace that the calling member can see; otherwise (a missing repo and an invisible repo look the same) `invalid_request` (`updateForum` is the same).
+   * A forum's `filter.repos` carries only the repos visible to the receiving member, and if none is visible, that member has no forum (editing and deleting are `not_found` too).
+   * A repo condition the calling member couldn't see stays when editing.
+   * `channel` goes to every web client with a realtime connection, and the alert lines of posts whose visible forums changed go again.
    */
   createForum: {
     method: "POST",
@@ -2222,8 +2224,8 @@ export const api = {
     response: z.strictObject({ channel: Channel }),
   },
   /**
-   * 포럼의 이름과 거르기를 고친다. 기본 포럼("논의", "참고")도 고친다. 없는 포럼이면 `not_found`, 이름이 다른 채널과 겹치면 `conflict`다.
-   * 실시간 연결에는 `createForum`과 같은 것이 간다.
+   * Edits a forum's name and filter. The default forums ("Discuss", "FYI") can be edited too. If the forum doesn't exist, `not_found`; if the name collides with another channel, `conflict`.
+   * The same thing as `createForum` goes to the realtime connection.
    */
   updateForum: {
     method: "POST",
@@ -2232,8 +2234,8 @@ export const api = {
     response: z.strictObject({ channel: Channel }),
   },
   /**
-   * 포럼을 지운다. 기본 포럼도 지운다. 포스트는 지워지지 않고, 어느 포럼에도 맞지 않게 되면 "다른 포스트"다. 없는 포럼이면 `not_found`다.
-   * 실시간 연결이 붙어 있는 웹 모두에 `forumDeleted`가 가고, 보이는 포럼이 바뀐 포스트의 알림 줄이 다시 간다.
+   * Deletes a forum. The default forums can be deleted too. Posts aren't deleted; one that no longer fits any forum becomes an "other post". If the forum doesn't exist, `not_found`.
+   * `forumDeleted` goes to every web client with a realtime connection, and the alert lines of posts whose visible forums changed go again.
    */
   deleteForum: {
     method: "POST",
@@ -2242,8 +2244,8 @@ export const api = {
     response: z.strictObject({}),
   },
   /**
-   * 채널의 지난 대화. `before`(메시지 번호) 앞의 것 가운데 마지막 `HISTORY_PAGE`개를 오래된 것부터 준다.
-   * `before`가 없으면 맨 끝에서부터다. 없는 채널이면 `not_found`. 읽기지만 채널을 본문에 실으려고 POST다.
+   * A channel's past conversation. Gives the last `HISTORY_PAGE` messages before `before` (a message number), oldest first.
+   * Without `before`, it starts from the very end. If the channel doesn't exist, `not_found`. It's a read, but POST so the channel goes in the body.
    */
   history: {
     method: "POST",
@@ -2252,10 +2254,10 @@ export const api = {
     response: z.strictObject({ messages: z.array(ChannelMessage) }),
   },
   /**
-   * 채널이나 포스트에 글을 쓴다. 실시간 연결이 붙어 있는 웹 모두(쓴 사람 것 포함)에 `message`가 간다.
-   * 포럼에는 쓰지 못한다(`invalid_request`). DM과 `@호출`(`api.ask`)도 같다.
-   * `replyTo`가 이 채널이나 포스트 안의 사람이 쓴 메시지가 아니면(다른 곳의 것, 없는 것, 알림·결정 줄) `invalid_request`다.
-   * 포스트의 답장은 GitHub 이슈 댓글 머리에 원래 메시지를 적는다(`@` 없이, ADR-0047).
+   * Writes text in a channel or post. `message` goes to every web client with a realtime connection (including the writer's).
+   * You can't write in a forum (`invalid_request`). Same for DMs and `@mentions` (`api.ask`).
+   * If `replyTo` isn't a message a person wrote in this channel or post (one elsewhere, a missing one, an alert or decision line), it's `invalid_request`.
+   * A reply in a post puts the original message in the head of the GitHub issue comment (without `@`, ADR-0047).
    */
   send: {
     method: "POST",
@@ -2268,8 +2270,8 @@ export const api = {
     response: z.strictObject({ message: ChannelMessage }),
   },
   /**
-   * GIPHY에서 GIF를 찾는다(ADR-0044). 서버가 키를 붙여 대신 묻고, 등급은 R까지다. `query`가 비어 있으면 GIPHY의 인기 GIF다.
-   * 서버에 GIPHY 키가 없으면 `not_found`, GIPHY가 답하지 않거나 서버의 시간당 한도를 넘으면 `internal`이다.
+   * Searches GIPHY for GIFs (ADR-0044). The server adds the key and asks on the caller's behalf, and the rating goes up to R. If `query` is empty, it's GIPHY's popular GIFs.
+   * If the server has no GIPHY key, `not_found`; if GIPHY doesn't answer or the server's hourly limit is exceeded, `internal`.
    */
   gifs: {
     method: "POST",
@@ -2278,27 +2280,27 @@ export const api = {
     response: z.strictObject({ gifs: z.array(Gif) }),
   },
   /**
-   * 사람이 쓴 메시지(글이나 공개된 문답)에 반응을 달거나(`on: true`) 뗀다(ADR-0044). 이미 단 것을 다시 달거나 달지 않은 것을 떼도 오류가 아니다.
-   * 없거나 볼 수 없는 메시지면 `not_found`다(둘을 가리지 않는다). 알림 줄과 결정 줄에는 달지 못한다(`invalid_request`).
-   * 반응이 바뀐 메시지가 실시간 연결의 `message`로 그 메시지를 볼 수 있는 웹 모두에 다시 간다. 포스트의 반응은 GitHub 이슈로 옮기지 않는다.
+   * Adds a reaction to a message written by a person (text or a public Q&A) (`on: true`) or removes it (ADR-0044). Adding one already added or removing one not added isn't an error.
+   * If the message doesn't exist or can't be seen, `not_found` (the two aren't told apart). You can't react to alert lines and decision lines (`invalid_request`).
+   * The message whose reactions changed goes again through `message` on the realtime connection to every web client that can see it. Reactions on a post aren't moved to the GitHub issue.
    */
   react: {
     method: "POST",
     path: "/api/channels/react",
     body: z.strictObject({
       message: z.number().int(),
-      emoji: z.string().refine(isEmoji, { message: "반응은 이모지 하나다" }),
+      emoji: z.string().refine(isEmoji, { message: "A reaction is one emoji" }),
       on: z.boolean(),
     }),
     response: z.strictObject({ message: ChannelMessage }),
   },
   /**
-   * 지난 `days`일(오늘 포함) 날마다 들어온 멤버 수와 문답 수. 오래된 날부터 오고, 아무 일 없던 날은 0이다(ADR-0018).
-   * 날은 `timeZone`(서울)의 자정으로 자른다. 들어온 멤버는 그날 웹을 열었거나 채널에서 읽고 쓴 멤버다.
-   * 문답은 그날 서버가 받은 DM과 `@호출`이다. 수만 오고, 누가 무엇을 물었는지는 오지 않는다.
-   * 돌려 본 수(`runs`)는 그날 서버가 받은 합쳐 돌려 보기의 판정을 판정별로 센다(ADR-0035, ADR-0036). "돌려 보는 중"과 같은 지문의 다시 올림은 세지 않는다.
-   * 토론 수(`debates`)는 토론이 열린 날, 결론이 난 날, 열린 토론의 포스트에 결정 PR이 선 것을 센다.
-   * 읽기지만 날 수를 본문에 실으려고 POST다.
+   * For each of the last `days` days (including today): the number of members who came in and the number of Q&As. Starts from the oldest day, and a day with nothing is 0 (ADR-0018).
+   * Days are cut at midnight in `timeZone` (Seoul). Members who came in are those who opened the web that day or read and wrote in a channel.
+   * Q&As are the DMs and `@mentions` the server received that day. Only the count comes, not who asked what.
+   * The number of runs (`runs`) counts the merge run verdicts the server received that day, by verdict (ADR-0035, ADR-0036). "Running" and a resend with the same fingerprint aren't counted.
+   * The number of debates (`debates`) counts the day a debate opened, the day it reached a conclusion, and decision PRs that appeared on a post with an open debate.
+   * It's a read, but POST so the number of days goes in the body.
    */
   metrics: {
     method: "POST",
@@ -2308,15 +2310,15 @@ export const api = {
       timeZone: z.string(),
       days: z.array(
         z.strictObject({
-          /** 그 시간대의 날짜 YYYY-MM-DD */
+          /** The date in that time zone, YYYY-MM-DD */
           day: z.string(),
           members: z.number(),
           qas: z.number(),
-          /** 판정별 수(통과, 깨짐, 가릴 수 없음, 돌리지 못함). */
+          /** Count per verdict (pass, broken, can't tell, not run). */
           runs: z.record(RunVerdict, z.number()),
           /**
-           * 토론(ADR-0040): 그날 열린 수, 그날 끝난 길별 수, 그날 열린 토론 가운데 결정 PR로 이어진 수. 수만 오고 내용은 오지 않는다.
-           * 길은 실험(`experiment`), 근거(`evidence`), 사람이 고름(`human`), 만료(`expired`)다. 실험과 만료의 길은 아직 없어 0이다.
+           * Debates (ADR-0040): the number opened that day, the number ended that day per path, and the number of debates opened that day that led to a decision PR. Only counts come, not content.
+           * The paths are experiment (`experiment`), evidence (`evidence`), human pick (`human`), and expiry (`expired`). The experiment and expiry paths don't exist yet, so they're 0.
            */
           debates: z.strictObject({
             opened: z.number(),
@@ -2334,56 +2336,56 @@ export const api = {
   },
 } satisfies Record<string, Route>;
 
-// --- 웹의 실시간 연결 ---
-// 웹은 조작을 HTTP API로 하고, 받는 것만 이 WebSocket으로 받는다(ADR-0014). 봉투, `encode`, `decode`는 러너의 것과 같다.
+// --- The web's realtime connection ---
+// The web does actions through the HTTP API and only receives through this WebSocket (ADR-0014). The envelope, `encode`, and `decode` are the same as the runner's.
 
-/** 웹이 실시간으로 받는 WebSocket 경로. */
+/** The WebSocket path the web receives realtime messages on. */
 export const LIVE_SOCKET = "/api/live";
 
-/** 웹이 실시간 연결에 보내는 것. 붙자마자 hello 하나만 보낸다. */
+/** What the web sends on the realtime connection. It sends only one hello right after connecting. */
 export const webToServer = {
   /**
-   * 브라우저의 WebSocket은 머리말을 싣지 못해 세션을 여기에 싣는다.
-   * `after`는 지난 연결에서 마지막으로 받은 메시지 번호(또는 그 연결의 welcome `seq`)다.
-   * 주면 그 뒤에 쌓인 메시지를 끊긴 사이의 것까지 다시 받는다. 처음 붙을 때는 주지 않는다.
+   * A browser's WebSocket can't carry headers, so the session goes here.
+   * `after` is the last message number received on the last connection (or that connection's welcome `seq`).
+   * If given, messages that piled up after that, including ones from the disconnected gap, are received again. Not given on the first connection.
    */
   hello: z.strictObject({
     session: z.string(),
     after: z.number().int().nonnegative().optional(),
-    /** 멤버 목록, 라벨처럼 레포마다인 것을 받을 레포. 주지 않으면 `workspace`의 첫 레포다. */
+    /** The repo to receive per-repo things like the member list and labels. If not given, the first repo of `workspace`. */
     repo: z.string().optional(),
-    /** 받을 워크스페이스(`Workspace.id`). 연결은 한 워크스페이스의 것만 받는다. `repo`도 `workspace`도 주지 않으면 `api.workspaces`의 첫째다. */
+    /** The workspace to receive (`Workspace.id`). A connection receives only one workspace's. If neither `repo` nor `workspace` is given, the first of `api.workspaces`. */
     workspace: z.string().optional(),
   }),
 } satisfies Payloads;
 
-/** 서버가 웹의 실시간 연결에 보내는 것. 세션이 없거나 끝나면 `error`를 보낸 뒤 1008로 닫는다. */
+/** What the server sends on the web's realtime connection. If there is no session or it ended, it sends `error` and closes with 1008. */
 export const serverToWeb = {
-  /** hello를 받아들였다. `seq`는 지금 마지막 메시지 번호다. 다음에 다시 붙을 때 `after`로 쓴다. */
+  /** Accepts the hello. `seq` is the current last message number. Use it as `after` when connecting again next time. */
   welcome: z.strictObject({ seq: z.number() }),
   /**
-   * 채널에 새로 쌓인 것. welcome 바로 뒤에 `after` 뒤의 것을 번호 순서대로 보내고, 그 뒤로는 쌓이는 대로 보낸다.
-   * 공개된 문답에 답이 오면, 반응이 바뀌면 같은 번호의 것을 다시 보낸다. 끊긴 사이에 답이 오거나 반응이 바뀐 것도 welcome 뒤에 다시 보낸다.
+   * What newly piled up in a channel. Right after welcome it sends what's after `after` in number order, and after that it sends as they pile up.
+   * When an answer comes to a public Q&A, or reactions change, the one with the same number is sent again. Answers or reaction changes during a disconnect are also sent again after welcome.
    */
   message: ChannelMessage,
-  /** 새 채널이 생겼거나 포럼이 고쳐졌다(같은 `id`면 바꾼다). 끊긴 사이의 것은 다시 보내지 않으니, 다시 붙으면 `api.channels`를 읽는다. */
+  /** A new channel was created or a forum was edited (the same `id` replaces). What happened during a disconnect isn't sent again, so read `api.channels` when reconnecting. */
   channel: Channel,
-  /** 포럼이 지워졌다. 끊긴 사이의 것은 다시 보내지 않는다. */
+  /** A forum was deleted. What happened during a disconnect isn't sent again. */
   forumDeleted: z.strictObject({ id: z.string() }),
-  /** 멤버 목록 전부(`api.members`와 같다). 붙을 때마다 welcome 뒤에 한 번, 그 뒤로는 달라질 때마다 보낸다. */
+  /** The whole member list (same as `api.members`). Sent once after welcome on every connect, and after that every time it changes. */
   members: Members,
   /**
-   * 내 문답이 생겼거나, 답이 왔거나, 채널에 올렸다(`api.ask`, `api.dms`의 것과 같다). 묻는 사람의 연결에만 간다.
-   * 공개된 문답은 채널의 모두에게 `message`(kind `qa`)로도 간다. 끊긴 사이의 것은 다시 보내지 않으니, 다시 붙으면 `api.dms`를 읽는다.
+   * My Q&A was created, got an answer, or was posted to a channel (same as `api.ask` and `api.dms`). Goes only to the asker's connections.
+   * A public Q&A also goes to everyone in the channel as `message` (kind `qa`). What happened during a disconnect isn't sent again, so read `api.dms` when reconnecting.
    */
   qa: Qa,
-  /** 라벨 목록 전부(`api.labels`와 같다). 라벨이 생기거나 바뀌거나 없어질 때마다 보낸다. 다시 붙으면 `api.labels`를 읽는다. */
+  /** The whole label list (same as `api.labels`). Sent every time a label is created, changed, or removed. Read `api.labels` when reconnecting. */
   labels: z.array(Label),
-  /** 내 결정 초안이 끝났다(다 씀, 멈춤, 쓰지 못함). 요청한 사람의 연결에만 간다. 끊긴 사이의 것은 다시 보내지 않는다. */
+  /** My decision draft ended (written, stopped, or couldn't be written). Goes only to the requester's connections. What happened during a disconnect isn't sent again. */
   draft: Draft,
   /**
-   * 포스트(`post`, 포스트의 채널)의 토론이나 토론 요청이 바뀌었다(`api.posts`의 `debate`, `request`와 같다). 라운드가 넘어가거나, 입장이 들어오거나,
-   * 대행을 부르거나, 고르거나, 만료되거나, 기다리는 자리의 러너가 붙거나 떨어질 때 보낸다. 다시 붙으면 `api.posts`를 읽는다.
+   * A post's debate or debate request changed (same as `debate` and `request` in `api.posts`) (`post`, the post's channel). Sent when a round advances, a stance comes in,
+   * a proxy is called, an option is picked, it expires, or the runner of a waiting seat connects or disconnects. Read `api.posts` when reconnecting.
    */
   debate: z.strictObject({
     post: z.string(),
@@ -2395,7 +2397,7 @@ export const serverToWeb = {
   error: ContractError,
 } satisfies Payloads;
 
-/** API 하나를 부른다. 웹, CLI, 테스트가 같이 쓴다. 오류 답은 `ContractFailure`로 던진다. */
+/** Calls one API. The web, CLI, and tests all use it. An error answer is thrown as `ContractFailure`. */
 export async function call<R extends Route>(
   server: { url: string; session?: string; repos?: string[]; workspace?: string },
   route: R,
@@ -2421,11 +2423,11 @@ export async function call<R extends Route>(
   return route.response.parse(json) as z.output<R["response"]>;
 }
 
-/** "3분 전"처럼 지금에서 거슬러 센 시간. 상태 한 줄의 쓴 시각과 오프라인의 기준 시각에 붙인다. */
+/** Time counted back from now, like "3m ago". Attached to the time a status line was written and to the offline reference time. */
 export function ago(iso: string) {
   const minutes = Math.floor((Date.now() - Date.parse(iso)) / 60_000);
-  if (minutes < 1) return "방금 전";
-  if (minutes < 60) return `${minutes}분 전`;
-  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)}시간 전`;
-  return `${Math.floor(minutes / (24 * 60))}일 전`;
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)}h ago`;
+  return `${Math.floor(minutes / (24 * 60))}d ago`;
 }

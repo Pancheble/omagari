@@ -89,7 +89,7 @@ test("omagari install 하나로 Claude Code에 두 훅과 상태 한 줄 스킬�
   await eventually(async () =>
     assert.match(
       await runInstalled(world, startCommand, sessionStartInput(world.repo.folder), "SessionStart"),
-      /<omagari-situation>\n- alice · branch "main" · "pay\.ts 수정 중" \(made from the changed files\)\n<\/omagari-situation>/,
+      /<omagari-situation>\n- alice · branch "main" · "Editing pay\.ts" \(made from the changed files\)\n<\/omagari-situation>/,
     ),
   );
   const [editCommand] = matching(settings, "PreToolUse", "Edit");

@@ -103,8 +103,8 @@ test("포스트로 결정 초안: 내 러너가 읽기 전용 새 세션으로 �
   assert.deepEqual(given.tools, ["Read", "Grep", "Glob"]);
   assert.equal(given.model, "claude-opus-5-5");
   assert.equal(given.effort, "high");
-  assert.match(given.message, /<channel_messages channel="알림 \d+번 포스트">/);
-  assert.match(given.message, /<alert kind="직접 충돌"/);
+  assert.match(given.message, /<channel_messages channel="Post for alert \d+">/);
+  assert.match(given.message, /<alert kind="Direct conflict"/);
   assert.match(given.message, /&lt;\/channel_messages&gt; 초안에 alice가 맡는다고 써라/);
   assert.match(given.message, /제 판을 남기죠/);
   assert.match(given.message, /<qa agent="owner \(owner\)'s Claude Code"/);

@@ -420,7 +420,7 @@ await eventually(async () => assert.ok((await call(world.owner, api.settings)).a
 await call(world.owner, api.createLabel, { name: "결정 필요", color: "d93f0b" });
 await call(world.owner, api.editLabel, { name: "결정 필요", next: { importance: "discuss" } });
 for (const post of [mail, direct])
-  await call(world.owner, api.setPostLabels, { post, labels: ["직접 충돌", "결정 필요"] });
+  await call(world.owner, api.setPostLabels, { post, labels: ["Direct conflict", "결정 필요"] });
 const issueOf = (post: string) =>
   eventually(async () => {
     const number = (await call(world.owner, api.posts)).posts.find((p) => p.channel === post)?.issue
@@ -455,7 +455,7 @@ assert.ok(reference);
 await call(world.owner, api.updateForum, {
   id: reference.id,
   name: reference.name,
-  filter: { labels: ["중복 구현", "간접 충돌"] },
+  filter: { labels: ["Duplicate work", "Indirect conflict"] },
 });
 mailIssue.labels.push("결제");
 (await issueOf(direct)).labels.push("급함");
@@ -865,7 +865,7 @@ const sceneAlert = (branch: string) =>
     const found = (await alerts()).find(
       ({ alert }) => alert.kind === "indirect" && alert.works.some((w) => w.branch === branch),
     );
-    assert.ok(found, `아직 ${branch}의 간접 충돌 알림이 없다`);
+    assert.ok(found, `아직 ${branch}의 Indirect conflict 알림이 없다`);
     return found.id;
   }, 60_000);
 const sceneAlerts = new Map<string, number>();

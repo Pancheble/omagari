@@ -1,9 +1,9 @@
 import { matchesGlob } from "node:path";
 
 /**
- * actions/labeler의 `.github/labeler.yml`에서 파일 조건만 읽어 파일 목록에 맞는 라벨을 고른다(ADR-0039).
- * 출처: https://github.com/actions/labeler (v5 형식). YAML 라이브러리는 들이지 않고, 이 형식에 쓰이는 꼴(맵, 목록, 글자, `[a, b]`)만 읽는다.
- * 브랜치 조건(`head-branch`, `base-branch`)은 무시하고, 파일 조건이 없는 규칙은 맞지 않는다.
+ * Reads only the file conditions from actions/labeler's `.github/labeler.yml` and picks the labels that match a list of files (ADR-0039).
+ * Source: https://github.com/actions/labeler (v5 format). Brings in no YAML library; reads only the shapes this format uses (maps, lists, strings, `[a, b]`).
+ * Ignores branch conditions (`head-branch`, `base-branch`), and a rule with no file conditions matches nothing.
  */
 type Yaml = string | Yaml[] | { [key: string]: Yaml };
 
@@ -12,7 +12,7 @@ const unquote = (text: string) => {
   return (quote === '"' || quote === "'") && text.at(-1) === quote ? text.slice(1, -1) : text;
 };
 
-/** 따옴표 밖의 `#` 주석을 뗀다. */
+/** Strips a `#` comment outside quotes. */
 const stripComment = (line: string) => {
   let quote = "";
   for (let i = 0; i < line.length; i++) {
@@ -25,7 +25,7 @@ const stripComment = (line: string) => {
   return line;
 };
 
-/** `[a, 'b/{c,d}']` 같은 한 줄 목록을 쪼갠다. 따옴표와 중괄호 안의 쉼표는 가르지 않는다. */
+/** Splits a one-line list like `[a, 'b/{c,d}']`. Commas inside quotes and braces don't split. */
 const flow = (text: string): Yaml => {
   if (!text.startsWith("[") || !text.endsWith("]")) return unquote(text);
   const items: string[] = [];
@@ -64,9 +64,9 @@ export const parseYaml = (source: string): Yaml => {
         const rest = line.text.slice(1).trimStart();
         if (rest && !/^("[^"]*"|'[^']*'|[^:]+?):(\s|$)/.test(rest)) {
           at++;
-          list.push(flow(rest)); // "- 글자"
+          list.push(flow(rest)); // "- string"
         } else if (rest) {
-          //"- key: v"는 목록 항목 안의 맵의 첫 줄이다. 글자를 뺀 자리를 그 맵의 들여쓰기로 본다.
+          //"- key: v" is the first line of a map inside a list item. Treat the spot after the dash as that map's indentation.
           lines[at] = { indent: indent + line.text.length - rest.length, text: rest };
           list.push(block(lines[at]?.indent as number));
         } else {
@@ -82,7 +82,7 @@ export const parseYaml = (source: string): Yaml => {
     while (lines[at] && lines[at]?.indent === indent && !lines[at]?.text.startsWith("-")) {
       const { text } = lines[at] as (typeof lines)[number];
       const found = /^("[^"]*"|'[^']*'|[^:]+?):(?:\s+([\s\S]*))?$/.exec(text);
-      if (!found) throw new Error(`읽을 수 없는 줄: ${text}`);
+      if (!found) throw new Error(`Can't read this line: ${text}`);
       at++;
       const key = unquote((found[1] as string).trim());
       const value = found[2]?.trim();
@@ -107,8 +107,8 @@ const isMap = (value: Yaml | undefined): value is { [key: string]: Yaml } =>
   typeof value === "object" && !Array.isArray(value);
 
 /**
- * 맞춰 보는 데 오래 걸릴 수 있는 글롭(길거나 `*`, `{`가 많은 것)은 어느 파일에도 맞지 않는 것으로 친다.
- * 서버 하나가 모든 멤버를 받으므로 설정 파일 하나가 서버를 붙잡지 못하게 한다.
+ * A glob that could take long to match (long, or with many `*` or `{`) is treated as matching no file.
+ * One server takes in every member, so one config file mustn't be able to hold the server up.
  */
 const tame = (glob: string) =>
   glob.length <= 200 &&
@@ -127,7 +127,7 @@ const MODES: Record<string, (globs: string[], files: string[]) => boolean> = {
   "all-globs-to-all-files": (globs, files) => files.every((f) => globs.every((g) => match(g, f))),
 };
 
-/** 규칙 하나(맵)가 파일에 맞는지. 파일 조건이 하나도 없으면(브랜치 조건뿐) `undefined`로 무시한다. */
+/** Whether one rule (a map) matches a file. If it has no file conditions at all (branch conditions only), it's ignored as `undefined`. */
 const matches = (rule: Yaml, files: string[]): boolean | undefined => {
   if (!isMap(rule)) return undefined;
   const checks: boolean[] = [];
@@ -155,14 +155,14 @@ const matches = (rule: Yaml, files: string[]): boolean | undefined => {
   return checks.length > 0 ? checks.every(Boolean) : undefined;
 };
 
-/** 이보다 긴 labeler.yml은 읽지 않는다(던진다). */
+/** A labeler.yml longer than this isn't read (it throws). */
 const MAX_LABELER_CHARS = 64 * 1024;
 
-/** labeler.yml의 내용과 알림의 파일에 맞는 라벨 이름들. 읽을 수 없는 꼴이면 던진다. */
+/** The label names that match the files of an alert, from the contents of labeler.yml. Throws if the shape can't be read. */
 export const labelsFor = (source: string, files: string[]): string[] => {
-  if (source.length > MAX_LABELER_CHARS) throw new Error("labeler.yml이 너무 길다");
+  if (source.length > MAX_LABELER_CHARS) throw new Error("labeler.yml is too long");
   const config = parseYaml(source);
-  if (!isMap(config)) throw new Error("labeler.yml은 라벨 이름을 키로 하는 맵이어야 한다");
+  if (!isMap(config)) throw new Error("labeler.yml must be a map with label names as keys");
   if (files.length === 0) return [];
   return Object.entries(config)
     .filter(([, rules]) => asList(rules).some((rule) => matches(rule, files) === true))

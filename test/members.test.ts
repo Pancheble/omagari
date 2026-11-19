@@ -36,7 +36,7 @@ test("멤버 목록에 사람마다 이름과 실행기마다의 에이전트, �
   await eventually(async () =>
     assert.deepEqual(
       (await aliceOf())?.works.map((work) => work.line?.text),
-      ["결제 붙이는 중", "refund.ts 수정 중"],
+      ["결제 붙이는 중", "Editing refund.ts"],
     ),
   );
 
@@ -80,7 +80,7 @@ test("멤버 목록에 사람마다 이름과 실행기마다의 에이전트, �
       {
         branch: "refund",
         executor: null, // 관측만 있고 훅도 status set도 보낸 적이 없다(ADR-0015)
-        line: { source: "files", text: "refund.ts 수정 중" },
+        line: { source: "files", text: "Editing refund.ts" },
         conflict: false,
         broken: false,
       },
@@ -100,7 +100,7 @@ test("멤버 목록에 사람마다 이름과 실행기마다의 에이전트, �
     offline?.works.map((work) => [work.branch, work.line?.text]),
     [
       ["payment", "결제 붙이는 중"],
-      ["refund", "refund.ts 수정 중"],
+      ["refund", "Editing refund.ts"],
     ],
   );
 
@@ -140,7 +140,7 @@ test("웹은 실시간 연결에서 멤버 목록을 바로 받고, 작업과 �
   await world.signInCli(world.owner);
   assert.match((await world.cli("status")).stdout, /owner · .*\n {2}no Work/);
   await writer(world.repo.folder)("payment.ts", "pay\n");
-  await eventually(() => assert.equal(owner()?.works[0]?.line?.text, "payment.ts 수정 중"));
+  await eventually(() => assert.equal(owner()?.works[0]?.line?.text, "Editing payment.ts"));
   await call(world.owner, api.setStatus, { branch: "payment", text: "결제 붙이는 중" });
   await eventually(() => assert.equal(owner()?.works[0]?.line?.text, "결제 붙이는 중"));
 

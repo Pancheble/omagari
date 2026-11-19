@@ -114,10 +114,10 @@ test("받는 쪽이 스위치를 끄면 바로 받지 않는다가 오고 러너
   // 멤버가 아니거나 자기 자신이면 묻지 못한다.
   const stranger = await omagari(world, "ask", "nobody", "누구세요?");
   assert.equal(stranger.code, 1);
-  assert.match(stranger.stderr, /Couldn't ask: \S+의 멤버가 아니다: nobody/);
+  assert.match(stranger.stderr, /Couldn't ask: Not a member of \S+: nobody/);
   const self = await omagari(world, "ask", "owner", "나?");
   assert.equal(self.code, 1);
-  assert.match(self.stderr, /자기 에이전트에게는 묻지 않는다/);
+  assert.match(self.stderr, /Can't ask your own agent/);
 });
 
 test("받는 쪽 러너가 오프라인이면 바로 그렇다고 오고, 러너가 붙으면 답해 편지함으로 온다", async (t) => {

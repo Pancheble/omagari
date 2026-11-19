@@ -35,7 +35,7 @@ function gitVersion() {
   try {
     return git("describe", "--tags");
   } catch {
-    return `버전 모름(커밋 ${git("rev-parse", "--short", "HEAD")})`;
+    return `version unknown (commit ${git("rev-parse", "--short", "HEAD")})`;
   }
 }
 

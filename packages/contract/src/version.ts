@@ -1,7 +1,7 @@
-// 이 체크아웃의 버전(ADR-0019). Git을 부르므로 Node에서만 쓴다. 웹이 읽는 index.ts와 따로 둔다.
+// This checkout's version (ADR-0019). It calls Git, so use it only in Node. Kept apart from index.ts, which the web reads.
 import { execFileSync } from "node:child_process";
 
-/** 이 체크아웃에서 Git을 부른다. 실패하면(Git이 없다, 클론이 아니다, 태그가 없다) 없다. */
+/** Calls Git in this checkout. If it fails (no Git, not a clone, no tags), there's none. */
 function git(...args: string[]) {
   try {
     return execFileSync("git", args, {
@@ -15,22 +15,22 @@ function git(...args: string[]) {
 }
 
 /**
- * 이 체크아웃의 `git describe --tags`: 릴리즈한 커밋이면 `v0.1.0`, 그 뒤 커밋이면 `v0.1.0-3-gabc1234`.
- * 태그를 받지 못한 클론(얕은 클론 등)이면 버전을 모른다고 하고 커밋을 붙인다. package.json의 version은 읽지 않는다.
+ * This checkout's `git describe --tags`: `v0.1.0` on a released commit, `v0.1.0-3-gabc1234` on a commit after it.
+ * For a clone that didn't get the tags (a shallow clone, etc.), says the version is unknown and adds the commit. Doesn't read version in package.json.
  */
 export function checkoutVersion() {
   const tag = git("describe", "--tags");
   if (tag) return tag;
   const commit = git("rev-parse", "--short", "HEAD");
-  return commit ? `버전 모름(커밋 ${commit})` : "버전 모름";
+  return commit ? `version unknown (commit ${commit})` : "version unknown";
 }
 
-/** 이 체크아웃의 최상위 폴더. 클론이 아니면 없다. */
+/** This checkout's top-level folder. None if it isn't a clone. */
 export function checkoutRoot() {
   return git("rev-parse", "--show-toplevel");
 }
 
-/** 이 체크아웃이 서 있는 브랜치. 브랜치가 아니면(태그나 커밋을 받은 상태) 없다. */
+/** The branch this checkout is on. None if it isn't on a branch (a tag or commit is checked out). */
 export function checkoutBranch() {
   const branch = git("rev-parse", "--abbrev-ref", "HEAD");
   return branch && branch !== "HEAD" ? branch : undefined;

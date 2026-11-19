@@ -149,7 +149,7 @@ test("부딪힘은 두 작업의 편지함에만 들어가 세션 시작 훅, �
   assert.deepEqual(inbox(carolStatus.stdout), []);
   assert.match(
     carolStatus.stdout,
-    /\nRecent news \(not involving my Work, newest first\):\n {2}Direct conflict: merging alice's branch "refund" and owner's branch "payment" makes lines clash\. "src\/pay\.ts" lines 3 \/ 3 \(방금 전\)\n$/,
+    /\nRecent news \(not involving my Work, newest first\):\n {2}Direct conflict: merging alice's branch "refund" and owner's branch "payment" makes lines clash\. "src\/pay\.ts" lines 3 \/ 3 \(just now\)\n$/,
   );
 });
 
@@ -202,7 +202,7 @@ test("서브에이전트가 본 소식과 Codex와 Claude Code의 훅이 넣는 
   await writer(alice.desk.folder)("src/pay.ts", text(BASE));
   await eventually(async () =>
     assert.deepEqual(inbox(await hook(world, { tool: "Bash", agent: "agent-5" })), [
-      `- Resolved: my Work and alice's branch "refund"'s 직접 충돌`,
+      `- Resolved: my Work and alice's branch "refund"'s Direct conflict`,
     ]),
   );
   await eventually(

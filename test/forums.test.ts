@@ -17,52 +17,55 @@ test("멤버가 포럼을 만들고 고치고 지우면 포스트가 맞는 포�
   const forumsOf = async () => (await call(world.owner, api.posts)).posts.map((p) => p.forums);
   const id = async (name: string) =>
     (await call(world.owner, api.channels)).channels.find((c) => c.name === name)?.id;
-  const discuss = await id("논의");
-  const reference = await id("참고");
+  const discuss = await id("Discuss");
+  const reference = await id("FYI");
 
   // 라벨 둘이 각각 다른 포럼에 맞으면 두 포럼에 다 보인다. 라벨 목록은 하나라도 맞으면 된다. 포럼은 이름 순이다.
   const guessed = (
-    await call(alice, api.createForum, { name: " 간접  충돌 ", filter: { labels: ["간접 충돌"] } })
+    await call(alice, api.createForum, {
+      name: " 간접  충돌 ",
+      filter: { labels: ["Indirect conflict"] },
+    })
   ).channel;
   assert.deepEqual(guessed, {
     id: guessed.id,
     name: "간접 충돌",
     kind: "forum",
-    filter: { labels: ["간접 충돌"] },
+    filter: { labels: ["Indirect conflict"] },
   });
   const { channel: confirmed } = await call(alice, api.createForum, {
     name: "확인",
-    filter: { labels: ["없는 라벨", "확인됨"] },
+    filter: { labels: ["없는 라벨", "Confirmed"] },
   });
-  assert.deepEqual(await forumsOf(), [[reference], [guessed.id, discuss, confirmed.id]]);
+  assert.deepEqual(await forumsOf(), [[reference], [discuss, guessed.id, confirmed.id]]);
   // 웹에는 새 포럼과, 보이는 포럼이 바뀐 포스트의 알림 줄이 바로 간다.
   await eventually(() => {
     assert.ok(web.received.some((m) => m.kind === "channel" && m.payload.id === confirmed.id));
     const last = web.messages().findLast((m) => m.kind === "alert" && m.id === 2);
     assert.ok(last?.kind === "alert");
-    assert.deepEqual(last.post.forums, [guessed.id, discuss, confirmed.id]);
+    assert.deepEqual(last.post.forums, [discuss, guessed.id, confirmed.id]);
   });
 
   // 라벨의 중요도를 바꾸면 그 라벨을 단 포스트가 참고 포럼에서 빠지고 논의 포럼에 보인다. 웹에도 바로 간다.
-  await call(alice, api.editLabel, { name: "직접 충돌", next: { importance: "discuss" } });
-  assert.deepEqual(await forumsOf(), [[discuss], [guessed.id, discuss, confirmed.id]]);
+  await call(alice, api.editLabel, { name: "Direct conflict", next: { importance: "discuss" } });
+  assert.deepEqual(await forumsOf(), [[discuss], [discuss, guessed.id, confirmed.id]]);
   await eventually(() => {
     const last = web.messages().findLast((m) => m.kind === "alert" && m.id === 1);
     assert.ok(last?.kind === "alert");
     assert.deepEqual(last.post.forums, [discuss]);
   });
-  await call(alice, api.editLabel, { name: "직접 충돌", next: { importance: "reference" } });
-  assert.deepEqual(await forumsOf(), [[reference], [guessed.id, discuss, confirmed.id]]);
+  await call(alice, api.editLabel, { name: "Direct conflict", next: { importance: "reference" } });
+  assert.deepEqual(await forumsOf(), [[reference], [discuss, guessed.id, confirmed.id]]);
   // 라벨 이름을 바꾸면 그 라벨로 거르는 포럼도 새 이름을 따른다.
-  await call(alice, api.editLabel, { name: "간접 충돌", next: { name: "추정 충돌" } });
+  await call(alice, api.editLabel, { name: "Indirect conflict", next: { name: "추정 충돌" } });
   assert.deepEqual(
     (await call(world.owner, api.channels)).channels.find((c) => c.id === guessed.id)?.filter,
     { labels: ["추정 충돌"] },
   );
-  assert.deepEqual(await forumsOf(), [[reference], [guessed.id, discuss, confirmed.id]]);
+  assert.deepEqual(await forumsOf(), [[reference], [discuss, guessed.id, confirmed.id]]);
 
   // 같은 이름(대소문자를 가리지 않는다)의 포럼이나 채널은 만들지 못한다.
-  for (const name of ["참고", "확인"])
+  for (const name of ["FYI", "확인"])
     await assert.rejects(
       call(alice, api.createForum, { name, filter: { importance: "discuss" } }),
       { code: "conflict" } satisfies Partial<ContractFailure>,
@@ -102,7 +105,7 @@ test("멤버가 포럼을 만들고 고치고 지우면 포스트가 맞는 포�
   await assert.rejects(
     call(alice, api.updateForum, {
       id: guessed.id,
-      name: "논의",
+      name: "Discuss",
       filter: { importance: "discuss" },
     }),
     { code: "conflict" } satisfies Partial<ContractFailure>,
@@ -118,8 +121,8 @@ test("멤버가 포럼을 만들고 고치고 지우면 포스트가 맞는 포�
     );
   await call(alice, api.updateForum, {
     id: discuss as string,
-    name: "논의",
-    filter: { labels: ["직접 충돌"] },
+    name: "Discuss",
+    filter: { labels: ["Direct conflict"] },
   });
   assert.deepEqual(await forumsOf(), [[discuss, reference, guessed.id], [confirmed.id]]);
 

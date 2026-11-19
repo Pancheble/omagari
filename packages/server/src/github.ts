@@ -1,11 +1,11 @@
 /**
- * 서버의 바깥 경계: GitHub. 테스트는 여기에 가짜를 꽂는다.
- * 로그인(기기 인증), push 권한, 브랜치마다의 PR(초안 PR 제목과 머지 여부), 결정 PR(ADR-0025)을 열고, 고쳐 올리고, 리뷰를 읽고, 머지하고, 닫는 것,
- * 그리고 포스트의 이슈(ADR-0032)를 열고, 읽고, 댓글을 주고받고, 닫는 것까지다.
- * 결정 PR과 이슈에 쓰는 것은 GitHub이 받지 않으면(토큰이 무효, 권한 없음) 던진다. 메시지에 GitHub의 까닭이 있다.
+ * The server's outer boundary: GitHub. Tests plug a fake in here.
+ * Sign-in (device flow), push permission, the PR per branch (draft PR title and merge state), and opening, updating, reading reviews on, merging, and closing decision PRs (ADR-0025),
+ * plus opening, reading, commenting on, and closing post issues (ADR-0032).
+ * Writes to decision PRs and issues throw if GitHub refuses them (invalid token, no permission). The message carries GitHub's reason.
  */
 export type GitHub = {
-  /** 기기 인증을 연다. `deviceCode`는 서버만 들고, 사람에게는 `userCode`를 보인다. */
+  /** Starts device flow. Only the server keeps `deviceCode`; people see `userCode`. */
   startDevice(): Promise<{
     deviceCode: string;
     userCode: string;
@@ -13,47 +13,47 @@ export type GitHub = {
     expiresInMs: number;
     intervalMs: number;
   }>;
-  /** 기기 인증을 한 번 확인한다. 사람이 코드를 넣었으면 GitHub 토큰이 온다. */
+  /** Checks device flow once. If the person entered the code, a GitHub token comes back. */
   pollDevice(
     deviceCode: string,
   ): Promise<{ token: string } | { pending: true; intervalMs?: number } | { error: string }>;
   /**
-   * 토큰 주인의 GitHub 숫자 id, 로그인, 프로필 이름, 프로필 사진 주소. 이름을 비워 두었으면 `name`이 null이다.
-   * 로그인은 바뀌고 다른 사람이 가져갈 수 있지만 `id`는 그 계정에 붙어 있다(#315).
+   * The token owner's GitHub numeric id, login, profile name, and avatar URL. `name` is null if they left the name blank.
+   * Logins change and someone else can take them, but `id` stays with the account (#315).
    */
   user(
     token: string,
   ): Promise<{ id: number; login: string; name: string | null; avatar: string | null }>;
   /**
-   * 토큰 주인이 `owner/name`에 push할 수 있나와 GitHub이 지금 그 레포를 부르는 이름(`name`).
-   * 레포가 옮겨지거나 이름이 바뀌었으면 GitHub이 옛 이름을 새 레포로 넘겨 주어 `name`이 새 이름이다(ADR-0043).
-   * 볼 수 없으면 `name`은 물은 그대로다. GitHub이 답하지 못하면 `undefined`다.
-   * 볼 수 있으면 레포의 GitHub 숫자 id(`id`, 옮기거나 이름을 바꿔도 같고 같은 이름으로 새로 만들면 다르다, #315)와
-   * 레포 계정의 종류와 아바타(`account`)도 온다(워크스페이스의 이름 줄, 시안 101).
+   * Whether the token owner can push to `owner/name`, and the name GitHub calls that repo now (`name`).
+   * If the repo was moved or renamed, GitHub redirects the old name to the new repo and `name` is the new name (ADR-0043).
+   * If it can't be seen, `name` is the name you asked about. If GitHub can't answer, it's `undefined`.
+   * If it can be seen, you also get the repo's GitHub numeric id (`id`: the same after a move or rename, different if re-created under the same name, #315)
+   * and the repo account's kind and avatar (`account`) (the workspace's name line, draft 101).
    */
   canPush(
     token: string,
     repo: string,
   ): Promise<{ push: boolean; name: string; id?: number; account?: Account } | undefined>;
-  /** 토큰 주인이 `owner/name`의 Admin인가(워크스페이스에 레포를 넣고 뺀다, ADR-0043). GitHub이 답하지 못하면 `undefined`다. */
+  /** Whether the token owner is an Admin of `owner/name` (adding and removing repos in the workspace, ADR-0043). If GitHub can't answer, `undefined`. */
   canAdmin(token: string, repo: string): Promise<boolean | undefined>;
   /**
-   * 계정 `owner`의 레포 가운데 토큰 주인이 Admin인 것과 공개 여부, push 권한이 있는 사람 수(레포 넣기 목록, ADR-0043).
-   * GitHub이 답하지 못하면 `undefined`다.
+   * The repos of account `owner` where the token owner is an Admin, with whether each is public and how many people can push (the add-repo list, ADR-0043).
+   * If GitHub can't answer, `undefined`.
    */
   adminRepos(
     token: string,
     owner: string,
   ): Promise<{ name: string; private: boolean; pushers: number }[] | undefined>;
-  /** `owner/name`에서 `branch`를 head로 하는 PR들(닫힌 것 포함). GitHub이 답하지 못하면 `undefined`다. */
+  /** PRs in `owner/name` whose head is `branch` (closed ones included). If GitHub can't answer, `undefined`. */
   pulls(token: string, repo: string, branch: string): Promise<Pull[] | undefined>;
-  /** 레포의 기본 브랜치 이름과 그 끝 커밋. */
+  /** The repo's default branch name and its tip commit. */
   defaultBranch(token: string, repo: string): Promise<{ name: string; sha: string }>;
-  /** 커밋 `ref`에서 파일 하나의 내용. 없으면 null이다. */
+  /** One file's content at commit `ref`. null if it doesn't exist. */
   read(token: string, repo: string, ref: string, path: string): Promise<string | null>;
-  /** 커밋 `ref`에서 폴더 바로 아래의 이름들. 폴더가 없으면 비어 있다. */
+  /** The names directly under a folder at commit `ref`. Empty if the folder doesn't exist. */
   list(token: string, repo: string, ref: string, folder: string): Promise<string[]>;
-  /** 커밋 `base` 위에 `files`를 쓴 커밋 하나를 만들고 그것을 새 브랜치 `branch`로 둔다. */
+  /** Makes one commit that writes `files` on top of commit `base` and points the new branch `branch` at it. */
   commit(
     token: string,
     repo: string,
@@ -64,56 +64,56 @@ export type GitHub = {
       files: { path: string; content: string }[];
     },
   ): Promise<void>;
-  /** `head` 브랜치에서 `base` 브랜치로 PR을 연다. */
+  /** Opens a PR from branch `head` into branch `base`. */
   openPull(
     token: string,
     repo: string,
     pull: { head: string; base: string; title: string; body: string },
   ): Promise<{ number: number; url: string }>;
-  /** 번호로 PR 하나. GitHub이 답하지 못하면 `undefined`다. */
+  /** One PR by number. If GitHub can't answer, `undefined`. */
   pull(token: string, repo: string, number: number): Promise<Pull | undefined>;
-  /** 이미 있는 브랜치 `branch`의 끝에 `files`를 쓴 커밋 하나를 더한다. */
+  /** Adds one commit that writes `files` to the tip of the existing branch `branch`. */
   addCommit(
     token: string,
     repo: string,
     change: { branch: string; message: string; files: { path: string; content: string }[] },
   ): Promise<void>;
-  /** PR을 머지하지 않고 닫는다. */
+  /** Closes the PR without merging. */
   closePull(token: string, repo: string, number: number): Promise<void>;
   /**
-   * PR에 변경 요청이 걸린 사람들: 리뷰어마다 마지막 리뷰(승인, 변경 요청, 해제)가 변경 요청인 사람의 로그인.
-   * 의견만 단 리뷰는 셈하지 않는다. GitHub이 답하지 못하면 `undefined`다.
+   * People with changes requested on the PR: the logins whose latest review (approve, request changes, dismiss) is a request for changes.
+   * Comment-only reviews don't count. If GitHub can't answer, `undefined`.
    */
   changesRequested(token: string, repo: string, number: number): Promise<string[] | undefined>;
-  /** PR을 머지한다. GitHub이 막으면(리뷰 필수, 검사 실패, 충돌, 토큰 무효) 그 까닭을 돌려준다. */
+  /** Merges the PR. If GitHub blocks it (review required, failed check, conflict, invalid token), returns the reason. */
   merge(
     token: string,
     repo: string,
     number: number,
   ): Promise<{ merged: true } | { reason: string }>;
-  /** 이슈를 연다(포스트의 이슈, ADR-0032). 라벨은 push 권한이 있는 토큰일 때만 붙는다. */
+  /** Opens an issue (a post's issue, ADR-0032). Labels are only applied with a token that can push. */
   openIssue(
     token: string,
     repo: string,
     issue: { title: string; body: string; labels: string[] },
   ): Promise<{ number: number; url: string }>;
-  /** 번호로 이슈 하나의 제목, 라벨 이름, 열림. GitHub이 답하지 못하면 `undefined`다. */
+  /** One issue by number: its title, label names, and whether it's open. If GitHub can't answer, `undefined`. */
   issue(token: string, repo: string, number: number): Promise<Issue | undefined>;
-  /** 이슈의 댓글, 오래된 것부터. GitHub이 답하지 못하면 `undefined`다. */
+  /** The issue's comments, oldest first. If GitHub can't answer, `undefined`. */
   comments(token: string, repo: string, number: number): Promise<Comment[] | undefined>;
-  /** 이슈에 댓글을 단다. 토큰 주인의 이름으로 달린다. */
+  /** Comments on the issue as the token owner. */
   comment(token: string, repo: string, number: number, body: string): Promise<{ id: number }>;
-  /** 이슈를 닫는다(끝남). */
+  /** Closes the issue (done). */
   closeIssue(token: string, repo: string, number: number): Promise<void>;
-  /** 이슈에 라벨을 붙인다. 이미 붙어 있어도 된다. 레포에 없는 라벨이면 GitHub이 만든다. */
+  /** Adds a label to the issue. It's fine if it's already there. If the repo doesn't have the label, GitHub creates it. */
   addLabel(token: string, repo: string, number: number, label: string): Promise<void>;
-  /** 이슈에서 라벨을 뗀다. 붙어 있지 않아도 된다. */
+  /** Removes a label from the issue. It's fine if it isn't there. */
   removeLabel(token: string, repo: string, number: number, label: string): Promise<void>;
-  /** 레포의 라벨 전부(ADR-0039). GitHub이 답하지 못하면 `undefined`다. */
+  /** All of the repo's labels (ADR-0039). If GitHub can't answer, `undefined`. */
   labels(token: string, repo: string): Promise<RepoLabel[] | undefined>;
-  /** 레포에 라벨을 만든다. 같은 이름이 있으면 GitHub이 받지 않는다. */
+  /** Creates a label in the repo. GitHub refuses if the name already exists. */
   createLabel(token: string, repo: string, label: Omit<RepoLabel, "id">): Promise<RepoLabel>;
-  /** 레포의 라벨 `name`의 이름, 색, 설명을 고친다. 이슈에 붙은 라벨도 GitHub에서 함께 바뀐다. */
+  /** Changes the name, color, and description of the repo's label `name`. Issues carrying the label change on GitHub too. */
   updateLabel(
     token: string,
     repo: string,
@@ -122,10 +122,10 @@ export type GitHub = {
   ): Promise<RepoLabel>;
 };
 
-/** GitHub 계정의 종류와 아바타 주소. */
+/** A GitHub account's kind and avatar URL. */
 export type Account = { kind: "organization" | "user"; avatar: string | null };
 
-/** 레포의 GitHub 라벨. `id`는 이름이 바뀌어도 그대로다. 색은 `#` 없는 16진수다. */
+/** A GitHub label in the repo. `id` stays the same when the name changes. The color is hex without `#`. */
 export type RepoLabel = { id: number; name: string; color: string; description: string };
 
 const repoLabel = (label: RepoLabel): RepoLabel => ({
@@ -142,14 +142,14 @@ export type Pull = {
   title: string;
   draft: boolean;
   open: boolean;
-  /** 머지된 시각(ISO). 머지되지 않았으면 없다. */
+  /** When it was merged (ISO). Absent if it wasn't merged. */
   mergedAt?: string;
 };
 
-// 기기 인증: https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow
-// push 권한: GET /repos/{owner}/{repo}의 `permissions.push`(Room과 같은 방법).
-// 브랜치의 PR: GET /repos/{owner}/{repo}/pulls?state=all&head={owner}:{branch}
-// (https://docs.github.com/en/rest/pulls/pulls#list-pull-requests). 멤버는 push 권한이 있어 같은 레포에 브랜치를 올린다.
+// Device flow: https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow
+// Push permission: `permissions.push` of GET /repos/{owner}/{repo} (same method as Room).
+// A branch's PRs: GET /repos/{owner}/{repo}/pulls?state=all&head={owner}:{branch}
+// (https://docs.github.com/en/rest/pulls/pulls#list-pull-requests). Members can push, so they put branches in the same repo.
 export function realGitHub(clientId: string): GitHub {
   const post = async (url: string, body: object) => {
     const response = await fetch(url, {
@@ -174,14 +174,14 @@ export function realGitHub(clientId: string): GitHub {
       signal: AbortSignal.timeout(10_000),
     });
   const get = (path: string, token: string) => request(path, token);
-  /** 결정 PR의 요청. 2xx가 아니면 GitHub의 까닭을 실어 던진다. */
+  /** A decision PR request. If it isn't 2xx, throws with GitHub's reason attached. */
   const send = async (path: string, token: string, method = "GET", body?: object) => {
     const response = await request(path, token, method, body);
     const json = await response.json().catch(() => undefined);
     if (!response.ok) throw new Error(`HTTP ${response.status} ${json?.message ?? ""}`.trim());
     return json;
   };
-  /** 커밋 `ref`에서 경로 하나의 contents. 없으면 undefined다. */
+  /** The contents of one path at commit `ref`. undefined if it doesn't exist. */
   const contents = async (token: string, repo: string, ref: string, path: string) => {
     const response = await request(
       `/repos/${repo}/contents/${encodeURI(path)}?ref=${encodeURIComponent(ref)}`,
@@ -192,18 +192,18 @@ export function realGitHub(clientId: string): GitHub {
     if (!response.ok) throw new Error(`HTTP ${response.status} ${json?.message ?? ""}`.trim());
     return json;
   };
-  /** 레포에서 토큰 주인의 권한 하나(GitHub이 돌려주는 것에 팀으로 받은 몫이 들어 있다, ADR-0043). */
-  // 옮겨지거나 이름이 바뀐 레포는 옛 이름으로 물으면 301로 새 레포(`/repositories/{id}`)를 가리키고, fetch가 따라가 `full_name`이 새 이름이다
+  /** One of the token owner's permissions on a repo (what GitHub returns includes what they get through teams, ADR-0043). */
+  // Asking for a moved or renamed repo by its old name gets a 301 to the new repo (`/repositories/{id}`), and fetch follows it, so `full_name` is the new name
   // (https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#follow-redirects).
   const permission = async (token: string, repo: string, kind: "push" | "admin") => {
     const response = await get(`/repos/${repo}`, token).catch(() => undefined);
-    // 401은 토큰이 끝났고, 404는 비공개 레포를 볼 수 없다. 403은 요청 한도일 수 있어 모른다고 한다.
+    // 401 means the token ended, 404 means a private repo can't be seen. 403 may be a rate limit, so we say we don't know.
     if (response?.status === 401 || response?.status === 404) return { can: false, name: repo };
     if (!response?.ok) return undefined;
     const json = await response.json();
     const can = json.permissions?.[kind];
     if (typeof can !== "boolean") return undefined;
-    // 레포의 owner는 계정(조직이나 개인)이다: `type`이 "Organization"이나 "User", `avatar_url`이 아바타다.
+    // The repo's owner is an account (org or person): `type` is "Organization" or "User", `avatar_url` is the avatar.
     const owner = json.owner as { type?: unknown; avatar_url?: unknown } | undefined;
     const account: Account | undefined = owner && {
       kind: owner.type === "User" ? "user" : "organization",
@@ -219,10 +219,10 @@ export function realGitHub(clientId: string): GitHub {
 
   return {
     async startDevice() {
-      // 비공개 레포의 권한을 읽으려면 OAuth 앱에는 repo 범위가 필요하다. GitHub 앱이면 범위는 무시된다.
+      // Reading permissions on private repos needs the repo scope for an OAuth app. For a GitHub App, the scope is ignored.
       const b = await post("https://github.com/login/device/code", { scope: "repo" });
       if (typeof b.device_code !== "string") {
-        throw new Error(`GitHub 기기 인증을 열지 못했다: ${b.error_description ?? b.error}`);
+        throw new Error(`Couldn't open GitHub device flow: ${b.error_description ?? b.error}`);
       }
       return {
         deviceCode: b.device_code,
@@ -240,7 +240,7 @@ export function realGitHub(clientId: string): GitHub {
       if (typeof b.access_token === "string") return { token: b.access_token };
       if (b.error === "authorization_pending") return { pending: true };
       if (b.error === "slow_down") return { pending: true, intervalMs: b.interval * 1000 };
-      return { error: b.error_description ?? b.error ?? "GitHub이 토큰을 주지 않았다" };
+      return { error: b.error_description ?? b.error ?? "GitHub didn't give a token" };
     },
     async user(token) {
       const response = await get("/user", token);
@@ -258,9 +258,9 @@ export function realGitHub(clientId: string): GitHub {
       return found && { push: found.can, name: found.name, id: found.id, account: found.account };
     },
     canAdmin: async (token, repo) => (await permission(token, repo, "admin"))?.can,
-    // 내 레포: GET /user/repos(https://docs.github.com/en/rest/repos/repos#list-repositories-for-the-authenticated-user)의 `permissions.admin`.
-    // push 권한이 있는 사람: GET /repos/{owner}/{repo}/collaborators?permission=push(팀으로 받은 사람도 든다).
-    // ponytail: 둘 다 첫 100개만 읽는다. 계정의 레포나 한 레포의 사람이 100을 넘으면 Link 머리말로 다음 쪽을 읽는다.
+    // My repos: `permissions.admin` of GET /user/repos (https://docs.github.com/en/rest/repos/repos#list-repositories-for-the-authenticated-user).
+    // People who can push: GET /repos/{owner}/{repo}/collaborators?permission=push (includes people who get it through teams).
+    // ponytail: reads only the first 100 of each. If an account has more than 100 repos or a repo has more than 100 people, read the next page from the Link header.
     async adminRepos(token, owner) {
       const response = await get("/user/repos?per_page=100&sort=full_name", token).catch(
         () => undefined,
@@ -308,8 +308,8 @@ export function realGitHub(clientId: string): GitHub {
         mergedAt: pull.merged_at ?? undefined,
       }));
     },
-    // 결정 PR: https://docs.github.com/en/rest/repos/contents, https://docs.github.com/en/rest/git (트리, 커밋, 참조),
-    // https://docs.github.com/en/rest/pulls/pulls (열기, 읽기, 머지).
+    // Decision PRs: https://docs.github.com/en/rest/repos/contents, https://docs.github.com/en/rest/git (trees, commits, refs),
+    // https://docs.github.com/en/rest/pulls/pulls (open, read, merge).
     async defaultBranch(token, repo) {
       const { default_branch: name } = await send(`/repos/${repo}`, token);
       const ref = await send(`/repos/${repo}/git/ref/heads/${encodeURIComponent(name)}`, token);
@@ -325,7 +325,7 @@ export function realGitHub(clientId: string): GitHub {
       return Array.isArray(items) ? items.map((item: { name: string }) => item.name) : [];
     },
     async commit(token, repo, { branch, base, message, files }) {
-      // 파일 여럿을 커밋 하나로: 기준 커밋의 트리 위에 새 트리, 그 트리의 커밋, 그 커밋을 가리키는 새 브랜치.
+      // Several files in one commit: a new tree on the base commit's tree, a commit of that tree, and a new branch pointing at that commit.
       const parent = await send(`/repos/${repo}/git/commits/${base}`, token);
       const tree = await send(`/repos/${repo}/git/trees`, token, "POST", {
         base_tree: parent.tree.sha,
@@ -375,8 +375,8 @@ export function realGitHub(clientId: string): GitHub {
     async closePull(token, repo, number) {
       await send(`/repos/${repo}/pulls/${number}`, token, "PATCH", { state: "closed" });
     },
-    // 리뷰: https://docs.github.com/en/rest/pulls/reviews#list-reviews-for-a-pull-request (오래된 것부터 온다).
-    // ponytail: 첫 100개만 읽는다. 결정 PR에 리뷰가 그보다 많아지면 쪽을 넘긴다.
+    // Reviews: https://docs.github.com/en/rest/pulls/reviews#list-reviews-for-a-pull-request (oldest first).
+    // ponytail: reads only the first 100. If a decision PR gets more reviews than that, page through.
     async changesRequested(token, repo, number) {
       const response = await get(
         `/repos/${repo}/pulls/${number}/reviews?per_page=100`,
@@ -391,7 +391,7 @@ export function realGitHub(clientId: string): GitHub {
       return [...last].filter(([, state]) => state === "CHANGES_REQUESTED").map(([login]) => login);
     },
     async merge(token, repo, number) {
-      // 레포가 허용하지 않는 머지 방법이면 405와 "not allowed"가 온다. 그때만 다음 방법을 해 본다.
+      // If the repo doesn't allow a merge method, you get 405 and "not allowed". Only then, try the next method.
       let reason = "";
       for (const method of ["merge", "squash", "rebase"]) {
         const response = await request(`/repos/${repo}/pulls/${number}/merge`, token, "PUT", {
@@ -405,7 +405,7 @@ export function realGitHub(clientId: string): GitHub {
       }
       return { reason };
     },
-    // 이슈: https://docs.github.com/en/rest/issues/issues, https://docs.github.com/en/rest/issues/comments
+    // Issues: https://docs.github.com/en/rest/issues/issues, https://docs.github.com/en/rest/issues/comments
     async openIssue(token, repo, issue) {
       const opened = await send(`/repos/${repo}/issues`, token, "POST", issue);
       return { number: opened.number, url: opened.html_url };
@@ -422,7 +422,7 @@ export function realGitHub(clientId: string): GitHub {
         open: issue.state === "open",
       };
     },
-    // ponytail: 첫 100개만 읽는다. 한 포스트에 댓글이 그보다 많아지면 `since`나 쪽 넘기기로 읽는다.
+    // ponytail: reads only the first 100. If a post gets more comments than that, read with `since` or paging.
     async comments(token, repo, number) {
       const response = await get(
         `/repos/${repo}/issues/${number}/comments?per_page=100`,
@@ -447,7 +447,7 @@ export function realGitHub(clientId: string): GitHub {
         state_reason: "completed",
       });
     },
-    // 라벨: https://docs.github.com/en/rest/issues/labels (붙이기는 POST, 떼기는 DELETE이고 붙어 있지 않으면 404다)
+    // Labels: https://docs.github.com/en/rest/issues/labels (add is POST, remove is DELETE, and 404 if it isn't there)
     async addLabel(token, repo, number, label) {
       await send(`/repos/${repo}/issues/${number}/labels`, token, "POST", { labels: [label] });
     },
@@ -459,7 +459,7 @@ export function realGitHub(clientId: string): GitHub {
       );
       if (!response.ok && response.status !== 404) throw new Error(`HTTP ${response.status}`);
     },
-    // ponytail: 첫 100개만 읽는다. 레포의 라벨이 그보다 많아지면 쪽을 넘긴다.
+    // ponytail: reads only the first 100. If the repo has more labels than that, page through.
     async labels(token, repo) {
       const response = await get(`/repos/${repo}/labels?per_page=100`, token).catch(
         () => undefined,

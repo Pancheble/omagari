@@ -110,11 +110,11 @@ test("Admin만 같은 계정의 레포를 넣고 빼며, 러너는 원격으로 
 
   // 라벨의 중요도는 레포마다다.
   await call(on(owner, REPO2), api.editLabel, {
-    name: "중복 구현",
+    name: "Duplicate work",
     next: { importance: "discuss" },
   });
   const importance = async (as: As) =>
-    (await call(as, api.labels)).labels.find((l) => l.name === "중복 구현")?.importance;
+    (await call(as, api.labels)).labels.find((l) => l.name === "Duplicate work")?.importance;
   assert.equal(await importance(on(owner, REPO2)), "discuss");
   assert.equal(await importance(owner), "reference");
   assert.equal(await importance(alice), "discuss");
@@ -186,14 +186,14 @@ test("레포가 하나이던 판의 DB로 켜도 있던 것이 그 레포에 그
   const { posts } = await call(owner, api.posts);
   assert.deepEqual(
     posts.map((p) => [p.channel, p.labels, p.importance, p.count]),
-    [["p1", ["직접 충돌"], "discuss", 1]],
+    [["p1", ["Direct conflict"], "discuss", 1]],
   );
   assert.deepEqual(
     (await call(owner, api.decisions)).decisions.map((d) => [d.id, d.title]),
     [[1, "결제는 alice가"]],
   );
   assert.equal(
-    (await call(owner, api.labels)).labels.find((l) => l.name === "직접 충돌")?.importance,
+    (await call(owner, api.labels)).labels.find((l) => l.name === "Direct conflict")?.importance,
     "discuss",
   );
   assert.deepEqual((await call(owner, api.settings)).mergeCheck.check, { problem: "missing" });
@@ -208,7 +208,7 @@ test("레포가 하나이던 판의 DB로 켜도 있던 것이 그 레포에 그
   assert.deepEqual((await call(other, api.posts)).posts, []);
   assert.deepEqual((await call(other, api.decisions)).decisions, []);
   assert.equal(
-    (await call(other, api.labels)).labels.find((l) => l.name === "직접 충돌")?.importance,
+    (await call(other, api.labels)).labels.find((l) => l.name === "Direct conflict")?.importance,
     "reference",
   );
   assert.equal((await call(other, api.settings)).mergeCheck.check, null);
@@ -243,11 +243,14 @@ test("GitHub에서 레포를 다른 계정으로 옮기면 그 레포의 것이 
       .map((l) => l.name),
     check: (await call(as, api.settings)).mergeCheck.check,
     history: (await call(as, api.history, { channel: "p1" })).messages.map((m) => m.kind),
-    channels: (await call(as, api.channels)).channels.map((c) => `${c.kind}:${c.name}`).sort(),
+    // Forums by filter: the new account's workspace gets the default forums under English names.
+    channels: (await call(as, api.channels)).channels
+      .map((c) => `${c.kind}:${c.kind === "forum" ? JSON.stringify(c.filter) : c.name}`)
+      .sort(),
   });
   const before = await seen(world.owner);
   assert.deepEqual(before.works, [["alice", "payment", "결제 고치는 중"]]);
-  assert.deepEqual(before.posts, [["p1", ["직접 충돌"], "discuss"]]);
+  assert.deepEqual(before.posts, [["p1", ["Direct conflict"], "discuss"]]);
 
   // 권한을 다시 읽을 때(여기서는 다시 로그인할 때, 서버에서는 10분마다도) 옮겨진 것을 안다.
   world.github.move(REPO, MOVED);

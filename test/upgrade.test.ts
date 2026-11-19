@@ -62,8 +62,8 @@ test("라벨이 없던 판의 포스트에 종류 라벨과 확인됨이 붙고,
   assert.deepEqual(
     posts.map((post) => [post.labels, post.importance]),
     [
-      [["직접 충돌"], "reference"],
-      [["간접 충돌", "확인됨"], "discuss"],
+      [["Direct conflict"], "reference"],
+      [["Indirect conflict", "Confirmed"], "discuss"],
     ],
   );
   // 이슈 맞추기가 여러 번 돌아도 참고 포스트의 이슈는 열린 채다.
@@ -71,8 +71,8 @@ test("라벨이 없던 판의 포스트에 종류 라벨과 확인됨이 붙고,
   assert.deepEqual(
     world.github.issues.map((issue) => [issue.number, issue.open, issue.labels]),
     [
-      [101, true, ["직접 충돌"]],
-      [102, true, ["간접 충돌", "확인됨"]],
+      [101, true, ["Direct conflict"]],
+      [102, true, ["Indirect conflict", "Confirmed"]],
     ],
   );
   assert.deepEqual(
@@ -81,10 +81,10 @@ test("라벨이 없던 판의 포스트에 종류 라벨과 확인됨이 붙고,
   );
   // 예전 "부딪힘" 포럼(f0)은 "논의"로 거르는 "논의" 포럼이 되고, "참고" 포럼이 생긴다(ADR-0039). 포스트는 중요도대로 보인다.
   const { channels } = await call(world.owner, api.channels);
-  const reference = channels.find((c) => c.name === "참고");
+  const reference = channels.find((c) => c.name === "FYI");
   assert.deepEqual(channels, [
-    { id: "f0", name: "논의", kind: "forum", filter: { importance: "discuss" } },
-    { id: reference?.id, name: "참고", kind: "forum", filter: { importance: "reference" } },
+    { id: "f0", name: "Discuss", kind: "forum", filter: { importance: "discuss" } },
+    { id: reference?.id, name: "FYI", kind: "forum", filter: { importance: "reference" } },
   ]);
   assert.deepEqual(
     (await call(world.owner, api.posts)).posts.map((post) => post.forums),

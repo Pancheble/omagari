@@ -71,7 +71,7 @@ test("주인이 러너마다 공유 수준을 고르고 다시 켜도 그 수준
       { path: "gone.ts", deleted: true },
       { path: "image.png", omitted: "binary" },
     ],
-    { source: "files", text: "committed.ts 외 3개 수정 중" },
+    { source: "files", text: "Editing committed.ts and 3 more" },
   );
   let { stdout } = await runner.stop();
   assert.match(stdout, /Observation \(share level full\)/);
@@ -84,7 +84,10 @@ test("주인이 러너마다 공유 수준을 고르고 다시 켜도 그 수준
     { path: "gone.ts", deleted: true },
     { path: "image.png", omitted: "share" },
   ];
-  await observed("declared", declared, { source: "files", text: "committed.ts 외 3개 수정 중" });
+  await observed("declared", declared, {
+    source: "files",
+    text: "Editing committed.ts and 3 more",
+  });
   ({ stdout } = await runner.stop());
   assert.match(
     stdout,
@@ -95,7 +98,7 @@ test("주인이 러너마다 공유 수준을 고르고 다시 켜도 그 수준
   await write("later.ts", "꺼진 동안 쓴 내용\n");
   runner = await launch();
   const later = [...declared, { path: "later.ts", omitted: "share" }];
-  await observed("declared", later, { source: "files", text: "committed.ts 외 4개 수정 중" });
+  await observed("declared", later, { source: "files", text: "Editing committed.ts and 4 more" });
   const fixing = await setStatus("결제 흐름 고치는 중");
   await observed("declared", later, fixing);
   ({ stdout } = await runner.stop());

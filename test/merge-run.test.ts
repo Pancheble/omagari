@@ -243,10 +243,10 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo "pay
     const line = inboxLines((await world.cliIn(folder, "status")).stdout).find((l) =>
       l.startsWith(OWNER_SEES),
     );
-    assert.ok(line, "깨짐 판정이 든 소식이 오지 않았다");
+    assert.ok(line, "Broken 판정이 든 소식이 오지 않았다");
     assert.match(
       line,
-      /· Merge run verdict: 깨짐 \(run by member owner, check command "sh check\.sh", \d+s\)\. End of output: "bob\.ts\\ncommitted\.ts\\ndraft\.ts\\npay\.ts\\nuse\.ts\\npay\(1\)에 currency가 빠졌다"$/,
+      /· Merge run verdict: Broken \(run by member owner, check command "sh check\.sh", \d+s\)\. End of output: "bob\.ts\\ncommitted\.ts\\ndraft\.ts\\npay\.ts\\nuse\.ts\\npay\(1\)에 currency가 빠졌다"$/,
     );
   });
   await receives(world, bob.desk.folder, BOB_SEES);
@@ -287,10 +287,10 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo "pay
   const log = (await world.cli("runner", "log")).stdout;
   assert.match(
     log,
-    /check command "sh check\.sh" {2}merge run payment \+ currency of bob {2}folder .+ {2}verdict 깨짐 /,
+    /check command "sh check\.sh" {2}merge run payment \+ currency of bob {2}folder .+ {2}verdict Broken /,
   );
-  assert.match(log, /merge run payment \+ reason of carol {2}folder .+ {2}verdict 통과 /);
-  assert.match(log, /merge run payment \+ currency of bob {2}folder .+ {2}verdict 통과 /);
+  assert.match(log, /merge run payment \+ reason of carol {2}folder .+ {2}verdict Pass /);
+  assert.match(log, /merge run payment \+ currency of bob {2}folder .+ {2}verdict Pass /);
 
   // 지표: 오늘 돌려 본 것은 넷이다. bob의 깨짐, carol의 통과, owner가 고친 뒤 다시 돌린 carol과 bob의 통과. 돌려 보는 중과 다시 올린 것(같은 지문)은 세지 않는다.
   await world.signInCli(world.owner);
@@ -299,7 +299,7 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo "pay
   const [header, today] = shown.stdout.trimEnd().split("\n");
   assert.equal(
     header,
-    "Date (Asia/Seoul)  Members joined  Q&As  Merge runs  통과  깨짐  가릴 수 없음  돌리지 못함  Debates opened  Ended (experiment)  Ended (evidence)  Ended (human)  Ended (expired)  Decision PRs",
+    "Date (Asia/Seoul)  Members joined  Q&As  Merge runs  Pass  Broken  Can't tell  Couldn't run  Debates opened  Ended (experiment)  Ended (evidence)  Ended (human)  Ended (expired)  Decision PRs",
   );
   assert.match(
     today ?? "",
@@ -488,9 +488,9 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
     (await call(world.owner, api.channels)).channels.map((c) => [c.name, c.id]),
   );
   const guessed = (await call(world.owner, api.posts)).posts[0];
-  assert.deepEqual(guessed?.labels, ["간접 충돌"]);
+  assert.deepEqual(guessed?.labels, ["Indirect conflict"]);
   assert.equal(guessed?.importance, "reference");
-  assert.deepEqual(guessed?.forums, [forums.참고]);
+  assert.deepEqual(guessed?.forums, [forums.FYI]);
   assert.equal(guessed?.issue, null);
   assert.equal(guessed?.debate, null); // 추정에는 토론이 열리지 않는다(ADR-0040)
   assert.equal(world.github.issues.length, 0);
@@ -505,21 +505,21 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
   const issue = await eventually(() => {
     const [opened] = world.github.issues;
     assert.ok(opened);
-    assert.deepEqual(opened.labels, ["간접 충돌", "확인됨"]);
+    assert.deepEqual(opened.labels, ["Indirect conflict", "Confirmed"]);
     assert.equal(opened.comments.length, 1);
     return opened;
   });
-  assert.match(issue.comments[0]?.body ?? "", /깨졌어요/);
+  assert.match(issue.comments[0]?.body ?? "", /The merge run broke/);
   assert.match(issue.comments[0]?.body ?? "", /`sh check\.sh`/);
   assert.match(issue.comments[0]?.body ?? "", /```\n합치면 깨진다\n```/);
   await sleep(300);
   assert.equal(issue.comments.length, 1);
   const [post] = (await call(world.owner, api.posts)).posts;
-  assert.ok(post?.issue?.labels.includes("확인됨"));
-  assert.deepEqual(post?.labels, ["간접 충돌", "확인됨"]);
+  assert.ok(post?.issue?.labels.includes("Confirmed"));
+  assert.deepEqual(post?.labels, ["Indirect conflict", "Confirmed"]);
   assert.equal(post?.importance, "discuss");
   // 논의가 되면 "참고" 포럼에서 빠지고 "논의" 포럼에 보인다(ADR-0039).
-  assert.deepEqual(post?.forums, [forums.논의]);
+  assert.deepEqual(post?.forums, [forums.Discuss]);
   // 확인되면 두 작업의 주인 에이전트로 토론이 열린다(ADR-0040).
   assert.deepEqual(post?.debate?.seats.map((seat) => seat.login).sort(), ["bob", "owner"]);
   const thread = await call(world.owner, api.history, { channel: post?.message.channel ?? "" });
@@ -536,11 +536,11 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
   assert.equal(fake.calls.length, 8);
   // 통과로 닫히면 라벨이 떼어지고 이슈가 닫히며 통과한 검사 명령이 댓글에 남는다.
   await eventually(() => {
-    assert.ok(!issue.labels.includes("확인됨"));
+    assert.ok(!issue.labels.includes("Confirmed"));
     assert.equal(issue.open, false);
     assert.equal(issue.comments.length, 2);
   });
-  assert.match(issue.comments[1]?.body ?? "", /통과했어요[\s\S]*`sh check\.sh`/);
+  assert.match(issue.comments[1]?.body ?? "", /The merge run passed[\s\S]*`sh check\.sh`/);
   // 새 알림을 만들지 않고 그 알림을 닫았다.
   const withBob = async () =>
     (await indirect(world.owner)).filter((a) => a.works.some((w) => w.login === "bob")).length;
@@ -548,12 +548,12 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
   await receives(
     world,
     folder,
-    `- Resolved: my Work and bob's branch "currency"'s 간접 충돌(추정)`,
+    `- Resolved: my Work and bob's branch "currency"'s Indirect conflict (guessed)`,
   );
   await receives(
     world,
     bob.desk.folder,
-    `- Resolved: my Work and owner's branch "payment"'s 간접 충돌(추정)`,
+    `- Resolved: my Work and owner's branch "payment"'s Indirect conflict (guessed)`,
   );
   await eventually(async () => {
     assert.equal(await brokenMark(world, "owner", "payment"), false);
@@ -578,7 +578,7 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
   assert.equal(fake.calls.length, 10);
   const reopened = await eventually(() => {
     const opened = world.github.issues[1];
-    assert.ok(opened?.labels.includes("확인됨"));
+    assert.ok(opened?.labels.includes("Confirmed"));
     return opened;
   });
 
@@ -587,9 +587,9 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
   await alertWith(world.owner, "bob", (a) => assert.equal(a.run?.verdict, "unclear"));
   await eventually(async () => {
     const now = (await call(world.owner, api.posts)).posts.at(-1);
-    assert.deepEqual(now?.labels, ["간접 충돌"]);
+    assert.deepEqual(now?.labels, ["Indirect conflict"]);
     assert.equal(now?.importance, "reference");
-    assert.ok(!reopened.labels.includes("확인됨"));
+    assert.ok(!reopened.labels.includes("Confirmed"));
   });
   assert.equal(reopened.open, true);
   await rm(join(folder, "src/owner-oops"));

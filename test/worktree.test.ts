@@ -34,7 +34,7 @@ test("등록한 폴더와 연결된 워크트리의 브랜치가 각각 작업�
         base,
         share: "full",
         files: [{ path: "a.ts", content: "a\n" }],
-        line: { source: "files", text: "a.ts 수정 중" },
+        line: { source: "files", text: "Editing a.ts" },
         offlineSince: null,
       },
       {
@@ -43,7 +43,7 @@ test("등록한 폴더와 연결된 워크트리의 브랜치가 각각 작업�
         base,
         share: "full",
         files: [{ path: "b.ts", content: "b\n" }],
-        line: { source: "files", text: "b.ts 수정 중" },
+        line: { source: "files", text: "Editing b.ts" },
         offlineSince: null,
       },
       {
@@ -52,7 +52,7 @@ test("등록한 폴더와 연결된 워크트리의 브랜치가 각각 작업�
         base,
         share: "full",
         files: [{ path: "main.ts", content: "main\n" }],
-        line: { source: "files", text: "main.ts 수정 중" },
+        line: { source: "files", text: "Editing main.ts" },
         offlineSince: null,
       },
     ]),
