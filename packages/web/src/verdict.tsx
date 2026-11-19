@@ -3,7 +3,7 @@ import { CircleCheck, CircleMinus, CircleQuestionMark, CircleX, LoaderCircle } f
 import { type ReactNode, useEffect, useId, useReducer, useState } from "react";
 import { notRunWords } from "./verdict-words.ts";
 
-const DOCS = "https://github.com/Pancheble/omagari/blob/dev/docs/adr";
+const DOCS = "https://github.com/omagari-dev/omagari/blob/dev/docs/adr";
 const link = (href: string, text: string) => (
   <a href={href} target="_blank" rel="noreferrer">
     {text}
