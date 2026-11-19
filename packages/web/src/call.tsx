@@ -185,6 +185,7 @@ export function CallComposer({
       }}
       onSubmit={onSubmit}
       area={area}
+      emoji
       menu={menu}
       before={
         attached ? (

@@ -1,10 +1,10 @@
 changelog:
   categories:
-    - title: 기능
+    - title: Features
       labels: ["type:feat"]
-    - title: 수정
+    - title: Fixes
       labels: ["type:fix"]
-    - title: 문서
+    - title: Docs
       labels: ["type:docs"]
-    - title: 그 밖에
+    - title: Other
       labels: ["*"]

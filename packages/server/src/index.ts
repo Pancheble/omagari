@@ -939,6 +939,19 @@ export async function startServer(options: {
     old TEXT PRIMARY KEY COLLATE NOCASE,
     new TEXT NOT NULL
   ) STRICT`);
+  // 레포의 GitHub 숫자 id(#315). 넣을 때나 처음 권한을 읽을 때 적고, 레포를 빼도 남긴다.
+  // 같은 이름이라도 id가 다르면 다른 레포다: 지워진 뒤 같은 이름으로 새로 만든 레포는 옛 레포의 것을 보지 못한다.
+  db.exec(`CREATE TABLE IF NOT EXISTS repo_ids (
+    name TEXT PRIMARY KEY COLLATE NOCASE,
+    id INTEGER NOT NULL
+  ) STRICT`);
+  /** GitHub이 `repo`라 부르는 레포(`id`)가 이 서버가 아는 그 레포인가. 처음 보는 이름이면 그 id를 적는다. */
+  const sameRepo = (repo: string, id: number) => {
+    db.prepare("INSERT OR IGNORE INTO repo_ids (name, id) VALUES (?, ?)").run(repo, id);
+    return (
+      (db.prepare("SELECT id FROM repo_ids WHERE name = ?").get(repo) as { id: number }).id === id
+    );
+  };
   /** 옮겨진 레포면 지금 이름, 아니면 그대로다. */
   const current = (repo: string) =>
     (
@@ -972,6 +985,8 @@ export async function startServer(options: {
     db.prepare(`SELECT 1 FROM pragma_table_info('${table}') WHERE name = '${column}'`).get();
   // 사람의 GitHub 프로필 사진(#288). 이름과 함께 로그인할 때와 10분마다 다시 읽는다.
   if (!hasColumn("people", "avatar")) db.exec("ALTER TABLE people ADD COLUMN avatar TEXT");
+  // 사람의 GitHub 숫자 id(#315). 로그인할 때 적는다. 이 이름을 다른 id가 쓰던 것이면 들어오지 못한다.
+  if (!hasColumn("people", "github_id")) db.exec("ALTER TABLE people ADD COLUMN github_id INTEGER");
   // 계정의 종류와 아바타(시안 101의 이름 줄). 멤버의 push 권한을 읽을 때 GitHub에서 함께 읽어 고친다.
   if (!hasColumn("workspaces", "kind")) {
     db.exec("ALTER TABLE workspaces ADD COLUMN kind TEXT NOT NULL DEFAULT 'organization'");
@@ -1063,6 +1078,7 @@ export async function startServer(options: {
     db.exec("BEGIN");
     try {
       db.prepare("UPDATE repos SET name = ? WHERE name = ?").run(to, from);
+      db.prepare("UPDATE OR REPLACE repo_ids SET name = ? WHERE name = ?").run(to, from);
       for (const table of tables)
         db.prepare(`UPDATE ${table} SET repo = ? WHERE repo = ?`).run(to, from);
       db.prepare("UPDATE channels SET workspace = ? WHERE repo = ?").run(ownerOf(to), to);
@@ -2687,8 +2703,10 @@ export async function startServer(options: {
     const push: string[] = [];
     const unknown: string[] = [];
     for (let repo of allRepos()) {
-      const can = await github.canPush(token, repo);
+      let can = await github.canPush(token, repo);
       if (stopped) break;
+      // 같은 이름의 다른 레포(id가 다르다)에는 권한이 없는 것으로 본다. 옮기지도 않는다.
+      if (can?.id !== undefined && !sameRepo(repo, can.id)) can = { push: false, name: repo };
       if (can && can.name !== repo && moveRepo(repo, can.name)) repo = can.name;
       if (can?.account)
         db.prepare("UPDATE workspaces SET kind = ?, avatar = ? WHERE id = ?").run(
@@ -2826,7 +2844,16 @@ export async function startServer(options: {
     if ("error" in polled)
       throw new ContractFailure({ code: "unauthorized", message: polled.error });
 
-    const { login, name, avatar } = await github.user(polled.token);
+    const { id, login, name, avatar } = await github.user(polled.token);
+    // GitHub 이름은 바꾸면 다른 사람이 가져갈 수 있다. 이 이름을 다른 계정이 쓰던 것이면 그 사람의 것을 이어받지 않게 막는다.
+    const known = db.prepare("SELECT github_id FROM people WHERE login = ?").get(login) as
+      | { github_id: number | null }
+      | undefined;
+    if (known?.github_id != null && known.github_id !== id)
+      throw new ContractFailure({
+        code: "forbidden",
+        message: `${login}는 이 서버에서 다른 GitHub 계정이 쓰던 이름이라 들어올 수 없다`,
+      });
     const access = await readAccess(login, polled.token);
     if (access.unknown.length > 0 && access.push.length === 0) {
       throw new ContractFailure({
@@ -2847,11 +2874,9 @@ export async function startServer(options: {
       login,
       polled.token,
     );
-    db.prepare("INSERT OR REPLACE INTO people (login, name, avatar) VALUES (?, ?, ?)").run(
-      login,
-      name ?? login,
-      avatar,
-    );
+    db.prepare(
+      "INSERT OR REPLACE INTO people (login, name, avatar, github_id) VALUES (?, ?, ?, ?)",
+    ).run(login, name ?? login, avatar, id);
     shareSituation(); // 빠졌다 돌아온 멤버의 작업이 다시 보인다
     return { session, login };
   });
@@ -2917,6 +2942,13 @@ export async function startServer(options: {
         message: `${repo.split("/")[0]}는 이 서버가 받는 GitHub 계정이 아니다`,
       });
     await mustAdmin(login, callerToken(c), repo);
+    // 넣을 때 GitHub id를 적는다. 전에 있던 같은 이름의 다른 레포면 그 레포의 것이 이어지지 않게 막는다(#315).
+    const found = await github.canPush(callerToken(c), repo);
+    if (found?.id !== undefined && !sameRepo(repo, found.id))
+      throw new ContractFailure({
+        code: "forbidden",
+        message: `${repo}는 전에 이 서버에 있던 같은 이름의 다른 레포라 넣을 수 없다`,
+      });
     db.prepare("INSERT OR IGNORE INTO repos (name, at) VALUES (?, ?)").run(repo, Date.now());
     const name = (db.prepare("SELECT name FROM repos WHERE name = ?").get(repo) as { name: string })
       .name;

@@ -26,6 +26,7 @@ import {
 import { CallComposer } from "./call.tsx";
 import { DecisionLine, DecisionStrip } from "./decision.tsx";
 import { QaLine } from "./dm.tsx";
+import { useEmojiInput } from "./emoji-input.tsx";
 import { AlertLine } from "./forum.tsx";
 import type { LiveState } from "./live.ts";
 import { Person } from "./profile-card.tsx";
@@ -316,6 +317,7 @@ export function Composer({
   textarea,
   tools,
   sendable,
+  emoji,
 }: {
   label: string;
   value: string;
@@ -333,9 +335,12 @@ export function Composer({
   tools?: ReactNode;
   /** 글이 없어도 보낼 수 있다(붙인 문답). */
   sendable?: boolean;
+  /** 이모지 버튼과 `:` 자동 완성을 둔다(채널과 포스트의 입력 칸. DM 칸에는 두지 않는다). */
+  emoji?: boolean;
 }) {
   const own = useRef<HTMLTextAreaElement>(null);
   const area = given ?? own;
+  const picker = useEmojiInput(area, value, onChange, !!emoji);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: 글이 바뀔 때마다 높이를 다시 잰다
   useLayoutEffect(() => {
@@ -371,6 +376,8 @@ export function Composer({
   }, []);
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    picker.onKeyDown(event);
+    if (event.defaultPrevented) return;
     textarea?.onKeyDown?.(event);
     if (event.defaultPrevented) return;
     // 한글을 조합하는 중의 Enter는 글자를 끝내는 것이다. Safari는 그때 isComposing 없이 229를 낸다.
@@ -389,9 +396,25 @@ export function Composer({
       }}
     >
       {menu}
+      {picker.menu}
       {before}
       <textarea
         {...textarea}
+        {...(emoji && {
+          role: "combobox",
+          "aria-autocomplete": "list",
+          "aria-expanded": !!(textarea?.["aria-expanded"] || picker.open),
+          "aria-controls": picker.list ?? textarea?.["aria-controls"],
+          "aria-activedescendant": picker.activeId ?? textarea?.["aria-activedescendant"],
+          onSelect: (event) => {
+            textarea?.onSelect?.(event);
+            picker.sync();
+          },
+          onBlur: (event) => {
+            textarea?.onBlur?.(event);
+            picker.onBlur();
+          },
+        })}
         ref={area}
         rows={1}
         value={value}
@@ -402,6 +425,7 @@ export function Composer({
         aria-label={label}
       />
       {tools && <div className="composer-tools">{tools}</div>}
+      {picker.button}
       <button
         type="submit"
         className="send-button"

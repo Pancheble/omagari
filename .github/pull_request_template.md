@@ -1,16 +1,16 @@
-## 무엇을 바꿨나
+## What changed
 
-<!-- 한두 문장 -->
+<!-- One or two sentences -->
 
-## 왜
+## Why
 
 Closes #
 
-## 확인한 방법
+## How I checked it
 
-- [ ] 테스트를 돌렸다
-- [ ] 화면이나 실행 결과로 직접 확인했다(해당하면 스크린샷)
+- [ ] I ran the tests
+- [ ] I checked it by hand, on screen or in the run output (screenshot if relevant)
 
-## 남긴 결정
+## Decisions recorded
 
-<!-- 이 PR에서 정한 것이 있으면 ADR 경로. 없으면 "없음" -->
+<!-- If this PR settles something, link the ADR path. Otherwise write "None". -->
