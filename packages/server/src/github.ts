@@ -116,10 +116,10 @@ export type GitHub = {
   ): Promise<RepoLabel>;
 };
 
-/** 레포의 GitHub 라벨. `id`는 이름이 바뀌어도 그대로다. 색은 `#` 없는 16진수다. */
 /** GitHub 계정의 종류와 아바타 주소. */
 export type Account = { kind: "organization" | "user"; avatar: string | null };
 
+/** 레포의 GitHub 라벨. `id`는 이름이 바뀌어도 그대로다. 색은 `#` 없는 16진수다. */
 export type RepoLabel = { id: number; name: string; color: string; description: string };
 
 const repoLabel = (label: RepoLabel): RepoLabel => ({
