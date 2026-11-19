@@ -1,7 +1,7 @@
-// 실제 샌드박스 손 점검(이슈 #138). 러너가 검사 명령을 가두는 샌드박스가 막을 것을 막고 열 것을 여는지 본다.
-// 주인 기기에서 사람이 돌린다. 이름이 *.test.ts가 아니라 CI(`npm test`)는 돌리지 않는다.
-// 러너의 `checkWork`와 실제 샌드박스(`osSandbox`)를 그대로 쓴다. 점검 명령은 임시 레포의 기본 브랜치 `.omagari.json`에 넣어 돌리므로
-// 막는 설정, 임시 워크트리, 의존성 잇기가 모두 러너가 쓰는 그대로다. 돌리는 법과 읽는 법: docs/sandbox-check.md
+// Real sandbox hand check (issue #138). Checks that the sandbox the runner uses to confine check commands blocks what it should and opens what it should.
+// A person runs it on the owner's machine. Its name isn't *.test.ts, so CI (`npm test`) doesn't run it.
+// It uses the runner's `checkWork` and the real sandbox (`osSandbox`) as they are. The check command is put in the temp repo's default branch `.omagari.json` and run, so
+// the block settings, the temp worktree, and dependency linking are all exactly what the runner uses. How to run and read it: docs/sandbox-check.md
 import { execFile } from "node:child_process";
 import {
   access,
@@ -25,7 +25,9 @@ import {
   windowsDrives,
 } from "../packages/runner/src/check.ts";
 
-const { values } = parseArgs({ options: { quick: { type: "boolean", default: false } } });
+const { values } = parseArgs({
+  options: { quick: { type: "boolean", default: false } },
+});
 const execFileAsync = promisify(execFile);
 const home = homedir();
 const root = join(import.meta.dirname, "..");
@@ -48,7 +50,7 @@ const git = async (folder: string, ...args: string[]) =>
     })
   ).stdout.trim();
 
-/** 토큰이 든 환경 변수: 가짜 값을 이 셸에 두고, 검사 명령 안에 넘어오지 않는지 본다. */
+/** Environment variables with tokens: put fake values in this shell and check they don't reach the check command. */
 Object.assign(process.env, {
   GITHUB_TOKEN: "ghp_fake_for_sandbox_check",
   OMAGARI_SECRET_KEY: "sk_fake_for_sandbox_check",
@@ -64,24 +66,24 @@ const add = (name: string, ok: Row["ok"], note: string) => {
 
 const missing = await osSandbox.unavailable();
 if (missing) {
-  console.error(`이 기기에서는 샌드박스를 쓸 수 없어 점검하지 못한다: ${missing}`);
+  console.error(`The sandbox can't be used on this machine, so the check couldn't run: ${missing}`);
   process.exit(2);
 }
 
-/** 이 점검이 홈 폴더 아래에 만드는 것. 끝나면 모두 지운다. */
+/** What this check creates under the home folder. All of it is removed at the end. */
 const base = await realpath(await mkdtemp(join(home, ".omagari-sandbox-check-")));
 const repo = join(base, "repo");
 const canary = join(base, "canary", "secret.txt");
 const outside = join(base, "outside.txt");
 await mkdir(join(base, "canary"), { recursive: true });
-await writeFile(canary, "비밀\n");
+await writeFile(canary, "secret\n");
 
-/** 임시 레포: 기본 브랜치 `origin/main`의 `.omagari.json`에 `command`를 넣어 `checkWork`로 돌린다. */
+/** Temp repo: put `command` in `.omagari.json` on the default branch `origin/main` and run it with `checkWork`. */
 async function setupRepo(folder: string) {
   await mkdir(folder, { recursive: true });
   await git(folder, "init", "--quiet", "--initial-branch=main");
   await writeFile(join(folder, ".gitignore"), "node_modules\n");
-  await writeFile(join(folder, "README.md"), "점검용 레포\n");
+  await writeFile(join(folder, "README.md"), "repo for the check\n");
   await mkdir(join(folder, "node_modules", ".cache"), { recursive: true });
   await mkdir(join(folder, "node_modules", "pkg"), { recursive: true });
   await writeFile(join(folder, "node_modules", "pkg", "index.js"), "module.exports = 1;\n");
@@ -89,82 +91,89 @@ async function setupRepo(folder: string) {
 async function publish(folder: string, remote: string, command: string) {
   await writeFile(join(folder, ".omagari.json"), `${JSON.stringify({ check: command })}\n`);
   await git(folder, "add", ".omagari.json", "README.md", ".gitignore");
-  await git(folder, "commit", "--quiet", "--allow-empty", "--message=점검");
+  await git(folder, "commit", "--quiet", "--allow-empty", "--message=check");
   await git(folder, "update-ref", `refs/remotes/${remote}/main`, "HEAD");
   await git(folder, "symbolic-ref", `refs/remotes/${remote}/HEAD`, `refs/remotes/${remote}/main`);
 }
 async function run(folder: string, command: string, remote = "origin") {
   await publish(folder, remote, command);
-  return checkWork({ folder, remote, sandbox: osSandbox, limits: CHECK_LIMITS });
+  return checkWork({
+    folder,
+    remote,
+    sandbox: osSandbox,
+    limits: CHECK_LIMITS,
+  });
 }
-/** 명령이 통과(종료 코드 0)하면 그 항목은 된 것이다. 명령은 "기대한 대로 가둬졌을 때 0"이 되게 쓴다. */
+/** If the command passes (exit code 0), the item is done. Write the command to exit 0 "when confined as expected". */
 async function probe(
   name: string,
   command: string,
   kind: "check" | "observe",
   note: string,
-  otherwise = "아니다",
+  otherwise = "no",
 ) {
   const result = await run(repo, command);
   const out = result.output.replace(/\s+/g, " ").trim().slice(-200);
   if (result.verdict === "not_run")
-    return add(name, false, `돌리지 못했다: ${result.reason ?? ""} ${out}`);
+    return add(name, false, `could not run: ${result.reason ?? ""} ${out}`);
   const passed = result.verdict === "pass";
   if (kind === "observe") return add(name, "observe", passed ? note : `${otherwise} ${out}`.trim());
-  add(name, passed, passed ? note : `${out || "출력 없음"}`);
+  add(name, passed, passed ? note : `${out || "no output"}`);
 }
 
 try {
   await setupRepo(repo);
-  // 러너는 레포 폴더에서 떠 있다. sandbox-runtime의 .git/hooks와 .git/config 쓰기 막기는 띄운 프로세스의 현재 폴더 기준이라 같게 맞춘다.
+  // The runner is started in the repo folder. sandbox-runtime's write block on .git/hooks and .git/config is relative to the started process's current folder, so match it.
   const start = process.cwd();
   process.chdir(repo);
   const nodeUnderHome = relative(home, process.execPath).startsWith("..") === false;
 
-  // 도구
+  // Tool
   const deps = await execFileAsync("which", ["rg"]).then(
     ({ stdout }) => stdout.trim(),
     () => "",
   );
   add(
-    "도구: sandbox-runtime 0.0.81이 이 기기에서 돈다",
+    "Tool: sandbox-runtime 0.0.81 runs on this machine",
     true,
-    `ripgrep ${deps || "(PATH에 없음)"}`,
+    `ripgrep ${deps || "(not in PATH)"}`,
   );
 
-  // 1. 바깥 네트워크가 막힌다. 막힌 쪽만 보면 네트워크가 없어서일 수 있어 샌드박스 밖에서 먼저 닿는지 본다.
-  const reachable = await fetch("https://example.com", { signal: AbortSignal.timeout(8000) }).then(
+  // 1. The outside network is blocked. Looking only at the blocked side could just mean there's no network, so first check it's reachable outside the sandbox.
+  const reachable = await fetch("https://example.com", {
+    signal: AbortSignal.timeout(8000),
+  }).then(
     (r) => r.ok,
     () => false,
   );
   if (reachable)
     await probe(
-      "바깥 네트워크가 막힌다",
+      "The outside network is blocked",
       "! curl -fsS -m 8 -o /dev/null https://example.com && ! curl -fsS -m 8 -o /dev/null http://1.1.1.1",
       "check",
-      "https와 http 모두 닿지 않는다",
+      "Neither https nor http gets through",
     );
   else
     add(
-      "바깥 네트워크가 막힌다",
+      "The outside network is blocked",
       "observe",
-      "이 기기에서 샌드박스 밖에서도 example.com에 닿지 않아 가리지 못했다",
+      "example.com isn't reachable even outside the sandbox on this machine, so it couldn't be told",
     );
 
-  // 2. 쓰기: 임시 워크트리 밖과 레포 폴더, 홈 폴더에 쓰지 못한다. 임시 워크트리 안에는 쓴다.
-  // Linux(bubblewrap)는 읽기를 막은 폴더를 오류 대신 빈 tmpfs로 덮는다(#176). 홈 아래에 쓰면 샌드박스 안에서는 성공하고 끝나면 사라진다.
-  // 그래서 Linux에서는 쓰기가 실패하는지가 아니라 밖에 파일이 실제로 생겼는지로 막기를 본다. macOS는 쓰기가 실패한다.
+  // 2. Writing: can't write outside the temp worktree, in the repo folder, or in the home folder. Can write inside the temp worktree.
+  // Linux (bubblewrap) covers a read-blocked folder with an empty tmpfs instead of an error (#176). Writing under home succeeds inside the sandbox and disappears at the end.
+  // So on Linux the block is judged by whether a file really appeared outside, not by whether the write failed. On macOS the write fails.
   const linux = platform() === "linux";
   const leaks = [outside, join(repo, "leak.txt"), join(home, ".omagari-sandbox-leak")];
   await probe(
-    "임시 워크트리 밖에 쓰지 못한다",
+    "Can't write outside the temp worktree",
     linux
       ? leaks.map((p) => `(echo x > '${p}' || true)`).join("; ")
       : leaks.map((p) => `! (echo x > '${p}')`).join(" && "),
     "check",
     linux
-      ? "쓰기를 시도했다(빈 tmpfs에 써지고 사라진다. 밖에 생겼는지는 바로 아래 줄)"
-      : "홈 폴더, 레포 폴더, 임시 폴더 밖 어디에도 쓰지 못한다",
+      ? "Tried to write (it goes to an empty tmpfs and disappears; whether it appeared outside is the next line)"
+      : "Can't write anywhere outside the home folder, repo folder, and temp folder",
   );
   const leaked = await Promise.all(
     leaks.map((p) =>
@@ -175,111 +184,115 @@ try {
     ),
   );
   for (const p of leaked.filter(Boolean) as string[]) {
-    add("임시 워크트리 밖에 쓰지 못한다(파일이 실제로 생겼는지)", false, `생겼다: ${p}`);
+    add(
+      "Can't write outside the temp worktree (whether a file really appeared)",
+      false,
+      `appeared: ${p}`,
+    );
     await rm(p, { force: true });
   }
   if (leaked.every((p) => !p))
     add(
-      "임시 워크트리 밖에 쓴 파일이 밖에 실제로 생기지 않는다",
+      "A file written outside the temp worktree doesn't really appear outside",
       true,
-      "홈, 레포 폴더, 임시 폴더 밖 어디에도 안 생겼다",
+      "Nothing appeared anywhere outside home, the repo folder, and the temp folder",
     );
-  await probe("임시 워크트리 안에 쓴다", "echo x > inside.txt", "check", "쓸 수 있다");
+  await probe("Writes inside the temp worktree", "echo x > inside.txt", "check", "can write");
   await probe(
-    "HOME에 쓴다(러너는 HOME을 임시 폴더로 둔다)",
+    "Writes to HOME (the runner sets HOME to a temp folder)",
     'echo x > "$HOME/h.txt"',
     "check",
-    "쓸 수 있다",
+    "can write",
   );
   await probe(
-    "TMPDIR이 러너가 준 임시 폴더다(sandbox-runtime이 /tmp/claude로 덮는지, 관찰)",
+    "TMPDIR is the temp folder the runner gave (whether sandbox-runtime overrides it with /tmp/claude, observed)",
     'echo "TMPDIR=$TMPDIR"; test "$TMPDIR" = "$HOME"',
     "observe",
-    "러너가 준 임시 폴더 그대로다",
-    "덮였다",
+    "It is the temp folder the runner gave",
+    "overridden",
   );
   await probe(
-    "TMPDIR 안에 쓴다(관찰)",
+    "Writes inside TMPDIR (observed)",
     'echo "TMPDIR=$TMPDIR"; echo x > "$TMPDIR/t.txt"',
     "observe",
-    "쓸 수 있다",
-    "쓰지 못한다",
+    "can write",
+    "can't write",
   );
 
-  // 3. 홈 폴더를 읽지 못한다
+  // 3. Can't read the home folder
   const sshDir = join(home, ".ssh");
   const hasSsh = await access(sshDir).then(
     () => true,
     () => false,
   );
-  // 홈 바로 아래의 카나리. Linux는 `ls 홈`이 빈 tmpfs를 열어 성공하므로(#176) 목록이 실패하는지가 아니라 카나리가 안 보이는지로 본다. macOS는 `ls`도 실패한다.
+  // The canary right under home. On Linux `ls home` opens an empty tmpfs and succeeds (#176), so judge by whether the canary is invisible, not by whether the listing fails. On macOS `ls` fails too.
   const homeCanary = join(home, `.omagari-sandbox-canary-${process.pid}`);
-  await writeFile(homeCanary, "비밀\n");
+  await writeFile(homeCanary, "secret\n");
   try {
     await probe(
-      "홈 폴더를 읽지 못한다",
+      "Can't read the home folder",
       `! cat '${canary}' >/dev/null 2>&1 && ! cat '${homeCanary}' >/dev/null 2>&1 && ! ls -A '${home}' 2>/dev/null | grep -q '${basename(homeCanary)}'${hasSsh ? ` && ! ls '${sshDir}' >/dev/null 2>&1` : ""}`,
       "check",
-      `홈 폴더 아래의 파일을 읽지 못하고 목록에도 안 보인다${hasSsh ? "(~/.ssh 포함)" : "(이 기기에 ~/.ssh가 없어 그것은 보지 못함)"}`,
+      `Can't read files under the home folder and they don't show in the listing${hasSsh ? " (including ~/.ssh)" : " (this machine has no ~/.ssh, so that wasn't checked)"}`,
     );
   } finally {
     await rm(homeCanary, { force: true });
   }
 
-  // 3-1. WSL2이면 Windows 드라이브를 읽지 못한다(#164, ADR-0038)
+  // 3-1. On WSL2, can't read Windows drives (#164, ADR-0038)
   const drives = windowsDrives(await osMounts());
   if (drives.length === 0)
-    add("WSL2이면 Windows 드라이브를 읽지 못한다", "observe", "WSL2가 아니어서 건너뛰었다");
+    add("On WSL2, can't read Windows drives", "observe", "Skipped because this isn't WSL2");
   else
     await probe(
-      "WSL2이면 Windows 드라이브를 읽지 못한다",
-      // 드라이브 자리는 빈 tmpfs로 덮이므로(#176) `ls`는 성공할 수 있다. 오류이거나 비어 있으면 막힌 것이다.
+      "On WSL2, can't read Windows drives",
+      // The drive spot is covered by an empty tmpfs (#176), so `ls` can succeed. If it errors or is empty, it is blocked.
       drives.map((d) => `[ -z "$(ls -A '${d}' 2>/dev/null)" ]`).join(" && "),
       "check",
-      `${drives.join(", ")}가 오류이거나 비어 있다`,
+      `${drives.join(", ")} errors or is empty`,
     );
 
-  // 4. 자기 기기의 포트를 열고 붙는다
+  // 4. Opens and connects to a port on its own machine
   await probe(
-    "자기 기기의 포트를 열고 붙을 수 있다",
+    "Can open and connect to a port on its own machine",
     `node -e "const n=require('net');const s=n.createServer(c=>c.end('hi')).listen(0,'127.0.0.1',()=>{n.connect(s.address().port,'127.0.0.1').on('data',d=>{process.exit(String(d)==='hi'?0:1)}).on('error',()=>process.exit(2))})"`,
     "check",
-    "127.0.0.1에 서버를 열고 붙었다",
+    "Opened a server on 127.0.0.1 and connected",
   );
-  // 샌드박스 밖의 포트에 붙는지도 본다(막힐 수 있다: 관찰)
+  // Also check whether it connects to a port outside the sandbox (it may be blocked: observed)
   const outer = createServer((c) => c.end("hi")).listen(0, "127.0.0.1");
   await new Promise((r) => outer.once("listening", r));
   const outerPort = (outer.address() as { port: number }).port;
   await probe(
-    "샌드박스 밖에서 떠 있는 서버(127.0.0.1)에 붙는다",
+    "Connects to a server running outside the sandbox (127.0.0.1)",
     `node -e "require('net').connect(${outerPort},'127.0.0.1').on('data',()=>process.exit(0)).on('error',()=>process.exit(1))"`,
     "observe",
-    "붙는다",
-    "막힌다",
+    "connects",
+    "blocked",
   );
   outer.close();
 
-  // 유닉스 소켓(#145, ADR-0037): 임시 워크트리와 임시 폴더 안에서만 열고 붙는다. 밖의 소켓에는 붙지 못한다.
+  // Unix sockets (#145, ADR-0037): open and connect only inside the temp worktree and temp folder. Can't connect to sockets outside.
   const listenConnect = (path: string) =>
     `node -e "const n=require('net');const p=${path};n.createServer(c=>c.end('hi')).listen(p,()=>{n.connect(p).on('data',()=>process.exit(0)).on('error',e=>{console.log(e.code);process.exit(1)})}).on('error',e=>{console.log(e.code);process.exit(2)})"`;
-  // Linux의 sandbox-runtime은 seccomp로 유닉스 소켓을 통째로 막고 allowUnixSockets를 읽지 않는다(ADR-0037, #167 전까지).
-  // 그래서 Linux에서는 "열린다"가 아니라 "EPERM으로 막힌다"가 맞는 기대다.
+  // On Linux, sandbox-runtime blocks Unix sockets entirely with seccomp and doesn't read allowUnixSockets (ADR-0037, until #167).
+  // So on Linux the right expectation is "blocked with EPERM", not "opens".
   const socketIn = (path: string) =>
     linux ? `${listenConnect(path)} | grep -qx EPERM` : listenConnect(path);
-  const socketNote = linux ? "막힌다(Linux는 #167 전까지 소켓을 모두 막는다)" : "된다";
+  const socketNote = linux ? "blocked (Linux blocks all sockets until #167)" : "works";
   await probe(
-    `유닉스 소켓을 임시 워크트리 안에 ${linux ? "열지 못한다(Linux)" : "열고 붙는다"}(짧은 상대 경로)`,
+    `Unix socket inside the temp worktree ${linux ? "can't open (Linux)" : "opens and connects"} (short relative path)`,
     socketIn("'u.sock'"),
     "check",
     socketNote,
   );
   await probe(
-    `유닉스 소켓을 러너가 준 임시 폴더(HOME) 안에 ${linux ? "열지 못한다(Linux)" : "열고 붙는다"}(절대 경로, 104바이트 안)`,
+    `Unix socket inside the temp folder (HOME) the runner gave ${linux ? "can't open (Linux)" : "opens and connects"} (absolute path, within 104 bytes)`,
     socketIn("process.env.HOME+'/omagari-0123456789abcdef.sock'"),
     "check",
     socketNote,
   );
-  // 샌드박스 밖에서 연 소켓. 홈 폴더 밖(읽기는 열린 /tmp)에 두어, 읽기 막기가 아니라 소켓 막기로 막히는지 본다.
+  // A socket opened outside the sandbox. Put it outside the home folder (/tmp, readable) to check it's blocked by the socket block, not the read block.
   const outerSock = join(await realpath("/tmp"), `omagari-outer-${process.pid}.sock`);
   const outerUnix = createServer((c) => c.end("hi")).listen(outerSock);
   await new Promise((r) => outerUnix.once("listening", r));
@@ -287,16 +300,16 @@ try {
     `node -e "require('net').connect(${path}).on('data',()=>process.exit(1)).on('error',e=>{console.log(e.code);process.exit(0)})"`;
   try {
     await probe(
-      "샌드박스 밖에서 연 유닉스 소켓(/tmp)에는 붙지 못한다",
+      "Can't connect to a Unix socket opened outside the sandbox (/tmp)",
       connectFails(`'${outerSock}'`),
       "check",
-      "막힌다",
+      "blocked",
     );
     await probe(
-      "임시 워크트리 안에 밖의 소켓을 가리키는 링크를 걸어도 붙지 못한다",
+      "Can't connect even through a link inside the temp worktree that points to an outside socket",
       `ln -s '${outerSock}' l.sock && ${connectFails("'l.sock'")}`,
       "check",
-      "막힌다",
+      "blocked",
     );
   } finally {
     outerUnix.close();
@@ -308,148 +321,158 @@ try {
       () => false,
     )
   )
-    await probe("Docker 소켓에 붙지 못한다", connectFails(`'${docker}'`), "check", "막힌다");
-  else add("Docker 소켓에 붙지 못한다", "observe", `이 기기에 ${docker}가 없어 보지 못했다`);
+    await probe(
+      "Can't connect to the Docker socket",
+      connectFails(`'${docker}'`),
+      "check",
+      "blocked",
+    );
+  else
+    add(
+      "Can't connect to the Docker socket",
+      "observe",
+      `this machine has no ${docker}, so it wasn't checked`,
+    );
   await probe(
-    "유닉스 소켓을 TMPDIR(sandbox-runtime이 덮은 /tmp/claude)에 연다(관찰)",
+    "Opens a Unix socket in TMPDIR (/tmp/claude, overridden by sandbox-runtime) (observed)",
     `node -e "require('net').createServer().listen(require('os').tmpdir()+'/u.sock',()=>process.exit(0)).on('error',(e)=>{console.log(e.code);process.exit(1)})"`,
     "observe",
-    "된다",
-    "막힌다",
+    "works",
+    "blocked",
   );
 
-  // 5. 토큰이 든 환경 변수가 넘어오지 않는다
+  // 5. Environment variables with tokens don't come through
   await probe(
-    "토큰이 든 환경 변수가 넘어오지 않는다",
+    "Environment variables with tokens don't come through",
     `test -z "$GITHUB_TOKEN" && test -z "$OMAGARI_SECRET_KEY" && test -z "$AWS_SECRET_ACCESS_KEY" && ! env | cut -d= -f1 | grep -Ei 'TOKEN|SECRET|API_KEY'`,
     "check",
-    "GITHUB_TOKEN 등 셋과 이름에 TOKEN·SECRET·API_KEY가 든 변수가 없다",
+    "GITHUB_TOKEN and two others, and variables with TOKEN, SECRET, or API_KEY in the name, are absent",
   );
 
   // 6. Node
   await probe(
     nodeUnderHome
-      ? "Node가 홈 폴더 아래에 있어도(nvm 같은 기기) 검사 명령이 돈다"
-      : "Node가 돈다(Node가 홈 폴더 밖에 있어 nvm 같은 경우는 보지 못함)",
+      ? "The check command runs even when Node is under the home folder (a machine with nvm)"
+      : "Node runs (Node is outside the home folder, so cases like nvm weren't checked)",
     `node -e "console.log(process.version, process.execPath)" && node -e "require('fs').readFileSync('README.md')"`,
     "check",
     `${process.version}, ${process.execPath}`,
   );
 
-  // 7. node_modules 안
+  // 7. Inside node_modules
   await probe(
-    "node_modules/.cache 안에 쓴다(이은 폴더 안, 관찰)",
+    "Writes inside node_modules/.cache (inside a linked folder, observed)",
     "echo x > node_modules/.cache/probe.txt",
     "observe",
-    "쓸 수 있다",
-    "막힌다",
+    "can write",
+    "blocked",
   );
   await probe(
-    "node_modules/pkg 안에 쓴다(이은 폴더 안, 관찰)",
+    "Writes inside node_modules/pkg (inside a linked folder, observed)",
     "echo x > node_modules/pkg/probe.txt",
     "observe",
-    "쓸 수 있다",
-    "막힌다",
+    "can write",
+    "blocked",
   );
   await probe(
-    "node_modules 안에 새 폴더를 만든다(워크트리 쪽, 관찰)",
+    "Creates a new folder inside node_modules (worktree side, observed)",
     "mkdir node_modules/.newcache && echo x > node_modules/.newcache/probe.txt",
     "observe",
-    "만들 수 있다",
-    "막힌다",
+    "can create",
+    "blocked",
   );
   await probe(
-    "이은 의존성을 읽는다",
+    "Reads the linked dependencies",
     "node -e \"require('./node_modules/pkg')\"",
     "check",
-    "읽는다",
+    "reads",
   );
 
-  // 8. #142가 남긴 것 1: 샌드박스 안의 git이 임시 워크트리의 인덱스를 쓴다
+  // 8. Left by #142, part 1: git inside the sandbox writes the temp worktree's index
   await probe(
-    "임시 워크트리 안의 git이 인덱스를 쓴다(add, write-tree, commit)",
+    "git inside the temp worktree writes the index (add, write-tree, commit)",
     "echo n > n.txt && git add n.txt && git write-tree >/dev/null && git -c user.name=x -c user.email=x@x.invalid commit -q -m t && git status --short | wc -l | grep -q '^ *0$'",
     "check",
-    "add, write-tree, commit, status가 된다",
+    "add, write-tree, commit, and status work",
   );
   await probe(
-    "임시 워크트리의 .git/config에 쓴다(관찰)",
+    "Writes to the temp worktree's .git/config (observed)",
     "echo '[core]' >> \"$(git rev-parse --git-dir)/config\"",
     "observe",
-    "쓸 수 있다",
-    "막힌다",
+    "can write",
+    "blocked",
   );
   await probe(
-    "임시 워크트리의 .git/hooks에 쓴다(관찰)",
+    "Writes to the temp worktree's .git/hooks (observed)",
     'mkdir -p "$(git rev-parse --git-path hooks)" && echo x > "$(git rev-parse --git-path hooks)/pre-commit"',
     "observe",
-    "쓸 수 있다",
-    "막힌다",
+    "can write",
+    "blocked",
   );
   await probe(
-    "임시 워크트리의 .git/HEAD에 쓴다(관찰)",
+    "Writes to the temp worktree's .git/HEAD (observed)",
     'echo x >> "$(git rev-parse --git-dir)/HEAD"',
     "observe",
-    "쓸 수 있다",
-    "막힌다",
+    "can write",
+    "blocked",
   );
 
-  // 임시 워크트리의 .git/config로 샌드박스 밖에서 명령이 도는지(러너가 샌드박스 밖에서 임시 워크트리에 git을 부른다). 막혀 있으면 표지가 안 생긴다.
+  // Whether a command runs outside the sandbox through the temp worktree's .git/config (the runner calls git on the temp worktree outside the sandbox). If blocked, no marker appears.
   const marker = join(base, "escaped.txt");
   await probe(
-    "임시 워크트리의 .git/config에 core.fsmonitor를 써 둔다(관찰)",
+    "Writes core.fsmonitor to the temp worktree's .git/config (observed)",
     `git config core.fsmonitor "touch '${marker}'; true"`,
     "observe",
-    "쓸 수 있다",
-    "막힌다",
+    "can write",
+    "blocked",
   );
   const escaped = await access(marker).then(
     () => true,
     () => false,
   );
   add(
-    "샌드박스가 끝난 뒤 러너의 git이 쓴 fsmonitor로 밖에서 명령이 돌았다(관찰)",
+    "After the sandbox ended, a command ran outside through the fsmonitor the runner's git used (observed)",
     escaped ? false : "observe",
-    escaped ? `샌드박스 밖에서 ${marker}가 만들어졌다` : "안 돌았다",
+    escaped ? `${marker} was created outside the sandbox` : "didn't run",
   );
-  // 같은 점검을 러너의 현재 폴더가 레포가 아닐 때도 본다.
+  // Do the same check when the runner's current folder isn't a repo.
   process.chdir(start);
   await rm(marker, { force: true });
   await probe(
-    "러너의 현재 폴더가 레포가 아닐 때 .git/config에 core.fsmonitor를 쓴다(관찰)",
+    "Writes core.fsmonitor to .git/config when the runner's current folder isn't a repo (observed)",
     `git config core.fsmonitor "touch '${marker}'; true"`,
     "observe",
-    "쓸 수 있다",
-    "막힌다",
+    "can write",
+    "blocked",
   );
   const escapedElsewhere = await access(marker).then(
     () => true,
     () => false,
   );
   add(
-    "러너의 현재 폴더가 레포가 아닐 때, 샌드박스가 끝난 뒤 러너의 git이 쓴 fsmonitor로 밖에서 명령이 돌았다(관찰)",
+    "When the runner's current folder isn't a repo, after the sandbox ended a command ran outside through the fsmonitor the runner's git used (observed)",
     escapedElsewhere ? false : "observe",
-    escapedElsewhere ? "샌드박스 밖에서 표지 파일이 만들어졌다" : "안 돌았다",
+    escapedElsewhere ? "A marker file was created outside the sandbox" : "didn't run",
   );
   process.chdir(repo);
 
-  // 9. #142가 남긴 것 2: 홈 아래의 임시 워크트리와 objects가 denyRead 위에서 다시 열린다
+  // 9. Left by #142, part 2: the temp worktree and objects under home are reopened over denyRead
   const objects = join(await realpath(join(repo, ".git")), "objects");
   await probe(
-    "홈 아래의 임시 워크트리와 레포의 objects를 읽는다",
+    "Reads the temp worktree under home and the repo's objects",
     "git log -1 --format=%H >/dev/null && git cat-file -p HEAD:.omagari.json >/dev/null && git cat-file -p HEAD:README.md >/dev/null && cat README.md >/dev/null",
     "check",
-    `git log, cat-file이 된다(objects ${relative(home, objects)})`,
+    `git log and cat-file work (objects ${relative(home, objects)})`,
   );
   await probe(
-    "레포의 Git 폴더(원격 URL이 든 config)는 읽지 못한다",
+    "Can't read the repo's Git folder (the config with the remote URL)",
     `! cat '${join(repo, ".git", "config")}' >/dev/null 2>&1`,
     "check",
-    "막힌다",
+    "blocked",
   );
 
-  // 10. #150: 검사 명령이 프로세스 그룹을 벗어나 남긴 프로세스가, 검사가 끝난 뒤 받은 임시 워크트리 경로의 node_modules를
-  // 바깥(홈 아래, 샌드박스가 쓸 수 없는 곳)을 가리키는 링크로 바꾸려 한다. 다음 돌림의 의존성 잇기가 그 링크를 따라 바깥에 쓰지 않아야 한다.
+  // 10. #150: a process the check command left outside its process group tries, after the check ends, to turn the node_modules of the temp worktree path it was given
+  // into a link pointing outside (under home, where the sandbox can't write). The next run's dependency linking must not follow that link and write outside.
   const lured = join(base, "lured");
   await mkdir(lured);
   const leftover = [
@@ -461,7 +484,7 @@ try {
   const planted = await run(repo, `node -e '${spawnLeftover}' '${leftover}'`);
   const [, pidText, at = ""] = /pid=(\d+) at=(\S+)/.exec(planted.output) ?? [];
   const pid = Number(pidText);
-  if (!pid) add("남은 프로세스를 띄운다(#150)", false, `띄우지 못했다: ${planted.output}`);
+  if (!pid) add("Starts a leftover process (#150)", false, `couldn't start: ${planted.output}`);
   else {
     const alive = () => {
       try {
@@ -473,33 +496,38 @@ try {
     };
     for (let i = 0; i < 400 && alive(); i++) await new Promise((r) => setTimeout(r, 50));
     if (alive()) process.kill(pid, "SIGKILL");
-    // 남은 프로세스가 받은 경로에 링크를 걸었으면 그 옆에 표지를 남긴다. 그 경로가 지금 무엇인지(쉬는 자리인지, 버려진 자리인지)도 적는다.
+    // If the leftover process put a link on the path it was given, it leaves a marker next to it. It also notes what that path is now (an idle spot or an abandoned one).
     const wrote = await readFile(join(at, "leftover.txt"), "utf8").then(
       () => true,
       () => false,
     );
     add(
-      "검사가 끝난 뒤 남은 프로세스가 받은 경로에 바깥을 가리키는 링크를 건다(#150, 관찰)",
+      "After the check ends, a leftover process puts a link pointing outside on the path it was given (#150, observed)",
       "observe",
-      `${wrote ? "걸었다" : "걸지 못했다"}(${relative(repo, at)})`,
+      `${wrote ? "put it" : "couldn't put it"} (${relative(repo, at)})`,
     );
-    await probe("남은 프로세스가 있던 뒤에도 다음 검사가 돈다(#150)", "true", "check", "돈다");
+    await probe(
+      "The next check runs even after there was a leftover process (#150)",
+      "true",
+      "check",
+      "runs",
+    );
     const into = await readdir(lured);
     add(
-      "남은 프로세스가 바꿔 둔 링크를 따라 러너가 바깥에 의존성을 잇지 않는다(#150)",
+      "The runner doesn't link dependencies outside by following the link the leftover process changed (#150)",
       into.length === 0,
-      into.length === 0 ? "바깥 폴더가 비어 있다" : `바깥에 생겼다: ${into.join(", ")}`,
+      into.length === 0 ? "the outside folder is empty" : `appeared outside: ${into.join(", ")}`,
     );
   }
 
-  // 11. 이 레포의 `npm test`
+  // 11. This repo's `npm test`
   if (!values.quick) {
     const top = await git(root, "rev-parse", "--show-toplevel");
     process.chdir(top);
     const remote = "omagari-sandbox-check";
-    progress("이 레포에서 npm test를 돈다(수 분)");
+    progress("Running npm test in this repo (a few minutes)");
     const tree = join(base, "repo-tree");
-    // 이 레포에는 `.omagari.json`이 없을 수 있어, 기본 브랜치에 있는 것처럼 가짜 원격 추적 ref를 잠깐 만든다.
+    // This repo may have no `.omagari.json`, so briefly make a fake remote-tracking ref as if it were on the default branch.
     await mkdir(tree);
     const index = join(tree, "index");
     const env = { ...process.env, ...gitEnv, GIT_INDEX_FILE: index };
@@ -514,7 +542,7 @@ try {
         );
         child.stdin?.end(
           `${JSON.stringify({
-            // `npm test` 그대로이고, 끝에 통과·실패 수와 실패한 테스트 이름이 보이게 모아 찍는다.
+            // It is `npm test` as is, and at the end it prints the pass and fail counts and the names of failed tests together.
             check:
               "npm test > omagari-test.log 2>&1; code=$?; grep -E '^✖' omagari-test.log | sort -u | head -12; grep -oE '\\bE[A-Z]{3,}\\b' omagari-test.log | sort | uniq -c | sort -rn | head -5; grep -oE '[a-z]+ EPERM' omagari-test.log | sort | uniq -c | sort -rn | head -5; grep EPERM omagari-test.log | grep -vE 'listen|connect' | sort -u | head -5; grep -E '^ℹ (tests|pass|fail|cancelled)' omagari-test.log; exit $code",
           })}\n`,
@@ -527,7 +555,7 @@ try {
       { env },
     );
     const written = (await execFileAsync("git", ["-C", top, "write-tree"], { env })).stdout.trim();
-    const commit = await git(top, "commit-tree", written, "-m", "점검");
+    const commit = await git(top, "commit-tree", written, "-m", "check");
     await git(top, "update-ref", `refs/remotes/${remote}/main`, commit);
     await git(top, "symbolic-ref", `refs/remotes/${remote}/HEAD`, `refs/remotes/${remote}/main`);
     try {
@@ -536,7 +564,7 @@ try {
         add(
           name,
           result.verdict === "pass",
-          `판정 ${result.verdict}, ${(result.ms / 1000).toFixed(0)}초. ${result.reason ?? ""} 출력 끝: ${out.slice(-700)}`,
+          `verdict ${result.verdict}, ${(result.ms / 1000).toFixed(0)}s. ${result.reason ?? ""} End of output: ${out.slice(-700)}`,
         );
       };
       const first = await checkWork({
@@ -545,9 +573,9 @@ try {
         sandbox: osSandbox,
         limits: CHECK_LIMITS,
       });
-      report("이 레포의 npm test가 샌드박스 안에서 통과한다", first);
+      report("This repo's npm test passes inside the sandbox", first);
       if (first.verdict !== "pass") {
-        // sandbox-runtime이 덮어쓰는 TMPDIR을 러너가 준 임시 폴더로 되돌려 다시 돌린다(check.ts는 고치지 않는다: 그래도 되는지 보는 실험).
+        // Put the TMPDIR that sandbox-runtime overrides back to the temp folder the runner gave and run again (check.ts isn't changed: an experiment to see whether that works).
         const fixedTmp: typeof osSandbox = {
           unavailable: () => osSandbox.unavailable(),
           wrap: (input) =>
@@ -556,10 +584,15 @@ try {
               command: `TMPDIR='${input.env.TMPDIR}'; export TMPDIR; ${input.command}`,
             }),
         };
-        progress("TMPDIR을 되돌려 npm test를 다시 돈다(수 분)");
+        progress("Running npm test again with TMPDIR restored (a few minutes)");
         report(
-          "(실험) TMPDIR을 러너가 준 임시 폴더로 되돌리면 이 레포의 npm test가 통과한다",
-          await checkWork({ folder: top, remote, sandbox: fixedTmp, limits: CHECK_LIMITS }),
+          "(Experiment) This repo's npm test passes when TMPDIR is restored to the temp folder the runner gave",
+          await checkWork({
+            folder: top,
+            remote,
+            sandbox: fixedTmp,
+            limits: CHECK_LIMITS,
+          }),
         );
       }
     } finally {
@@ -580,10 +613,10 @@ const version = JSON.parse(
   ),
 ).version;
 console.log(
-  `**실제 샌드박스 손 점검 결과** (${date}, ${platform()} ${arch()}, Node ${process.version}(${process.execPath}), @anthropic-ai/sandbox-runtime ${version})\n`,
+  `**Real sandbox hand check result** (${date}, ${platform()} ${arch()}, Node ${process.version}(${process.execPath}), @anthropic-ai/sandbox-runtime ${version})\n`,
 );
 for (const row of rows)
   console.log(
-    `- ${row.ok === true ? "[x]" : row.ok === false ? "[ ] (실패)" : "(관찰)"} ${row.name}: ${row.note}`,
+    `- ${row.ok === true ? "[x]" : row.ok === false ? "[ ] (failed)" : "(observed)"} ${row.name}: ${row.note}`,
   );
 process.exit(rows.some((row) => row.ok === false) ? 1 : 0);

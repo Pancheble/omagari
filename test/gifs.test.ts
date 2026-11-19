@@ -6,7 +6,7 @@ import { fakeGiphy, startWorld } from "./harness.ts";
 
 const KEY = "giphy-secret-key";
 
-/** GIPHY가 주는 GIF 하나. 크기는 글자로 온다. 쓰지 않는 것도 섞여 온다. */
+/** One GIF GIPHY gives. Sizes come as strings. Some unused ones come mixed in. */
 const giphyGif = (
   id: string,
   title: string,
@@ -18,47 +18,58 @@ const giphyGif = (
   username: "someone",
   images: {
     fixed_width: { url, width: "200", height: "150", size: "1234" },
-    original: { url: `https://media2.giphy.com/media/${id}/giphy.gif?api_key=${KEY}` },
+    original: {
+      url: `https://media2.giphy.com/media/${id}/giphy.gif?api_key=${KEY}`,
+    },
   },
 });
 
-test("서버에 GIPHY 키가 없으면 GIF가 꺼져 있다", async (t) => {
+test("with no GIPHY key on the server, GIFs are off", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
 
-  assert.equal((await call(world.owner, api.me)).gif, false); // 웹은 GIF 버튼을 두지 않는다
-  await assert.rejects(call(world.owner, api.gifs, { query: "cat" }), { code: "not_found" });
+  assert.equal((await call(world.owner, api.me)).gif, false); // the web doesn't show a GIF button
+  await assert.rejects(call(world.owner, api.gifs, { query: "cat" }), {
+    code: "not_found",
+  });
 });
 
-test("GIF 찾기는 서버가 키를 붙여 GIPHY에 묻고, 웹에는 주소·크기·제목만 간다", async (t) => {
+test("GIF search has the server add the key and ask GIPHY, and only the URL, size and title go to the web", async (t) => {
   const giphy = await fakeGiphy(t);
   giphy.answer = (url) =>
     url.pathname === "/v1/gifs/trending"
-      ? [giphyGif("Trend1", "인기")]
+      ? [giphyGif("Trend1", "trending")]
       : [
-          giphyGif("Cat1", "박수 치는 고양이"),
-          giphyGif("Bad1", "남의 주소", "https://evil.example/cat.gif"),
-          giphyGif("../x", "이상한 id"),
+          giphyGif("Cat1", "clapping cat"),
+          giphyGif("Bad1", "someone else's URL", "https://evil.example/cat.gif"),
+          giphyGif("../x", "strange id"),
         ];
-  const world = await startWorld({ giphy: realGiphy(KEY, { base: giphy.url }) });
+  const world = await startWorld({
+    giphy: realGiphy(KEY, { base: giphy.url }),
+  });
   t.after(world.stop);
 
   assert.equal((await call(world.owner, api.me)).gif, true);
-  // 로그인하지 않은 브라우저는 찾지 못한다(서버의 한도를 남이 쓰지 못한다).
-  await assert.rejects(call(world.server, api.gifs, { query: "cat" }), { code: "unauthorized" });
+  // A browser that isn't logged in can't search (others can't use the server's quota).
+  await assert.rejects(call(world.server, api.gifs, { query: "cat" }), {
+    code: "unauthorized",
+  });
 
   const response = await fetch(new URL(api.gifs.path, world.server.url), {
     method: "POST",
-    headers: { authorization: `Bearer ${world.owner.session}`, "content-type": "application/json" },
-    body: JSON.stringify({ query: " 축하 " }),
+    headers: {
+      authorization: `Bearer ${world.owner.session}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ query: " congrats " }),
   });
   const raw = await response.text();
-  assert.ok(!raw.includes(KEY), "키가 웹에 내려가면 안 된다");
+  assert.ok(!raw.includes(KEY), "the key must not go down to the web");
   assert.deepEqual(JSON.parse(raw), {
     gifs: [
       {
         id: "Cat1",
-        title: "박수 치는 고양이",
+        title: "clapping cat",
         url: "https://media2.giphy.com/media/Cat1/200w.gif",
         width: 200,
         height: 150,
@@ -68,10 +79,10 @@ test("GIF 찾기는 서버가 키를 붙여 GIPHY에 묻고, 웹에는 주소·�
   const [search] = giphy.asked;
   assert.equal(search?.pathname, "/v1/gifs/search");
   assert.equal(search?.searchParams.get("api_key"), KEY);
-  assert.equal(search?.searchParams.get("q"), "축하");
+  assert.equal(search?.searchParams.get("q"), "congrats");
   assert.equal(search?.searchParams.get("rating"), "r");
 
-  // 찾는 말이 없으면 인기 GIF다.
+  // With no search words, it's trending GIFs.
   assert.deepEqual(
     (await call(world.owner, api.gifs, { query: "" })).gifs.map((gif) => gif.id),
     ["Trend1"],
@@ -79,13 +90,17 @@ test("GIF 찾기는 서버가 키를 붙여 GIPHY에 묻고, 웹에는 주소·�
   assert.equal(giphy.asked[1]?.pathname, "/v1/gifs/trending");
 });
 
-test("서버는 GIPHY의 시간당 한도를 넘겨 묻지 않는다", async (t) => {
+test("the server doesn't ask GIPHY past its hourly limit", async (t) => {
   const giphy = await fakeGiphy(t);
-  const world = await startWorld({ giphy: realGiphy(KEY, { base: giphy.url, perHour: 2 }) });
+  const world = await startWorld({
+    giphy: realGiphy(KEY, { base: giphy.url, perHour: 2 }),
+  });
   t.after(world.stop);
 
   await call(world.owner, api.gifs, { query: "a" });
   await call(world.owner, api.gifs, { query: "b" });
-  await assert.rejects(call(world.owner, api.gifs, { query: "c" }), { code: "internal" });
+  await assert.rejects(call(world.owner, api.gifs, { query: "c" }), {
+    code: "internal",
+  });
   assert.equal(giphy.asked.length, 2);
 });

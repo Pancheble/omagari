@@ -3,22 +3,24 @@ import { test } from "node:test";
 import { api, call } from "@omagari/contract";
 import { eventually, fakeExecutor, fakeSandbox, startWorld, tempRepo, writer } from "./harness.ts";
 
-test("설정은 내 스위치, 내 에이전트가 답한 수와 마지막 질문을 읽는다", async (t) => {
+test("settings read my switch, how many my agent answered, and the last question", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
   world.github.grant("bob");
   const bob = await world.login("bob");
-  const fake = fakeExecutor((input) => `bob의 답 ${input.message.length}`);
-  const desk = await world.desk(bob, undefined, { "claude-code": fake.executor });
+  const fake = fakeExecutor((input) => `bob's answer ${input.message.length}`);
+  const desk = await world.desk(bob, undefined, {
+    "claude-code": fake.executor,
+  });
   t.after(desk.remove);
 
-  // 처음에는 켜짐이고, 답한 것이 없다.
+  // At first it's on, and nothing has been answered.
   const first = await call(bob, api.settings);
   assert.equal(first.askSwitch, true);
   assert.deepEqual(first.answered, { count: 0, last: null });
 
-  // owner가 두 번 물어 bob의 에이전트가 답하면 bob에게 세어지고, 마지막 질문이 보인다. 묻은 쪽에는 세지 않는다.
-  for (const question of ["charge()에 재시도를 넣나요?", "calcRefund()는 누가 부르나요?"]) {
+  // When owner asks twice and bob's agent answers, it's counted for bob and the last question shows. It isn't counted for the asker.
+  for (const question of ["Should charge() add a retry?", "Who calls calcRefund()?"]) {
     const asked = await world.cli("ask", "bob", question);
     assert.equal(asked.code, 0, asked.stderr);
   }
@@ -28,25 +30,31 @@ test("설정은 내 스위치, 내 에이전트가 답한 수와 마지막 질�
     return answered;
   });
   assert.equal(answered.last?.login, "owner");
-  assert.equal(answered.last?.name, "owner"); // 프로필 이름이 없으면 로그인
-  assert.equal(answered.last?.text, "calcRefund()는 누가 부르나요?");
-  assert.deepEqual((await call(world.owner, api.settings)).answered, { count: 0, last: null });
+  assert.equal(answered.last?.name, "owner"); // the login if there's no profile name
+  assert.equal(answered.last?.text, "Who calls calcRefund()?");
+  assert.deepEqual((await call(world.owner, api.settings)).answered, {
+    count: 0,
+    last: null,
+  });
 
-  // 스위치는 내 것만 바뀌고 새로 읽어도 남는다.
+  // Only my own switch changes, and it stays after reading again.
   await call(bob, api.setAskSwitch, { on: false });
   assert.equal((await call(bob, api.settings)).askSwitch, false);
   assert.equal((await call(world.owner, api.settings)).askSwitch, true);
 });
 
-test("설정은 레포의 검사 명령과 내 러너의 합쳐 돌려 보기를 읽고, 러너를 끄고 켜거나 러너에서 끈 것을 따른다. 웹으로는 켜고 끌 수 없다", {
+test("settings read the repo's check command and my runner's merge run, follow turning the runner off and on or off at the runner, and can't be turned on or off from the web", {
   timeout: 60_000,
 }, async (t) => {
-  const world = await startWorld({ sandbox: fakeSandbox().sandbox, observeMs: 50 });
+  const world = await startWorld({
+    sandbox: fakeSandbox().sandbox,
+    observeMs: 50,
+  });
   t.after(world.stop);
   const mergeCheck = async (as: { url: string; session: string }) =>
     (await call(as, api.settings)).mergeCheck;
 
-  // 샌드박스가 있는 owner의 러너는 켜짐이고, 기본 브랜치에 설정 파일이 없다.
+  // owner's runner, which has a sandbox, is on, and the default branch has no config file.
   await eventually(async () =>
     assert.deepEqual(await mergeCheck(world.owner), {
       runner: "on",
@@ -54,7 +62,7 @@ test("설정은 레포의 검사 명령과 내 러너의 합쳐 돌려 보기를
     }),
   );
 
-  // 샌드박스 도구가 없는 bob의 러너. 러너를 끄면 꺼짐이고, 다시 켜면 돌아온다.
+  // bob's runner, with no sandbox tool. Turning the runner off makes it off, and turning it on again brings it back.
   world.github.grant("bob");
   const bob = await world.login("bob");
   const desk = await world.desk(bob);
@@ -64,9 +72,9 @@ test("설정은 레포의 검사 명령과 내 러너의 합쳐 돌려 보기를
   assert.equal((await mergeCheck(bob)).runner, "offline");
   await desk.start();
   assert.equal((await mergeCheck(bob)).runner, "no_sandbox");
-  assert.equal((await mergeCheck(world.owner)).runner, "on"); // 내 러너의 것만 본다
+  assert.equal((await mergeCheck(world.owner)).runner, "on"); // only my own runner's is read
 
-  // alice가 러너에서 끄면(omagari runner --merge-check off) 꺼 둠이다.
+  // When alice turns it off at the runner (omagari runner --merge-check off), it's switched off.
   world.github.grant("alice");
   const aliceDesk = await tempRepo();
   t.after(aliceDesk.remove);
@@ -80,7 +88,7 @@ test("설정은 레포의 검사 명령과 내 러너의 합쳐 돌려 보기를
   await runner.stop();
   assert.equal((await mergeCheck(alice)).runner, "offline");
 
-  // 설정 파일을 기본 브랜치에 머지하면 러너가 다음 관측에서 읽어 알린다. 꼴이 틀리면 그 까닭이다.
+  // When the config file merges into the default branch, the runner reads it at the next observation and reports it. If the shape is wrong, that's the reason.
   const merge = async (content: string) => {
     await writer(world.repo.folder)(".omagari.json", content);
     await world.repo.git("add", "--all");
@@ -98,7 +106,7 @@ test("설정은 레포의 검사 명령과 내 러너의 합쳐 돌려 보기를
     }),
   );
 
-  // 웹 API에는 합쳐 돌려 보기를 켜고 끄는 길이 없다(ADR-0034).
+  // The web API has no way to turn the merge run on or off (ADR-0034).
   assert.deepEqual(
     Object.values(api).filter((route) => /merge|check/i.test(route.path)),
     [],

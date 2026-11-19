@@ -6,14 +6,14 @@ import { api, CONTRACT_VERSION, call, MAX_OVERLAPS, RUNNER_SOCKET } from "@omaga
 import { WebSocket as WsClient } from "ws";
 import { eventually, REPO, startWorld } from "./harness.ts";
 
-// 서버는 멤버의 러너가 보낸 것을 그 멤버의 것으로만 받는다. 계약대로의 러너가 아닌 연결(멤버의 세션으로 붙은 손으로 짠 러너)을 날 WebSocket으로 흉내 낸다.
+// The server accepts what a member's runner sends only as that member's. A connection that is not a contract-following runner (a hand-built runner attached with the member's session) is imitated with a raw WebSocket.
 
 type World = Awaited<ReturnType<typeof startWorld>>;
-// biome-ignore lint/suspicious/noExplicitAny: 날 프레임이다
+// biome-ignore lint/suspicious/noExplicitAny: raw frame
 type Frame = { kind: string; re?: string; payload: any };
 
 const BASE = "a".repeat(40);
-/** 일어나지 않아야 하는 것을 확인할 때 기다리는 시간. */
+/** How long to wait when checking that something must not happen. */
 const SETTLE_MS = 400;
 
 const frame = (kind: string, payload: object, id: string = crypto.randomUUID()) =>
@@ -28,7 +28,7 @@ const hello = (session: string) =>
     mergeCheck: "off",
   });
 
-/** 멤버 `login`으로 들어와 그 세션으로 러너인 척 붙는다. 받은 것은 `got`에 쌓인다. */
+/** Enters as member `login` and attaches to that session pretending to be a runner. What it receives piles up in `got`. */
 async function member(t: TestContext, world: World, login: string) {
   world.github.grant(login);
   const as = await world.login(login);
@@ -45,7 +45,7 @@ async function member(t: TestContext, world: World, login: string) {
     as,
     got,
     send,
-    /** 이 브랜치들을 바꾼 것 없이 관측했다고 보낸다. */
+    /** Sends that these branches were observed with no change. */
     observe: (...branches: string[]) =>
       send("observation", {
         works: branches.map((branch) => ({ branch, base: BASE, share: "full", files: [] })),
@@ -65,7 +65,7 @@ const alerts = async (world: World) =>
     p.message.kind === "alert" ? [p.message.alert] : [],
   );
 
-test("관측의 기준 커밋은 커밋의 전체 id만 받는다", async (t) => {
+test("an observation's base commit takes only a full commit id", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
   const alice = await member(t, world, "alice");
@@ -86,7 +86,7 @@ test("관측의 기준 커밋은 커밋의 전체 id만 받는다", async (t) =>
   await knows(world, "alice", "a1");
 });
 
-test("선점의 겹침에 같은 선점을 여러 번 실어도 겹침 소식은 하나고, 상한을 넘게 실으면 받지 않는다", async (t) => {
+test("the same claim sent many times in a claim's overlaps gives one overlap notice, and more than the limit is rejected", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
   const alice = await member(t, world, "alice");
@@ -126,12 +126,12 @@ test("선점의 겹침에 같은 선점을 여러 번 실어도 겹침 소식은
   );
 });
 
-test("부딪힘의 두 끝은 서버가 아는 작업이어야 알림이 서고, 이슈의 제목과 본문은 러너가 보낸 이름으로 줄을 넘지 않는다", async (t) => {
+test("both ends of a conflict must be work the server knows for a notification to stand, and the issue title and body do not break the line, using the name the runner sent", async (t) => {
   const world = await startWorld({ followMs: 50 });
   t.after(world.stop);
   const alice = await member(t, world, "alice");
   const bob = await member(t, world, "bob");
-  const name = "refund`\n\n## 제목 줄\n둘째 줄";
+  const name = "refund`\n\n## Title line\nSecond line";
   const pairs = [
     {
       kind: "declared",
@@ -148,13 +148,13 @@ test("부딪힘의 두 끝은 서버가 아는 작업이어야 알림이 서고,
     },
   ];
 
-  // 아직 아무도 a1, b1을 관측하지 않았다.
+  // Nobody has observed a1 or b1 yet.
   bob.send("conflicts", { pairs });
   await sleep(SETTLE_MS);
   assert.deepEqual(await alerts(world), []);
   assert.equal(world.github.issues.length, 0);
 
-  // 두 작업이 관측되면 같은 쌍이 알림이 된다.
+  // Once both works are observed, the same pair becomes a notification.
   alice.observe("a1");
   bob.observe("b1");
   await knows(world, "alice", "a1");
@@ -170,7 +170,7 @@ test("부딪힘의 두 끝은 서버가 아는 작업이어야 알림이 서고,
   assert.ok(!issue.body.split("\n").some((line) => line.startsWith("## ")), issue.body);
 });
 
-test("합쳐 돌려 보기의 판정은 그 쌍을 계산하는 쪽(쓰는 쪽) 러너의 것만 알림에 붙는다", async (t) => {
+test("the verdict of a combined run is attached to the notification only from the runner on the computing side (the using side)", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
   const alice = await member(t, world, "alice");
@@ -181,7 +181,7 @@ test("합쳐 돌려 보기의 판정은 그 쌍을 계산하는 쪽(쓰는 쪽) 
   await knows(world, "bob", "b1");
   const indirect = async () => (await alerts(world)).filter((a) => a.kind === "indirect");
 
-  // alice가 bob이 바꾼 심볼을 쓴다. 계산하는 쪽은 alice다.
+  // alice uses a symbol bob changed. The computing side is alice.
   alice.send("conflicts", {
     pairs: [
       {
@@ -211,12 +211,12 @@ test("합쳐 돌려 보기의 판정은 그 쌍을 계산하는 쪽(쓰는 쪽) 
   await eventually(async () => assert.notEqual((await indirect())[0]?.resolved, null));
 });
 
-test("세션이 끝난 러너 연결이 닫히기 전에 보낸 것은 받지 않는다", async (t) => {
+test("what a runner connection sends after its session ended and before it closes is not accepted", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
   world.github.grant("alice");
   const alice = await world.login("alice");
-  // 서버의 닫기에 답하지 않는 연결이다. 서버 쪽에서는 닫는 중으로 남는다.
+  // A connection that does not answer the server's close. On the server side it stays as closing.
   const socket = new WsClient(world.server.url.replace("http", "ws") + RUNNER_SOCKET);
   t.after(() => socket.terminate());
   socket.on("error", () => {});
@@ -246,11 +246,11 @@ test("세션이 끝난 러너 연결이 닫히기 전에 보낸 것은 받지 �
   assert.deepEqual(await alerts(world), []);
 });
 
-test("omagari status는 다른 멤버가 보낸 브랜치와 경로를 따옴표 안에 적어 줄을 넘지 못하게 한다", async (t) => {
+test("omagari status puts the branch and path sent by another member in quotes so they cannot break the line", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
   const alice = await member(t, world, "alice");
-  const forged = "\nOmagari: 가짜 줄";
+  const forged = "\nOmagari: fake line";
   alice.send("observation", {
     works: [
       {
@@ -266,6 +266,6 @@ test("omagari status는 다른 멤버가 보낸 브랜치와 경로를 따옴표
 
   const { code, stdout, stderr } = await world.cli("status");
   assert.equal(code, 0, stderr);
-  assert.match(stdout, /"a1\\nOmagari: 가짜 줄"/);
-  assert.ok(!stdout.split("\n").some((line) => line.startsWith("Omagari: 가짜")), stdout);
+  assert.match(stdout, /"a1\\nOmagari: fake line"/);
+  assert.ok(!stdout.split("\n").some((line) => line.startsWith("Omagari: fake")), stdout);
 });

@@ -26,14 +26,14 @@ const root = join(import.meta.dirname, "..");
 const exec = promisify(execFile);
 
 /**
- * 러너가 깔린 클론을 받는 것(ADR-0042)을 임시 원격과 깔린 클론으로 본다. 서버의 계약이 `contract`이고 모든 hello를 거절하는
- * 가짜 서버를 두고, 깔린 클론의 CLI를 관측하는 레포 폴더에서 켠다. 원격에는 클론을 받은 뒤 계약을 올린 커밋이 있다.
- * 가짜: 서버, 그리고 `npm ci`(내려받기가 필요해 CI에서 불안정하다. 불렸다는 표만 클론에 남긴다).
+ * Looks at the runner pulling an installed clone (ADR-0042) with a temporary remote and an installed clone. There is a fake server whose contract is `contract` and which refuses every hello,
+ * and the installed clone's CLI is started in the observed repo folder. The remote has a commit that raised the contract after the clone was taken.
+ * Fakes: the server, and `npm ci` (it needs a download and is unstable in CI. It leaves only a mark in the clone that it was called).
  */
 type Hello = { v: number; id: string };
 type Reply = (socket: WebSocket, hello: Hello, n: number) => void;
 
-/** 모든 hello를 계약 `contract`의 서버처럼 거절한다. */
+/** Refuses every hello like a server whose contract is `contract`. */
 const refuse =
   (contract: number): Reply =>
   (socket, hello) => {
@@ -43,13 +43,18 @@ const refuse =
         id: "e",
         re: hello.id,
         kind: "error",
-        payload: { code: "version_mismatch", message: "다르다", version: "v9.9.9", contract },
+        payload: {
+          code: "version_mismatch",
+          message: "different",
+          version: "v9.9.9",
+          contract,
+        },
       }),
     );
     socket.close(1008, "version_mismatch");
   };
 
-/** hello를 받아 주고(서버의 계약은 러너의 것과 같다) 붙어 있게 둔다. */
+/** Accepts hello (the server's contract is the same as the runner's) and leaves it attached. */
 const welcome: Reply = (socket, hello) =>
   socket.send(
     JSON.stringify({
@@ -74,7 +79,7 @@ async function setup(t: TestContext, reply: Reply) {
   const git = async (cwd: string, ...args: string[]) =>
     (await exec("git", args, { cwd, env: { ...process.env, ...env } })).stdout.trim();
 
-  // 원격: 지금 소스의 사본. 클론을 받은 뒤 계약을 올린 커밋을 더한다.
+  // The remote: a copy of the current source. Add a commit that raised the contract after the clone was taken.
   const origin = join(dir, "origin");
   const packages = ["contract", "runner", "cli"];
   for (const name of packages)
@@ -96,8 +101,8 @@ async function setup(t: TestContext, reply: Reply) {
       `CONTRACT_VERSION = ${CONTRACT_VERSION + 1};`,
     ),
   );
-  await git(origin, "commit", "-am", "계약을 올린다");
-  // 깔린 클론의 의존성: 바깥 것을 가리키고, 작업 공간 패키지는 이 클론의 것을 가리킨다.
+  await git(origin, "commit", "-am", "raise the contract");
+  // The installed clone's dependencies: point outside, and workspace packages point to this clone's own.
   await mkdir(join(installed, "node_modules/@omagari"), { recursive: true });
   for (const name of await readdir(join(root, "node_modules")))
     if (name !== "@omagari")
@@ -107,7 +112,7 @@ async function setup(t: TestContext, reply: Reply) {
       join(installed, "packages", name),
       join(installed, "node_modules/@omagari", name),
     );
-  // 가짜 npm: 불린 인자를 클론에 남긴다.
+  // Fake npm: leaves the arguments it was called with in the clone.
   const bin = join(dir, "bin");
   await mkdir(bin);
   await writeFile(join(bin, "npm"), '#!/bin/sh\necho "$@" > npm-called\n');
@@ -130,7 +135,7 @@ async function setup(t: TestContext, reply: Reply) {
   });
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   await mkdir(join(dir, "config/omagari"), { recursive: true });
-  await writeFile(join(dir, "config/omagari/sessions.json"), JSON.stringify({ [url]: "세션" }));
+  await writeFile(join(dir, "config/omagari/sessions.json"), JSON.stringify({ [url]: "session" }));
 
   const observed = await tempRepo();
   t.after(observed.remove);
@@ -148,9 +153,13 @@ async function setup(t: TestContext, reply: Reply) {
         env: { ...process.env, ...cliEnv },
       },
     ).catch((error) => error);
-    return { code: result.code ?? 0, stdout: String(result.stdout), stderr: String(result.stderr) };
+    return {
+      code: result.code ?? 0,
+      stdout: String(result.stdout),
+      stderr: String(result.stderr),
+    };
   };
-  /** 원격의 계약을 `to`로 올린다. */
+  /** Raises the remote's contract to `to`. */
   const bump = async (to: number) => {
     await writeFile(
       index,
@@ -159,9 +168,9 @@ async function setup(t: TestContext, reply: Reply) {
         `CONTRACT_VERSION = ${to};`,
       ),
     );
-    await git(origin, "commit", "-am", `계약 ${to}`);
+    await git(origin, "commit", "-am", `contract ${to}`);
   };
-  /** 러너를 켜 두고 `hellos`가 `count`개가 되기를 기다린 뒤 끈다. */
+  /** Starts the runner, waits until `hellos` has `count` entries, then stops it. */
   const keep = async (count: number) => {
     const child = spawn(
       process.execPath,
@@ -174,7 +183,7 @@ async function setup(t: TestContext, reply: Reply) {
     );
     const exited = once(child, "exit");
     try {
-      await eventually(() => assert.ok(hellos.length >= count, `hello ${hellos.length}개`), 30_000);
+      await eventually(() => assert.ok(hellos.length >= count, `${hellos.length} hellos`), 30_000);
     } finally {
       child.kill("SIGINT");
       await exited;
@@ -183,7 +192,7 @@ async function setup(t: TestContext, reply: Reply) {
   return { git, origin, installed, observed, hellos, omagari, bump, keep };
 }
 
-test("서버의 계약이 더 새로우면 깔린 클론이 빨리 감기되고 의존성을 깔고 다시 켜며, 받은 것이 기록에 남고 관측하는 폴더는 그대로다", async (t) => {
+test("when the server's contract is newer, the installed clone is fast-forwarded, dependencies are installed and it restarts, what was pulled is recorded and the observed folder is untouched", async (t) => {
   const world = await setup(t, refuse(CONTRACT_VERSION + 1));
   const before = await world.git(world.installed, "rev-parse", "HEAD");
   const observedStatus = await world.git(world.observed.folder, "status", "--porcelain");
@@ -193,12 +202,12 @@ test("서버의 계약이 더 새로우면 깔린 클론이 빨리 감기되고 
   const after = await world.git(world.origin, "rev-parse", "HEAD");
   assert.equal(await world.git(world.installed, "rev-parse", "HEAD"), after);
   assert.equal((await readFile(join(world.installed, "npm-called"), "utf8")).trim(), "ci");
-  // 처음엔 옛 계약으로, 받은 뒤 다시 켠 러너는 새 계약으로 붙었다. 그래도 안 맞으면 거듭 받지 않고 멈춘다.
+  // First it connected with the old contract; the runner restarted after pulling connected with the new one. If it still doesn't match, it stops without pulling again and again.
   assert.deepEqual(world.hellos, [CONTRACT_VERSION, CONTRACT_VERSION + 1]);
   assert.notEqual(started.code, 0);
   assert.match(started.stdout, /The server's contract is newer, so this clone will be updated/);
   assert.match(started.stdout, /Updated dev from .* to .*/);
-  // 안내 문구는 깔린 클론의 브랜치를 말한다.
+  // The notice talks about the installed clone's branch.
   assert.match(started.stdout, /Pull `dev`/);
   assert.doesNotMatch(started.stdout, /`main`/);
 
@@ -211,7 +220,7 @@ test("서버의 계약이 더 새로우면 깔린 클론이 빨리 감기되고 
   assert.equal(await world.git(world.observed.folder, "rev-parse", "HEAD"), observedHead);
 });
 
-test("깔린 클론에 고친 파일이 있으면 아무것도 바뀌지 않고 할 일이 보인다", async (t) => {
+test("when the installed clone has edited files, nothing changes and what to do is shown", async (t) => {
   const world = await setup(t, refuse(CONTRACT_VERSION + 1));
   const before = await world.git(world.installed, "rev-parse", "HEAD");
   await writeFile(join(world.installed, "packages/cli/package.json"), "{}\n");
@@ -224,9 +233,9 @@ test("깔린 클론에 고친 파일이 있으면 아무것도 바뀌지 않고 
   await assert.rejects(readFile(join(world.installed, "npm-called")));
 });
 
-test("깔린 클론이 빨리 감기가 안 되면 아무것도 바뀌지 않고 할 일이 보인다", async (t) => {
+test("when the installed clone can't be fast-forwarded, nothing changes and what to do is shown", async (t) => {
   const world = await setup(t, refuse(CONTRACT_VERSION + 1));
-  await world.git(world.installed, "commit", "--allow-empty", "-m", "내 커밋");
+  await world.git(world.installed, "commit", "--allow-empty", "-m", "my commit");
   const before = await world.git(world.installed, "rev-parse", "HEAD");
 
   const started = await world.omagari(...runner);
@@ -236,7 +245,7 @@ test("깔린 클론이 빨리 감기가 안 되면 아무것도 바뀌지 않고
   await assert.rejects(readFile(join(world.installed, "npm-called")));
 });
 
-test("서버가 더 낡았으면 받지 않고 서버를 올리라고 알린다", async (t) => {
+test("when the server is older, it doesn't pull and tells you to raise the server", async (t) => {
   const world = await setup(t, refuse(CONTRACT_VERSION - 1));
   const before = await world.git(world.installed, "rev-parse", "HEAD");
 
@@ -247,9 +256,9 @@ test("서버가 더 낡았으면 받지 않고 서버를 올리라고 알린다"
   assert.deepEqual(world.hellos, [CONTRACT_VERSION]);
 });
 
-test("켜져서 붙어 있던 러너가 서버가 새 계약으로 다시 떠 거절당하면 깔린 클론을 받고 다시 켜서 붙는다", async (t) => {
+test("when a running, attached runner is refused because the server came back up with a new contract, it pulls the installed clone, restarts and attaches", async (t) => {
   const N = CONTRACT_VERSION;
-  // 붙었다가 끊기고(서버가 다시 뜬다), 다시 붙을 때 새 계약으로 거절한다. 받고 다시 켠 러너는 붙는다.
+  // It attached, then dropped (the server comes back up), and on reattaching it refuses with the new contract. The runner that pulled and restarted attaches.
   const world = await setup(t, (socket, hello, n) => {
     if (n === 1) {
       welcome(socket, hello, n);
@@ -266,11 +275,11 @@ test("켜져서 붙어 있던 러너가 서버가 새 계약으로 다시 떠 �
   assert.equal((await readFile(join(world.installed, "npm-called"), "utf8")).trim(), "ci");
 });
 
-test("받고 다시 켠 러너가 잘 붙은 뒤 서버가 또 새 계약이 되면 다시 받는다", async (t) => {
+test("when, after a runner that pulled and restarted attaches well, the server gets a new contract again, it pulls again", async (t) => {
   const N = CONTRACT_VERSION;
   let world: Awaited<ReturnType<typeof setup>>;
   world = await setup(t, (socket, hello, n) => {
-    // 1: 켤 때 거절 → 받음. 2: 받은 러너가 붙는다. 3: 서버가 또 올라 거절 → 또 받음. 4: 붙는다.
+    // 1: refused on start → pulled. 2: the pulled runner attaches. 3: the server rises again and refuses → pulled again. 4: attaches.
     if (n === 1) refuse(N + 1)(socket, hello, n);
     else if (n === 2) {
       welcome(socket, hello, n);

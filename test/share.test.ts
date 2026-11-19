@@ -4,14 +4,14 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { eventually, startWorld, tempRepo, writer } from "./harness.ts";
 
-// 러너를 CLI로 다섯 번 켜고 끈다. 관측은 붙자마자 보내므로 주기(3초)를 기다리지 않지만, 단계가 많아 시간 제한을 늘린다.
-test("주인이 러너마다 공유 수준을 고르고 다시 켜도 그 수준이 남는다. 기본은 full, declared는 경로만, intent는 작업만 올리고, 낮추면 올라간 내용이 서버에서 내려간다", {
+// Starts and stops the runner five times with the CLI. Observation is sent right on attach, so it doesn't wait for the interval (3s), but there are many steps, so the time limit is extended.
+test("the owner picks a share level per runner and it stays after turning on again. The default is full, declared uploads paths only, intent uploads the work only, and lowering it takes the uploaded content off the server", {
   timeout: 60_000,
 }, async (t) => {
   const world = await startWorld();
   t.after(world.stop);
   world.github.grant("alice");
-  const desk = await tempRepo(); // alice가 레포를 받은 폴더
+  const desk = await tempRepo(); // the folder where alice cloned the repo
   t.after(desk.remove);
   const { git, folder } = desk;
   const write = writer(folder);
@@ -22,15 +22,15 @@ test("주인이 러너마다 공유 수준을 고르고 다시 켜도 그 수준
   await git("update-ref", "refs/remotes/origin/main", "HEAD");
   const base = await git("rev-parse", "HEAD");
   await git("switch", "--create", "feat");
-  await write("committed.ts", "커밋한 내용\n");
+  await write("committed.ts", "Committed content\n");
   await git("add", "committed.ts");
   await git("commit", "--message=committed");
-  await write("draft.ts", "커밋하지 않은 내용\n");
+  await write("draft.ts", "Uncommitted content\n");
   await write("image.png", new Uint8Array([0x89, 0x50, 0x00]));
-  await write(".env.local", "TOKEN=secret\n"); // 어느 수준에서도 나가지 않는다
+  await write(".env.local", "TOKEN=secret\n"); // never goes out at any level
   await rm(join(folder, "gone.ts"));
 
-  /** alice의 러너를 `omagari runner <args>`로 켠다. 처음이면 기기 인증으로 로그인한다. */
+  /** Turns on alice's runner with `omagari runner <args>`. If it's the first time, it logs in with device login. */
   const launch = async (...args: string[]) => {
     const runner = world.launchCliIn(folder, "runner", ...args);
     t.after(() => runner.stop("SIGKILL"));
@@ -41,7 +41,7 @@ test("주인이 러너마다 공유 수준을 고르고 다시 켜도 그 수준
     }
     return runner;
   };
-  /** 다른 멤버(owner)가 API로 보는 alice의 작업. 상태 한 줄은 쓴 시각을 빼고 본다. 러너가 켜져 있어 오프라인이 아니다. */
+  /** Alice's work as another member (owner) sees it through the API. The one-line status is seen without its written time. The runner is on, so she isn't offline. */
   const observed = (share: string, files: object[], line: object | null) =>
     eventually(async () =>
       assert.deepEqual(
@@ -49,25 +49,38 @@ test("주인이 러너마다 공유 수준을 고르고 다시 켜도 그 수준
           .filter((work) => work.login === "alice")
           .map((work) => ({
             ...work,
-            line: work.line && { source: work.line.source, text: work.line.text },
+            line: work.line && {
+              source: work.line.source,
+              text: work.line.text,
+            },
           })),
-        [{ login: "alice", branch: "feat", base, share, files, line, offlineSince: null }],
+        [
+          {
+            login: "alice",
+            branch: "feat",
+            base,
+            share,
+            files,
+            line,
+            offlineSince: null,
+          },
+        ],
       ),
     );
-  /** alice의 에이전트가 이 폴더에서 `omagari status set`으로 상태 한 줄을 쓴다. */
+  /** Alice's agent writes a one-line status with `omagari status set` in this folder. */
   const setStatus = async (text: string) => {
     const { code, stderr } = await world.cliIn(folder, "status", "set", text);
     assert.equal(code, 0, stderr);
     return { source: "agent", text };
   };
 
-  // 고르지 않으면 full: 내용까지 올라간다.
+  // If you don't pick, it's full: content goes up too.
   let runner = await launch();
   await observed(
     "full",
     [
-      { path: "committed.ts", content: "커밋한 내용\n" },
-      { path: "draft.ts", content: "커밋하지 않은 내용\n" },
+      { path: "committed.ts", content: "Committed content\n" },
+      { path: "draft.ts", content: "Uncommitted content\n" },
       { path: "gone.ts", deleted: true },
       { path: "image.png", omitted: "binary" },
     ],
@@ -76,7 +89,7 @@ test("주인이 러너마다 공유 수준을 고르고 다시 켜도 그 수준
   let { stdout } = await runner.stop();
   assert.match(stdout, /Observation \(share level full\)/);
 
-  // declared로 낮추면 경로만 남고(선점한 경로가 없다), 이미 올라간 내용은 서버에서 내려간다. 선점한 경로의 내용은 claims.test가 본다.
+  // Lowering to declared leaves paths only (there are no claimed paths), and content already uploaded comes off the server. The content of claimed paths is checked in claims.test.
   runner = await launch("--share", "declared");
   const declared = [
     { path: "committed.ts", omitted: "share" },
@@ -94,44 +107,47 @@ test("주인이 러너마다 공유 수준을 고르고 다시 켜도 그 수준
     /Observation \(share level declared\): .*the paths of the files changed since it split from the default branch go to the server, and members can see them\. Content goes only for files inside paths that branch has claimed \(omagari claim\)/,
   );
 
-  // 고르지 않고 다시 켜도 고른 수준이 남는다. 꺼진 동안 쓴 파일도 경로만 올라간다.
-  await write("later.ts", "꺼진 동안 쓴 내용\n");
+  // Turning it on again without picking keeps the picked level. Files written while it was off also go up as paths only.
+  await write("later.ts", "Content written while off\n");
   runner = await launch();
   const later = [...declared, { path: "later.ts", omitted: "share" }];
-  await observed("declared", later, { source: "files", text: "Editing committed.ts and 4 more" });
-  const fixing = await setStatus("결제 흐름 고치는 중");
+  await observed("declared", later, {
+    source: "files",
+    text: "Editing committed.ts and 4 more",
+  });
+  const fixing = await setStatus("Fixing the payment flow");
   await observed("declared", later, fixing);
   ({ stdout } = await runner.stop());
   assert.match(stdout, /Observation \(share level declared\)/);
 
-  // intent로 낮추면 경로도 내용도 내려가고 작업(브랜치)과 상태 한 줄만 남는다.
-  // 파일이 오지 않을 뿐 바뀐 것이 0이 된 것이 아니라, 에이전트가 쓴 줄은 지워지지 않는다.
+  // Lowering to intent takes both paths and content down, leaving only the work (branch) and the one-line status.
+  // Files just stop arriving; changes don't become 0, and the line the agent wrote isn't erased.
   runner = await launch("--share=intent");
   await observed("intent", [], fixing);
-  await observed("intent", [], await setStatus("환불 흐름으로 넘어가는 중"));
+  await observed("intent", [], await setStatus("Moving on to the refund flow"));
   ({ stdout } = await runner.stop());
   assert.match(
     stdout,
     /Observation \(share level intent\): .*Neither the paths nor the content of changed files go/,
   );
 
-  // 없는 수준은 받지 않고, 러너도 켜지 않는다.
+  // A level that doesn't exist isn't accepted, and the runner isn't turned on either.
   const wrong = await world.cliIn(folder, "runner", "--share", "everything");
   assert.equal(wrong.code, 1);
   assert.match(wrong.stderr, /Share level must be one of full, declared, intent: everything/);
 
-  // 다시 올리면 내용이 올라간다.
+  // Raising it again uploads the content.
   runner = await launch("--share", "full");
   await observed(
     "full",
     [
-      { path: "committed.ts", content: "커밋한 내용\n" },
-      { path: "draft.ts", content: "커밋하지 않은 내용\n" },
+      { path: "committed.ts", content: "Committed content\n" },
+      { path: "draft.ts", content: "Uncommitted content\n" },
       { path: "gone.ts", deleted: true },
       { path: "image.png", omitted: "binary" },
-      { path: "later.ts", content: "꺼진 동안 쓴 내용\n" },
+      { path: "later.ts", content: "Content written while off\n" },
     ],
-    { source: "agent", text: "환불 흐름으로 넘어가는 중" },
+    { source: "agent", text: "Moving on to the refund flow" },
   );
   await runner.stop();
 });

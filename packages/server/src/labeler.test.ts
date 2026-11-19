@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { labelsFor } from "./labeler.ts";
 
 const yaml = `
-# 주석
+# comment
 backend:
   - changed-files:
     - any-glob-to-any-file: 'server/**'
@@ -27,12 +27,12 @@ nested:
     - head-branch: ['^feat']
 branch-only:
   - head-branch: ['^feature']
-"결제":
+"payment":
   - changed-files:
       - any-glob-to-any-file: ['src/payment/**', 'pay/{a,b}.ts']
 `;
 
-test("labeler.yml의 파일 조건 네 가지와 any/all, 브랜치 조건 무시", () => {
+test("labeler.yml: four file conditions, any/all, and branch conditions ignored", () => {
   const of = (...files: string[]) => labelsFor(yaml, files);
   assert.deepEqual(of("server/a.ts"), ["backend", "only-ts"]);
   assert.deepEqual(of("lib/x.md", "docs/y.md"), []);
@@ -40,8 +40,8 @@ test("labeler.yml의 파일 조건 네 가지와 any/all, 브랜치 조건 무�
   assert.deepEqual(of("web/a.ts"), ["shared", "only-ts"]);
   assert.deepEqual(of("web/legacy/a.js"), []);
   assert.deepEqual(of("a/x.js"), ["nested"]);
-  assert.deepEqual(of("b/x.js"), ["nested"]); // 브랜치 조건은 무시하고 파일 조건만 본다
-  assert.deepEqual(of("src/payment/x.js", "pay/a.ts"), ["결제"]);
+  assert.deepEqual(of("b/x.js"), ["nested"]); // branch conditions are ignored; only file conditions count
+  assert.deepEqual(of("src/payment/x.js", "pay/a.ts"), ["payment"]);
   assert.deepEqual(of(), []);
   assert.throws(() => labelsFor("- a\n- b", ["x"]));
 });

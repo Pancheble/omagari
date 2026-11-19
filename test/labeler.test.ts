@@ -6,13 +6,13 @@ import { eventually, startWorld, writer } from "./harness.ts";
 const text = (lines: string[]) => `${lines.join("\n")}\n`;
 const BASE = Array.from({ length: 5 }, (_, i) => `line ${i + 1}`);
 
-/** src/pay.ts를 두 작업이 같은 줄에서 고쳐 직접 충돌 포스트 하나를 세우고 그 라벨을 돌려준다. */
+/** Sets up one direct-conflict post by two works editing the same line of src/pay.ts, and returns its labels. */
 async function directLabels(labeler: string | undefined, branchLabeler?: string) {
   const world = await startWorld({ observeMs: 50, followMs: 50 });
   const fake = world.github;
   try {
     if (labeler !== undefined) fake.files.get("main")?.set(".github/labeler.yml", labeler);
-    // 기본 브랜치가 아닌 판의 labeler.yml은 쓰지 않는다.
+    // A labeler.yml from a branch that isn't the default branch isn't used.
     if (branchLabeler !== undefined)
       fake.files.set("other", new Map([[".github/labeler.yml", branchLabeler]]));
     fake.createLabel("backend");
@@ -45,7 +45,7 @@ async function directLabels(labeler: string | undefined, branchLabeler?: string)
       const found = (await call(world.owner, api.posts)).posts.find(
         (p) => p.message.kind === "alert" && p.message.alert.kind === "direct",
       );
-      assert.ok(found, "아직 포스트가 없다");
+      assert.ok(found, "no post yet");
       return found;
     });
     await desk.remove();
@@ -55,7 +55,7 @@ async function directLabels(labeler: string | undefined, branchLabeler?: string)
   }
 }
 
-test("labeler.yml의 경로 규칙에 맞는 팀 라벨이 직접 충돌 포스트에 종류 라벨과 함께 붙는다", async () => {
+test("team labels matching labeler.yml's path rules are attached to a direct-conflict post along with the kind label", async () => {
   const labels = await directLabels(
     text([
       "backend:",
@@ -72,12 +72,12 @@ test("labeler.yml의 경로 규칙에 맞는 팀 라벨이 직접 충돌 포스�
   assert.deepEqual(labels, ["Direct conflict", "backend"]);
 });
 
-test("labeler.yml이 없거나 틀린 꼴이면 종류 라벨만 붙고 서버는 멈추지 않는다", async () => {
+test("with no labeler.yml or one of the wrong shape, only the kind label is attached and the server doesn't stop", async () => {
   assert.deepEqual(await directLabels(undefined), ["Direct conflict"]);
-  assert.deepEqual(await directLabels("- 틀린\n- 꼴"), ["Direct conflict"]);
+  assert.deepEqual(await directLabels("- wrong\n- shape"), ["Direct conflict"]);
 });
 
-test("labeler.yml이 오래 걸리는 꼴이어도 서버를 붙잡지 않고, 그 글롭만 빼고 읽는다", {
+test("even if labeler.yml takes long to process, it doesn't hold up the server, and is read without that glob", {
   timeout: 60_000,
 }, async () => {
   const braces = Array.from({ length: 24 }, () => "{a,b}").join("");
@@ -93,7 +93,7 @@ test("labeler.yml이 오래 걸리는 꼴이어도 서버를 붙잡지 않고, �
     ]),
   );
   assert.deepEqual(labels, ["Direct conflict", "backend"]);
-  // 너무 긴 파일은 읽지 않는다.
+  // A file that's too long isn't read.
   const long = text([
     "backend:",
     "  - changed-files:",
@@ -103,7 +103,7 @@ test("labeler.yml이 오래 걸리는 꼴이어도 서버를 붙잡지 않고, �
   assert.deepEqual(await directLabels(long), ["Direct conflict"]);
 });
 
-test("간접 충돌과 중복 구현은 심볼이 있는 파일에 맞는 팀 라벨이 붙는다", async (t) => {
+test("for indirect conflicts and duplicate implementations, team labels matching the file with the symbol are attached", async (t) => {
   const world = await startWorld({ observeMs: 50, followMs: 50 });
   t.after(world.stop);
   const fake = world.github;
@@ -149,7 +149,7 @@ test("간접 충돌과 중복 구현은 심볼이 있는 파일에 맞는 팀 �
   await eventually(async () =>
     assert.ok((await world.works(world.owner)).some((w) => w.branch === "payment")),
   );
-  // owner가 refund의 정의 줄을 바꾸고(alice는 checkout.ts에서 쓴다), 두 작업이 같은 이름의 새 함수 split을 다른 파일에 만든다.
+  // owner changes refund's definition line (alice uses it in checkout.ts), and two works make a new function split of the same name in different files.
   await writer(world.repo.folder)(
     "src/pay.ts",
     PAY.replace("refund(a: number)", "refund(a: number, why: string)"),

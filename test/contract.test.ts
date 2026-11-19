@@ -24,7 +24,7 @@ const frame = (fields: object) => JSON.stringify({ v: CONTRACT_VERSION, payload:
 const tooBigFrame = "x".repeat(MAX_FRAME_BYTES + 1);
 const tooBigBody = "x".repeat(MAX_MESSAGE_BYTES + 1);
 
-/** 이 체크아웃의 버전을 Git에 직접 묻는다. 태그를 받지 못한 클론(CI의 얕은 클론)이면 커밋만 안다. */
+/** Asks Git directly for this checkout's version. A clone without tags (CI's shallow clone) knows only the commit. */
 function gitVersion() {
   const git = (...args: string[]) =>
     execFileSync("git", args, {
@@ -39,7 +39,7 @@ function gitVersion() {
   }
 }
 
-/** 이 체크아웃의 브랜치를 Git에 직접 묻는다. 브랜치가 아니면(CI의 분리된 HEAD) 안내가 일반 문구다. */
+/** Asks Git directly for this checkout's branch. If it isn't a branch (CI's detached HEAD), the guidance is generic. */
 function gitBranch() {
   const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
     cwd: import.meta.dirname,
@@ -48,7 +48,7 @@ function gitBranch() {
   return branch === "HEAD" ? "this clone's branch" : branch;
 }
 
-/** 러너인 척 서버에 붙는 날 연결. 계약을 거치지 않고 프레임을 그대로 보낸다. */
+/** A bare connection that attaches to the server pretending to be a runner. It sends frames as they are, without going through the contract. */
 async function rawRunner(t: TestContext, serverUrl: string) {
   const socket = new WebSocket(serverUrl.replace("http", "ws") + RUNNER_SOCKET);
   t.after(() => socket.close());
@@ -63,7 +63,7 @@ async function rawRunner(t: TestContext, serverUrl: string) {
   };
 }
 
-/** 서버인 척하는 것. hello를 받으면 `onHello`대로 군다. */
+/** Pretends to be a server. On receiving hello, it acts as `onHello` says. */
 async function fakeServer(
   t: TestContext,
   onHello: (socket: ServerSocket, hello: { id: string }) => void,
@@ -77,7 +77,7 @@ async function fakeServer(
     socket.on("message", (data) => {
       const message = JSON.parse(String(data));
       if (message.kind === "hello") onHello(socket, message);
-      // 러너가 연결마다 알아서 보내는 관측과 검사 명령은 문답이 아니라 세지 않는다.
+      // The observations and check commands the runner sends on its own per connection aren't Q&A, so they aren't counted.
       else if (message.kind !== "observation" && message.kind !== "checkCommand")
         received.push(message);
     });
@@ -89,33 +89,35 @@ async function fakeServer(
   const repo = await tempRepo();
   t.after(repo.remove);
   return {
-    /** 이 서버에 붙을 러너의 옵션. */
+    /** Options for the runner that attaches to this server. */
     runner: {
       serverUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
       folder: repo.folder,
-      session: "세션",
+      session: "session",
       ...stubbed(),
     },
-    /** hello 다음에 러너가 보낸 메시지들(관측과 검사 명령은 빼고). 온 순서대로다. */
+    /** The messages the runner sent after hello (without observations and check commands). In order of arrival. */
     received,
-    /** 러너와의 연결이 닫혔다. */
+    /** The connection to the runner closed. */
     closed: closed.promise,
   };
 }
 
-test("실제 서버와 실제 러너가 임시 Git 레포 위에서 붙어 메시지를 주고받는다", async (t) => {
-  const world = await startWorld(); // 러너는 hello에 welcome을 받아야 켜진다
+test("a real server and a real runner connect over a temporary Git repo and exchange messages", async (t) => {
+  const world = await startWorld(); // the runner turns on only after getting welcome for hello
   t.after(world.stop);
 
   assert.equal(await world.repo.git("rev-list", "--count", "HEAD"), "1");
-  assert.deepEqual(await call(world.server, api.health), { contract: CONTRACT_VERSION });
+  assert.deepEqual(await call(world.server, api.health), {
+    contract: CONTRACT_VERSION,
+  });
   assert.deepEqual(await world.agents(world.owner), { owner: "online" });
 });
 
-test("서버는 계약에 없는 종류, 내용, 키를 받지 않는다", async (t) => {
+test("the server doesn't accept kinds, contents or keys that aren't in the contract", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
-  // hello를 마치지 않은 연결은 거절한 뒤 닫히므로 프레임마다 새로 붙는다.
+  // A connection that didn't finish hello is refused and then closed, so each frame attaches anew.
   const reply = async (sent: string) => (await rawRunner(t, world.server.url)).reply(sent);
   const refusedWith = (code: string, re?: string) => ({
     kind: "error",
@@ -127,30 +129,36 @@ test("서버는 계약에 없는 종류, 내용, 키를 받지 않는다", async
     await reply(frame({ id: "a", kind: "run_command", payload: { command: "ls" } })),
     refusedWith("unknown_kind", "a"),
   );
-  assert.partialDeepStrictEqual(await reply("이건 JSON이 아니다"), refusedWith("invalid_message"));
+  assert.partialDeepStrictEqual(await reply("this isn't JSON"), refusedWith("invalid_message"));
   assert.partialDeepStrictEqual(
-    await reply(frame({ id: "b", kind: "hello", payload: "내용이 객체가 아니다" })),
+    await reply(frame({ id: "b", kind: "hello", payload: "the content isn't an object" })),
     refusedWith("invalid_message", "b"),
   );
   assert.partialDeepStrictEqual(
-    await reply(frame({ id: "c", kind: "hello", payload: { junk: "계약에 없는 키" } })),
+    await reply(
+      frame({
+        id: "c",
+        kind: "hello",
+        payload: { junk: "a key not in the contract" },
+      }),
+    ),
     refusedWith("invalid_message", "c"),
   );
   assert.partialDeepStrictEqual(
-    await reply(frame({ id: "d", kind: "hello", junk: "봉투에 없는 키" })),
+    await reply(frame({ id: "d", kind: "hello", junk: "a key not in the envelope" })),
     refusedWith("invalid_message"),
   );
 
-  // 받지 않은 메시지를 보낸 연결은 러너로 치지 않는다. 붙어 있는 것은 world의 러너 하나다.
+  // A connection that sent a message that wasn't accepted doesn't count as a runner. What is attached is the world's one runner.
   assert.deepEqual(await world.agents(world.owner), { owner: "online" });
 });
 
-test("서버는 계약 버전이 다른 러너를 자기 버전과 계약 버전을 실어 거절하고 연결을 끊는다", async (t) => {
+test("the server refuses a runner with a different contract version, sending its own version and contract version, and drops the connection", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
   const { socket, reply } = await rawRunner(t, world.server.url);
 
-  // 서버를 올렸는데 아직 올리지 않은 러너가 붙는다.
+  // The server is up and a runner that hasn't been updated attaches.
   const closed = once(socket, "close");
   assert.partialDeepStrictEqual(
     await reply(frame({ v: CONTRACT_VERSION - 1, id: "a", kind: "hello" })),
@@ -158,21 +166,25 @@ test("서버는 계약 버전이 다른 러너를 자기 버전과 계약 버전
       v: CONTRACT_VERSION,
       kind: "error",
       re: "a",
-      payload: { code: "version_mismatch", version: gitVersion(), contract: CONTRACT_VERSION },
+      payload: {
+        code: "version_mismatch",
+        version: gitVersion(),
+        contract: CONTRACT_VERSION,
+      },
     },
   );
   const [{ code }] = await closed;
   assert.equal(code, 1008);
 });
 
-test("서버는 상한을 넘는 프레임과 본문을 읽지 않는다", async (t) => {
+test("the server doesn't read frames and bodies over the limit", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
   const { socket } = await rawRunner(t, world.server.url);
 
   socket.send(frame({ id: "a", kind: "hello", payload: { junk: tooBigFrame } }));
   const [{ code }] = await once(socket, "close");
-  assert.equal(code, 1009); // 메시지가 너무 크다
+  assert.equal(code, 1009); // the message is too big
   assert.deepEqual(await world.agents(world.owner), { owner: "online" });
 
   const response = await fetch(world.server.url + api.health.path, {
@@ -180,10 +192,12 @@ test("서버는 상한을 넘는 프레임과 본문을 읽지 않는다", async
     body: tooBigBody,
   });
   assert.equal(response.status, 413);
-  assert.partialDeepStrictEqual(await response.json(), { error: { code: "invalid_request" } });
+  assert.partialDeepStrictEqual(await response.json(), {
+    error: { code: "invalid_request" },
+  });
 });
 
-test("서버는 없는 경로에 계약의 오류 형식으로 답한다", async (t) => {
+test("the server answers a path that doesn't exist in the contract's error format", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
 
@@ -192,7 +206,7 @@ test("서버는 없는 경로에 계약의 오류 형식으로 답한다", async
   });
 });
 
-test("계약의 경로는 계약대로의 본문만 받는다", async (t) => {
+test("a contract path accepts only a body that follows the contract", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
 
@@ -200,20 +214,23 @@ test("계약의 경로는 계약대로의 본문만 받는다", async (t) => {
     code: "invalid_request",
   });
   await assert.rejects(
-    call(world.server, api.loginPoll, { device: "x", junk: "계약에 없는 키" } as never),
+    call(world.server, api.loginPoll, {
+      device: "x",
+      junk: "a key not in the contract",
+    } as never),
     { code: "invalid_request" },
   );
-  // 계약대로의 본문은 처리기까지 간다. 모르는 기기 인증이라 거절된다.
+  // A body that follows the contract reaches the handler. It is refused as an unknown device auth.
   await assert.rejects(call(world.server, api.loginPoll, { device: "x" }), {
     code: "unauthorized",
   });
 });
 
-test("서버는 따로 열지 않으면 이 기기 안에서만 듣는다", async (t) => {
+test("unless opened separately, the server listens only inside this device", async (t) => {
   const outside = Object.values(networkInterfaces())
     .flat()
     .find((address) => address?.family === "IPv4" && !address.internal);
-  if (!outside) return t.skip("바깥으로 난 네트워크 인터페이스가 없다");
+  if (!outside) return t.skip("there's no network interface facing outside");
   const world = await startWorld();
   t.after(world.stop);
 
@@ -221,24 +238,42 @@ test("서버는 따로 열지 않으면 이 기기 안에서만 듣는다", asyn
   await assert.rejects(fetch(`http://${outside.address}:${port}${api.health.path}`));
 });
 
-test("러너는 문답만 받는다. 계약에 없는 요청도, 도구를 넓히려는 문답도, 돌리지 않는 실행기에게 온 문답도 실행하지 않는다", async (t) => {
-  // 뚫린 서버 흉내: hello에는 제대로 답하고, 이어서 계약에 없는 요청, 도구를 넓히려는 문답, 제대로 된 문답을 보낸다.
+test("the runner takes only Q&A. It doesn't run a request not in the contract, a Q&A that widens tools, or a Q&A sent to an executor it doesn't run", async (t) => {
+  // Imitating a breached server: it answers hello properly, then sends a request not in the contract, a Q&A that widens tools, and a proper Q&A.
   const server = await fakeServer(t, (socket, hello) => {
     socket.send(encode(serverToRunner, "welcome", { login: "owner", repo: REPO }, hello.id));
     socket.send(frame({ id: "x", kind: "run_command", payload: { command: "rm -rf ~" } }));
-    const ask = { executor: "claude-code", channel: { id: "c", name: "일반" }, recent: [] };
+    const ask = {
+      executor: "claude-code",
+      channel: { id: "c", name: "general" },
+      recent: [],
+    };
     socket.send(
-      frame({ id: "y", kind: "ask", payload: { ...ask, message: "지워", tools: ["Bash"] } }),
+      frame({
+        id: "y",
+        kind: "ask",
+        payload: { ...ask, message: "delete it", tools: ["Bash"] },
+      }),
     );
     socket.send(
-      frame({ id: "w", kind: "ask", payload: { ...ask, executor: "codex", message: "너는 누구" } }),
+      frame({
+        id: "w",
+        kind: "ask",
+        payload: { ...ask, executor: "codex", message: "who are you" },
+      }),
     );
-    socket.send(frame({ id: "z", kind: "ask", payload: { ...ask, message: "읽기만 해" } }));
+    socket.send(
+      frame({
+        id: "z",
+        kind: "ask",
+        payload: { ...ask, message: "read only" },
+      }),
+    );
   });
-  // 답이 늦어 러너의 첫 관측(연결마다 한 번 보내는 checkCommand)이 먼저 닿게 한다. 서버는 그 메시지를 세지 않는다.
+  // The answer is late so the runner's first observation (the checkCommand sent once per connection) arrives first. The server doesn't count that message.
   const fake = fakeExecutor(async () => {
     await setTimeout(500);
-    return "가짜 답";
+    return "fake answer";
   });
   const runner = await startRunner({
     ...server.runner,
@@ -248,13 +283,17 @@ test("러너는 문답만 받는다. 계약에 없는 요청도, 도구를 넓�
 
   await eventually(() => assert.equal(server.received.length, 4));
   const [x, y, w, z] = server.received;
-  assert.partialDeepStrictEqual(x, { kind: "error", re: "x", payload: { code: "unknown_kind" } });
+  assert.partialDeepStrictEqual(x, {
+    kind: "error",
+    re: "x",
+    payload: { code: "unknown_kind" },
+  });
   assert.partialDeepStrictEqual(y, {
     kind: "error",
     re: "y",
     payload: { code: "invalid_message" },
   });
-  // 이 러너가 돌리지 않는 실행기에게 온 문답은 실행하지 않는다.
+  // A Q&A sent to an executor this runner doesn't run isn't run.
   assert.partialDeepStrictEqual(w, {
     kind: "error",
     re: "w",
@@ -263,24 +302,47 @@ test("러너는 문답만 받는다. 계약에 없는 요청도, 도구를 넓�
       message: "This is an executor the runner doesn't run: codex",
     },
   });
-  assert.partialDeepStrictEqual(z, { kind: "answer", re: "z", payload: { text: "가짜 답" } });
-  // 실행기에 닿은 것은 제대로 된 문답 하나이고, 도구와 폴더는 러너가 정한 것이다.
+  assert.partialDeepStrictEqual(z, {
+    kind: "answer",
+    re: "z",
+    payload: { text: "fake answer" },
+  });
+  // What reached the executor is the one proper Q&A, and the tools and folder are what the runner decided.
   assert.deepEqual(
-    fake.calls.map(({ message, tools, folder }) => ({ message, tools, folder })),
-    [{ message: "읽기만 해", tools: ["Read", "Grep", "Glob"], folder: server.runner.folder }],
+    fake.calls.map(({ message, tools, folder }) => ({
+      message,
+      tools,
+      folder,
+    })),
+    [
+      {
+        message: "read only",
+        tools: ["Read", "Grep", "Glob"],
+        folder: server.runner.folder,
+      },
+    ],
   );
 });
 
-test("러너는 계약 버전이 다른 서버를 알아보고 켜지지 않는다", async (t) => {
+test("the runner recognizes a server with a different contract version and doesn't turn on", async (t) => {
   const server = await fakeServer(t, (socket, hello) => {
-    socket.send(frame({ v: CONTRACT_VERSION + 1, id: "w", re: hello.id, kind: "welcome" }));
+    socket.send(
+      frame({
+        v: CONTRACT_VERSION + 1,
+        id: "w",
+        re: hello.id,
+        kind: "welcome",
+      }),
+    );
   });
 
-  await assert.rejects(startRunner(server.runner), { code: "version_mismatch" });
+  await assert.rejects(startRunner(server.runner), {
+    code: "version_mismatch",
+  });
   await server.closed;
 });
 
-test("러너는 계약 버전이 달라 거절되면 무엇을 올려야 하는지 알린다", async (t) => {
+test("when refused for a different contract version, the runner says what to update", async (t) => {
   const advice = {
     newer: `Pull \`${gitBranch()}\` (\`git pull\`, \`npm ci\`) and turn the runner back on`,
     older: "The server is older. Update the server (tell whoever runs it)",
@@ -289,7 +351,7 @@ test("러너는 계약 버전이 달라 거절되면 무엇을 올려야 하는�
     [CONTRACT_VERSION + 1, advice.newer],
     [CONTRACT_VERSION - 1, advice.older],
   ] as const) {
-    // 계약 버전이 다른 서버의 거절. 이 꼴은 계약 버전과 상관없이 굳어 있어, 뒤에 더한 키가 있어도 읽힌다.
+    // A refusal from a server with a different contract version. This shape is fixed regardless of the contract version, so it is read even with keys added later.
     const server = await fakeServer(t, (socket, hello) => {
       socket.send(
         JSON.stringify({
@@ -299,10 +361,10 @@ test("러너는 계약 버전이 달라 거절되면 무엇을 올려야 하는�
           kind: "error",
           payload: {
             code: "version_mismatch",
-            message: `계약 버전이 다르다: 받은 것 ${CONTRACT_VERSION}, 여기는 ${contract}`,
+            message: `contract version differs: received ${CONTRACT_VERSION}, here ${contract}`,
             version: "v0.3.0",
             contract,
-            later: "뒤의 계약이 더한 키",
+            later: "a key added by a later contract",
           },
         }),
       );
@@ -317,18 +379,21 @@ test("러너는 계약 버전이 달라 거절되면 무엇을 올려야 하는�
   }
 });
 
-test("러너는 서버가 hello를 거절하면 연결을 닫고 켜지지 않는다", async (t) => {
+test("the runner closes the connection and doesn't turn on if the server refuses hello", async (t) => {
   const server = await fakeServer(t, (socket, hello) => {
     socket.send(
-      encode(serverToRunner, "error", { code: "internal", message: "받지 않는다" }, hello.id),
+      encode(serverToRunner, "error", { code: "internal", message: "not accepted" }, hello.id),
     );
   });
 
-  await assert.rejects(startRunner(server.runner), { code: "internal", message: "받지 않는다" });
+  await assert.rejects(startRunner(server.runner), {
+    code: "internal",
+    message: "not accepted",
+  });
   await server.closed;
 });
 
-test("러너는 hello에 답하지 않는 서버를 끝없이 기다리지 않는다", async (t) => {
+test("the runner doesn't wait forever for a server that doesn't answer hello", async (t) => {
   const server = await fakeServer(t, () => {});
 
   await assert.rejects(
@@ -338,37 +403,40 @@ test("러너는 hello에 답하지 않는 서버를 끝없이 기다리지 않�
   await server.closed;
 });
 
-test("계약에 없는 종류는 보낼 수도 없다", () => {
-  // @ts-expect-error 이 줄이 타입 검사를 통과하면 `npm run typecheck`가 실패한다.
+test("a kind not in the contract can't even be sent", () => {
+  // @ts-expect-error if this line passes the type check, `npm run typecheck` fails.
   assert.throws(() => encode(runnerToServer, "run_command", {}));
 });
 
-test("CLI와 훅은 실행 파일의 입출력으로 조작한다", async (t) => {
+test("the CLI and hooks are operated through the executable's input and output", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
 
-  // 버전은 package.json이 아니라 이 체크아웃의 git 태그다(ADR-0019).
+  // The version is this checkout's git tag, not package.json (ADR-0019).
   assert.deepEqual(await world.cli("--version"), {
     code: 0,
     stdout: `omagari ${gitVersion()} (contract ${CONTRACT_VERSION})\n`,
     stderr: "",
   });
 
-  // 훅은 무엇을 받아도 도구 호출을 막지 않는다: 0으로 끝나고 아무것도 넣지 않는다.
+  // A hook never blocks a tool call whatever it receives: it ends with 0 and puts in nothing.
   const silent = { code: 0, stdout: "", stderr: "" };
-  assert.deepEqual(await world.hook("이건 JSON이 아니다"), silent);
-  // 에이전트가 입력을 닫지 않아도 스스로 끝난다.
+  assert.deepEqual(await world.hook("this isn't JSON"), silent);
+  // It ends by itself even if the agent doesn't close the input.
   assert.deepEqual(await world.hook("", { keepStdinOpen: true }), silent);
 });
 
-/** `client` 주소인 척 로그인을 시작하는 날 요청. Fly 앞단처럼 Fly-Client-IP를 단다. */
+/** A bare request that starts a login pretending to be the `client` address. It adds Fly-Client-IP like Fly's front end. */
 const startLogin = (url: string, client: string) =>
-  fetch(new URL(api.login.path, url), { method: "POST", headers: { "fly-client-ip": client } });
+  fetch(new URL(api.login.path, url), {
+    method: "POST",
+    headers: { "fly-client-ip": client },
+  });
 
-test("Fly 위의 서버에서 한 주소가 끝나지 않은 로그인을 한꺼번에 쌓아도 다섯까지만 받고, 다른 사람의 로그인을 막지 못한다", async (t) => {
+test("on a server behind Fly, even if one address piles up unfinished logins all at once, only five are accepted, and it can't block other people's logins", async (t) => {
   const world = await startWorld({ behindFly: true });
   t.after(world.stop);
-  // GitHub이 느리게 답해 요청들이 서로 기다리는 사이에 겹친다.
+  // GitHub answers slowly, so the requests overlap while waiting on each other.
   const startDevice = world.github.github.startDevice;
   world.github.github.startDevice = async () => {
     await setTimeout(100);
@@ -380,12 +448,12 @@ test("Fly 위의 서버에서 한 주소가 끝나지 않은 로그인을 한꺼
     ),
   );
   assert.equal(statuses.filter((status) => status === 200).length, 5);
-  // 다른 사람은 로그인한다.
+  // Another person logs in.
   world.github.grant("alice");
   await world.login("alice");
 });
 
-test("Fly 위가 아닌 서버는 Fly-Client-IP를 믿지 않아, 헤더를 바꿔 가며 보내도 연결의 주소 하나로 센다", async (t) => {
+test("a server not behind Fly doesn't trust Fly-Client-IP, so even with a changing header it counts by the connection's one address", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
   for (let i = 1; i <= 5; i++)
@@ -393,7 +461,7 @@ test("Fly 위가 아닌 서버는 Fly-Client-IP를 믿지 않아, 헤더를 바�
   assert.equal((await startLogin(world.server.url, "192.0.2.6")).status, 500);
 });
 
-test("hello를 마치지 않은 연결은 시간 안에 끊기고, 큰 프레임이나 계약과 다른 프레임을 보내면 바로 끊긴다", async (t) => {
+test("a connection that didn't finish hello is dropped in time, and one that sends a big frame or a frame off the contract is dropped right away", async (t) => {
   const world = await startWorld({ helloMs: 200 });
   t.after(world.stop);
   const open = async (path: string) => {
@@ -403,22 +471,22 @@ test("hello를 마치지 않은 연결은 시간 안에 끊기고, 큰 프레임
     const closed = once(socket, "close");
     return { socket, closed };
   };
-  // 아무것도 보내지 않는 연결
+  // A connection that sends nothing
   for (const path of [RUNNER_SOCKET, "/api/live"]) {
     const { closed } = await open(path);
     await closed;
   }
-  // hello보다 큰 첫 프레임
+  // A first frame bigger than hello
   const big = await open(RUNNER_SOCKET);
   big.socket.send("x".repeat(65 * 1024));
   const [bigClose] = (await big.closed) as [CloseEvent];
   assert.equal(bigClose.code, 1009);
-  // 계약과 다른 첫 프레임
+  // A first frame off the contract
   const junk = await open(RUNNER_SOCKET);
   junk.socket.send(frame({ id: "x", kind: "nope" }));
   const [junkClose] = (await junk.closed) as [CloseEvent];
   assert.equal(junkClose.code, 1008);
-  // hello를 마친 러너는 시간이 지나도 붙어 있다.
+  // A runner that finished hello stays attached as time passes.
   await setTimeout(400);
   assert.deepEqual(await world.agents(world.owner), { owner: "online" });
 });

@@ -17,7 +17,7 @@ export function refund(amount: number) {
 const NOTES = `${Array.from({ length: 10 }, (_, i) => `line ${i + 1}`).join("\n")}\n`;
 const SESSION = "11111111-2222-3333-4444-555555555555";
 
-/** 기준 커밋에 src/pay.ts와 src/notes.txt를 두고 origin/main을 올린다. 모두 같은 판에서 시작한다. */
+/** Puts src/pay.ts and src/notes.txt on the base commit and pushes origin/main. Everyone starts from the same state. */
 async function base(world: World) {
   await writer(world.repo.folder)("src/pay.ts", PAY);
   await writer(world.repo.folder)("src/notes.txt", NOTES);
@@ -26,7 +26,7 @@ async function base(world: World) {
   await world.repo.git("update-ref", "refs/remotes/origin/main", "HEAD");
 }
 
-/** 멤버 `login`의 기기. 내 레포를 받은 것처럼 내 main 위에서 `branch`를 시작한다(conflicts.test와 같다). */
+/** Member `login`'s device. Starts `branch` on my main, as if it had received my repo (same as conflicts.test). */
 async function clone(world: World, login: string, branch: string, share?: ShareLevel) {
   world.github.grant(login);
   const as = await world.login(login);
@@ -37,7 +37,7 @@ async function clone(world: World, login: string, branch: string, share?: ShareL
   await desk.git("update-ref", "refs/remotes/origin/main", "HEAD");
   await desk.git("switch", "--create", branch);
   await desk.start();
-  // 러너가 그 브랜치를 관측해야 선점을 건다.
+  // The runner must observe that branch before it puts a claim on it.
   await eventually(async () =>
     assert.ok(
       (await world.works(world.owner)).some((w) => w.login === login && w.branch === branch),
@@ -46,7 +46,7 @@ async function clone(world: World, login: string, branch: string, share?: ShareL
   return { as, desk };
 }
 
-/** owner가 payment 브랜치로 옮기고 서버가 그것을 볼 때까지 기다린다. */
+/** Waits until owner switches to the payment branch and the server sees it. */
 async function payment(world: World) {
   await world.repo.git("switch", "--create", "payment");
   await eventually(async () =>
@@ -54,28 +54,28 @@ async function payment(world: World) {
   );
 }
 
-/** `omagari <args>`를 `cwd`(기본은 owner의 레포)에서 돌려 성공한 출력을 돌려준다. */
+/** Runs `omagari <args>` in `cwd` (default: owner's repo) and returns the successful output. */
 async function omagari(world: World, args: string[], cwd = world.repo.folder) {
   const { code, stdout, stderr } = await world.cliIn(cwd, ...args);
   assert.equal(code, 0, stderr);
   return stdout;
 }
 
-/** 피드의 선점 소식을 "걸었다/풀었다 login branch path"로. */
+/** Claim news in the feed as "claimed/released login branch path". */
 async function claimNews(as: As) {
   const { news } = await call(as, api.feed);
   return news.flatMap((n) =>
     "claim" in n
-      ? [`걸었다 ${n.claim.login} ${n.claim.branch} ${n.claim.path}`]
+      ? [`claimed ${n.claim.login} ${n.claim.branch} ${n.claim.path}`]
       : "released" in n
-        ? [`풀었다 ${n.released.login} ${n.released.branch} ${n.released.path}`]
+        ? [`released ${n.released.login} ${n.released.branch} ${n.released.path}`]
         : [],
   );
 }
 
 /**
- * 편집 전 훅(Edit)이나 세션 시작 훅을 돌려 넣은 글을 돌려준다. 늘 0으로 끝나고 도구 호출을 막는 결정을 내지 않는다.
- * `agent`를 주면 서브에이전트의 호출이라 기억 없이 본다.
+ * Runs the pre-edit hook (Edit) or the session-start hook and returns the text it injected. It always exits 0 and makes no decision to block the tool call.
+ * With `agent`, it is a subagent's call, so it looks without memory.
  */
 async function hook(world: World, options: { cwd?: string; path?: string; agent?: string } = {}) {
   const cwd = options.cwd ?? world.repo.folder;
@@ -85,11 +85,25 @@ async function hook(world: World, options: { cwd?: string; path?: string; agent?
         cwd,
         hook_event_name: "PreToolUse",
         tool_name: "Edit",
-        tool_input: { file_path: `${cwd}/${options.path}`, old_string: "a", new_string: "b" },
-        ...(options.agent && { agent_id: options.agent, agent_type: "Explore" }),
+        tool_input: {
+          file_path: `${cwd}/${options.path}`,
+          old_string: "a",
+          new_string: "b",
+        },
+        ...(options.agent && {
+          agent_id: options.agent,
+          agent_type: "Explore",
+        }),
       }
-    : { session_id: SESSION, cwd, hook_event_name: "SessionStart", source: "startup" };
-  const { code, stdout, stderr } = await world.hook(JSON.stringify(input), { cwd });
+    : {
+        session_id: SESSION,
+        cwd,
+        hook_event_name: "SessionStart",
+        source: "startup",
+      };
+  const { code, stdout, stderr } = await world.hook(JSON.stringify(input), {
+    cwd,
+  });
   assert.deepEqual({ code, stderr }, { code: 0, stderr: "" });
   if (stdout === "") return "";
   const { hookSpecificOutput } = JSON.parse(stdout);
@@ -97,11 +111,11 @@ async function hook(world: World, options: { cwd?: string; path?: string; agent?
   return hookSpecificOutput.additionalContext as string;
 }
 
-/** 넣은 글에서 `<tag>` 블록 안의 줄. 없으면 비어 있다. */
+/** The lines inside the `<tag>` block of the injected text. Empty if there is none. */
 const block = (output: string, tag: string) =>
   output.split(`<${tag}>\n`)[1]?.split(`\n</${tag}>`)[0]?.split("\n") ?? [];
 
-test("심볼, 줄 범위, 폴더, 새 파일 전체로 선점한다. 겹치지 않는 선점은 다른 멤버의 피드에만 남는다", async (t) => {
+test("claim by symbol, line range, folder, or whole new file. A claim that doesn't overlap stays only in other members' feeds", async (t) => {
   const world = await startWorld({ observeMs: 50 });
   t.after(world.stop);
   await base(world);
@@ -121,14 +135,14 @@ test("심볼, 줄 범위, 폴더, 새 파일 전체로 선점한다. 겹치지 �
     await omagari(world, ["claim", "src/refund/"]),
     /^Claimed on payment: folder "src\/refund\/"\n/,
   );
-  // 기준 커밋에 없던 새 파일은 경로만 주면 파일 전체가 잡힌다. 하위 폴더에서 준 경로도 레포 최상위에서 본 것으로 걸린다.
+  // A new file that wasn't in the base commit gets the whole file claimed when you give just the path. A path given from a subfolder is also claimed as seen from the repo root.
   await writer(world.repo.folder)("src/new.ts", "export const a = 1;\n");
   assert.match(
     await omagari(world, ["claim", "new.ts"], `${world.repo.folder}/src`),
     /^Claimed on payment: "src\/new.ts" whole file\n/,
   );
 
-  // 기준 커밋에 있던 파일은 심볼이나 줄 범위로 좁혀 건다. 없는 심볼은 걸리지 않는다.
+  // For a file that was in the base commit, narrow the claim by symbol or line range. A symbol that doesn't exist isn't claimed.
   const whole = await world.cli("claim", "src/pay.ts");
   assert.equal(whole.code, 1);
   assert.match(
@@ -139,19 +153,19 @@ test("심볼, 줄 범위, 폴더, 새 파일 전체로 선점한다. 겹치지 �
   assert.equal(missing.code, 1);
   assert.match(missing.stderr, /couldn't find the definition of nope in src\/pay.ts/);
 
-  // 다른 멤버는 편지함이 아니라 피드에서 본다.
+  // Other members see it in the feed, not the inbox.
   await eventually(async () =>
     assert.deepEqual(await claimNews(alice), [
-      "걸었다 owner payment src/new.ts",
-      "걸었다 owner payment src/refund/",
-      "걸었다 owner payment src/notes.txt",
-      "걸었다 owner payment src/pay.ts",
+      "claimed owner payment src/new.ts",
+      "claimed owner payment src/refund/",
+      "claimed owner payment src/notes.txt",
+      "claimed owner payment src/pay.ts",
     ]),
   );
-  assert.deepEqual(await claimNews(world.owner), []); // 내 것은 내 피드에 없다
+  assert.deepEqual(await claimNews(world.owner), []); // mine isn't in my feed
 });
 
-test("omagari release로 하나나 모두를 푼다. 푼 것은 다른 멤버의 피드에 남는다", async (t) => {
+test("omagari release lets go of one or all. What was released stays in other members' feeds", async (t) => {
   const world = await startWorld({ observeMs: 50 });
   t.after(world.stop);
   await base(world);
@@ -171,12 +185,12 @@ test("omagari release로 하나나 모두를 푼다. 푼 것은 다른 멤버의
   );
   assert.match(await omagari(world, ["release"]), /^payment has no Claims to release\n/);
   assert.deepEqual((await claimNews(alice)).slice(0, 2).sort(), [
-    "풀었다 owner payment src/notes.txt",
-    "풀었다 owner payment src/pay.ts",
+    "released owner payment src/notes.txt",
+    "released owner payment src/pay.ts",
   ]);
 });
 
-test("남의 선점은 내 사본의 줄로 옮겨 편집 전 훅에 들어가고, 내 선점이 없으면 선점하라고 권한다. 겹친 선점도 걸리고 양쪽 편지함에 들어간다", async (t) => {
+test("another member's claim is moved to lines in my copy and goes into the pre-edit hook, and if I have no claim it advises claiming. An overlapping claim is also placed and lands in both inboxes", async (t) => {
   const world = await startWorld({ observeMs: 50 });
   t.after(world.stop);
   await base(world);
@@ -184,7 +198,7 @@ test("남의 선점은 내 사본의 줄로 옮겨 편집 전 훅에 들어가�
   t.after(desk.remove);
   await payment(world);
 
-  // alice는 위에 세 줄을 더해 refund가 alice의 사본에서 8-10줄이다. owner의 사본에서는 5-7줄이다.
+  // alice adds three lines above, so refund is lines 8-10 in alice's copy. In owner's copy it is lines 5-7.
   await writer(desk.folder)("src/pay.ts", `// a\n// b\n// c\n${PAY}`);
   await eventually(async () =>
     assert.ok(
@@ -200,7 +214,7 @@ test("남의 선점은 내 사본의 줄로 옮겨 편집 전 훅에 들어가�
     /^Claimed on refund: "refund" in "src\/pay.ts" lines 8-10\n/,
   );
 
-  // owner가 그 파일을 고치려 하면 alice의 선점이 owner의 줄로 들어가고, 근처 작업이 있는데 owner의 선점이 없으니 선점하라고 권한다.
+  // When owner is about to edit that file, alice's claim goes into owner's lines, and since there is nearby work and owner has no claim, it advises claiming.
   const first = await eventually(async () => {
     const context = await hook(world, { path: "src/pay.ts" });
     assert.deepEqual(block(context, "omagari-claims"), [
@@ -213,10 +227,10 @@ test("남의 선점은 내 사본의 줄로 옮겨 편집 전 훅에 들어가�
     first,
     /my Work hasn't claimed "src\/pay.ts"\. Before editing, claim the part you'll change: omagari claim/,
   );
-  // 달라진 것이 없으면 다시 넣지 않는다.
+  // If nothing has changed, it is not injected again.
   assert.equal(await hook(world, { path: "src/pay.ts" }), "");
 
-  // 겹쳐도 걸린다. 겹친 alice의 선점이 owner의 줄로 함께 보인다.
+  // An overlap is also placed. Alice's overlapping claim shows together in owner's lines.
   const claimed = await omagari(world, ["claim", "src/pay.ts", "--lines", "6"]);
   assert.match(claimed, /^Claimed on payment: "src\/pay.ts" lines 6\n/);
   assert.match(
@@ -224,13 +238,13 @@ test("남의 선점은 내 사본의 줄로 옮겨 편집 전 훅에 들어가�
     /Overlapping Claims from other members.*\n {2}alice's branch "refund" · "refund" in "src\/pay.ts" lines 5-7\n/,
   );
 
-  // 양쪽 작업의 편지함에 겹침이 들어간다. 줄은 각자의 사본 기준이다.
+  // The overlap goes into both works' inboxes. Lines are as of each one's own copy.
   await eventually(async () =>
     assert.deepEqual(block(await hook(world, { cwd: desk.folder }), "omagari-inbox"), [
       `- Claims overlap: my Claim "refund" in "src/pay.ts" lines 8-10 and owner's branch "payment"'s Claim "src/pay.ts" lines 6. Lines are from each side's own copy. Wait for the overlapping part, or ask the other side.`,
     ]),
   );
-  // owner의 것은 omagari claim의 응답 끝에 먼저 실렸을 수 있다. 그러면 훅에는 다시 들어가지 않는다.
+  // owner's may have been attached first at the end of the omagari claim response. Then it isn't injected into the hook again.
   const ownerSees = `- Claims overlap: my Claim "src/pay.ts" lines 6 and alice's branch "refund"'s Claim "refund" in "src/pay.ts" lines 8-10. Lines are from each side's own copy. Wait for the overlapping part, or ask the other side.`;
   await eventually(async () =>
     assert.ok(
@@ -239,14 +253,14 @@ test("남의 선점은 내 사본의 줄로 옮겨 편집 전 훅에 들어가�
     ),
   );
 
-  // 이제 owner도 그 파일을 선점했으니 선점하라는 권유 없이 남의 선점만 다시 들어간다.
+  // Now owner has claimed that file too, so only the other member's claim is injected again, without the advice to claim.
   const after = await hook(world, { path: "src/pay.ts" });
   assert.deepEqual(block(after, "omagari-claims"), [
     `- alice's branch "refund" · "refund" in "src/pay.ts" lines 5-7`,
   ]);
   assert.doesNotMatch(after, /omagari claim/);
 
-  // 폴더 선점은 그 아래 파일을 고칠 때 들어간다.
+  // A folder claim is injected when you edit a file under it.
   await omagari(world, ["claim", "src/"], desk.folder);
   await eventually(async () =>
     assert.deepEqual(
@@ -256,9 +270,13 @@ test("남의 선점은 내 사본의 줄로 옮겨 편집 전 훅에 들어가�
   );
 });
 
-test("상대 내용을 읽을 수 없으면 줄에 대략이 붙고, 오프라인이 길면 오래됨이 되었다가 지워진다", async (t) => {
-  // 7일 대신 6초로 줄인다. "오래됨"으로 보이는 구간이 forgetMs만큼이라, 부하에서 훅이 느려도 놓치지 않게 넉넉히 둔다(#153).
-  const world = await startWorld({ observeMs: 50, followMs: 50, forgetMs: 6000 });
+test("when the other side's content can't be read, the lines get an approximation, and a long offline becomes stale and then is erased", async (t) => {
+  // Cut 7 days down to 6 seconds. The "stale" window lasts forgetMs, so leave room so a slow hook under load doesn't miss it (#153).
+  const world = await startWorld({
+    observeMs: 50,
+    followMs: 50,
+    forgetMs: 6000,
+  });
   t.after(world.stop);
   await base(world);
   const { desk } = await clone(world, "bob", "docs", "intent");
@@ -284,7 +302,7 @@ test("상대 내용을 읽을 수 없으면 줄에 대략이 붙고, 오프라�
   );
 });
 
-test("브랜치가 머지되거나 지워지면 그 작업의 선점이 저절로 풀린다", async (t) => {
+test("when a branch is merged or deleted, that work's claims are released on their own", async (t) => {
   const world = await startWorld({ observeMs: 50, followMs: 50 });
   t.after(world.stop);
   await base(world);
@@ -295,27 +313,27 @@ test("브랜치가 머지되거나 지워지면 그 작업의 선점이 저절�
   await omagari(world, ["claim", "src/pay.ts", "--symbol", "charge"]);
   await omagari(world, ["claim", "src/notes.txt", "--lines", "1"], alice.desk.folder);
   await eventually(async () =>
-    assert.deepEqual(await claimNews(alice.as), ["걸었다 owner payment src/pay.ts"]),
+    assert.deepEqual(await claimNews(alice.as), ["claimed owner payment src/pay.ts"]),
   );
 
-  // payment가 머지되면 owner의 선점이 풀린다.
-  world.github.merge(world.github.openPull("payment", "결제", false));
+  // When payment is merged, owner's claim is released.
+  world.github.merge(world.github.openPull("payment", "Payment", false));
   await eventually(async () =>
     assert.deepEqual(await claimNews(alice.as), [
-      "풀었다 owner payment src/pay.ts",
-      "걸었다 owner payment src/pay.ts",
+      "released owner payment src/pay.ts",
+      "claimed owner payment src/pay.ts",
     ]),
   );
 
-  // refund를 지우면 alice의 선점이 풀린다.
+  // When refund is deleted, alice's claim is released.
   await alice.desk.git("switch", "main");
   await alice.desk.git("branch", "-D", "refund");
   await eventually(async () =>
-    assert.deepEqual((await claimNews(world.owner))[0], "풀었다 alice refund src/notes.txt"),
+    assert.deepEqual((await claimNews(world.owner))[0], "released alice refund src/notes.txt"),
   );
 });
 
-test("공유 수준 declared는 선점한 경로 안의 바뀐 파일만 내용을 올리고, 밖은 경로만 올린다", async (t) => {
+test("share level declared uploads content only for changed files inside claimed paths, and uploads only the path outside them", async (t) => {
   const world = await startWorld({ observeMs: 50 });
   t.after(world.stop);
   await base(world);
@@ -327,20 +345,26 @@ test("공유 수준 declared는 선점한 경로 안의 바뀐 파일만 내용�
     Object.fromEntries(
       ((await world.works(world.owner)).find((w) => w.login === "alice")?.files ?? []).map((f) => [
         f.path,
-        "content" in f ? "내용" : "omitted" in f ? f.omitted : "지움",
+        "content" in f ? "content" : "omitted" in f ? f.omitted : "deleted",
       ]),
     );
   await eventually(async () =>
-    assert.deepEqual(await files(), { "src/notes.txt": "share", "src/pay.ts": "share" }),
+    assert.deepEqual(await files(), {
+      "src/notes.txt": "share",
+      "src/pay.ts": "share",
+    }),
   );
 
   await omagari(world, ["claim", "src/pay.ts", "--symbol", "refund"], desk.folder);
   await eventually(async () =>
-    assert.deepEqual(await files(), { "src/notes.txt": "share", "src/pay.ts": "내용" }),
+    assert.deepEqual(await files(), {
+      "src/notes.txt": "share",
+      "src/pay.ts": "content",
+    }),
   );
 });
 
-test("#82의 편지함 표로 만든 DB로도 뜨고, 넘겨주지 않은 소식이 그대로 넘어간다", async (t) => {
+test("it also comes up with a DB built from #82's inbox table, and news not handed over passes through as is", async (t) => {
   const works = JSON.stringify([
     { login: "alice", name: "alice", branch: "refund" },
     { login: "owner", name: "owner", branch: "main" },

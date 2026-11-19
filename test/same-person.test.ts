@@ -1,5 +1,5 @@
-// 같은 사람의 작업끼리도 브랜치가 다르면 남의 작업처럼 부딪힘을 본다(ADR-0041). 같은 작업(같은 사람, 같은 브랜치)만 건너뛴다.
-// owner 한 사람이 러너 하나로 같은 레포의 워크트리 둘(payment, refund)을 돌린다.
+// Work by the same person is seen as a conflict, like someone else's work, if the branches differ (ADR-0041). Only the same work (same person, same branch) is skipped.
+// One person, owner, runs two worktrees (payment, refund) of the same repo with one runner.
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -21,7 +21,7 @@ export const total = refund(2);
 const PAYMENT = { login: "owner", name: "owner", branch: "payment" };
 const REFUND = { login: "owner", name: "owner", branch: "refund" };
 
-/** 기준 커밋을 두고 owner가 main 폴더에서 payment를, 연결된 워크트리에서 refund를 시작한다. refund 폴더를 돌려준다. */
+/** Puts the base commit, then owner starts payment in the main folder and refund in a linked worktree. Returns the refund folder. */
 async function twoBranches(world: World) {
   const write = writer(world.repo.folder);
   await write("src/pay.ts", text(BASE));
@@ -39,7 +39,7 @@ async function twoBranches(world: World) {
   return tree;
 }
 
-/** `kind` 알림 가운데 아직 풀리지 않은 것. */
+/** The `kind` notifications that are not resolved yet. */
 async function open(world: World, kind: Alert["kind"]) {
   const { posts } = await call(world.owner, api.posts);
   return posts.flatMap(({ message: m, channel }) =>
@@ -49,14 +49,14 @@ async function open(world: World, kind: Alert["kind"]) {
   );
 }
 
-/** 훅을 `cwd`에서 돌리고 넣은 글을 돌려준다. 넣지 않았으면 "". */
+/** Runs the hook in `cwd` and returns the text it injected, or "" if it injected nothing. */
 async function runHook(world: World, cwd: string, input: object) {
   const { code, stdout, stderr } = await world.hook(JSON.stringify({ cwd, ...input }), { cwd });
   assert.deepEqual({ code, stderr }, { code: 0, stderr: "" });
   return stdout === "" ? "" : (JSON.parse(stdout).hookSpecificOutput.additionalContext as string);
 }
 
-/** `cwd`의 작업 세션이 `path`를 고치기 직전의 편집 전 훅. 처음 보는 세션이라 늘 지금 근처 작업을 넣는다. */
+/** The pre-edit hook just before the work session in `cwd` edits `path`. It is a session seen for the first time, so it always injects nearby work. */
 const preEdit = (world: World, cwd: string, path: string) =>
   runHook(world, cwd, {
     session_id: crypto.randomUUID(),
@@ -66,7 +66,7 @@ const preEdit = (world: World, cwd: string, path: string) =>
     tool_input: { file_path: join(cwd, path), old_string: "a", new_string: "b" },
   });
 
-/** `cwd`에서 시작한 작업 세션의 세션 시작 훅. */
+/** The session-start hook of the work session started in `cwd`. */
 const sessionStart = (world: World, cwd: string) =>
   runHook(world, cwd, {
     session_id: crypto.randomUUID(),
@@ -75,18 +75,18 @@ const sessionStart = (world: World, cwd: string) =>
     source: "startup",
   });
 
-/** 넣은 글에서 `tag`로 감싼 줄들의 작업(멤버 · 브랜치)만. */
+/** Only the work (member · branch) of the lines wrapped in `tag` in the injected text. */
 const worksIn = (context: string, tag: string) =>
   (context.split(`<${tag}>\n`)[1]?.split(`\n</${tag}>`)[0]?.split("\n") ?? []).map((line) =>
     line.split(" · ").slice(0, 2).join(" · "),
   );
 
-test("한 사람의 두 브랜치가 같은 곳을 고치면 직접 충돌 알림과 포스트가 서고, 두 훅에 내 다른 브랜치만 근처 작업으로 들어간다", async (t) => {
+test("when one person's two branches edit the same place, a direct conflict notification and post appear, and only my other branch goes into the two hooks as nearby work", async (t) => {
   const world = await startWorld({ observeMs: 50 });
   t.after(world.stop);
   const refund = await twoBranches(world);
 
-  // payment만 고친 파일에는 근처 작업이 없다(같은 작업).
+  // A file only payment edited has no nearby work (same work).
   await writer(world.repo.folder)("src/only.ts", "only\n");
   await writer(world.repo.folder)("src/pay.ts", text(BASE.toSpliced(2, 1, "payment")));
   await writer(refund)("src/pay.ts", text(BASE.toSpliced(2, 1, "refund")));
@@ -101,10 +101,10 @@ test("한 사람의 두 브랜치가 같은 곳을 고치면 직접 충돌 알�
     alert.files.map((f) => f.path),
     ["src/pay.ts"],
   );
-  // 알림 하나가 포스트 하나다.
+  // One notification is one post.
   assert.ok(alert.channel);
 
-  // 편집 전 훅: 내 다른 브랜치가 근처 작업으로 들어가고, 내가 고치는 브랜치는 들어가지 않는다.
+  // Pre-edit hook: my other branch goes in as nearby work, and the branch I am editing does not.
   await eventually(async () =>
     assert.deepEqual(
       worksIn(await preEdit(world, world.repo.folder, "src/pay.ts"), "omagari-nearby"),
@@ -119,7 +119,7 @@ test("한 사람의 두 브랜치가 같은 곳을 고치면 직접 충돌 알�
     [],
   );
 
-  // 세션 시작 훅: 브랜치마다 다른 쪽만 보인다.
+  // Session-start hook: only the other side of each branch is shown.
   assert.deepEqual(worksIn(await sessionStart(world, world.repo.folder), "omagari-situation"), [
     `- owner · branch "refund"`,
   ]);
@@ -128,12 +128,12 @@ test("한 사람의 두 브랜치가 같은 곳을 고치면 직접 충돌 알�
   ]);
 });
 
-test("한 사람의 두 브랜치 사이에도 간접 충돌(추정)과 중복 구현 알림이 선다", async (t) => {
+test("an indirect conflict (estimated) and a duplicate work notification also appear between one person's two branches", async (t) => {
   const world = await startWorld({ observeMs: 50 });
   t.after(world.stop);
   const refund = await twoBranches(world);
 
-  // payment가 refund의 정의 줄을 바꾼다. refund 브랜치의 checkout은 그것을 쓴다. 두 브랜치가 같은 이름의 새 함수를 만든다.
+  // payment changes the definition line of refund. checkout on the refund branch uses it. The two branches create a new function with the same name.
   await writer(world.repo.folder)(
     "src/money.ts",
     MONEY.replace("refund(amount: number)", "refund(amount: number, reason: string)"),
@@ -143,7 +143,7 @@ test("한 사람의 두 브랜치 사이에도 간접 충돌(추정)과 중복 �
 
   await eventually(async () => {
     const [indirect] = await open(world, "indirect");
-    assert.ok(indirect && indirect.kind !== "direct", "Indirect conflict이 아직 없다");
+    assert.ok(indirect && indirect.kind !== "direct", "Indirect conflict does not exist yet");
     assert.deepEqual(indirect.works, [PAYMENT, REFUND]);
     assert.deepEqual(
       indirect.symbols.map((s) => s.name),
@@ -152,7 +152,7 @@ test("한 사람의 두 브랜치 사이에도 간접 충돌(추정)과 중복 �
   });
   await eventually(async () => {
     const [duplicate] = await open(world, "duplicate");
-    assert.ok(duplicate && duplicate.kind !== "direct", "Duplicate work이 아직 없다");
+    assert.ok(duplicate && duplicate.kind !== "direct", "Duplicate work does not exist yet");
     assert.deepEqual(duplicate.works, [PAYMENT, REFUND]);
     assert.deepEqual(
       duplicate.symbols.map((s) => s.name),
@@ -161,12 +161,15 @@ test("한 사람의 두 브랜치 사이에도 간접 충돌(추정)과 중복 �
   });
 });
 
-test("한 사람의 두 작업 사이의 부딪힘에도 토론이 열려 양쪽이 각 브랜치의 작업 세션을 갈라 입장을 내고, 대행은 부를 수 없다", async (t) => {
+test("a debate opens even for a conflict between one person's two works, each side splits that branch's work session and gives a stance, and a proxy cannot be called", async (t) => {
   const owner = fakeExecutor(({ folder }) =>
-    JSON.stringify({ claim: `${folder}의 안`, evidence: ["src/money.ts:1 refund의 정의"] }),
+    JSON.stringify({
+      claim: `inside ${folder}`,
+      evidence: ["src/money.ts:1 definition of refund"],
+    }),
   );
   owner.executor.recent = async (_folder, branch) => `work-${branch}`;
-  // 한 라운드로 줄여, 두 입장이 공개된 뒤 반박 라운드가 시작되지 않게 한다.
+  // Cut to one round so no rebuttal round starts after the two stances are public.
   const world = await startWorld({
     observeMs: 50,
     followMs: 50,
@@ -176,7 +179,7 @@ test("한 사람의 두 작업 사이의 부딪힘에도 토론이 열려 양쪽
   t.after(world.stop);
   await twoBranches(world);
 
-  // payment가 refund의 시그니처를 바꾸겠다고 선언한다. refund 브랜치의 checkout이 그것을 쓴다(payment 자신의 쓰임은 같은 작업이라 빠진다).
+  // payment declares it will change refund's signature. checkout on the refund branch uses it (payment's own use is left out because it is the same work).
   const claimed = await world.cli(
     "claim",
     "src/money.ts",
@@ -206,13 +209,13 @@ test("한 사람의 두 작업 사이의 부딪힘에도 토론이 열려 양쪽
     ],
   );
   assert.equal(debate.options.length, 2);
-  // 같은 러너가 브랜치마다 그 브랜치의 작업 세션을 갈라 띄웠다.
+  // The same runner split and started that branch's work session for each branch.
   assert.deepEqual(owner.calls.map((c) => [c.resume, c.fork]).sort(), [
     ["work-payment", true],
     ["work-refund", true],
   ]);
 
-  // 주인이 늘 있으니 다른 멤버도 주인도 대행을 부를 수 없다.
+  // The owner is always present, so neither another member nor the owner can call a proxy.
   world.github.grant("alice");
   const alice = await world.login("alice");
   for (const as of [alice, world.owner]) {
@@ -223,12 +226,12 @@ test("한 사람의 두 작업 사이의 부딪힘에도 토론이 열려 양쪽
   }
 });
 
-test("omagari impact가 내 다른 브랜치의 작업은 보이고 같은 브랜치의 내 작업은 보이지 않는다", async (t) => {
+test("omagari impact shows my work on my other branch and does not show my work on the same branch", async (t) => {
   const world = await startWorld({ observeMs: 50 });
   t.after(world.stop);
   const refund = await twoBranches(world);
 
-  // payment가 refund 함수의 정의 줄을 바꾼다.
+  // payment changes the definition line of the refund function.
   await writer(world.repo.folder)(
     "src/money.ts",
     MONEY.replace("refund(amount: number)", "refund(amount: number, reason: string)"),
@@ -242,7 +245,7 @@ test("omagari impact가 내 다른 브랜치의 작업은 보이고 같은 브�
     assert.equal(mine.code, 0, mine.stderr);
     assert.match(works(mine.stdout) ?? "", /^ {2}owner · "payment" · "src\/money.ts":1 /);
   });
-  // 같은 브랜치(payment)에서 묻으면 내 작업은 빠진다.
+  // Asking from the same branch (payment) leaves my work out.
   const own = await world.cliIn(world.repo.folder, "impact", "refund");
   assert.equal(own.code, 0, own.stderr);
   assert.equal(works(own.stdout), "  none\n");

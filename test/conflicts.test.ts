@@ -8,10 +8,10 @@ type As = { url: string; session: string };
 
 const BASE = Array.from({ length: 10 }, (_, i) => `line ${i + 1}`);
 const text = (lines: string[]) => `${lines.join("\n")}\n`;
-/** `n`번 줄(1부터)을 `to`로 바꾼 판. */
+/** The version with line `n` (from 1) replaced by `to`. */
 const edit = (n: number, to: string, lines = BASE) => lines.toSpliced(n - 1, 1, to);
 
-/** 기준 커밋에 `files`를 두고 origin/main을 올린다. 두 멤버가 같은 판에서 시작한다. */
+/** Puts `files` on the base commit and pushes origin/main. Two members start from the same version. */
 async function base(world: World, files: string[]) {
   for (const path of files) await writer(world.repo.folder)(path, text(BASE));
   await world.repo.git("add", ".");
@@ -20,8 +20,8 @@ async function base(world: World, files: string[]) {
 }
 
 /**
- * 멤버 `login`의 기기. 내 레포를 받은 것처럼 내 main 위에서 `branch`를 시작한다. 같은 레포의 두 클론이다.
- * 받는 동안은 러너를 꺼 둔다. 반쯤 받은 레포의 작업이 잠깐 관측되어 알림이 서지 않게 한다.
+ * Member `login`'s device. As if they cloned my repo, starts `branch` on my main. Two clones of the same repo.
+ * The runner stays off while cloning, so work in a half-cloned repo isn't briefly observed and doesn't raise an alert.
  */
 async function clone(world: World, login: string, branch: string, share?: "declared") {
   world.github.grant(login);
@@ -37,8 +37,8 @@ async function clone(world: World, login: string, branch: string, share?: "decla
 }
 
 /**
- * owner가 payment 브랜치로 옮기고, 서버가 그것을 볼 때까지 기다린다. 관측이 브랜치 이름을 읽은 뒤에 옮기면
- * 그 주기의 바뀐 파일이 옛 브랜치의 것으로 잠깐 보일 수 있어서다.
+ * owner moves to the payment branch and waits until the server sees it. If observation moved after reading the branch name,
+ * that cycle's changed files could briefly look like the old branch's.
  */
 async function payment(world: World) {
   await world.repo.git("switch", "--create", "payment");
@@ -52,8 +52,8 @@ type Of<K extends Alert["kind"]> = (K extends "direct"
   : Exclude<Alert, { kind: "direct" }>) & { id: number };
 
 /**
- * `kind`(기본은 직접 충돌) 알림들. 포럼 `name`을 주면 그 포럼에 보이는 것만이고, 그런 포럼이 없으면 비어 있다.
- * 알림마다 올라온 때 생긴 포스트가 있다(ADR-0027).
+ * Alerts of `kind` (direct conflict by default). With a forum `name`, only those shown in that forum, and empty if there is no such forum.
+ * Each alert has the post made when it was raised (ADR-0027).
  */
 async function alerts<K extends Alert["kind"] = "direct">(
   as: As,
@@ -71,7 +71,7 @@ async function alerts<K extends Alert["kind"] = "direct">(
   });
 }
 
-/** `kind` 알림이 정확히 하나가 될 때까지 기다리고, `check`가 맞을 때까지 기다린 그 알림. */
+/** Waits until exactly one `kind` alert exists, and that alert once `check` passes. */
 const theAlert = <K extends Alert["kind"] = "direct">(
   as: As,
   check: (alert: Of<K>) => void,
@@ -85,7 +85,7 @@ const theAlert = <K extends Alert["kind"] = "direct">(
     return found[0] as Of<K>;
   });
 
-/** 멤버 목록에서 작업마다 직접 충돌 표시. */
+/** Direct-conflict marks per work in the member list. */
 async function marks(as: As) {
   const { members } = await call(as, api.members);
   return Object.fromEntries(
@@ -96,7 +96,7 @@ async function marks(as: As) {
 const OWNER = { login: "owner", name: "owner", branch: "payment" };
 const ALICE = { login: "alice", name: "alice", branch: "refund" };
 
-test("같은 곳을 고치면 알림 하나가 오고, 바뀌면 같은 알림이 고쳐지고, 다 풀리면 풀렸다가 한 번 적힌다", async (t) => {
+test("editing the same place raises one alert, a change updates the same alert, and when all is resolved it is marked resolved once", async (t) => {
   const world = await startWorld({ observeMs: 50 });
   t.after(world.stop);
   await base(world, ["src/pay.ts", "src/clean.ts"]);
@@ -105,39 +105,50 @@ test("같은 곳을 고치면 알림 하나가 오고, 바뀌면 같은 알림�
   await payment(world);
   const web = await world.live(world.owner);
 
-  // 같은 파일이어도 떨어진 줄을 고치면 합쳐서 부딪히지 않는다.
+  // Editing apart lines in the same file merges cleanly and doesn't collide.
   await writer(world.repo.folder)("src/clean.ts", text(edit(2, "owner")));
   await writer(desk.folder)("src/clean.ts", text(edit(8, "alice")));
-  // 같은 줄을 고치면 부딪힌다.
+  // Editing the same line collides.
   await writer(world.repo.folder)("src/pay.ts", text(edit(3, "owner")));
   assert.deepEqual(await alerts(world.owner), []);
   await writer(desk.folder)("src/pay.ts", text(edit(3, "alice")));
 
-  // 알림에는 두 사람, 두 브랜치, 파일, 부딪히는 줄(각자의 사본 기준)이 있다.
+  // The alert has two people, two branches, the files, and the colliding lines (by each one's copy).
   const first = await theAlert(world.owner, () => {});
   assert.deepEqual(first, {
     id: first.id,
     kind: "direct",
     works: [ALICE, OWNER],
-    files: [{ path: "src/pay.ts", lines: [[{ from: 3, to: 3 }], [{ from: 3, to: 3 }]] }],
+    files: [
+      {
+        path: "src/pay.ts",
+        lines: [[{ from: 3, to: 3 }], [{ from: 3, to: 3 }]],
+      },
+    ],
     more: 0,
     resolved: null,
   });
-  // 양쪽 러너가 같은 쌍을 올려도 알림은 하나다. 다른 멤버도 같은 것을 본다.
+  // Even if both runners raise the same pair, there is one alert. Other members see the same.
   await eventually(async () => assert.deepEqual(await alerts(world.owner), [first]));
   await eventually(async () =>
-    assert.deepEqual(await marks(world.owner), { "alice/refund": true, "owner/payment": true }),
+    assert.deepEqual(await marks(world.owner), {
+      "alice/refund": true,
+      "owner/payment": true,
+    }),
   );
 
-  // 부딪힘이 바뀌면 같은 알림이 고쳐지고 실시간 연결로 다시 온다.
+  // When the collision changes, the same alert is updated and arrives again over the live connection.
   await writer(desk.folder)("src/pay.ts", text(edit(4, "alice too", edit(3, "alice"))));
   const changed = await theAlert(world.owner, (alert) =>
     assert.deepEqual(alert.files, [
-      { path: "src/pay.ts", lines: [[{ from: 3, to: 4 }], [{ from: 3, to: 3 }]] },
+      {
+        path: "src/pay.ts",
+        lines: [[{ from: 3, to: 4 }], [{ from: 3, to: 3 }]],
+      },
     ]),
   );
   assert.equal(changed.id, first.id);
-  // 포스트의 첫 글이 그 알림이라 함께 바뀐다.
+  // The post's first message is that alert, so it changes along with it.
   const firstPost = async () =>
     (await call(world.owner, api.openPost, { alert: first.id })).message;
   const top = await firstPost();
@@ -157,22 +168,25 @@ test("같은 곳을 고치면 알림 하나가 오고, 바뀌면 같은 알림�
     ),
   );
 
-  // 다 풀리면 같은 알림에 풀린 시각이 한 번 적히고, 새 알림은 서지 않는다. 표시도 사라진다.
+  // When all is resolved, the resolved time is written once on the same alert, and no new alert is raised. The mark disappears too.
   await desk.git("checkout", "--", "src/pay.ts");
   const resolved = await theAlert(world.owner, (alert) => assert.notEqual(alert.resolved, null));
   assert.equal(resolved.id, first.id);
   await eventually(async () =>
-    assert.deepEqual(await marks(world.owner), { "alice/refund": false, "owner/payment": false }),
+    assert.deepEqual(await marks(world.owner), {
+      "alice/refund": false,
+      "owner/payment": false,
+    }),
   );
   await eventually(() =>
     assert.ok(web.messages().some((m) => m.kind === "alert" && m.alert.resolved !== null)),
   );
   const closed = await firstPost();
   assert.ok(closed.kind === "alert" && closed.alert.resolved !== null);
-  // 풀린 포스트도 목록에 남고 풀렸다고 보인다.
+  // A resolved post stays in the list and shows as resolved.
   const listedClosed = (await call(world.owner, api.posts)).posts.find((p) => p.alert === first.id);
   assert.ok(listedClosed?.message.kind === "alert" && listedClosed.message.alert.resolved !== null);
-  // 풀린 뒤 다시 부딪히면 새 알림이다.
+  // Colliding again after being resolved is a new alert.
   await writer(desk.folder)("src/pay.ts", text(edit(3, "alice again")));
   const again = await eventually(async () => {
     const [old, next, ...rest] = await alerts(world.owner);
@@ -184,7 +198,7 @@ test("같은 곳을 고치면 알림 하나가 오고, 바뀌면 같은 알림�
   await web.close();
 });
 
-test("한 쌍에서 여러 파일이 부딪히면 알림 하나로 묶고 여덟 개까지 이름, 나머지는 개수다", async (t) => {
+test("when several files of a pair collide, they are grouped into one alert, with names up to eight and the rest as a count", async (t) => {
   const world = await startWorld({ observeMs: 50 });
   t.after(world.stop);
   const paths = Array.from({ length: 10 }, (_, i) => `f${i}.ts`);
@@ -203,7 +217,7 @@ test("한 쌍에서 여러 파일이 부딪히면 알림 하나로 묶고 여덟
   );
 });
 
-test("한쪽 러너만 켜져 있어도 알림이 온다", async (t) => {
+test("an alert comes even when only one runner is on", async (t) => {
   const world = await startWorld({ observeMs: 50 });
   t.after(world.stop);
   await base(world, ["src/pay.ts"]);
@@ -216,29 +230,35 @@ test("한쪽 러너만 켜져 있어도 알림이 온다", async (t) => {
       (await world.works(world.owner)).some((w) => w.branch === "refund" && w.files.length === 1),
     ),
   );
-  // alice의 러너가 꺼져도 그 작업은 서버에 남고, owner의 러너가 혼자 계산한다.
+  // Even if alice's runner is off, her work stays on the server, and owner's runner computes alone.
   await desk.stop();
   await writer(world.repo.folder)("src/pay.ts", text(edit(3, "owner")));
   await theAlert(world.owner, (alert) =>
     assert.deepEqual(alert.files, [
-      { path: "src/pay.ts", lines: [[{ from: 3, to: 3 }], [{ from: 3, to: 3 }]] },
+      {
+        path: "src/pay.ts",
+        lines: [[{ from: 3, to: 3 }], [{ from: 3, to: 3 }]],
+      },
     ]),
   );
   await eventually(async () =>
-    assert.deepEqual(await marks(world.owner), { "alice/refund": true, "owner/payment": true }),
+    assert.deepEqual(await marks(world.owner), {
+      "alice/refund": true,
+      "owner/payment": true,
+    }),
   );
 });
 
-test("상대의 내용을 읽을 수 없으면 부딪힐 수 있음으로 알린다", async (t) => {
+test("when the other side's content can't be read, it is reported as might collide", async (t) => {
   const world = await startWorld({ observeMs: 50 });
   t.after(world.stop);
   await base(world, ["src/pay.ts", "src/bob.ts"]);
 
-  // alice는 내용을 내보내지 않는다(공유 수준 declared). alice의 러너는 owner의 내용으로 계산하지만,
-  // owner의 러너가 확인할 수 없는 것은 "부딪힐 수 있음"이다. 두 러너의 결과는 하나로 묶인다.
+  // alice doesn't send out her content (share level declared). alice's runner computes with owner's content,
+  // but what owner's runner can't check is "might collide". The results of the two runners are merged into one.
   const alice = await clone(world, "alice", "refund", "declared");
   t.after(alice.desk.remove);
-  // bob은 이 기기가 받지 않은 커밋 위에서 일한다. bob의 러너는 내 기준 커밋을 모른다.
+  // bob works on a commit this device hasn't received. bob's runner doesn't know my base commit.
   world.github.grant("bob");
   const bob = await world.desk(await world.login("bob"));
   t.after(bob.remove);
@@ -252,17 +272,20 @@ test("상대의 내용을 읽을 수 없으면 부딪힐 수 있음으로 알린
   await writer(world.repo.folder)("src/bob.ts", text(edit(3, "owner")));
   await writer(alice.desk.folder)("src/pay.ts", text(edit(9, "alice")));
 
-  // 줄이 떨어져 있어도 확인하지 못했으니 알린다. alice의 러너는 owner의 내용으로 깨끗하다고 보지만 owner의 러너는 확인하지 못한다.
-  // 두 러너의 결과는 쌍마다 하나로 묶인다. 표시는 확인된 직접 충돌에만 붙는다.
+  // Even apart lines are reported because they couldn't be checked. alice's runner sees it clean with owner's content, but owner's runner can't check.
+  // The results of the two runners are merged per pair. The mark goes only on confirmed direct conflicts.
   await eventually(async () => {
-    // 브랜치를 옮기는 사이에 잠깐 선 알림은 이미 풀렸다. 열린 것만 본다.
+    // An alert raised briefly while moving branches is already resolved. Look only at open ones.
     const found = (await alerts(world.owner))
       .filter((alert) => alert.resolved === null)
       .map(({ works, files }) => ({ works, files }));
     assert.deepEqual(
       found.sort((x, y) => (x.works[0].login < y.works[0].login ? -1 : 1)),
       [
-        { works: [ALICE, OWNER], files: [{ path: "src/pay.ts", unknown: "share" }] },
+        {
+          works: [ALICE, OWNER],
+          files: [{ path: "src/pay.ts", unknown: "share" }],
+        },
         {
           works: [{ login: "bob", name: "bob", branch: "bob" }, OWNER],
           files: [{ path: "src/bob.ts", unknown: "base" }],
@@ -277,8 +300,8 @@ test("상대의 내용을 읽을 수 없으면 부딪힐 수 있음으로 알린
   });
 });
 
-test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에는 못 쓰고, 포스트에서 글과 DM·@호출이 채널처럼 돈다", async (t) => {
-  const fake = fakeExecutor(() => "답");
+test("an alert creates a post and its first message is the alert. You can't write in the forum, and in the post messages, DMs and @mentions work like a channel", async (t) => {
+  const fake = fakeExecutor(() => "answer");
   const world = await startWorld({ observeMs: 50, executor: fake.executor });
   t.after(world.stop);
   await base(world, ["src/pay.ts"]);
@@ -289,24 +312,24 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
   await writer(world.repo.folder)("src/pay.ts", text(edit(3, "owner")));
   await writer(desk.folder)("src/pay.ts", text(edit(3, "alice")));
   const alert = await theAlert(world.owner, () => {});
-  /** 실시간 연결로 마지막에 받은 그 알림 줄의 포스트. */
+  /** The post of the alert line last received over the live connection. */
   const postOf = () =>
     web
       .messages()
       .flatMap((m) => (m.kind === "alert" && m.id === alert.id ? [m.post] : []))
       .at(-1);
 
-  // 아무도 열지 않아도 알림이 올라온 순간 포스트가 있다. 처음 받은 알림 줄에 이미 붙어 있다.
+  // Even if nobody opens it, the post exists the moment the alert is raised. It is already attached to the first alert line received.
   const arrived = await eventually(() => {
     const first = web.messages().find((m) => m.id === alert.id);
     assert.ok(first?.kind === "alert");
     return first;
   });
   const post = arrived.post.channel;
-  // 직접 충돌은 참고라 "참고" 포럼에 보인다(ADR-0039).
+  // A direct conflict is FYI, so it shows in the "FYI" forum (ADR-0039).
   const channels = (await call(alice, api.channels)).channels;
   const reference = channels.find((c) => c.name === "FYI")?.id;
-  // 이슈(ADR-0032)는 알림 뒤에 따로 열리므로 여기서는 빼고 본다. 이슈는 issues.test.ts가 본다.
+  // The issue (ADR-0032) opens separately after the alert, so it's left out here. issues.test.ts looks at issues.
   const noIssue = <T extends { issue: unknown }>({ issue, ...rest }: T) => rest;
   assert.deepEqual(noIssue(arrived.post), {
     channel: post,
@@ -318,7 +341,7 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
     importance: "reference",
     forums: [reference],
   });
-  // 목록 한 번으로 포럼 화면이 그릴 수 있다: 알림, 마지막 글(아직 없다), 글 수, 마지막 활동, 올라온 시각.
+  // One list call is enough to draw the forum screen: the alert, the last message (none yet), the message count, the last activity, the time raised.
   const listed = (await call(alice, api.posts)).posts;
   assert.deepEqual(
     listed.map(({ message, ...p }) => noIssue(p)),
@@ -360,12 +383,22 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
     code: "not_found",
   } satisfies Partial<ContractFailure>);
 
-  // 채널 목록에 포럼이 종류, 거르기와 함께 오고 포스트는 없다. 사람은 포럼의 이름으로 채널을 만들지 못한다.
-  const general = await world.channel(world.owner, "일반");
+  // The channel list has the forums with kind and filter and no posts. People can't make a channel with a forum's name.
+  const general = await world.channel(world.owner, "일반"); // the harness default channel name
   const forum = channels.find((c) => c.name === "Discuss");
   assert.deepEqual((await call(alice, api.channels)).channels, [
-    { id: forum?.id, name: "Discuss", kind: "forum", filter: { importance: "discuss" } },
-    { id: reference, name: "FYI", kind: "forum", filter: { importance: "reference" } },
+    {
+      id: forum?.id,
+      name: "Discuss",
+      kind: "forum",
+      filter: { importance: "discuss" },
+    },
+    {
+      id: reference,
+      name: "FYI",
+      kind: "forum",
+      filter: { importance: "reference" },
+    },
     { id: general, name: "일반", kind: "chat" },
   ]);
   assert.ok(forum);
@@ -373,17 +406,23 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
     code: "conflict",
   } satisfies Partial<ContractFailure>);
 
-  // 포럼 자체에는 글도 DM도 `@호출`도 쓰지 못한다.
-  await assert.rejects(call(world.owner, api.send, { channel: forum.id, text: "포럼의 말" }), {
-    code: "invalid_request",
-  } satisfies Partial<ContractFailure>);
+  // The forum itself takes no messages, DMs or `@mention`s.
+  await assert.rejects(
+    call(world.owner, api.send, {
+      channel: forum.id,
+      text: "words in the forum",
+    }),
+    {
+      code: "invalid_request",
+    } satisfies Partial<ContractFailure>,
+  );
   for (const visibility of ["private", "public"] as const) {
     await assert.rejects(
       call(world.owner, api.ask, {
         agent: "owner",
         executor: "claude-code",
         channel: forum.id,
-        message: "포럼에서 묻기",
+        message: "asking in the forum",
         visibility,
       }),
       { code: "invalid_request" } satisfies Partial<ContractFailure>,
@@ -391,49 +430,53 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
   }
   assert.equal(fake.calls.length, 0);
 
-  // 포스트에 쓴 글은 다른 멤버에게 실시간으로 가고 지난 대화로 다시 읽힌다. 알림 줄의 글 수가 따라 바뀐다.
-  await call(world.owner, api.send, { channel: post, text: "이 줄은 제가 고칠게요" });
+  // A message written in the post goes live to other members and is read again as past conversation. The alert line's message count follows.
+  await call(world.owner, api.send, {
+    channel: post,
+    text: "I'll fix this line",
+  });
   await eventually(() =>
-    assert.ok(
-      web.messages().some((m) => m.channel === post && said(m) === "이 줄은 제가 고칠게요"),
-    ),
+    assert.ok(web.messages().some((m) => m.channel === post && said(m) === "I'll fix this line")),
   );
   assert.deepEqual((await call(alice, api.history, { channel: post })).messages.map(said), [
-    "이 줄은 제가 고칠게요",
+    "I'll fix this line",
   ]);
-  // 실시간 연결로 온 그 포스트의 요약이 바뀐다: 마지막 글(쓴 사람과 한 줄)과 마지막 활동 시각.
+  // The summary of that post arriving over the live connection changes: the last message (author and one line) and the last activity time.
   await eventually(() => {
     const p = postOf();
     assert.equal(p?.count, 1);
     assert.equal(p?.last?.login, "owner");
-    assert.equal(p?.last?.line, "이 줄은 제가 고칠게요");
+    assert.equal(p?.last?.line, "I'll fix this line");
     assert.ok(p && p.activity > arrived.at);
   });
 
-  // 채팅 채널의 채널 세션과 포스트의 채널 세션은 따로 이어 간다.
-  await world.settled(world.owner, await world.ask(world.owner, general, "채널에서 묻기"));
-  const dm = await world.ask(world.owner, post, "포스트에서 묻기");
+  // A chat channel's channel session and a post's channel session continue separately.
+  await world.settled(world.owner, await world.ask(world.owner, general, "ask in channel"));
+  const dm = await world.ask(world.owner, post, "ask in post");
   await world.settled(world.owner, dm);
-  await world.settled(world.owner, await world.ask(world.owner, post, "포스트에서 또 묻기"));
+  await world.settled(world.owner, await world.ask(world.owner, post, "ask in post again"));
   const [inRoom, inPost, again] = fake.calls;
   assert.equal(inRoom?.resume, undefined);
-  assert.equal(inPost?.resume, undefined, "포스트는 다른 채널의 세션을 잇지 않는다");
-  assert.equal(again?.resume, "session-2", "포스트의 세션을 잇는다");
-  // 러너에 넘어간 대화는 포스트의 것이고 맨 위에 알림이 있다.
+  assert.equal(inPost?.resume, undefined, "a post doesn't continue another channel's session");
+  assert.equal(again?.resume, "session-2", "it continues the post's session");
+  // The conversation handed to the runner is the post's, with the alert at the top.
   const given = inPost?.message ?? "";
   assert.match(given, /<channel_messages channel="Post for alert \d+">/);
   assert.match(given, /<alert kind="Direct conflict"[^>]*>\n[^<]*src\/pay\.ts: 3 \/ 3/);
-  assert.match(given, /이 줄은 제가 고칠게요/);
-  assert.ok(given.indexOf("<alert") < given.indexOf("이 줄은 제가 고칠게요"));
+  assert.match(given, /I'll fix this line/);
+  assert.ok(given.indexOf("<alert") < given.indexOf("I'll fix this line"));
 
-  // 포스트의 DM을 포스트에 올리고, `@호출`도 포스트에 선다. 둘 다 글 수에 든다.
-  const shared = await call(world.owner, api.postQa, { qa: dm.id, text: "근거" });
+  // Post the DM to the post, and the `@mention` stands in the post too. Both count in the message count.
+  const shared = await call(world.owner, api.postQa, {
+    qa: dm.id,
+    text: "reason",
+  });
   assert.equal(shared.message.channel, post);
   const called = await call(world.owner, api.ask, {
     agent: "owner",
     executor: "claude-code",
     channel: post,
-    message: "모두 보게 묻기",
+    message: "ask so everyone sees",
     visibility: "public",
   });
   assert.equal(called.message?.channel, post);
@@ -445,13 +488,13 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
   await eventually(() => assert.equal(postOf()?.count, 3));
   const atForum = (await call(alice, api.openPost, { alert: alert.id })).message;
   assert.equal(atForum.kind === "alert" && atForum.post.count, 3);
-  // 목록 API도 같은 요약을 준다. 마지막 글은 `@호출`한 사람의 질문이다.
+  // The list API gives the same summary. The last message is the question of whoever made the `@mention`.
   const [now] = (await call(alice, api.posts)).posts;
   assert.equal(now?.count, 3);
-  assert.equal(now?.last?.line, "모두 보게 묻기");
+  assert.equal(now?.last?.line, "ask so everyone sees");
 });
 
-/** 정의 줄을 견줄 기준 판: 함수 둘과 그것을 쓰는 파일. */
+/** The base version to compare definition lines against: two functions and the file that uses them. */
 const PAY = `export function pay(amount: number) {
   return amount;
 }
@@ -463,7 +506,7 @@ const CHECKOUT = `import { pay, refund } from "./pay";
 export const total = pay(1) + refund(2);
 `;
 
-/** 기준 커밋에 src/pay.ts와 src/checkout.ts를 둔다. */
+/** Puts src/pay.ts and src/checkout.ts on the base commit. */
 async function symbolBase(world: World) {
   await writer(world.repo.folder)("src/pay.ts", PAY);
   await writer(world.repo.folder)("src/checkout.ts", CHECKOUT);
@@ -472,11 +515,11 @@ async function symbolBase(world: World) {
   await world.repo.git("update-ref", "refs/remotes/origin/main", "HEAD");
 }
 
-/** 넣은 글(CLI의 응답)에서 편지함의 소식 줄만. */
+/** Only the inbox's news lines from the submitted message (the CLI's reply). */
 const inboxLines = (output: string) =>
   output.split("<omagari-inbox>\n")[1]?.split("\n</omagari-inbox>")[0]?.split("\n") ?? [];
 
-/** `cwd`에서 `omagari status`를 거듭 돌려 편지함에 `line`이 넘겨질 때까지 기다린다. 넘긴 것은 다시 오지 않으니 본 것을 모은다. */
+/** Runs `omagari status` repeatedly in `cwd` until `line` is delivered to the inbox. What was delivered doesn't come again, so it collects what it saw. */
 async function receives(world: World, cwd: string, line: string) {
   const seen: string[] = [];
   await eventually(async () => {
@@ -485,7 +528,7 @@ async function receives(world: World, cwd: string, line: string) {
   });
 }
 
-test("함수의 정의 줄을 바꾸면 그 함수를 쓰는 다른 작업에 추정 간접 충돌이 오고, 본문만 바꾼 함수는 빠지며, 되돌리거나 쓰는 곳이 사라지면 풀렸다", async (t) => {
+test("changing a function's definition line sends a presumed indirect conflict to other work that uses it, a body-only change is left out, and it resolves on revert or when the usage disappears", async (t) => {
   const world = await startWorld({ observeMs: 50 });
   t.after(world.stop);
   await symbolBase(world);
@@ -493,7 +536,7 @@ test("함수의 정의 줄을 바꾸면 그 함수를 쓰는 다른 작업에 �
   t.after(alice.desk.remove);
   await payment(world);
 
-  // owner가 한 번에 pay의 본문과 refund의 정의 줄을 바꾼다. alice는 둘 다 쓴다. 알림에는 refund만 있다.
+  // owner changes pay's body and refund's definition line at once. alice uses both. Only refund is in the alert.
   const changed = PAY.replace("return amount;", "return amount + 0;").replace(
     "refund(amount: number)",
     "refund(amount: number, reason: string)",
@@ -509,7 +552,7 @@ test("함수의 정의 줄을 바꾸면 그 함수를 쓰는 다른 작업에 �
       [{ path: "src/pay.ts", line: 4, role: "changed" }],
     ],
   };
-  // owner가 파일을 쓰는 도중(빈 파일)을 관측하면 모든 정의가 없어진 알림이 잠깐 서고, 다음 보고에서 고쳐진다. 고쳐질 때까지 기다린다.
+  // If owner is observed mid-write (an empty file), an alert with all definitions gone is briefly raised and fixed in the next report. Wait until it is fixed.
   const first = await theAlert(
     world.owner,
     (alert) => assert.deepEqual(alert.symbols, [REFUND]),
@@ -524,7 +567,7 @@ test("함수의 정의 줄을 바꾸면 그 함수를 쓰는 다른 작업에 �
     more: 0,
     resolved: null,
   });
-  // 직접 충돌은 없다(함께 바꾼 파일이 없다). 쓰는 쪽 작업의 편지함에 "추정"과 함께 들어간다.
+  // No direct conflict (no file was changed together). It goes into the user's inbox with "presumed".
   assert.deepEqual(await alerts(world.owner), []);
   await receives(
     world,
@@ -532,7 +575,7 @@ test("함수의 정의 줄을 바꾸면 그 함수를 쓰는 다른 작업에 �
     `- Indirect conflict (estimated): my Work and owner's branch "payment". One side changed or removed a definition line of a symbol the other side uses. It's linked by name only, so it may be a different symbol. "refund" (me: Uses "src/checkout.ts":1, "src/checkout.ts":2 / them: Definition line changed "src/pay.ts":4)`,
   );
 
-  // 바꾼 정의 줄을 되돌리면 풀렸다.
+  // Reverting the changed definition line resolves it.
   await writer(world.repo.folder)(
     "src/pay.ts",
     PAY.replace("return amount;", "return amount + 0;"),
@@ -550,12 +593,12 @@ test("함수의 정의 줄을 바꾸면 그 함수를 쓰는 다른 작업에 �
     `- Resolved: my Work and owner's branch "payment"'s Indirect conflict (guessed)`,
   );
 
-  // 다시 바꾸면 새 알림이다. 쓰는 쪽 러너가 꺼져 있으면 바꾼 쪽 러너만으로는 풀었다고 보지 않는다.
+  // Changing it again is a new alert. If the user's runner is off, the changer's runner alone doesn't count it as resolved.
   await writer(world.repo.folder)("src/pay.ts", changed);
   const again = await eventually(async () => {
     const open = (await alerts(world.owner, undefined, "indirect")).filter((a) => !a.resolved);
     assert.equal(open.length, 1);
-    // 위와 같이 쓰는 도중의 알림이 고쳐질 때까지 기다린다.
+    // As above, wait until the mid-write alert is fixed.
     assert.deepEqual(open[0]?.symbols, [REFUND]);
     return open[0] as Of<"indirect">;
   });
@@ -568,7 +611,7 @@ test("함수의 정의 줄을 바꾸면 그 함수를 쓰는 다른 작업에 �
     null,
   );
 
-  // 쓰는 곳이 사라지면 풀렸다.
+  // It resolves when the usage disappears.
   await alice.desk.start();
   await writer(alice.desk.folder)("src/checkout.ts", "export const total = 1;\n");
   await eventually(async () =>
@@ -579,7 +622,7 @@ test("함수의 정의 줄을 바꾸면 그 함수를 쓰는 다른 작업에 �
   );
 });
 
-test("두 작업에 같은 이름의 새 정의가 생기면 중복 구현이 양쪽 편지함에 들어가고, 한 쌍에 직접 충돌과 간접 충돌이 함께 있으면 종류마다 알림이 따로다", async (t) => {
+test("a new definition with the same name in two works puts a duplicate implementation in both inboxes, and a pair with both a direct and an indirect conflict has a separate alert per kind", async (t) => {
   const world = await startWorld({ observeMs: 50 });
   t.after(world.stop);
   await symbolBase(world);
@@ -587,7 +630,7 @@ test("두 작업에 같은 이름의 새 정의가 생기면 중복 구현이 �
   t.after(alice.desk.remove);
   await payment(world);
 
-  // 같은 이름의 새 함수를 다른 파일에 따로 만든다.
+  // Each makes a new function with the same name in a different file.
   await writer(alice.desk.folder)(
     "src/split.ts",
     "export function split(n: number) {\n  return [n];\n}\n",
@@ -624,7 +667,7 @@ test("두 작업에 같은 이름의 새 정의가 생기면 중복 구현이 �
     `- Duplicate work: my Work and owner's branch "payment" each made a new definition with the same name. "split" (me: Added "src/split.ts":1 / them: Added "src/money.ts":1)`,
   );
 
-  // 같은 줄(pay의 본문)을 둘이 고치고, owner는 refund의 정의 줄도 바꾼다. 한 쌍에 세 종류가 따로 선다.
+  // Both edit the same line (pay's body), and owner also changes refund's definition line. Three kinds stand separately for one pair.
   await writer(alice.desk.folder)(
     "src/pay.ts",
     PAY.replace("return amount;", "return amount * 1;"),
@@ -648,7 +691,7 @@ test("두 작업에 같은 이름의 새 정의가 생기면 중복 구현이 �
     "indirect",
   );
   const kinds = (await call(world.owner, api.feed)).news;
-  assert.deepEqual(kinds, []); // 두 작업 모두 owner의 것이 걸려 있어 피드에는 없다
+  assert.deepEqual(kinds, []); // both works have owner's, so it isn't in the feed
   const all = await alerts(world.owner, undefined, "duplicate");
   assert.deepEqual(
     all.map((a) => a.id),

@@ -1,5 +1,5 @@
-// Codex(#16): 두 번째 에이전트로 붙는 실행기와, 같은 훅 파일을 Codex의 훅 형식으로 까는 것.
-// 실행기는 러너의 실제 `codex`를 쓰고, 그것이 부르는 Codex CLI만 가짜(test/fake-codex.ts)다.
+// Codex (#16): the executor attached as the second agent, and installing the same hook files in Codex's hook format.
+// The executor uses the runner's real `codex`, and only the Codex CLI it calls is fake (test/fake-codex.ts).
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -20,17 +20,17 @@ import {
 type World = Awaited<ReturnType<typeof startWorld>>;
 type Group = { matcher?: string; hooks: { type: string; command: string; timeout?: number }[] };
 
-/** 멤버의 에이전트와 그 상태. 고를 거리는 model.test가 본다. */
+/** A member's agents and their state. What to pick from is covered by model.test. */
 const agentsOf = async (world: World, login: string) =>
   (await call(world.owner, api.members)).members
     .find((m) => m.login === login)
     ?.agents.map(({ executor, state }) => ({ executor, state }));
 
-test("Codex에게 물으면 러너가 codex exec를 읽기 전용으로 화면 없이 띄우고, 같은 채널의 다음 문답은 resume으로 같은 세션을 잇는다", async (t) => {
+test("when asked, the runner starts codex exec read-only with no screen, and the next Q&A in the same channel resumes the same session", async (t) => {
   const fake = await fakeCodex(t);
-  process.env.FAKE_CODEX_MCP = "docs,fs"; // 주인이 Codex에 설정해 둔 MCP 서버
+  process.env.FAKE_CODEX_MCP = "docs,fs"; // MCP servers the owner set up in Codex
   t.after(() => delete process.env.FAKE_CODEX_MCP);
-  const claude = fakeExecutor(() => "Claude의 답");
+  const claude = fakeExecutor(() => "Claude's answer");
   const world = await startWorld({ executors: { "claude-code": claude.executor, codex } });
   t.after(world.stop);
   const folder = world.repo.folder;
@@ -38,14 +38,14 @@ test("Codex에게 물으면 러너가 codex exec를 읽기 전용으로 화면 �
     { executor: "claude-code", state: "online" },
     { executor: "codex", state: "online" },
   ]);
-  const channel = await world.channel(world.owner, "결제");
-  await call(world.owner, api.send, { channel, text: "결제는 payment.ts에 있다" });
+  const channel = await world.channel(world.owner, "payments");
+  await call(world.owner, api.send, { channel, text: "Payments are in payment.ts" });
   const ask = async (message: string, executor: "codex" | "claude-code" = "codex") =>
     world.settled(world.owner, await world.ask(world.owner, channel, message, executor));
 
-  assert.deepEqual((await ask("결제는 어디서?")).answer, {
+  assert.deepEqual((await ask("Where are payments?")).answer, {
     state: "answered",
-    text: "Codex: 결제는 어디서?",
+    text: "Codex: Where are payments?",
     source: {
       branch: "main",
       commit: await world.repo.git("rev-parse", "HEAD"),
@@ -53,15 +53,15 @@ test("Codex에게 물으면 러너가 codex exec를 읽기 전용으로 화면 �
       repo: REPO,
     },
   });
-  await call(world.owner, api.send, { channel, text: "환불은 refund.ts" });
-  assert.equal((await ask("환불은?")).answer.state, "answered");
-  // 같은 채널이어도 Claude Code는 자기 채널 세션이다.
-  assert.equal((await ask("Claude는?", "claude-code")).answer.state, "answered");
+  await call(world.owner, api.send, { channel, text: "Refunds are in refund.ts" });
+  assert.equal((await ask("What about refunds?")).answer.state, "answered");
+  // Even in the same channel, Claude Code has its own channel session.
+  assert.equal((await ask("What about Claude?", "claude-code")).answer.state, "answered");
 
   const [first, second, ...more] = await fake.calls();
   assert.deepEqual(more, []);
-  // 샌드박스는 주인의 설정에 기대지 않고 읽기 전용으로 준다. 샌드박스 밖에서 도는 MCP 서버, 앱, 플러그인은 끈다.
-  // 이것들은 resume 앞에 오고, 메시지는 표준 입력이다.
+  // The sandbox is given read-only without relying on the owner's settings. MCP servers, apps, and plugins that run outside the sandbox are turned off.
+  // These come before resume, and the message is stdin.
   const readOnly = [
     "exec",
     "--json",
@@ -75,20 +75,20 @@ test("Codex에게 물으면 러너가 codex exec를 읽기 전용으로 화면 �
   const thread = second?.args.at(-2) ?? "";
   assert.deepEqual(second?.args, [...readOnly, "resume", thread, "-"]);
   assert.equal(first?.cwd, folder);
-  // 첫 턴은 채널 대화를 데이터로 감싸 넘기고, 다음 턴은 그 뒤의 것만 넘긴다(ADR-0017).
+  // The first turn passes the channel conversation wrapped as data, and the next turn passes only what came after (ADR-0017).
   assert.match(
     first?.input ?? "",
-    /<channel_messages channel="결제">\n<message from="owner \(owner\)" at="[^"]+">\n결제는 payment\.ts에 있다\n<\/message>\n<\/channel_messages>\n\n결제는 어디서\?$/,
+    /<channel_messages channel="payments">\n<message from="owner \(owner\)" at="[^"]+">\nPayments are in payment\.ts\n<\/message>\n<\/channel_messages>\n\nWhere are payments\?$/,
   );
   assert.match(first?.input ?? "", /Answer in the language the question was asked in\./);
   assert.doesNotMatch(second?.input ?? "", /payment\.ts/);
   assert.match(
     second?.input ?? "",
-    /환불은 refund\.ts\n<\/message>\n<\/channel_messages>\n\n환불은\?$/,
+    /Refunds are in refund\.ts\n<\/message>\n<\/channel_messages>\n\nWhat about refunds\?$/,
   );
   assert.equal(claude.calls[0]?.resume, undefined);
 
-  // 이어 간 세션은 첫 턴의 thread.started가 알린 것이다. 실행 기록에 실행기와 세션이 남는다.
+  // The resumed session is the one the first turn's thread.started reported. The run record keeps the executor and session.
   const runs = (await readFile((await runnerPaths(folder)).log, "utf8"))
     .trimEnd()
     .split("\n")
@@ -104,7 +104,7 @@ test("Codex에게 물으면 러너가 codex exec를 읽기 전용으로 화면 �
   assert.match(thread, /^[0-9a-f-]{36}$/);
 });
 
-test("Codex의 턴이 실패하면 문답이 그 이유로 실패하고, 다음 문답은 다시 답한다", async (t) => {
+test("when Codex's turn fails, the Q&A fails with that reason, and the next Q&A answers again", async (t) => {
   const fake = await fakeCodex(t);
   const world = await startWorld({ executors: { codex } });
   t.after(world.stop);
@@ -112,25 +112,25 @@ test("Codex의 턴이 실패하면 문답이 그 이유로 실패하고, 다음 
   const ask = async (message: string) =>
     world.settled(world.owner, await world.ask(world.owner, channel, message, "codex"));
 
-  assert.deepEqual((await ask("실패")).answer, {
+  assert.deepEqual((await ask("fail")).answer, {
     state: "failed",
     error: {
       code: "executor_failed",
-      message: "Codex couldn't answer (exit code 1): 사용량 한도에 걸렸다",
+      message: "Codex couldn't answer (exit code 1): usage limit reached",
     },
   });
-  assert.partialDeepStrictEqual((await ask("다시")).answer, {
+  assert.partialDeepStrictEqual((await ask("again")).answer, {
     state: "answered",
-    text: "Codex: 다시",
+    text: "Codex: again",
   });
-  // 실패한 턴은 세션을 남기지 않아 다음 문답이 새 세션을 띄운다.
+  // The failed turn leaves no session, so the next Q&A starts a new session.
   assert.deepEqual(
     (await fake.calls()).map((c) => c.args.includes("resume")),
     [false, false],
   );
 });
 
-test("러너는 codex가 깔려 있고 로그인했을 때만 Codex 에이전트를 붙인다", async (t) => {
+test("the runner attaches the Codex agent only when codex is installed and logged in", async (t) => {
   await fakeCodex(t);
   const world = await startWorld();
   t.after(world.stop);
@@ -145,7 +145,7 @@ test("러너는 codex가 깔려 있고 로그인했을 때만 Codex 에이전트
   assert.deepEqual(await agentsOf(world, "alice"), [{ executor: "claude-code", state: "online" }]);
   await out.stop();
 
-  // 로그인하면(`codex login`이 CODEX_HOME에 남기는 것) 다시 켤 때 붙는다.
+  // After logging in (what `codex login` leaves in CODEX_HOME), it attaches on the next start.
   await writer(world.codex)("auth.json", "{}");
   const signedIn = world.launchCliIn(desk.folder, "runner");
   t.after(() => signedIn.stop("SIGKILL"));
@@ -158,10 +158,10 @@ test("러너는 codex가 깔려 있고 로그인했을 때만 Codex 에이전트
   );
 });
 
-/** 매 세션이 처음 보는 작업 세션이다. 편집 전 훅의 기억 없이 지금 근처 작업을 본다. */
+/** Every session is a work session seen for the first time. It sees nearby work now without the pre-edit hook's memory. */
 const fresh = () => crypto.randomUUID();
 
-/** Codex가 훅에 주는 입력(Codex hooks 문서의 공통 필드와 이벤트 필드). */
+/** The input Codex gives a hook (the common and event fields from the Codex hooks docs). */
 const codexInput = {
   sessionStart: (cwd: string, session = fresh()) => ({
     session_id: session,
@@ -185,7 +185,7 @@ const codexInput = {
   }),
 };
 
-/** Claude Code가 훅에 주는 입력. Codex가 같은 내용을 받는지 견줄 때 쓴다. */
+/** The input Claude Code gives a hook. Used to compare whether Codex receives the same content. */
 const claudeInput = {
   sessionStart: (cwd: string) => ({
     session_id: fresh(),
@@ -208,7 +208,7 @@ const claudeInput = {
 
 const patch = (...files: string[]) => ["*** Begin Patch", ...files, "*** End Patch"].join("\n");
 
-/** 깔린 명령을 에이전트처럼 돌리고 넣은 글을 돌려준다. 훅은 0으로 끝나고 stderr에 쓰지 않는다. */
+/** Runs the installed command as an agent and returns the text it injected. The hook exits with 0 and writes nothing to stderr. */
 async function runInstalled(world: World, command: string, input: { hook_event_name: string }) {
   const { code, stdout, stderr } = await world.shell(command, JSON.stringify(input));
   assert.deepEqual({ code, stderr }, { code: 0, stderr: "" });
@@ -218,7 +218,7 @@ async function runInstalled(world: World, command: string, input: { hook_event_n
   return hookSpecificOutput.additionalContext as string;
 }
 
-test("omagari install이 Codex에도 두 훅과 상태 한 줄 스킬을 깔고 /hooks에서 신뢰하라고 알리며, 깔린 훅은 Codex의 입력으로 Claude Code와 같은 글을 넣는다", async (t) => {
+test("omagari install also installs two hooks and a one-line status skill for Codex and tells you to trust them in /hooks, and the installed hooks inject the same text as Claude Code from Codex's input", async (t) => {
   const world = await startWorld({ observeMs: 50 });
   t.after(world.stop);
   world.github.grant("alice");
@@ -243,7 +243,7 @@ test("omagari install이 Codex에도 두 훅과 상태 한 줄 스킬을 깔고 
     await readFile(join(world.claude, "skills", "omagari-status", "SKILL.md"), "utf8"),
   );
 
-  // Codex의 matcher는 정규식이다. 세션 시작은 어떻게 시작했든, 편집 전 훅은 apply_patch와 셸 명령(편지함을 넘기려고)에만 걸린다.
+  // Codex's matcher is a regex. Session start matches however it started, and the pre-edit hook matches only apply_patch and shell commands (to hand over the inbox).
   const { hooks }: { hooks: Record<string, Group[]> } = JSON.parse(
     await readFile(hooksFile, "utf8"),
   );
@@ -265,7 +265,7 @@ test("omagari install이 Codex에도 두 훅과 상태 한 줄 스킬을 깔고 
   assert.match(start ?? "", /\/packages\/hooks\/src\/main\.ts' codex$/);
   assert.equal(edit, start);
 
-  // 같은 상황에서 Claude Code의 훅과 같은 글을 넣는다.
+  // In the same situation it injects the same text as Claude Code's hook.
   const claude = JSON.parse(await readFile(join(world.claude, "settings.json"), "utf8")).hooks;
   const claudeStart = claude.SessionStart.at(-1).hooks[0].command;
   const folder = world.repo.folder;
@@ -287,13 +287,13 @@ test("omagari install이 Codex에도 두 훅과 상태 한 줄 스킬을 깔고 
   const claudeEdit = claude.PreToolUse.at(-1).hooks[0].command;
   assert.equal(await runInstalled(world, claudeEdit, claudeInput.edit(folder, "pay.ts")), nearby);
 
-  // 다시 깔아도 하나만 남는다.
+  // Even after installing again, only one remains.
   const first = await readFile(hooksFile, "utf8");
   assert.equal((await world.cli("install")).code, 0);
   assert.equal(await readFile(hooksFile, "utf8"), first);
 });
 
-test("Codex의 패치 하나가 여러 파일을 고치면 파일마다 근처 작업을 넣고, 같은 세션에서 같은 것은 다시 넣지 않는다", async (t) => {
+test("when one Codex patch edits several files, it injects nearby work per file, and does not inject the same thing again in the same session", async (t) => {
   const world = await startWorld({ observeMs: 50 });
   t.after(world.stop);
   world.github.grant("alice");
@@ -332,12 +332,12 @@ test("Codex의 패치 하나가 여러 파일을 고치면 파일마다 근처 �
     "-old",
     "+new",
     "*** Delete File: gone.ts",
-    "*** Add File: free.ts", // 아무도 바꾸지 않는 파일
+    "*** Add File: free.ts", // a file nobody changes
     "+free",
-    "*** Add File: ../outside.ts", // 레포 밖은 Omagari가 볼 것이 아니다
+    "*** Add File: ../outside.ts", // outside the repo is not for Omagari to see
     "+x",
   );
-  // 같은 세션에서 본 것은 다시 넣지 않으니, 서버가 네 파일을 모두 알기 전에 묻으면 일부만 넘겨져 나머지가 영영 안 온다. 알 때까지 기다린 뒤 묻는다(#153).
+  // What was seen in the same session is not injected again, so if asked before the server knows all four files, only some are handed over and the rest never come. Wait until it knows, then ask (#153).
   const alice = await world.login("alice");
   await eventually(async () => {
     const seen = (await world.works(alice))
@@ -349,10 +349,10 @@ test("Codex의 패치 하나가 여러 파일을 고치면 파일마다 근처 �
   await eventually(async () =>
     assert.deepEqual(files(await preEdit(body)), ["pay.ts", "old.ts", "new.ts", "gone.ts"]),
   );
-  // 같은 세션의 다음 패치에서는 지난번과 같은 근처 작업을 다시 넣지 않는다.
+  // In the same session's next patch, the same nearby work as last time is not injected again.
   assert.equal(await preEdit(body), "");
 
-  // 하위 폴더에서 일하는 세션의 상대 경로도 레포 최상위에서 본 경로로 묻는다.
+  // The relative path of a session working in a subfolder is also asked as the path seen from the repo root.
   await write("src/a.ts", "a\n");
   await writer(folder)("src/.keep", "");
   await eventually(async () =>
@@ -363,7 +363,7 @@ test("Codex의 패치 하나가 여러 파일을 고치면 파일마다 근처 �
   );
 });
 
-test("Codex의 편집 전 훅은 셸 명령이나 다른 도구에는 아무것도 넣지 않는다", async (t) => {
+test("Codex's pre-edit hook injects nothing for shell commands or other tools", async (t) => {
   const world = await startWorld({ observeMs: 50 });
   t.after(world.stop);
   world.github.grant("alice");
@@ -372,7 +372,7 @@ test("Codex의 편집 전 훅은 셸 명령이나 다른 도구에는 아무것�
   await writer(desk.folder)("pay.ts", "pay\n");
   const folder = world.repo.folder;
   const hook = async (input: object) => world.hook(JSON.stringify(input), { executor: "codex" });
-  // 먼저 alice의 관측이 와서 pay.ts를 고치는 패치에는 넣을 것이 있다.
+  // First alice's observation arrives, so there is something to inject for a patch that edits pay.ts.
   await eventually(async () =>
     assert.match(
       (await hook(codexInput.applyPatch(folder, patch("*** Update File: pay.ts")))).stdout,
@@ -393,7 +393,7 @@ test("Codex의 편집 전 훅은 셸 명령이나 다른 도구에는 아무것�
   }
 });
 
-test("실행기가 둘인 러너에서 작업의 에이전트는 그 브랜치에서 마지막으로 훅을 부른 실행기이고, 관측만 있으면 모른다", async (t) => {
+test("in a runner with two executors, a work's agent is the executor that last called a hook on that branch, and is unknown with observation only", async (t) => {
   const executors = {
     "claude-code": fakeExecutor(() => "").executor,
     codex: fakeExecutor(() => "").executor,
@@ -412,7 +412,7 @@ test("실행기가 둘인 러너에서 작업의 에이전트는 그 브랜치�
       idle: member && idleAgents(member).map((agent) => agent.executor),
     };
   };
-  // 훅도 status set도 없이 관측만 있다.
+  // There is only observation, with no hook or status set.
   await eventually(async () =>
     assert.deepEqual(await seen(), {
       works: [{ branch: "b", executor: null }],
@@ -420,7 +420,7 @@ test("실행기가 둘인 러너에서 작업의 에이전트는 그 브랜치�
     }),
   );
 
-  // Codex의 세션 시작 훅이 b에서 불렸다. Codex는 작업 없는 에이전트에서 빠진다.
+  // Codex's session start hook was called on b. Codex drops out of the agents with no work.
   await world.hook(JSON.stringify(codexInput.sessionStart(folder)), { executor: "codex" });
   await eventually(async () =>
     assert.deepEqual(await seen(), {
@@ -429,7 +429,7 @@ test("실행기가 둘인 러너에서 작업의 에이전트는 그 브랜치�
     }),
   );
 
-  // 같은 브랜치에서 Claude Code의 훅(셸 명령의 편집 전 훅)이 불리면 그쪽으로 바뀐다.
+  // If Claude Code's hook (the pre-edit hook of a shell command) is called on the same branch, it switches to that.
   const bash = {
     ...claudeInput.edit(folder, "b.ts"),
     tool_name: "Bash",
@@ -447,7 +447,7 @@ test("실행기가 둘인 러너에서 작업의 에이전트는 그 브랜치�
   const status = await world.cli("status");
   assert.match(status.stdout, /^ {2}"b" \(Claude Code\): /m, status.stderr);
 
-  // 서버가 다시 떠도 남는다.
+  // It stays even if the server restarts.
   await world.restartServer();
   await eventually(async () =>
     assert.deepEqual((await seen()).works, [{ branch: "b", executor: "claude-code" }]),

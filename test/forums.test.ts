@@ -1,12 +1,12 @@
-// 포럼은 중요도나 라벨로 거른 보기다(#190, ADR-0039). 포스트는 3단계 판(contract32.sql)의 DB에 있는 둘을 쓴다:
-// 직접 충돌(참고)과, 확인된 간접 충돌(라벨 둘, 논의).
+// A forum is a view filtered by importance or label (#190, ADR-0039). Posts use two that are in the DB of the stage-3 version (contract32.sql):
+// a direct conflict (reference) and a confirmed indirect conflict (two labels, discuss).
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { api, type ContractFailure, call } from "@omagari/contract";
 import { eventually, startWorld } from "./harness.ts";
 
-test("멤버가 포럼을 만들고 고치고 지우면 포스트가 맞는 포럼마다 보이고, 어디에도 안 맞으면 다른 포스트다", async (t) => {
+test("when a member creates, edits, and deletes forums, posts show up in each forum they match, and one that matches nowhere is an other post", async (t) => {
   const world = await startWorld({
     seed: await readFile(new URL("./contract32.sql", import.meta.url), "utf8"),
   });
@@ -20,25 +20,25 @@ test("멤버가 포럼을 만들고 고치고 지우면 포스트가 맞는 포�
   const discuss = await id("Discuss");
   const reference = await id("FYI");
 
-  // 라벨 둘이 각각 다른 포럼에 맞으면 두 포럼에 다 보인다. 라벨 목록은 하나라도 맞으면 된다. 포럼은 이름 순이다.
+  // If two labels each match a different forum, the post shows in both forums. A label list matches if any one does. Forums are in name order.
   const guessed = (
     await call(alice, api.createForum, {
-      name: " 간접  충돌 ",
+      name: " Guessed  conflict ",
       filter: { labels: ["Indirect conflict"] },
     })
   ).channel;
   assert.deepEqual(guessed, {
     id: guessed.id,
-    name: "간접 충돌",
+    name: "Guessed conflict",
     kind: "forum",
     filter: { labels: ["Indirect conflict"] },
   });
   const { channel: confirmed } = await call(alice, api.createForum, {
-    name: "확인",
-    filter: { labels: ["없는 라벨", "Confirmed"] },
+    name: "Verified",
+    filter: { labels: ["No such label", "Confirmed"] },
   });
   assert.deepEqual(await forumsOf(), [[reference], [discuss, guessed.id, confirmed.id]]);
-  // 웹에는 새 포럼과, 보이는 포럼이 바뀐 포스트의 알림 줄이 바로 간다.
+  // The web immediately gets the new forum and the alert line of the post whose visible forums changed.
   await eventually(() => {
     assert.ok(web.received.some((m) => m.kind === "channel" && m.payload.id === confirmed.id));
     const last = web.messages().findLast((m) => m.kind === "alert" && m.id === 2);
@@ -46,48 +46,60 @@ test("멤버가 포럼을 만들고 고치고 지우면 포스트가 맞는 포�
     assert.deepEqual(last.post.forums, [discuss, guessed.id, confirmed.id]);
   });
 
-  // 라벨의 중요도를 바꾸면 그 라벨을 단 포스트가 참고 포럼에서 빠지고 논의 포럼에 보인다. 웹에도 바로 간다.
-  await call(alice, api.editLabel, { name: "Direct conflict", next: { importance: "discuss" } });
+  // Changing a label's importance takes posts with that label out of the reference forum and shows them in the discuss forum. The web gets it right away too.
+  await call(alice, api.editLabel, {
+    name: "Direct conflict",
+    next: { importance: "discuss" },
+  });
   assert.deepEqual(await forumsOf(), [[discuss], [discuss, guessed.id, confirmed.id]]);
   await eventually(() => {
     const last = web.messages().findLast((m) => m.kind === "alert" && m.id === 1);
     assert.ok(last?.kind === "alert");
     assert.deepEqual(last.post.forums, [discuss]);
   });
-  await call(alice, api.editLabel, { name: "Direct conflict", next: { importance: "reference" } });
+  await call(alice, api.editLabel, {
+    name: "Direct conflict",
+    next: { importance: "reference" },
+  });
   assert.deepEqual(await forumsOf(), [[reference], [discuss, guessed.id, confirmed.id]]);
-  // 라벨 이름을 바꾸면 그 라벨로 거르는 포럼도 새 이름을 따른다.
-  await call(alice, api.editLabel, { name: "Indirect conflict", next: { name: "추정 충돌" } });
+  // Renaming a label makes forums that filter by that label follow the new name.
+  await call(alice, api.editLabel, {
+    name: "Indirect conflict",
+    next: { name: "Probable conflict" },
+  });
   assert.deepEqual(
     (await call(world.owner, api.channels)).channels.find((c) => c.id === guessed.id)?.filter,
-    { labels: ["추정 충돌"] },
+    { labels: ["Probable conflict"] },
   );
   assert.deepEqual(await forumsOf(), [[reference], [discuss, guessed.id, confirmed.id]]);
 
-  // 같은 이름(대소문자를 가리지 않는다)의 포럼이나 채널은 만들지 못한다.
-  for (const name of ["FYI", "확인"])
+  // You can't create a forum or channel with the same name (case-insensitive).
+  for (const name of ["FYI", "Verified"])
     await assert.rejects(
       call(alice, api.createForum, { name, filter: { importance: "discuss" } }),
       { code: "conflict" } satisfies Partial<ContractFailure>,
     );
-  await assert.rejects(call(alice, api.createChannel, { name: "확인" }), {
+  await assert.rejects(call(alice, api.createChannel, { name: "Verified" }), {
     code: "conflict",
   } satisfies Partial<ContractFailure>);
-  const general = await world.channel(world.owner, "일반");
+  const general = await world.channel(world.owner, "General");
   await assert.rejects(
-    call(alice, api.createForum, { name: "일반", filter: { importance: "discuss" } }),
+    call(alice, api.createForum, {
+      name: "General",
+      filter: { importance: "discuss" },
+    }),
     { code: "conflict" } satisfies Partial<ContractFailure>,
   );
 
-  // 이름과 거르기를 고친다. 기본 포럼도 고친다. 다른 채널의 이름이면 거절하고, 포럼이 아니면 없는 것이다.
+  // Edit the name and filter. Default forums can be edited too. A name of another channel is refused, and a non-forum is not found.
   const renamed = await call(alice, api.updateForum, {
     id: guessed.id,
-    name: "추정",
+    name: "Guess",
     filter: { importance: "reference" },
   });
   assert.deepEqual(renamed.channel, {
     id: guessed.id,
-    name: "추정",
+    name: "Guess",
     kind: "forum",
     filter: { importance: "reference" },
   });
@@ -98,7 +110,7 @@ test("멤버가 포럼을 만들고 고치고 지우면 포스트가 맞는 포�
   await eventually(() =>
     assert.ok(
       web.received.some(
-        (m) => m.kind === "channel" && m.payload.id === guessed.id && m.payload.name === "추정",
+        (m) => m.kind === "channel" && m.payload.id === guessed.id && m.payload.name === "Guess",
       ),
     ),
   );
@@ -110,11 +122,11 @@ test("멤버가 포럼을 만들고 고치고 지우면 포스트가 맞는 포�
     }),
     { code: "conflict" } satisfies Partial<ContractFailure>,
   );
-  for (const other of [general, "alerts", "없는 포럼"])
+  for (const other of [general, "alerts", "No such forum"])
     await assert.rejects(
       call(alice, api.updateForum, {
         id: other,
-        name: "새 이름",
+        name: "New name",
         filter: { importance: "discuss" },
       }),
       { code: "not_found" } satisfies Partial<ContractFailure>,
@@ -126,12 +138,12 @@ test("멤버가 포럼을 만들고 고치고 지우면 포스트가 맞는 포�
   });
   assert.deepEqual(await forumsOf(), [[discuss, reference, guessed.id], [confirmed.id]]);
 
-  // 기본 포럼까지 모두 지우면 포스트는 어느 포럼에도 보이지 않는다("다른 포스트"). 포스트 자체는 남는다.
+  // Deleting every forum, default ones included, leaves posts visible in no forum ("other posts"). The posts themselves remain.
   for (const forum of [discuss, reference, guessed.id, confirmed.id])
     assert.deepEqual(await call(alice, api.deleteForum, { id: forum as string }), {});
   assert.deepEqual(await forumsOf(), [[], []]);
   assert.deepEqual((await call(world.owner, api.channels)).channels, [
-    { id: general, name: "일반", kind: "chat" },
+    { id: general, name: "General", kind: "chat" },
   ]);
   await eventually(() =>
     assert.ok(web.received.some((m) => m.kind === "forumDeleted" && m.payload.id === discuss)),
@@ -141,24 +153,30 @@ test("멤버가 포럼을 만들고 고치고 지우면 포스트가 맞는 포�
       code: "not_found",
     } satisfies Partial<ContractFailure>);
 
-  // 지운 기본 포럼은 다시 띄워도 돌아오지 않는다. 멤버가 다시 만든다.
+  // A deleted default forum doesn't come back when restarted. A member creates it again.
   await world.restartServer();
   await eventually(async () =>
     assert.deepEqual(
       (await call(world.owner, api.channels)).channels.map((c) => c.name),
-      ["일반"],
+      ["General"],
     ),
   );
-  await call(alice, api.createForum, { name: "논의", filter: { importance: "discuss" } });
+  await call(alice, api.createForum, {
+    name: "Debate",
+    filter: { importance: "discuss" },
+  });
   assert.deepEqual(
     (await forumsOf()).map((f) => f.length),
     [0, 1],
   );
 
-  // "알림을 올릴 포럼" API는 없다.
+  // There is no "forum to post alerts in" API.
   const gone = await fetch(new URL("/api/alert-channel", world.owner.url), {
     method: "POST",
-    headers: { authorization: `Bearer ${world.owner.session}`, "content-type": "application/json" },
+    headers: {
+      authorization: `Bearer ${world.owner.session}`,
+      "content-type": "application/json",
+    },
     body: JSON.stringify({ channel: discuss }),
   });
   assert.equal(gone.status, 404);

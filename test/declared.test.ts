@@ -1,4 +1,4 @@
-// 계약 선언(#87): 선점에 붙인 계획이 그 심볼을 쓰는 작업에 알림으로 가고, 대체되고, 이루지 못한 채 풀면 취소된다.
+// Contract declaration (#87): a plan attached to a claim goes as a notice to work that uses the symbol, is replaced, and is cancelled if released without being done.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { type Alert, api, call } from "@omagari/contract";
@@ -19,7 +19,7 @@ const CHECKOUT = `import { pay, refund } from "./pay";
 export const total = pay(1) + refund(2);
 `;
 
-/** 기준 커밋에 src/pay.ts와 src/checkout.ts를 두고 origin/main을 올린다. */
+/** Put src/pay.ts and src/checkout.ts on the base commit and push origin/main. */
 async function base(world: World) {
   await writer(world.repo.folder)("src/pay.ts", PAY);
   await writer(world.repo.folder)("src/checkout.ts", CHECKOUT);
@@ -28,7 +28,7 @@ async function base(world: World) {
   await world.repo.git("update-ref", "refs/remotes/origin/main", "HEAD");
 }
 
-/** alice의 기기: 내 main 위에서 refund 브랜치를 시작한다(conflicts.test와 같다). */
+/** alice's machine: start a refund branch on my main (same as conflicts.test). */
 async function alice(world: World) {
   world.github.grant("alice");
   const as = await world.login("alice");
@@ -42,7 +42,7 @@ async function alice(world: World) {
   return desk;
 }
 
-/** owner가 payment 브랜치로 옮기고 서버가 그것을 볼 때까지 기다린다. */
+/** Wait until the owner switches to the payment branch and the server sees it. */
 async function payment(world: World) {
   await world.repo.git("switch", "--create", "payment");
   await eventually(async () =>
@@ -50,14 +50,14 @@ async function payment(world: World) {
   );
 }
 
-/** owner의 레포에서 `omagari <args>`를 돌려 성공한 출력. */
+/** Run `omagari <args>` in the owner's repo and return the output of a success. */
 async function omagari(world: World, args: string[], cwd = world.repo.folder) {
   const { code, stdout, stderr } = await world.cliIn(cwd, ...args);
   assert.equal(code, 0, stderr);
   return stdout;
 }
 
-/** 선언된 계약 변경 알림들. */
+/** The declared contract-change notices. */
 async function declared(as: As): Promise<Declared[]> {
   const messages = (await call(as, api.posts)).posts.map((p) => p.message);
   return messages.flatMap((m) =>
@@ -68,7 +68,7 @@ async function declared(as: As): Promise<Declared[]> {
 const inboxLines = (output: string) =>
   output.split("<omagari-inbox>\n")[1]?.split("\n</omagari-inbox>")[0]?.split("\n") ?? [];
 
-/** `cwd`에서 `omagari status`를 거듭 돌려 편지함에 `line`이 넘겨질 때까지 기다린다. 넘겨받은 줄을 모두 돌려준다. */
+/** Run `omagari status` in `cwd` repeatedly and wait until `line` is handed to the mailbox. Return all the lines handed over. */
 async function receives(world: World, cwd: string, line: string, seen: string[] = []) {
   await eventually(async () => {
     seen.push(...inboxLines((await world.cliIn(cwd, "status")).stdout));
@@ -84,7 +84,7 @@ const USES = [
   { path: "src/checkout.ts", line: 2, role: "uses" },
 ] as const;
 
-test("선점에 계획을 붙이면 코드를 바꾸기 전에 쓰는 작업에 알림이 가고, 새 계획이 옛 것을 대체하고, 이루지 못한 채 풀면 취소됨이 간다", async (t) => {
+test("attaching a plan to a claim notifies work that uses the code before it changes; a new plan replaces the old one; releasing without doing it sends cancelled", async (t) => {
   const world = await startWorld({ observeMs: 50 });
   t.after(world.stop);
   await base(world);
@@ -92,7 +92,7 @@ test("선점에 계획을 붙이면 코드를 바꾸기 전에 쓰는 작업에 
   t.after(desk.remove);
   await payment(world);
 
-  // 코드는 그대로 두고 refund의 시그니처 변경을 선언한다. 알림이 빨리 서면 이 명령의 응답 끝에 owner의 편지함 소식이 붙어 넘겨진다.
+  // Declare a signature change to refund and leave the code alone. If the notice is up quickly, the owner's mailbox news is attached to the end of this command's reply.
   const claimed = await omagari(world, [
     "claim",
     "src/pay.ts",
@@ -107,7 +107,11 @@ test("선점에 계획을 붙이면 코드를 바꾸기 전에 쓰는 작업에 
     claimed,
     /^Claimed on payment: "refund" in "src\/pay.ts" lines 4-6 · plan: Signature change "refund" "refund\(amount, reason\)"\n/,
   );
-  const signature = { kind: "signature", symbol: "refund", detail: "refund(amount, reason)" };
+  const signature = {
+    kind: "signature",
+    symbol: "refund",
+    detail: "refund(amount, reason)",
+  };
   const first = await eventually(async () => {
     const found = await declared(world.owner);
     assert.equal(found.length, 1, JSON.stringify(found));
@@ -127,7 +131,7 @@ test("선점에 계획을 붙이면 코드를 바꾸기 전에 쓰는 작업에 
     more: 0,
     resolved: null,
   });
-  // 쓰는 쪽과 바꾸는 쪽 편지함 모두에 들어간다.
+  // It goes into the mailboxes of both the user and the changer.
   await receives(
     world,
     desk.folder,
@@ -140,13 +144,13 @@ test("선점에 계획을 붙이면 코드를 바꾸기 전에 쓰는 작업에 
     inboxLines(claimed),
   );
 
-  // 쓰는 쪽의 omagari impact가 걸린 계획을 보인다.
+  // The user's omagari impact shows the attached plan.
   assert.match(
     await omagari(world, ["impact", "refund"], desk.folder),
     /Other members' Claims that declare a change \(with a plan attached\):\n {2}owner's branch "payment" · "refund" in "src\/pay.ts" lines 4-6 · plan: Signature change "refund" "refund\(amount, reason\)"\n/,
   );
 
-  // 같은 심볼에 다른 곳(줄 범위)으로 새 계획을 걸면 옛 계획을 대체하고, 같은 알림이 새 계획으로 고쳐진다.
+  // A new plan on the same symbol at another place (line range) replaces the old plan, and the same notice is updated to the new plan.
   await omagari(world, ["claim", "src/pay.ts", "--lines", "4-6", "--plan", "rename:refund"]);
   await eventually(async () => {
     const found = await declared(world.owner);
@@ -158,8 +162,8 @@ test("선점에 계획을 붙이면 코드를 바꾸기 전에 쓰는 작업에 
     );
   });
 
-  // 계획을 이루지 못한 채 풀면 알림을 받은 작업에 취소됨이 가고, 알림은 풀린다.
-  // 모든 omagari 명령이 응답 끝에 편지함을 넘기므로 release의 응답도 owner가 본 것이다.
+  // Releasing a plan without doing it sends cancelled to the work that got the notice, and the notice is lifted.
+  // Every omagari command hands over the mailbox at the end of its reply, so the owner also saw the release reply.
   const released = inboxLines(await omagari(world, ["release"]));
   const seen = await receives(
     world,
@@ -173,7 +177,7 @@ test("선점에 계획을 붙이면 코드를 바꾸기 전에 쓰는 작업에 
     seen,
   );
   assert.notEqual((await declared(world.owner))[0]?.resolved, null);
-  // 바꾸는 쪽은 취소됨을 받지 않는다.
+  // The changer doesn't get cancelled.
   const own = await receives(
     world,
     world.repo.folder,
@@ -183,7 +187,7 @@ test("선점에 계획을 붙이면 코드를 바꾸기 전에 쓰는 작업에 
   assert.ok(!own.some((line) => line.includes("cancelled")), JSON.stringify(own));
 });
 
-test("계획대로 정의 줄을 바꾼 뒤 풀면 취소됨이 가지 않는다", async (t) => {
+test("releasing after changing the definition line as planned doesn't send cancelled", async (t) => {
   const world = await startWorld({ observeMs: 50 });
   t.after(world.stop);
   await base(world);
@@ -193,7 +197,7 @@ test("계획대로 정의 줄을 바꾼 뒤 풀면 취소됨이 가지 않는다
 
   await omagari(world, ["claim", "src/pay.ts", "--symbol", "refund", "--plan", "signature"]);
   await eventually(async () => assert.equal((await declared(world.owner)).length, 1));
-  // 계획대로 시그니처를 바꾸고, 서버가 그 정의 줄을 볼 때까지 기다린다.
+  // Change the signature as planned, and wait until the server sees that definition line.
   await writer(world.repo.folder)(
     "src/pay.ts",
     PAY.replace("refund(amount: number)", "refund(amount: number, reason: string)"),
@@ -214,7 +218,7 @@ test("계획대로 정의 줄을 바꾼 뒤 풀면 취소됨이 가지 않는다
   assert.ok(!seen.some((line) => line.includes("cancelled")), JSON.stringify(seen));
 });
 
-test("--plan은 종류가 맞아야 하고 심볼이 있어야 하며, release에는 주지 않는다", async (t) => {
+test("--plan needs the right kind and an existing symbol, and isn't given to release", async (t) => {
   const world = await startWorld({ observeMs: 50 });
   t.after(world.stop);
   await base(world);

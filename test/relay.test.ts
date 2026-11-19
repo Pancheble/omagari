@@ -12,39 +12,39 @@ import {
   tempRepo,
 } from "./harness.ts";
 
-test("DM으로 물으면 답을 기다리는 문답이 바로 오고, 서버를 거쳐 주인의 러너 세션이 답한다. 다음 문답은 같은 세션으로 이어진다", async (t) => {
-  const fake = fakeExecutor((input) => `답: ${input.message}`);
+test("asking in a DM returns a QA waiting for the answer right away, and the owner's runner session answers through the server; the next QA continues the same session", async (t) => {
+  const fake = fakeExecutor((input) => `Answer: ${input.message}`);
   const world = await startWorld({ executor: fake.executor });
   t.after(world.stop);
   const channel = await world.channel(world.owner);
 
-  const first = await world.ask(world.owner, channel, "이 레포는 뭘 하나?");
+  const first = await world.ask(world.owner, channel, "What does this repo do?");
   assert.deepEqual(first.answer, { state: "pending" });
   assert.equal(first.executor, "claude-code");
-  assert.equal(first.question, "이 레포는 뭘 하나?");
+  assert.equal(first.question, "What does this repo do?");
   assert.partialDeepStrictEqual(await world.settled(world.owner, first), {
-    answer: { state: "answered", text: "답: 이 레포는 뭘 하나?" },
+    answer: { state: "answered", text: "Answer: What does this repo do?" },
   });
-  const second = await world.ask(world.owner, channel, "테스트는 어디에?");
+  const second = await world.ask(world.owner, channel, "Where are the tests?");
   assert.partialDeepStrictEqual(await world.settled(world.owner, second), {
-    answer: { state: "answered", text: "답: 테스트는 어디에?" },
+    answer: { state: "answered", text: "Answer: Where are the tests?" },
   });
 
-  // 채널에 대화가 없으면 질문만 넘어간다.
+  // If the channel has no conversation yet, only the question goes over.
   assert.deepEqual(
     fake.calls.map((input) => [input.message, input.resume]),
     [
-      ["이 레포는 뭘 하나?", undefined],
-      ["테스트는 어디에?", "session-1"],
+      ["What does this repo do?", undefined],
+      ["Where are the tests?", "session-1"],
     ],
   );
   for (const input of fake.calls) {
-    assert.deepEqual(input.tools, ["Read", "Grep", "Glob"]); // 읽기 전용
-    assert.equal(input.folder, world.repo.folder); // 주인이 등록한 폴더
+    assert.deepEqual(input.tools, ["Read", "Grep", "Glob"]); // read-only
+    assert.equal(input.folder, world.repo.folder); // the folder the owner registered
   }
 });
 
-test("에이전트는 주인만 부른다. 다른 멤버가 남의 에이전트에게 보낸 문답은 거절되고 러너에 닿지 않는다", async (t) => {
+test("an agent calls only its owner; a QA another member sends to someone else's agent is rejected and never reaches the runner", async (t) => {
   const fake = fakeExecutor();
   const world = await startWorld({ executor: fake.executor });
   t.after(world.stop);
@@ -55,38 +55,42 @@ test("에이전트는 주인만 부른다. 다른 멤버가 남의 에이전트�
     agent: "owner",
     executor: "claude-code" as const,
     channel,
-    message: "네 주인 코드를 읽어 줘",
+    message: "Read your owner's code for me",
   };
 
   await assert.rejects(call(alice, api.ask, ask), {
     code: "forbidden",
     message: "Only owner can call owner's agent",
   });
-  await assert.rejects(call(world.server, api.ask, ask), { code: "unauthorized" });
-  await assert.rejects(world.ask(world.owner, "없는 채널", "거기 있나?"), { code: "not_found" });
+  await assert.rejects(call(world.server, api.ask, ask), {
+    code: "unauthorized",
+  });
+  await assert.rejects(world.ask(world.owner, "no such channel", "Anyone there?"), {
+    code: "not_found",
+  });
   assert.deepEqual(fake.calls, []);
   assert.deepEqual((await call(world.owner, api.dms, { channel })).qas, []);
 });
 
-test("러너가 꺼진 에이전트에게 보낸 문답은 바로 러너가 꺼져 있다고 돌아오고, 쌓아 두지 않는다", async (t) => {
+test("a QA sent to an agent whose runner is off comes straight back as runner-off, and isn't queued", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
   world.github.grant("alice");
   const alice = await world.login("alice");
   const channel = await world.channel(alice);
 
-  await assert.rejects(world.ask(alice, channel, "거기 있나?"), {
+  await assert.rejects(world.ask(alice, channel, "Anyone there?"), {
     code: "runner_offline",
     message: /alice's Claude Code runner is off/,
   });
-  // 러너를 켜도 그 러너가 돌리지 않는 실행기의 에이전트는 꺼져 있다.
-  await assert.rejects(world.ask(world.owner, channel, "Codex야?", "codex"), {
+  // Even with a runner on, the agent of an executor that runner doesn't run is off.
+  await assert.rejects(world.ask(world.owner, channel, "Is this Codex?", "codex"), {
     code: "runner_offline",
     message: /owner's Codex runner is off/,
   });
   assert.deepEqual((await call(alice, api.dms, { channel })).qas, []);
 
-  // 러너를 켜도 꺼져 있을 때 보낸 문답은 오지 않는다.
+  // A QA sent while the runner was off doesn't arrive when it comes on.
   const desk = await tempRepo();
   t.after(desk.remove);
   const fake = fakeExecutor();
@@ -98,36 +102,39 @@ test("러너가 꺼진 에이전트에게 보낸 문답은 바로 러너가 꺼�
     sandbox: stubbed().sandbox,
   });
   t.after(runner.stop);
-  const asked = await world.ask(alice, channel, "이제는?");
+  const asked = await world.ask(alice, channel, "How about now?");
   assert.partialDeepStrictEqual(await world.settled(alice, asked), {
-    answer: { state: "answered", text: "가짜 답" },
+    answer: { state: "answered", text: "fake answer" },
   });
   assert.deepEqual(
     fake.calls.map((input) => input.message),
-    ["이제는?"],
+    ["How about now?"],
   );
 });
 
-test("러너가 답하기 전에 떨어지거나 서버가 다시 뜨면 기다리던 문답은 답하지 못한 것으로 남는다", async (t) => {
+test("a QA waiting for an answer is left unanswered if the runner drops before answering or the server restarts", async (t) => {
   const fake = gatedExecutor();
   const world = await startWorld({ executor: fake.executor });
   t.after(world.stop);
   const channel = await world.channel(world.owner);
 
-  const dropped = await world.ask(world.owner, channel, "길게 생각해");
+  const dropped = await world.ask(world.owner, channel, "Think long");
   await eventually(() => assert.equal(fake.calls.length, 1));
   await world.runner.stop();
   assert.partialDeepStrictEqual(await world.settled(world.owner, dropped), {
     answer: {
       state: "failed",
-      error: { code: "runner_offline", message: "owner's runner dropped before answering" },
+      error: {
+        code: "runner_offline",
+        message: "owner's runner dropped before answering",
+      },
     },
   });
 
-  // 답을 기다리는 동안 서버가 다시 뜨면 그 답은 받지 못한다. 기다리는 채로 남지 않는다.
+  // If the server restarts while waiting for the answer, that answer is never received. It doesn't stay waiting.
   const desk = await world.desk(world.owner);
   t.after(desk.remove);
-  const restarted = await world.ask(world.owner, channel, "다시 떠도?");
+  const restarted = await world.ask(world.owner, channel, "Even after a restart?");
   await world.restartServer();
   assert.partialDeepStrictEqual(await world.settled(world.owner, restarted), {
     answer: {
@@ -140,7 +147,7 @@ test("러너가 답하기 전에 떨어지거나 서버가 다시 뜨면 기다�
   });
 });
 
-test("러너는 한 번에 한 턴만 돌리고, 나머지 문답은 온 순서대로 줄을 서서 그 순서대로 답이 온다", async (t) => {
+test("the runner runs one turn at a time, and the other QAs queue in the order they came and answer in that order", async (t) => {
   const fake = gatedExecutor();
   const world = await startWorld({ executor: fake.executor });
   t.after(world.stop);
@@ -148,62 +155,65 @@ test("러너는 한 번에 한 턴만 돌리고, 나머지 문답은 온 순서�
   const live = await world.live(world.owner);
 
   const asked = [];
-  for (const message of ["하나", "둘", "셋"]) {
+  for (const message of ["one", "two", "three"]) {
     asked.push(await world.ask(world.owner, channel, message));
     await eventually(() => assert.ok(fake.calls.length >= 1));
   }
-  // 뒤의 것부터 풀어도 앞의 것이 도는 동안 나머지는 줄에 있다.
-  fake.release("셋");
-  fake.release("둘");
+  // Even if the later ones are released first, the others stay in the queue while the earlier one runs.
+  fake.release("three");
+  fake.release("two");
   await sleep(100);
   assert.equal(fake.calls.length, 1);
   const { qas } = await call(world.owner, api.dms, { channel });
   assert.deepEqual(
     qas.map((qa) => [qa.question, qa.answer.state]),
     [
-      ["하나", "pending"],
-      ["둘", "pending"],
-      ["셋", "pending"],
+      ["one", "pending"],
+      ["two", "pending"],
+      ["three", "pending"],
     ],
   );
 
-  fake.release("하나");
+  fake.release("one");
   for (const qa of asked) await world.settled(world.owner, qa);
   const answered = live.received.flatMap((m) =>
     m.kind === "qa" && m.payload.answer.state === "answered" ? [m.payload.answer.text] : [],
   );
-  assert.deepEqual(answered, ["답: 하나", "답: 둘", "답: 셋"]);
+  assert.deepEqual(answered, ["Answer: one", "Answer: two", "Answer: three"]);
   assert.deepEqual(
     fake.calls.map((input) => input.message),
-    ["하나", "둘", "셋"],
+    ["one", "two", "three"],
   );
   assert.equal(fake.most(), 1);
 });
 
-test("한 턴이 시간 상한을 넘으면 끊고 끊긴 답으로 남긴다. 러너는 다음 문답에 답한다", async (t) => {
+test("a turn that goes over the time limit is cut off and stays as a cut-off answer; the runner answers the next QA", async (t) => {
   const fake = fakeExecutor((input) =>
-    input.message === "끝없이" ? new Promise<string>(() => {}) : "답",
+    input.message === "endless" ? new Promise<string>(() => {}) : "answer",
   );
-  const world = await startWorld({ executor: fake.executor, turnTimeoutMs: 100 });
+  const world = await startWorld({
+    executor: fake.executor,
+    turnTimeoutMs: 100,
+  });
   t.after(world.stop);
   const channel = await world.channel(world.owner);
 
-  const endless = await world.ask(world.owner, channel, "끝없이");
+  const endless = await world.ask(world.owner, channel, "endless");
   assert.partialDeepStrictEqual(await world.settled(world.owner, endless), {
     answer: { state: "failed", error: { code: "turn_timeout" } },
   });
-  assert.equal(fake.calls[0]?.signal.aborted, true); // 실행기에 끄라고 알렸다
-  const next = await world.ask(world.owner, channel, "다음");
+  assert.equal(fake.calls[0]?.signal.aborted, true); // the executor was told to stop
+  const next = await world.ask(world.owner, channel, "next");
   assert.partialDeepStrictEqual(await world.settled(world.owner, next), {
-    answer: { state: "answered", text: "답" },
+    answer: { state: "answered", text: "answer" },
   });
   assert.match(
     (await world.cli("runner", "log")).stdout,
-    /received "끝없이" {2}failed: The turn went over .+ minutes and was cut off\n/,
+    /received "endless" {2}failed: The turn went over .+ minutes and was cut off\n/,
   );
 });
 
-test("답하는 동안 그 에이전트가 다른 멤버에게 '답하는 중'으로 보인다", async (t) => {
+test("while answering, the agent shows to other members as 'answering'", async (t) => {
   const fake = gatedExecutor();
   const world = await startWorld({ executor: fake.executor });
   t.after(world.stop);
@@ -212,9 +222,9 @@ test("답하는 동안 그 에이전트가 다른 멤버에게 '답하는 중'�
   const channel = await world.channel(world.owner);
   assert.equal((await world.agents(alice)).owner, "online");
 
-  const asked = await world.ask(world.owner, channel, "생각 중이야?");
+  const asked = await world.ask(world.owner, channel, "Are you thinking?");
   await eventually(async () => assert.equal((await world.agents(alice)).owner, "answering"));
-  fake.release("생각 중이야?");
+  fake.release("Are you thinking?");
   await world.settled(world.owner, asked);
   await eventually(async () => assert.equal((await world.agents(alice)).owner, "online"));
 });

@@ -12,24 +12,33 @@ const CHECKOUT = `import { refund } from "./money";
 export const total = refund(2);
 `;
 
-/** 토론이 라운드 몇인지 지시문에서 읽는다(첫 입장은 1). */
+/** Read the debate's round number from the instruction (the first stance is 1). */
 const roundOf = (message: string) =>
   /This is round (\d+) \(rebuttal\)/.exec(message)?.[1] ??
   (/give your first stance/.test(message) ? "1" : "0");
 
-test("토론의 공개된 입장과 결론이 이슈 댓글로 가고(가린 라운드는 공개 뒤에), 소식이 두 작업의 편지함으로 가고, 지표에 센다", async (t) => {
+test("a debate's revealed stances and conclusion go to the issue as comments (hidden rounds after they're revealed), news goes to both works' mailboxes, and the metrics count it", async (t) => {
   const stance = (who: string, gate?: Promise<void>) =>
     fakeExecutor(async ({ message }) => {
       await gate;
       return roundOf(message) === "0"
-        ? JSON.stringify({ title: "t", context: "c", decision: "d", consequences: "q" })
+        ? JSON.stringify({
+            title: "t",
+            context: "c",
+            decision: "d",
+            consequences: "q",
+          })
         : JSON.stringify({
-            claim: `${who}의 ${roundOf(message)}라운드 주장`,
-            evidence: ["부분 환불 요구가 늘었다"],
+            claim: `${who}'s round ${roundOf(message)} claim`,
+            evidence: ["Partial refund requests increased"],
           });
     });
   const owner = stance("owner");
-  const world = await startWorld({ observeMs: 50, followMs: 50, executor: owner.executor });
+  const world = await startWorld({
+    observeMs: 50,
+    followMs: 50,
+    executor: owner.executor,
+  });
   t.after(world.stop);
   const write = writer(world.repo.folder);
   await write("src/pay.ts", `${BASE}\n`);
@@ -40,12 +49,14 @@ test("토론의 공개된 입장과 결론이 이슈 댓글로 가고(가린 라
   await world.repo.git("update-ref", "refs/remotes/origin/main", "HEAD");
   await world.repo.git("switch", "--create", "payment");
 
-  // alice는 풀어 줄 때까지 답하지 않는다.
+  // alice doesn't answer until released.
   const gate = Promise.withResolvers<void>();
   const alice = stance("alice", gate.promise);
   world.github.grant("alice");
   const as = await world.login("alice");
-  const desk = await world.desk(as, undefined, { "claude-code": alice.executor });
+  const desk = await world.desk(as, undefined, {
+    "claude-code": alice.executor,
+  });
   t.after(desk.remove);
   await desk.stop();
   await desk.git("fetch", "--quiet", world.repo.folder, "main");
@@ -71,22 +82,22 @@ test("토론의 공개된 입장과 결론이 이슈 댓글로 가고(가린 라
   });
   assert.ok(issue);
 
-  // 토론이 열렸다는 소식이 두 작업의 편지함에 간다. 첫 라운드는 가려져 있어 입장이 댓글로 가지 않는다.
+  // News that the debate opened goes to both works' mailboxes. The first round is hidden, so no stance goes as a comment.
   const opened = /A debate opened: post /;
-  // 편지함은 한 번 넘기면 비워진다(CLI는 어느 명령이든 응답 끝에 밀린 소식을 싣는다). 먼저 받은 쪽을 다시 확인하면 빈 채로 보이고,
-  // 위 claim의 응답에 이미 실려 갔을 수도 있다. 그래서 받은 것을 쌓아 두고, 쌓인 것에서 찾는다.
+  // A mailbox is emptied once handed over (the CLI attaches pending news to the end of any command's reply). Checking the one that received first again would show it empty,
+  // and the reply to the claim above may already have carried it. So keep what was received and look in the pile.
   const seen = new Map([[world.repo.folder, claimed.stdout]]);
   for (const cwd of [world.repo.folder, desk.folder])
     await eventually(async () => {
       const { code, stdout, stderr } = await world.cliIn(cwd, "status");
       const all = `${seen.get(cwd) ?? ""}${stdout}`;
       seen.set(cwd, all);
-      assert.match(all, opened, `종료 코드 ${code}\nstdout: ${stdout}\nstderr: ${stderr}`);
+      assert.match(all, opened, `exit code ${code}\nstdout: ${stdout}\nstderr: ${stderr}`);
     });
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.equal(issue.comments.filter((c) => c.body.includes("AI-written answer")).length, 0);
 
-  // 다 모여 공개되면 입장이 각자 그 주인의 이름으로, AI가 쓴 답 표시를 달고 간다. 그 뒤 반박 라운드의 입장도 공개될 때 간다.
+  // Once everyone is in and revealed, each stance goes under its owner's name with the AI-written-answer mark. Stances of the later rebuttal rounds go when they're revealed.
   gate.resolve();
   const posted = await eventually(() => {
     const stances = issue.comments.filter((c) => c.body.includes("AI-written answer"));
@@ -95,15 +106,18 @@ test("토론의 공개된 입장과 결론이 이슈 댓글로 가고(가린 라
   });
   for (const who of ["owner", "alice"])
     for (const round of [1, 2, 3]) {
-      const found = posted.find((c) => c.body.includes(`${who}의 ${round}라운드 주장`));
+      const found = posted.find((c) => c.body.includes(`${who}'s round ${round} claim`));
       assert.equal(found?.login, who);
       assert.match(found?.body ?? "", /^> \[!NOTE\]\n> 🤖 \*\*AI-written answer\*\* · /);
-      assert.match(found?.body ?? "", /Evidence\n- 부분 환불 요구가 늘었다 \(Unverified\)/);
+      assert.match(
+        found?.body ?? "",
+        /Evidence\n- Partial refund requests increased \(Unverified\)/,
+      );
     }
-  // 결론은 아직 없다: 검증된 근거가 없어 사람이 고를 차례다.
+  // No conclusion yet: there's no verified evidence, so it's a human's turn to choose.
   assert.equal(issue.comments.filter((c) => c.body.includes("The debate is over")).length, 0);
 
-  // 사람이 고르면 결론이 댓글 하나로 간다. 같은 것은 다시 가지 않는다.
+  // When a human chooses, the conclusion goes as one comment. The same one doesn't go again.
   const post = (await call(world.owner, api.posts)).posts.find(
     (p) => p.message.kind === "alert" && p.message.alert.kind === "declared",
   );
@@ -116,15 +130,17 @@ test("토론의 공개된 입장과 결론이 이슈 댓글로 가고(가린 라
   });
   assert.equal(ended?.login, "alice");
   assert.match(ended?.body ?? "", /alice picked it/);
-  // 결론 댓글은 서버가 지은 글만 싣는다. 이긴 주장은 그 사람의 입장 댓글에 있다.
-  assert.doesNotMatch(ended?.body ?? "", /라운드 주장/);
+  // The conclusion comment carries only text the server wrote. The winning claim is in that person's stance comment.
+  assert.doesNotMatch(ended?.body ?? "", /round \d claim/);
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.equal(issue.comments.length, 7);
-  // 우리가 단 댓글은 포스트의 글로 들어오지 않는다.
-  const history = await call(world.owner, api.history, { channel: post.channel });
+  // Comments we posted don't come in as the post's text.
+  const history = await call(world.owner, api.history, {
+    channel: post.channel,
+  });
   assert.equal(history.messages.filter((m) => m.kind === "text").length, 0);
 
-  // 내 차례와 결론 소식이 두 작업의 편지함에 갔다.
+  // My-turn and conclusion news went to both works' mailboxes.
   for (const folder of [world.repo.folder, desk.folder]) {
     const seen = (await world.cliIn(folder, "status")).stdout;
     assert.match(seen, /Your turn in the debate: round 2 of post /);
@@ -132,7 +148,7 @@ test("토론의 공개된 입장과 결론이 이슈 댓글로 가고(가린 라
     assert.match(seen, /A debate reached a conclusion: in post .*, a person picked/);
   }
 
-  // 지표: 열린 토론 1, 사람이 골라 끝난 토론 1.
+  // Metrics: 1 open debate, 1 debate ended by a human's choice.
   const today = (await call(world.owner, api.metrics, {})).days.at(-1);
   assert.deepEqual(today?.debates, {
     opened: 1,
@@ -148,8 +164,8 @@ test("토론의 공개된 입장과 결론이 이슈 댓글로 가고(가린 라
   assert.match(shown.stdout, / {2}1 {2}0 {2}0 {2}1 {2}0 {2}0\n$/);
 });
 
-test("대행이 낸 입장은 부재자가 아니라 부른 사람의 계정으로, 대행 표시를 달고 이슈 댓글이 된다", async (t) => {
-  const owner = fakeExecutor(() => JSON.stringify({ claim: "owner의 주장", evidence: [] }));
+test("a stance made by a proxy becomes an issue comment under the account of the person who called, not the absentee, with a proxy mark", async (t) => {
+  const owner = fakeExecutor(() => JSON.stringify({ claim: "owner's claim", evidence: [] }));
   const world = await startWorld({
     observeMs: 50,
     followMs: 50,
@@ -169,7 +185,9 @@ test("대행이 낸 입장은 부재자가 아니라 부른 사람의 계정으�
   const member = async (login: string, branch: string, answer: ReturnType<typeof fakeExecutor>) => {
     world.github.grant(login);
     const as = await world.login(login);
-    const desk = await world.desk(as, undefined, { "claude-code": answer.executor });
+    const desk = await world.desk(as, undefined, {
+      "claude-code": answer.executor,
+    });
     t.after(desk.remove);
     await desk.stop();
     await desk.git("fetch", "--quiet", world.repo.folder, "main");
@@ -179,14 +197,14 @@ test("대행이 낸 입장은 부재자가 아니라 부른 사람의 계정으�
     await desk.start();
     return { as, desk };
   };
-  // alice의 첫 턴은 러너가 꺼지며 실패한다. 그 자리는 부재자가 된다.
+  // alice's first turn fails as the runner shuts down. Her seat becomes the absentee.
   const gone = Promise.withResolvers<void>();
   const alice = fakeExecutor(async () => {
     await gone.promise;
-    throw new Error("러너가 꺼졌다");
+    throw new Error("the runner shut down");
   });
   const aliceDesk = await member("alice", "refund", alice);
-  // alice는 refund를 쓰는 파일을 고쳐 두어 토론의 자리가 된다.
+  // alice has edited a file that uses refund, so she gets a seat in the debate.
   await writer(aliceDesk.desk.folder)("src/checkout.ts", `${CHECKOUT}export const more = 1;\n`);
   await eventually(async () => {
     const works = (await call(world.owner, api.works)).works;
@@ -222,17 +240,17 @@ test("대행이 낸 입장은 부재자가 아니라 부른 사람의 계정으�
   gone.resolve();
   await stopping;
 
-  // bob은 토론이 열린 뒤에 들어온다.
-  const bob = fakeExecutor(() => JSON.stringify({ claim: "대행의 주장", evidence: [] }));
+  // bob joins after the debate opened.
+  const bob = fakeExecutor(() => JSON.stringify({ claim: "proxy's claim", evidence: [] }));
   const bobDesk = await member("bob", "elsewhere", bob);
   await eventually(() => call(bobDesk.as, api.proxyDebate, found));
   await eventually(() => {
     const stances = issue.comments.filter((c) => c.body.includes("AI-written answer"));
     assert.equal(stances.length, 2);
-    const mine = stances.find((c) => c.body.includes("owner의 주장"));
+    const mine = stances.find((c) => c.body.includes("owner's claim"));
     assert.equal(mine?.login, "owner");
     assert.ok(!mine?.body.includes("proxy:"));
-    const proxied = stances.find((c) => c.body.includes("대행의 주장"));
+    const proxied = stances.find((c) => c.body.includes("proxy's claim"));
     assert.equal(proxied?.login, "bob");
     assert.match(
       proxied?.body ?? "",

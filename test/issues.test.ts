@@ -13,17 +13,17 @@ const CHECKOUT = `import { refund } from "./money";
 export const total = refund(2);
 `;
 type As = { url: string; session: string };
-/** 그 종류의 알림의 포스트. */
+/** The post of that kind of alert. */
 const postOf = async (as: As, kind: string) =>
   (await call(as, api.posts)).posts.find(
     (post) => post.message.kind === "alert" && post.message.alert.kind === kind,
   );
 
-test("포스트에 종류 라벨이 붙고, 논의 포스트 하나가 GitHub 이슈 하나다: 글은 댓글로 가고, 댓글은 글로 들어오고, 제목·라벨·닫힘을 따라간다", async (t) => {
+test("a post gets a kind label, and one Discuss post is one GitHub issue: messages go as comments, comments come in as messages, and it follows the title, labels and closing", async (t) => {
   const world = await startWorld({
     observeMs: 50,
     followMs: 50,
-    executor: fakeExecutor(() => "부분 환불은 refund()에서 계산해요").executor,
+    executor: fakeExecutor(() => "a partial refund is computed in refund()").executor,
   });
   t.after(world.stop);
   const fake = world.github;
@@ -52,10 +52,10 @@ test("포스트에 종류 라벨이 붙고, 논의 포스트 하나가 GitHub �
   await writer(world.repo.folder)("src/pay.ts", text(BASE.toSpliced(2, 1, "owner")));
   await writer(desk.folder)("src/pay.ts", text(BASE.toSpliced(2, 1, "alice")));
 
-  // 직접 충돌 포스트는 종류 라벨이 붙은 참고라 이슈가 열리지 않는다. 알림은 그래도 두 작업의 편지함에 들어간다.
+  // A direct-conflict post is FYI with a kind label, so no issue opens. The alert still goes to both works' inboxes.
   const direct = await eventually(async () => {
     const found = await postOf(world.owner, "direct");
-    assert.ok(found, "아직 포스트가 없다");
+    assert.ok(found, "no post yet");
     return found;
   });
   assert.deepEqual(direct.labels, ["Direct conflict"]);
@@ -70,7 +70,7 @@ test("포스트에 종류 라벨이 붙고, 논의 포스트 하나가 GitHub �
   assert.equal(fake.issues.length, 0);
   assert.equal((await postOf(world.owner, "direct"))?.issue, null);
 
-  // 계약 변경 알림은 논의라 서면 포스트의 이슈가 열린다. 알림의 두 사람 가운데 한 멤버의 이름으로, 포스트의 라벨을 달고, 본문에 포스트 링크가 있다.
+  // A contract-change alert is Discuss, so the post's issue opens when it stands. It is in the name of one of the alert's two members, with the post's labels, and the body has the post link.
   const claimed = await world.cli(
     "claim",
     "src/money.ts",
@@ -84,7 +84,7 @@ test("포스트에 종류 라벨이 붙고, 논의 포스트 하나가 GitHub �
   assert.equal(claimed.code, 0, claimed.stderr);
   const post = await eventually(async () => {
     const found = await postOf(world.owner, "declared");
-    assert.ok(found?.issue, "아직 이슈가 없다");
+    assert.ok(found?.issue, "no issue yet");
     return found;
   });
   assert.deepEqual(post.labels, ["Contract change"]);
@@ -94,7 +94,7 @@ test("포스트에 종류 라벨이 붙고, 논의 포스트 하나가 GitHub �
   assert.ok(["owner", "alice"].includes(issue.author));
   assert.equal(issue.title, "refund Contract change");
   assert.deepEqual(issue.labels, ["Contract change"]);
-  // 이슈의 링크는 포스트가 보이는 첫 포럼("논의")의 그 포스트다.
+  // The issue's link is that post in the first forum where the post is visible ("Discuss").
   assert.match(issue.body, new RegExp(`/#${post.forums[0]}/${post.alert}$`));
   assert.deepEqual(post.issue, {
     number: issue.number,
@@ -104,29 +104,29 @@ test("포스트에 종류 라벨이 붙고, 논의 포스트 하나가 GitHub �
     open: true,
   });
 
-  // 포스트의 글은 쓴 사람의 이름으로 이슈 댓글이 된다.
+  // A message in the post becomes an issue comment in the author's name.
   await call(world.owner, api.send, {
     channel: post.channel,
-    text: "제가 결제 쪽을 먼저 머지할게요",
+    text: "I'll merge the pay side first",
   });
   const { message: agreed } = await call(alice, api.send, {
     channel: post.channel,
-    text: "좋아요, 환불은 그 뒤에",
+    text: "OK, refund after that",
   });
   await eventually(() =>
     assert.deepEqual(
       issue.comments.map(({ login, body }) => [login, body]),
       [
-        ["owner", "제가 결제 쪽을 먼저 머지할게요"],
-        ["alice", "좋아요, 환불은 그 뒤에"],
+        ["owner", "I'll merge the pay side first"],
+        ["alice", "OK, refund after that"],
       ],
     ),
   );
 
-  // 포스트의 답장은 댓글 머리에 원래 댓글의 링크와 첫 줄을 적는다. GitHub이 다시 메일을 보내지 않게 `@`는 없다(ADR-0047).
+  // A reply in the post puts the original comment's link and first line at the head of the comment. There is no `@`, so GitHub doesn't send mail again (ADR-0047).
   await call(world.owner, api.send, {
     channel: post.channel,
-    text: "고마워요",
+    text: "thanks",
     replyTo: agreed.id,
   });
   await eventually(() =>
@@ -134,58 +134,63 @@ test("포스트에 종류 라벨이 붙고, 논의 포스트 하나가 GitHub �
       issue.comments.at(-1)?.body,
       [
         `> **alice** · [original](${post.issue?.url}#issuecomment-${issue.comments[1]?.id})`,
-        "> 좋아요, 환불은 그 뒤에",
+        "> OK, refund after that",
         "",
-        "고마워요",
+        "thanks",
       ].join("\n"),
     ),
   );
 
-  // 포스트에 올린 문답은 올린 사람의 이름으로, AI가 쓴 답이라는 표시를 달고 간다.
+  // A Q&A posted to the post goes in the poster's name, marked as an AI-written answer.
   const qa = await world.settled(
     world.owner,
-    await world.ask(world.owner, post.channel, "부분 환불은?"),
+    await world.ask(world.owner, post.channel, "what about a partial refund?"),
   );
-  await call(world.owner, api.postQa, { qa: qa.id, text: "참고로 붙여요" });
+  await call(world.owner, api.postQa, {
+    qa: qa.id,
+    text: "pasting for reference",
+  });
   await eventually(() => {
     const last = issue.comments.at(-1);
     assert.equal(last?.login, "owner");
     assert.equal(
       last?.body,
       [
-        "참고로 붙여요",
+        "pasting for reference",
         "",
         "> [!NOTE]",
         "> 🤖 **AI-written answer** · owner's Claude Code",
-        "> Question: 부분 환불은?",
+        "> Question: what about a partial refund?",
         "",
-        "부분 환불은 refund()에서 계산해요",
+        "a partial refund is computed in refund()",
       ].join("\n"),
     );
   });
 
-  // GitHub에서 단 댓글은 포스트의 글로 들어온다. 멤버가 아니어도 된다. 사람이 제목과 라벨을 바꾸면 따라간다.
-  fake.comment(issue.number, "carol", "QA 쪽에서도 환불을 봐요");
-  issue.title = "refund의 reason 필드";
-  issue.labels.push("결제");
+  // A comment made on GitHub comes into the post as a message. The commenter needn't be a member. If a person changes the title and labels, it follows.
+  fake.comment(issue.number, "carol", "QA looks at refunds too");
+  issue.title = "reason field of refund";
+  issue.labels.push("payment");
   await eventually(async () => {
-    const { messages } = await call(world.owner, api.history, { channel: post.channel });
+    const { messages } = await call(world.owner, api.history, {
+      channel: post.channel,
+    });
     const last = messages.at(-1);
     assert.equal(last?.kind, "text");
     assert.deepEqual(last?.kind === "text" && [last.login, last.text, last.github], [
       "carol",
-      "QA 쪽에서도 환불을 봐요",
+      "QA looks at refunds too",
       true,
     ]);
     const now = await postOf(world.owner, "declared");
-    assert.equal(now?.issue?.title, "refund의 reason 필드");
-    assert.deepEqual(now?.issue?.labels, ["Contract change", "결제"]);
+    assert.equal(now?.issue?.title, "reason field of refund");
+    assert.deepEqual(now?.issue?.labels, ["Contract change", "payment"]);
   });
-  // 들어온 댓글은 다시 올리지 않고, 올린 글은 두 번 올리지 않는다.
+  // A comment that came in isn't posted again, and a message that was posted isn't posted twice.
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.equal(issue.comments.length, 5);
 
-  // 알림이 풀리면(계획을 거두면) Omagari가 이슈를 닫는다.
+  // When the alert resolves (the plan is withdrawn), Omagari closes the issue.
   assert.equal((await world.cli("release")).code, 0);
   await eventually(async () => {
     const now = await postOf(world.owner, "declared");

@@ -1,5 +1,5 @@
-// 한 워크스페이스에 같은 계정의 레포 여럿(ADR-0043). 레포는 그 레포의 Admin만 넣고 빼고, 러너는 폴더의 원격으로 레포에 이어지며,
-// 멤버는 push 권한이 있는 레포만 본다. 작업, 알림, 포스트, 라벨, 결정은 레포마다 나뉜다.
+// Several repos of the same account in one workspace (ADR-0043). Only a repo's Admin adds and removes it, a runner connects to a repo by the folder's remote,
+// and a member sees only repos they have push access to. Works, notifications, posts, labels, and decisions are split per repo.
 import assert from "node:assert/strict";
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -8,30 +8,30 @@ import { api, type ContractFailure, call } from "@omagari/contract";
 import { eventually, REPO, REPO2, startWorld, writer } from "./harness.ts";
 
 type As = { url: string; session: string };
-/** `as`가 `repo`로 부른다. */
+/** Calls as `as` using `repo`. */
 const on = (as: As, repo: string) => ({ ...as, repos: [repo] });
 const refused = (code: string) => (error: ContractFailure) => error.code === code;
 
 const BASE = Array.from({ length: 10 }, (_, i) => `line ${i + 1}`);
 const text = (lines: string[]) => `${lines.join("\n")}\n`;
 
-test("Admin만 같은 계정의 레포를 넣고 빼며, 러너는 원격으로 그 레포에 이어지고, 작업과 알림과 라벨이 레포마다 나뉜다", async (t) => {
+test("only an Admin adds and removes a repo of the same account, a runner connects to that repo by its remote, and works, notifications, and labels are split per repo", async (t) => {
   const world = await startWorld({ observeMs: 50 });
   t.after(world.stop);
   const { owner } = world;
 
-  // 워크스페이스에 없는 레포에만 push 권한이 있으면 들어오지 못한다.
+  // Having push access only to a repo not in the workspace does not let you in.
   world.github.grant("alice", REPO2);
   await assert.rejects(world.login("alice"), refused("forbidden"));
 
-  // 받을 계정 밖의 레포와, Admin이 아닌 레포는 넣지 못한다.
+  // A repo outside the accepted account, and a repo that is not Admin, cannot be added.
   await assert.rejects(call(owner, api.addRepo, { repo: "stranger/code" }), refused("forbidden"));
   await assert.rejects(call(owner, api.addRepo, { repo: REPO2 }), refused("forbidden"));
   world.github.admin("owner", REPO2);
   world.github.grant("owner", REPO2);
   assert.deepEqual(await call(owner, api.addRepo, { repo: REPO2 }), { repos: [REPO, REPO2] });
 
-  // alice는 push 권한이 있는 REPO2만 본다. Admin이 아니라 넣고 빼지 못한다.
+  // alice sees only REPO2, where she has push access. She is not an Admin, so she cannot add or remove.
   const alice = await world.login("alice");
   assert.deepEqual(await call(alice, api.me), {
     login: "alice",
@@ -43,7 +43,7 @@ test("Admin만 같은 계정의 레포를 넣고 빼며, 러너는 원격으로 
     prefs: { language: "en" },
   });
   await assert.rejects(call(alice, api.removeRepo, { repo: REPO2 }), refused("forbidden"));
-  // 레포 넣기 목록에는 내가 Admin인 레포만 실린다. Admin이 아니면 비어 다른 레포의 이름도 수도 보이지 않는다(시안 93-C).
+  // The add-repo list shows only repos I am Admin of. If not an Admin it is empty, so not even the names of other repos or their count show (draft 93-C).
   assert.deepEqual(await call(alice, api.adminRepos), { repos: [] });
   world.github.admin("owner", "omagari-test/later");
   assert.deepEqual(
@@ -55,9 +55,9 @@ test("Admin만 같은 계정의 레포를 넣고 빼며, 러너는 원격으로 
   );
   await assert.rejects(call(on(alice, REPO), api.works), refused("not_found"));
 
-  // 워크스페이스에 없는 레포의 러너는 거절된다.
+  // A runner of a repo not in the workspace is rejected.
   await assert.rejects(world.desk(alice, undefined, undefined, { repo: "omagari-test/nowhere" }));
-  // alice의 러너는 원격으로 REPO2에 이어진다. 두 브랜치가 같은 줄을 고쳐 REPO2에 직접 충돌이 선다(ADR-0041).
+  // alice's runner connects to REPO2 by its remote. Two branches edit the same line, so a direct conflict stands in REPO2 (ADR-0041).
   const desk = await world.desk(alice, undefined, undefined, { repo: REPO2 });
   t.after(desk.remove);
   await writer(desk.folder)("src/pay.ts", text(BASE));
@@ -76,7 +76,7 @@ test("Admin만 같은 계정의 레포를 넣고 빼며, 러너는 원격으로 
     assert.equal(posts.length, 1);
     return posts;
   });
-  // REPO2의 것은 REPO2에서만 보인다.
+  // What belongs to REPO2 is seen only in REPO2.
   assert.deepEqual(
     (await call(on(owner, REPO2), api.posts)).posts.map((p) => p.channel),
     posts.map((p) => p.channel),
@@ -85,18 +85,18 @@ test("Admin만 같은 계정의 레포를 넣고 빼며, 러너는 원격으로 
   assert.deepEqual(
     (await call(owner, api.works)).works.map((w) => w.login),
     ["owner"],
-    "REPO의 작업에 REPO2의 것이 섞이지 않는다",
+    "REPO2's works do not mix into REPO's works",
   );
   assert.deepEqual(
     (await call(on(owner, REPO2), api.works)).works.map((w) => `${w.login}/${w.branch}`),
     ["alice/payment", "alice/refund"],
   );
-  // REPO의 멤버 목록에 REPO2에만 있는 alice는 없다.
+  // alice, who is only in REPO2, is not in REPO's member list.
   assert.deepEqual(
     (await call(owner, api.members)).members.map((m) => m.login),
     ["owner"],
   );
-  // REPO2의 포스트는 REPO2를 볼 수 없는 사람에게 없는 것이다.
+  // REPO2's posts do not exist for someone who cannot see REPO2.
   const post = posts[0]?.channel as string;
   world.github.grant("bob");
   const bob = await world.login("bob");
@@ -105,10 +105,10 @@ test("Admin만 같은 계정의 레포를 넣고 빼며, 러너는 원격으로 
   assert.deepEqual(
     (await call(bob, api.history, { channel: "alerts" })).messages,
     [],
-    "알림 줄의 자리에도 REPO2의 알림은 없다",
+    "REPO2's notifications are not in the notification lines either",
   );
 
-  // 라벨의 중요도는 레포마다다.
+  // A label's importance is per repo.
   await call(on(owner, REPO2), api.editLabel, {
     name: "Duplicate work",
     next: { importance: "discuss" },
@@ -119,7 +119,7 @@ test("Admin만 같은 계정의 레포를 넣고 빼며, 러너는 원격으로 
   assert.equal(await importance(owner), "reference");
   assert.equal(await importance(alice), "discuss");
 
-  // 레포를 빼면 그 레포의 러너가 끊기고 아무에게도 보이지 않는다. 다시 넣으면 그 레포의 것이 돌아온다.
+  // Removing a repo disconnects that repo's runner and hides it from everyone. Adding it back brings its things back.
   assert.deepEqual(await call(owner, api.removeRepo, { repo: REPO2 }), { repos: [REPO] });
   await assert.rejects(call(alice, api.posts), refused("not_found"));
   assert.deepEqual(await call(owner, api.addRepo, { repo: REPO2 }), { repos: [REPO, REPO2] });
@@ -129,7 +129,7 @@ test("Admin만 같은 계정의 레포를 넣고 빼며, 러너는 원격으로 
   );
 });
 
-test("push 권한이 있는 레포만 보이고, GitHub에서 권한을 잃으면 다시 확인한 뒤 그 레포가 보이지 않는다", async (t) => {
+test("only repos with push access are visible, and after losing access on GitHub and checking again, that repo is not visible", async (t) => {
   const world = await startWorld({ accept: [REPO, REPO2], recheckMs: 50 });
   t.after(world.stop);
   world.github.grant("owner", REPO2);
@@ -139,7 +139,7 @@ test("push 권한이 있는 레포만 보이고, GitHub에서 권한을 잃으�
   assert.deepEqual((await call(alice, api.me)).repos, [REPO, REPO2]);
   const live = await world.live(alice);
 
-  // REPO2의 권한을 잃으면 REPO만 남는다.
+  // Losing access to REPO2 leaves only REPO.
   world.github.revoke("alice", REPO2);
   await eventually(async () => assert.deepEqual((await call(alice, api.me)).repos, [REPO]));
   await assert.rejects(call(on(alice, REPO2), api.members), refused("not_found"));
@@ -149,22 +149,26 @@ test("push 권한이 있는 레포만 보이고, GitHub에서 권한을 잃으�
       ["owner"],
     ),
   );
-  assert.equal(live.received.at(-1)?.kind !== "error", true, "REPO를 고른 웹은 그대로다");
+  assert.equal(
+    live.received.at(-1)?.kind !== "error",
+    true,
+    "the web that picked REPO stays as it was",
+  );
 
-  // 모든 레포의 권한을 잃으면 세션이 끝난다.
+  // Losing access to every repo ends the session.
   world.github.revoke("alice", REPO);
   await eventually(() => assert.rejects(call(alice, api.me), refused("unauthorized")));
   assert.equal(await live.closed, 1008);
 });
 
-test("레포가 하나이던 판의 DB로 켜도 있던 것이 그 레포에 그대로 있고, 새로 넣은 레포에는 섞이지 않는다", async (t) => {
+test("even when started with a DB from the single-repo version, what was there stays in that repo and does not mix into a newly added repo", async (t) => {
   const world = await startWorld({
     accept: [REPO, REPO2],
     seed: await readFile(new URL("./contract45.sql", import.meta.url), "utf8"),
   });
   t.after(world.stop);
   world.github.grant("owner", REPO2);
-  // 그 판의 alice 세션은 다시 로그인하지 않아도 옛 레포의 멤버다.
+  // Alice's session from that version is a member of the old repo even without logging in again.
   const alice = { url: world.server.url, session: "old-alice-session" };
   assert.deepEqual(await call(alice, api.me), {
     login: "alice",
@@ -176,7 +180,7 @@ test("레포가 하나이던 판의 DB로 켜도 있던 것이 그 레포에 그
     prefs: { language: "en" },
   });
 
-  // owner는 새 레포의 권한을 받은 뒤 다시 들어온다.
+  // owner comes back in after getting access to the new repo.
   const owner = await world.login("owner");
   const [work] = (await call(owner, api.works)).works;
   assert.deepEqual(
@@ -202,7 +206,7 @@ test("레포가 하나이던 판의 DB로 켜도 있던 것이 그 레포에 그
     ["text", "decision"],
   );
 
-  // 새 레포에는 아무것도 없고, 라벨은 기본값이다.
+  // The new repo has nothing, and labels are the defaults.
   const other = on(owner, REPO2);
   assert.deepEqual((await call(other, api.works)).works, []);
   assert.deepEqual((await call(other, api.posts)).posts, []);
@@ -213,7 +217,7 @@ test("레포가 하나이던 판의 DB로 켜도 있던 것이 그 레포에 그
   );
   assert.equal((await call(other, api.settings)).mergeCheck.check, null);
 
-  // 다시 떠도(이미 옮긴 DB) 그대로다.
+  // It stays the same after another restart (the already-moved DB).
   await world.restartServer();
   await eventually(async () =>
     assert.deepEqual(
@@ -223,15 +227,15 @@ test("레포가 하나이던 판의 DB로 켜도 있던 것이 그 레포에 그
   );
 });
 
-test("GitHub에서 레포를 다른 계정으로 옮기면 그 레포의 것이 새 이름 아래로 따라가고, 옛 원격과 옛 설정도 새 이름으로 읽는다", async (t) => {
+test("when a repo is moved to another account on GitHub, its things follow under the new name, and the old remote and old settings are read as the new name", async (t) => {
   const MOVED = "omagari-moved/space";
-  // 받을 계정에 옮겨 갈 계정이 있다. 옛 레포 이름(REPO)도 설정에 남아 있다.
+  // The accepted accounts include the account it moves to. The old repo name (REPO) also remains in the settings.
   const world = await startWorld({
     accept: [REPO, "omagari-moved"],
     seed: await readFile(new URL("./contract47.sql", import.meta.url), "utf8"),
   });
   t.after(world.stop);
-  // owner의 러너들이 올리는 작업은 때에 따라 있어 그 판의 alice 작업만 본다.
+  // The works owner's runners post come and go, so look only at alice's work from that version.
   const seen = async (as: As) => ({
     works: (await call(as, api.works)).works
       .filter((w) => w.login === "alice")
@@ -252,7 +256,7 @@ test("GitHub에서 레포를 다른 계정으로 옮기면 그 레포의 것이 
   assert.deepEqual(before.works, [["alice", "payment", "결제 고치는 중"]]);
   assert.deepEqual(before.posts, [["p1", ["Direct conflict"], "discuss"]]);
 
-  // 권한을 다시 읽을 때(여기서는 다시 로그인할 때, 서버에서는 10분마다도) 옮겨진 것을 안다.
+  // When permissions are read again (here when logging in again, and on the server every 10 minutes too) it learns of the move.
   world.github.move(REPO, MOVED);
   const owner = await world.login("owner");
   assert.deepEqual((await call(owner, api.me)).repos, [MOVED]);
@@ -261,13 +265,13 @@ test("GitHub에서 레포를 다른 계정으로 옮기면 그 레포의 것이 
     (await call(owner, api.channels)).channels.find((c) => c.name === "일반")?.repo,
     MOVED,
   );
-  // 옛 이름으로 부르는 CLI와 옛 원격의 러너도 새 레포에 닿는다.
+  // The CLI that calls by the old name and the runner of the old remote also reach the new repo.
   assert.deepEqual(await seen(on(owner, REPO)), before);
   const desk = await world.desk(owner, undefined, undefined, { repo: REPO });
   t.after(desk.remove);
   assert.equal((await call({ ...owner, session: "old-alice-session" }, api.me)).repo, MOVED);
 
-  // 다시 떠도 설정의 옛 이름으로 빈 레포가 다시 생기지 않는다.
+  // Even after another restart, an empty repo is not created again from the old name in the settings.
   await world.restartServer();
   await eventually(async () => assert.deepEqual((await call(owner, api.me)).repos, [MOVED]));
   assert.deepEqual(await seen(owner), before);
