@@ -2,6 +2,7 @@ import type { Words } from "../i18n.ts";
 import { channelsKo } from "./channels.ko.ts";
 import { conversationKo } from "./conversation.ko.ts";
 import { dmKo } from "./dm.ko.ts";
+import { profileKo } from "./profile.ko.ts";
 
 /** 받침이 있으면 앞, 없으면 뒤: 지은이 / 민수가. */
 export const josa = (name: string, withFinal: string, without: string) => {
@@ -318,6 +319,9 @@ export const ko: Words = {
       waiting: "입장 하나 · 기다려요",
       off: "안 자리 하나 · 토론 참여를 껐어요",
       failed: "입장을 내지 못했어요",
+      known: {
+        "The executor didn't answer in the stance's shape": "실행기가 입장의 꼴로 답하지 않았어요",
+      },
     },
     option: (n: number) => `안 ${n}`,
     noContext: "맥락 없이 참여",
@@ -476,4 +480,6 @@ export const ko: Words = {
   conversation: conversationKo,
 
   dm: dmKo,
+
+  profile: profileKo,
 };

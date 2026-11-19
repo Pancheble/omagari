@@ -1,11 +1,12 @@
 import { Smile } from "lucide-react";
 import { type KeyboardEvent, type RefObject, useEffect, useId, useRef, useState } from "react";
 import { EmojiPalette, type Found, findEmoji, loadEmoji, loadedEmoji, remember } from "./emoji.tsx";
+import { t } from "./i18n.ts";
 
-/** 글쇠 앞에서 맨 앞이나 공백 뒤의 `:`와 두 글자 이상. `10:30`처럼 낱말 중간의 `:`는 아니다. */
+/** A `:` at the start or after a space, before the caret, plus two or more characters. Not a `:` in the middle of a word like `10:30`. */
 const TRIGGER = /(?:^|\s):([^\s:]{2,})$/;
 
-/** 글쇠 자리의 글자를 `emoji`로 바꾸고 글쇠를 그 뒤에 둔다. */
+/** Replaces the typed `:text` with `emoji` and puts the caret after it. */
 function put(
   area: RefObject<HTMLTextAreaElement | null>,
   value: string,
@@ -20,9 +21,9 @@ function put(
 }
 
 /**
- * 입력 칸의 이모지(DESIGN.md "채팅의 이모지"): 보내기 앞 이모지 버튼과 `:` 자동 완성.
- * 자동 완성은 `@호출` 메뉴와 같은 콤보박스다: 초점은 입력 칸에 두고, 위아래 화살표로 고르고, Enter나 Tab으로 넣고, Esc로 닫는다.
- * 한글을 조합하는 중의 Enter는 고르지 않는다.
+ * Emoji in the composer (DESIGN.md "Emoji in chat"): the emoji button before Send and `:` autocomplete.
+ * Autocomplete is a combobox like the `@call` menu: focus stays in the composer, up and down arrows choose, Enter or Tab inserts, and Esc closes.
+ * Enter while composing text (an IME) doesn't choose.
  */
 export function useEmojiInput(
   area: RefObject<HTMLTextAreaElement | null>,
@@ -31,9 +32,11 @@ export function useEmojiInput(
   enabled: boolean,
 ) {
   const list = useId();
-  const [data, setData] = useState(loadedEmoji);
+  // Redraw once the data arrives. It is read per render, so a language change picks up that language's data.
+  const [, setLoaded] = useState(0);
+  const data = loadedEmoji();
   const [trigger, setTrigger] = useState<{ at: number; query: string }>();
-  /** Esc로 닫은 `:`의 자리. 그 자리에서는 다시 열지 않는다. */
+  /** The spot of a `:` closed with Esc. It isn't reopened there. */
   const [dismissed, setDismissed] = useState<number>();
   const [active, setActive] = useState(0);
   const [palette, setPalette] = useState(false);
@@ -50,10 +53,10 @@ export function useEmojiInput(
     setTrigger(next);
     setActive(0);
   };
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 글이 바뀔 때마다 `:`를 다시 찾는다
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the `:` is looked for again whenever the text changes
   useEffect(sync, [value]);
   useEffect(() => {
-    if (trigger && !data) void loadEmoji().then(setData);
+    if (trigger && !data) void loadEmoji().then(() => setLoaded((n) => n + 1));
   }, [trigger, data]);
 
   const found: Found[] = trigger && data ? findEmoji(data, trigger.query) : [];
@@ -85,7 +88,7 @@ export function useEmojiInput(
     }
   };
 
-  // 팔레트 바깥을 누르면 닫는다.
+  // Pressing outside the palette closes it.
   useEffect(() => {
     if (!palette) return;
     const outside = (event: PointerEvent) => {
@@ -98,9 +101,9 @@ export function useEmojiInput(
   const menu = open && trigger && (
     <div className="menu emoji-suggest">
       <p className="call-menu-title">:{trigger.query}</p>
-      <div id={list} role="listbox" aria-label="이모지 후보">
+      <div id={list} role="listbox" aria-label={t.profile.emoji.suggestions}>
         {found.map((item) => (
-          // biome-ignore lint/a11y/useKeyWithClickEvents: 글쇠는 입력 칸이 받는다(콤보박스)
+          // biome-ignore lint/a11y/useKeyWithClickEvents: keys are handled by the composer (combobox)
           <div
             key={item.emoji}
             id={option(item.emoji)}
@@ -108,7 +111,7 @@ export function useEmojiInput(
             aria-selected={item === current}
             tabIndex={-1}
             className="menu-item"
-            // 눌러도 입력 칸의 초점이 떠나지 않는다.
+            // Pressing it doesn't take focus from the composer.
             onPointerDown={(event) => event.preventDefault()}
             onPointerMove={() => setActive(found.indexOf(item))}
             onClick={() => pick(item)}
@@ -129,10 +132,10 @@ export function useEmojiInput(
       <button
         type="button"
         className="composer-icon"
-        aria-label="이모지"
+        aria-label={t.profile.emoji.tip}
         aria-haspopup="dialog"
         aria-expanded={palette}
-        data-tip="이모지"
+        data-tip={t.profile.emoji.tip}
         onClick={() => setPalette(!palette)}
       >
         <Smile size={20} aria-hidden />

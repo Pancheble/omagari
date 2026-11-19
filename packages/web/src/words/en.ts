@@ -2,6 +2,7 @@ import type { CheckReading, Importance } from "@omagari/contract";
 import { channelsEn } from "./channels.en.ts";
 import { conversationEn } from "./conversation.en.ts";
 import { dmEn } from "./dm.en.ts";
+import { profileEn } from "./profile.en.ts";
 
 type CheckProblem = Extract<CheckReading, { problem: unknown }>["problem"];
 
@@ -324,6 +325,11 @@ export const en = {
       waiting: "One stance · waiting",
       off: "One option slot · opted out of debates",
       failed: "Couldn't give a stance",
+      /** Runner error messages we know by their exact text, so Korean can show them in Korean (the runner sends English only). */
+      known: {
+        "The executor didn't answer in the stance's shape":
+          "The executor didn't answer in the stance's shape",
+      } as Record<string, string>,
     },
     option: (n: number) => `Option ${n}`,
     noContext: "Joined without context",
@@ -493,4 +499,6 @@ export const en = {
   conversation: conversationEn,
 
   dm: dmEn,
+
+  profile: profileEn,
 };

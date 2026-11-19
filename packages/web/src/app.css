@@ -1,4 +1,4 @@
-/* 값은 모두 DESIGN.md의 토큰이다. 1단계 화면은 밝은 모드만 낸다. */
+/* All values are DESIGN.md tokens. The stage 1 screens ship light mode only. */
 :root {
   color-scheme: light;
   --primary: #0066cc;
@@ -12,7 +12,7 @@
   --chip: #e8e8ed;
   --hover: #0000000a;
   --selected: #0000000f;
-  /* 파치먼트 위에 고른 줄 바탕(6%)을 겹친 한 색. 그 위에 놓인 접속 점의 둘레 고리에 쓴다. */
+  /* One color: the selected-row background (6%) laid over parchment. Used for the ring around a presence dot sitting on it. */
   --selected-solid: #e6e6e8;
   --online: #248a3d;
   --away: #c27c0e;
@@ -37,11 +37,11 @@
     "IBM Plex Sans KR", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic",
     system-ui, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  /* 이모지는 색 이모지 글꼴로 그린다. 본문 글꼴이 ©나 ↔를 흑백 글자로 그리지 않게. emoji.tsx의 EMOJI_FONT와 같다. */
+  /* Emoji are drawn with a color emoji font, so the body font does not render © or ↔ as monochrome glyphs. Same as EMOJI_FONT in emoji.tsx. */
   --emoji:
     "Apple Color Emoji", "Noto Color Emoji", "Segoe UI Emoji", "Twemoji Mozilla", "Android Emoji",
     sans-serif;
-  /* 버튼, 머리 띠 버튼, 메뉴 줄의 높이. 좁은 화면에서는 44px로 키운다. */
+  /* Height of buttons, header-bar buttons, and menu rows. Grows to 44px on narrow screens. */
   --control: 32px;
   scrollbar-color: #0000003d transparent;
 }
@@ -71,7 +71,7 @@ body {
   font: 400 15px / 1.47 var(--font);
   caret-color: var(--primary);
   -webkit-font-smoothing: antialiased;
-  /* 한글은 낱말 가운데서 줄을 바꾸지 않는다. 긴 아이디는 넘치지 않게 끊는다. */
+  /* Never break a line in the middle of a Korean word. Long IDs are broken so they do not overflow. */
   word-break: keep-all;
   overflow-wrap: anywhere;
 }
@@ -101,7 +101,7 @@ svg.lucide {
   stroke-width: 1.5;
 }
 
-/* 버튼(app-button). 누르면 0.95배로 줄었다가 돌아온다. */
+/* Button (app-button). Shrinks to 0.95x when pressed, then returns. */
 .button {
   display: inline-flex;
   align-items: center;
@@ -149,7 +149,7 @@ svg.lucide {
   transform: scale(0.95);
 }
 
-/* 눌림 0.95배가 움직임으로 보이게. 따로 transition을 두지 않은 부품들이다. */
+/* So the 0.95x press reads as motion. These are the parts that have no transition of their own. */
 .composer-chip,
 .tag-chip,
 .settings-item,
@@ -161,7 +161,7 @@ svg.lucide {
   transition: transform 120ms ease-out;
 }
 
-/* app-tooltip: 아이콘만 있는 버튼의 이름. 맨 위 층(popover)에 떠서 대화 상자 위에도 보인다. */
+/* app-tooltip: the name of an icon-only button. Floats on the top layer (popover), so it shows above dialogs too. */
 .tooltip {
   position: fixed;
   inset: auto;
@@ -202,7 +202,7 @@ svg.lucide {
   background: var(--hover);
 }
 
-/* 알림 띠 */
+/* Notice strip */
 .banner {
   display: flex;
   align-items: center;
@@ -227,7 +227,7 @@ svg.lucide {
   color: var(--warning);
 }
 
-/* 화면에는 보이지 않고 화면 낭독기만 읽는다. */
+/* Not visible on screen; only screen readers read it. */
 .sr-only {
   position: absolute;
   width: 1px;
@@ -237,7 +237,7 @@ svg.lucide {
   white-space: nowrap;
 }
 
-/* 로그인처럼 앱 틀 바깥의 화면 */
+/* Screens outside the app frame, like login */
 .centered {
   display: grid;
   place-items: center;
@@ -264,7 +264,7 @@ svg.lucide {
   text-wrap: pretty;
 }
 
-/* 묶음 사이는 12px, 동작 앞과 알림 띠 뒤는 24px로 띄운다. */
+/* 12px between groups; 24px before an action and after a notice strip. */
 .centered .notice {
   margin-bottom: 12px;
 }
@@ -281,7 +281,7 @@ svg.lucide {
   line-height: 1.38;
 }
 
-/* GitHub에 넣을 코드. 사람이 옮겨 적는 값이라 고정폭으로 크게 보인다. */
+/* Code to enter on GitHub. People copy it by hand, so it is large and monospaced. */
 .device-code {
   display: grid;
   place-items: center;
@@ -293,7 +293,7 @@ svg.lucide {
   user-select: all;
 }
 
-/* 앱 틀: 창 안쪽 8px, 칸 사이 8px. 채널 패널 240px과 대화 칸. */
+/* App frame: 8px inside the window, 8px between columns. Channel panel 240px, then the conversation column. */
 .app {
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr);
@@ -312,7 +312,7 @@ svg.lucide {
   background: var(--parchment);
 }
 
-/* 워크스페이스 이름 줄. 오른쪽 끝에 채널 패널을 접는 버튼이 카테고리의 + 버튼과 같은 세로줄에 선다. */
+/* Workspace name row. At the right end, the button that collapses the channel panel lines up vertically with the category + button. */
 .workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -325,7 +325,7 @@ svg.lucide {
   grid-column: 1 / -1;
 }
 
-/* 이름 줄 높이를 늘리지 않게 위아래로 4px 겹친다. */
+/* Overlap 4px above and below so the name row does not get taller. */
 .fold-button {
   display: grid;
   place-items: center;
@@ -381,9 +381,9 @@ svg.lucide {
 }
 
 /*
- * 카테고리 머리(채팅 채널): 28px, 이름(.section-title) 뒤에 12px 꺾쇠, 오른쪽 끝에 28px +.
- * 꺾쇠와 +는 올렸거나 키보드로 머리 안에 갔을 때만 보인다. 숨길 때도 자리는 그대로라(opacity) 줄이 흔들리지 않는다.
- * 꺾쇠는 펼치면 아래, 접으면 오른쪽을 가리키고 150ms로 돈다.
+ * Category header (chat channels): 28px, a 12px chevron after the name (.section-title), a 28px + at the right end.
+ * The chevron and + show only on hover or when keyboard focus is inside the header. They hide with opacity so they keep their space and the row does not shift.
+ * The chevron points down when expanded and right when collapsed, rotating over 150ms.
  */
 .category-head {
   display: flex;
@@ -455,7 +455,7 @@ svg.lucide {
   opacity: 1;
 }
 
-/* 채널 줄(app-nav-item). 30px 줄, 줄 사이 2px. 고른 채널은 바탕 6%, 이름 600, 아이콘만 강조색. */
+/* Channel row (app-nav-item). 30px rows, 2px between rows. The selected channel gets a 6% background, name at 600, and only the icon in the accent color. */
 .nav-list {
   display: grid;
   gap: 2px;
@@ -508,7 +508,7 @@ svg.lucide {
   color: var(--primary);
 }
 
-/* 프로필 패널과 그 메뉴 */
+/* Profile panel and its menu */
 .profile {
   position: relative;
   margin-top: 8px;
@@ -570,7 +570,7 @@ svg.lucide {
   line-height: 1;
 }
 
-/* GitHub 프로필 사진(#288). 사람은 동그라미 그대로다. */
+/* GitHub profile picture (#288). People stay circular. */
 .avatar {
   overflow: hidden;
 }
@@ -591,7 +591,7 @@ svg.lucide {
   height: 36px;
 }
 
-/* 프로필 패널의 바탕(검정 6%) 위에서는 칩 회색이 묻혀 아바타만 흰 바탕으로 띄운다. */
+/* On the profile panel background (black 6%) the chip gray gets lost, so the avatar is lifted with a white background. */
 .profile-button .avatar {
   background: var(--canvas);
 }
@@ -614,8 +614,8 @@ svg.lucide {
 }
 
 /*
- * 접속 점(DESIGN.md "접속 점"): 아바타 36px에는 12px, 40px에는 13px. 모양으로도 가른다.
- * 둘레 2.5px 고리는 아바타를 점보다 크게 도려내 놓인 바탕이 보이게 한다. 바탕이 바뀌어도(올렸을 때) 고리가 맞는다.
+ * Presence dot (DESIGN.md "Presence dot"): 12px on a 36px avatar, 13px on a 40px one. Also told apart by shape.
+ * The 2.5px ring around it cuts out a hole in the avatar, larger than the dot, so the background shows through. The ring still fits when the background changes (on hover).
  */
 .dot {
   --dot: 12px;
@@ -678,7 +678,7 @@ svg.lucide {
   --dot: 13px;
 }
 
-/* 프로필 카드와 전체 보기: 접속 점 18px, 둘레 3px 고리. */
+/* Profile card and full view: 18px presence dot, 3px ring. */
 .with-dot .avatar-64 {
   mask: radial-gradient(circle at 56px 56px, transparent 12px, #000 12.5px);
 }
@@ -752,18 +752,18 @@ svg.lucide {
   font-size: 12px;
 }
 
-/* 상태 메뉴(DESIGN.md "프로필 패널과 상태 메뉴"). 설명이 한 줄에 들어가게 패널보다 넓게 연다. 좁은 화면(서랍)에서는 패널 폭이다. */
+/* Status menu (DESIGN.md "Profile panel and status menu"). Opens wider than the panel so the description fits on one line. On narrow screens (drawer) it is the panel width. */
 .status-menu {
   right: auto;
   width: 280px;
 }
 
-/* ponytail: 넓은 화면에서는 시간 메뉴가 옆으로 나와야 해서 메뉴를 스크롤 칸으로 만들지 않는다. 650px보다 낮은 창에서 이모지까지 열면 위가 잘린다. */
+/* ponytail: on wide screens the time menu has to open sideways, so the menu is not made a scroll area. In a window shorter than 650px, opening it with the emoji picker cuts off the top. */
 @media (max-width: 833px) {
   .status-menu {
     right: 0;
     width: auto;
-    /* 서랍 위로 넘치지 않게: 시간 메뉴도 이 안에 펼쳐지니 스크롤해도 잘리지 않는다. */
+    /* So it does not overflow above the drawer: the time menu also expands inside this, so scrolling does not clip it. */
     max-height: calc(100dvh - 88px);
     overflow-y: auto;
   }
@@ -774,7 +774,7 @@ svg.lucide {
   gap: 6px;
 }
 
-/* 상태 메시지 칸: 높이 36px, 왼쪽에 28px 이모지 버튼, 오른쪽에 24px 지우기 버튼. */
+/* Status message field: 36px tall, a 28px emoji button on the left, a 24px clear button on the right. */
 .status-field {
   display: flex;
   align-items: center;
@@ -856,8 +856,8 @@ svg.lucide {
 }
 
 /*
- * 이모지 팔레트(DESIGN.md "이모지 팔레트"): 상태 메뉴 오른쪽 옆에 폭 474px로 열리고 아래 끝을 상태 메뉴에 맞춘다.
- * 위에서부터 찾기 줄, 이모지 목록(316px, 칸 안에서 스크롤), 분류 막대.
+ * Emoji palette (DESIGN.md "Emoji palette"): opens 474px wide to the right of the status menu, with its bottom edge aligned to the status menu.
+ * From the top: search row, emoji list (316px, scrolls inside the box), category bar.
  */
 .emoji-palette {
   top: auto;
@@ -890,7 +890,7 @@ svg.lucide {
   color: var(--text-secondary);
 }
 
-/* 입력 중에는 테두리만 강조색이다(DESIGN.md "입력"). 찾기 칸 셋이 같다. */
+/* While typing, only the border takes the accent color (DESIGN.md "Input"). The three search fields are the same. */
 .palette-find:focus-within,
 .pop-search:focus-within,
 .labels-search:focus-within {
@@ -987,7 +987,7 @@ svg.lucide {
   font-size: 13px;
 }
 
-/* 분류 막대: "최근 사용"과 분류 아홉. 지금 보이는 분류는 고른 줄 바탕에 본문 색. */
+/* Category bar: "Recent" and nine categories. The category currently shown gets the selected-row background with body-color text. */
 .emoji-bar {
   display: flex;
   justify-content: space-between;
@@ -1015,7 +1015,7 @@ svg.lucide {
   cursor: default;
 }
 
-/* 좁은 화면: 상태 메뉴 위에 겹쳐 아래에서 올라오는 시트. 칸은 44px, 열 수는 폭에 맞춘다. */
+/* Narrow screens: a sheet that slides up from the bottom over the status menu. Cells are 44px; the column count fits the width. */
 @media (max-width: 833px) {
   .emoji-palette {
     position: fixed;
@@ -1030,7 +1030,7 @@ svg.lucide {
   }
 }
 
-/* 접속 상태 줄: 점, 이름(설명이 붙으면 40px), 시간을 정하는 줄은 오른쪽 꺾쇠. 지금 상태는 고른 줄 바탕. */
+/* Presence status row: dot, name (40px when a description is attached), and a right chevron on the row that sets a time. The current status gets the selected-row background. */
 .presence-item {
   justify-content: flex-start;
   gap: 10px;
@@ -1067,12 +1067,12 @@ svg.lucide {
   color: var(--text-secondary);
 }
 
-/* 시간 메뉴: 그 줄 오른쪽 옆에 같은 떠 있는 층으로 열린다. 좁은 화면(서랍)에서는 옆에 자리가 없어 그 줄 아래에 펼친다. */
+/* Time menu: opens as the same floating layer to the right of that row. On narrow screens (drawer) there is no room beside it, so it expands below the row. */
 .submenu {
   position: relative;
 }
 
-/* 상태 메뉴가 창 아래에 붙어 있어 시간 메뉴는 그 줄의 아래 끝에 맞춰 위로 연다. 아래로 열면 창 밖으로 나간다. */
+/* The status menu sits against the bottom of the window, so the time menu aligns to the bottom edge of its row and opens upward. Opening downward would go outside the window. */
 .flyout {
   top: auto;
   right: auto;
@@ -1091,7 +1091,7 @@ svg.lucide {
   }
 }
 
-/* 대화 칸: 패널이 아니라 창 바탕 위에 바로 놓는다. 위에 52px 머리 띠. */
+/* Conversation column: sits directly on the window background, not in a panel. A 52px header bar on top. */
 .conversation {
   display: flex;
   flex-direction: column;
@@ -1134,7 +1134,7 @@ svg.lucide {
   display: none;
 }
 
-/* 머리 띠 오른쪽: 오른쪽 칸을 여는 버튼들. 연 버튼만 바탕 6%, 강조색 아이콘, 이름(13px)이 붙는다. */
+/* Right side of the header bar: buttons that open the right column. Only the open button gets a 6% background, an accent-color icon, and a name (13px). */
 .header-actions {
   display: flex;
   gap: 4px;
@@ -1182,7 +1182,7 @@ svg.lucide {
   margin-top: 12px;
 }
 
-/* 머리 띠의 `# 채널 이름`(20px/600)과 멤버 수 */
+/* The header bar's `# channel name` (20px/600) and the member count */
 .channel-title {
   display: flex;
   align-items: center;
@@ -1217,13 +1217,13 @@ svg.lucide {
   line-height: 1.38;
 }
 
-/* 포럼 머리 띠의 설명은 12px이다(DESIGN.md "부딪힘 포럼"). */
+/* The forum header bar description is 12px (DESIGN.md "Conflict forum"). */
 .forum-lead {
   font-size: 12px;
   line-height: 1.33;
 }
 
-/* 알림 띠: 머리 띠 바로 아래, 대화 칸 폭에 맞춘다. 오른쪽 동작은 밑줄 600 글씨. */
+/* Notice strip: right below the header bar, fitted to the conversation column width. The right-hand action is underlined, weight 600. */
 .conversation > .banner {
   flex: none;
   margin: 8px 20px 0;
@@ -1242,7 +1242,7 @@ svg.lucide {
   cursor: pointer;
 }
 
-/* 메시지 목록. 거꾸로 쌓는 칸이라 처음부터 맨 아래가 보인다. 안의 목록은 오래된 것부터 읽힌다. */
+/* Message list. A reverse-stacked box, so the bottom is visible from the start. The list inside reads oldest first. */
 .scroller {
   display: flex;
   flex: 1;
@@ -1256,7 +1256,7 @@ svg.lucide {
   padding: 8px 0 12px;
 }
 
-/* 메시지(app-message): 아바타 36px, 이름과 시각 한 줄, 그 아래 본문. 같은 사람이 5분 안에 이어 쓰면 머리 없이 묶는다. */
+/* Message (app-message): 36px avatar, name and time on one line, body below. Consecutive messages from the same person within 5 minutes are grouped without a header. */
 .message {
   display: grid;
   grid-template-columns: 36px minmax(0, 1fr);
@@ -1290,13 +1290,13 @@ svg.lucide {
   line-height: 1.33;
 }
 
-/* 줄바꿈은 쓴 그대로 둔다. 글줄은 720px을 넘지 않는다. */
+/* Line breaks stay as written. Text lines do not exceed 720px. */
 .message-text {
   max-width: 720px;
   white-space: pre-wrap;
 }
 
-/* 묶인 줄의 시각은 올렸을 때 아바타 자리에 보인다. 아바타 칸보다 길면 왼쪽 여백으로 넘친다. */
+/* The time of a grouped row shows in the avatar slot on hover. If longer than the avatar column, it overflows into the left margin. */
 .message .side-time {
   justify-self: end;
   visibility: hidden;
@@ -1310,8 +1310,8 @@ svg.lucide {
 }
 
 /*
- * 반응(DESIGN.md "반응"): 메시지에 올리거나 키보드로 오면 오른쪽 위에 동작 띠가 뜨고, 본문 아래에 반응 알약(app-reaction)이 붙는다.
- * 띠는 숨겨도 Tab으로 닿게 opacity로 감춘다.
+ * Reactions (DESIGN.md "Reaction"): on hover or keyboard focus on a message, an action bar appears at the top right, and reaction pills (app-reaction) attach below the body.
+ * The bar is hidden with opacity so Tab can still reach it.
  */
 .message {
   position: relative;
@@ -1408,7 +1408,7 @@ svg.lucide {
   display: contents;
 }
 
-/* 팔레트는 화면에 고정해 연다(자리는 스크립트가 버튼에 맞춘다). 좁은 화면에서는 .emoji-palette의 시트 그대로다. */
+/* The palette opens fixed to the screen (a script positions it to the button). On narrow screens it is the sheet from .emoji-palette as is. */
 .reaction-pop {
   position: fixed;
   z-index: 3;
@@ -1420,7 +1420,7 @@ svg.lucide {
   }
 }
 
-/* 날짜가 바뀌는 곳: 가운데 글과 양옆 선 */
+/* Where the date changes: centered text with lines on both sides */
 .day {
   display: flex;
   align-items: center;
@@ -1439,7 +1439,7 @@ svg.lucide {
   content: "";
 }
 
-/* 불러오는 중(app-skeleton): 아바타 원과 두 줄(30%, 90%) */
+/* Loading (app-skeleton): an avatar circle and two lines (30%, 90%) */
 .skeleton {
   display: flex;
   flex: 1;
@@ -1488,9 +1488,9 @@ svg.lucide {
   width: 90%;
 }
 
-/* 메시지 입력 칸(app-composer): 200px까지 커지고 그 뒤로는 칸 안에서 스크롤한다. */
+/* Message composer (app-composer): grows up to 200px, then scrolls inside the box. */
 .composer {
-  position: relative; /* @호출 메뉴가 바로 위에 뜬다 */
+  position: relative; /* the @mention menu floats directly above */
   display: flex;
   flex: none;
   align-items: flex-end;
@@ -1512,9 +1512,9 @@ svg.lucide {
 .composer textarea {
   flex: 1;
   min-width: 0;
-  /* 숨겨진 채로 재서 높이가 0이어도 다시 잴 때까지 보내기 버튼 높이보다 작아지지 않는다. */
+  /* Measured while hidden, so even if the height is 0 it does not get smaller than the send button until measured again. */
   min-height: var(--control);
-  /* 칸 200px에서 위아래 안쪽 12px과 선 2px을 뺀 것 */
+  /* The 200px box minus 12px padding above and below and 2px borders */
   max-height: 186px;
   padding: calc((var(--control) - 22px) / 2) 0;
   border: 0;
@@ -1529,7 +1529,7 @@ svg.lucide {
   color: var(--text-secondary);
 }
 
-/* DM 칸의 입력 칸은 두 줄이다: 위는 글, 아래 줄 왼쪽에 모델·effort 칩, 오른쪽 끝에 보내기 버튼(DESIGN.md "모델과 effort"). */
+/* The composer in the DM column has two rows: text on top; on the bottom row, model/effort chips on the left and the send button at the right end (DESIGN.md "DM column"). */
 .composer.stacked {
   flex-wrap: wrap;
   row-gap: 2px;
@@ -1539,7 +1539,7 @@ svg.lucide {
   flex-basis: 100%;
 }
 
-/* 입력 칸의 이모지 버튼(DESIGN.md "입력")과 `:` 자동 완성(DESIGN.md "채팅의 이모지"). 팔레트는 입력 칸 바로 위에 오른쪽을 맞춘다. */
+/* The composer's emoji button (DESIGN.md "Input") and `:` autocomplete (DESIGN.md "Emoji in chat"). The palette is right-aligned directly above the composer. */
 .emoji-anchor {
   display: contents;
 }
@@ -1581,8 +1581,8 @@ svg.lucide {
 }
 
 /*
- * GIF(DESIGN.md "GIF", 시안 102-A): 입력 칸의 GIF 버튼과 입력 칸 바로 위에 오른쪽을 맞춰 열리는 폭 424px의 GIF 칸.
- * 위에서부터 찾기 칸, 두 열의 엇갈린 격자(300px, 칸 안에서 스크롤), "Powered by GIPHY" 줄.
+ * GIF (DESIGN.md "GIF", mockup 102-A): the composer's GIF button and a 424px-wide GIF box that opens right-aligned directly above the composer.
+ * From the top: search box, a two-column staggered grid (300px, scrolls inside the box), and a "Powered by GIPHY" row.
  */
 .gif-mark {
   display: inline-grid;
@@ -1647,7 +1647,7 @@ svg.lucide {
   object-fit: cover;
 }
 
-/* 올렸을 때와 키보드로 왔을 때 2px 강조색 테두리. 칸 안에서 스크롤하는 격자라 안쪽에 그린다. */
+/* 2px accent-color border on hover and on keyboard focus. The grid scrolls inside the box, so the border is drawn inside. */
 .gif-cell:hover,
 .gif-cell:focus-visible {
   outline: 2px solid var(--primary);
@@ -1676,7 +1676,7 @@ svg.lucide {
   font-weight: 600;
 }
 
-/* 좁은 화면: 이모지 팔레트처럼 아래에서 올라오는 시트. */
+/* Narrow screens: a sheet that slides up from the bottom, like the emoji palette. */
 @media (max-width: 833px) {
   .gif-picker {
     position: fixed;
@@ -1687,7 +1687,7 @@ svg.lucide {
   }
 }
 
-/* 메시지 속 GIF: 폭 260px까지, 높이 비율은 그대로, 왼쪽 아래에 "GIF" 띠. */
+/* GIF in a message: up to 260px wide, aspect ratio kept, a "GIF" strip at the bottom left. */
 .message-gif {
   position: relative;
   display: block;
@@ -1772,7 +1772,7 @@ button.message-gif {
   min-width: 0;
 }
 
-/* 칩 글자를 위의 글과 맞춘다. 칸 밖으로 내지 않고 안에서 당겨야 아래 줄로 내려간다. */
+/* Align the chip text with the text above. Pull it in inside the box rather than out of it so it drops to the next row. */
 .composer-tools > :first-child {
   margin-left: -8px;
 }
@@ -1803,7 +1803,7 @@ button.message-gif {
   background: var(--selected);
 }
 
-/* 칩 메뉴는 칩이 아니라 입력 칸 위(선 바깥 4px)에 열어 쓰던 글을 덮지 않는다. 왼쪽과 높이는 dm.tsx의 place()가 잰다. */
+/* The chip menu opens above the composer (4px outside the border), not at the chip, so it does not cover text being written. Left and height are measured by place() in dm.tsx. */
 .chip-menu {
   right: auto;
   bottom: calc(100% + 5px);
@@ -1812,7 +1812,7 @@ button.message-gif {
   overflow-y: auto;
 }
 
-/* "이전 모델 N개": 접히면 오른쪽, 펼치면 아래를 가리킨다. */
+/* "N earlier models": points right when collapsed, down when expanded. */
 .older-chevron {
   color: var(--text-secondary);
   transition: transform 150ms ease-out;
@@ -1857,7 +1857,7 @@ button.message-gif {
   cursor: default;
 }
 
-/* 대화 상자(app-dialog): 폭 400px, 화면 가운데, 뒤 덮개 */
+/* Dialog (app-dialog): 400px wide, centered on screen, with a backdrop */
 .dialog {
   width: min(400px, 100vw - 32px);
   padding: 24px;
@@ -1885,7 +1885,7 @@ button.message-gif {
   margin-top: 24px;
 }
 
-/* 글 입력 칸(app-text-input): 위에 라벨, 아래에 도움말. 오류면 선과 도움말이 오류색이다. */
+/* Text input (app-text-input): label above, help text below. On error, the border and help text use the error color. */
 .field {
   display: grid;
   gap: 6px;
@@ -1930,7 +1930,7 @@ button.message-gif {
   color: var(--error);
 }
 
-/* 오른쪽 칸(app-right-panel): 채널 패널과 같은 떠 있는 패널, 폭 300px. 1069px 이상에서는 세 번째 칸이다. */
+/* Right column (app-right-panel): a floating panel like the channel panel, 300px wide. At 1069px and above it is the third column. */
 @media (min-width: 1069px) {
   .app.with-panel {
     grid-template-columns: 240px minmax(0, 1fr) 300px;
@@ -1983,7 +1983,7 @@ button.message-gif {
   overflow-y: auto;
 }
 
-/* 멤버 목록 */
+/* Member list */
 .member-group h3 {
   margin: 0 0 4px;
 }
@@ -2003,7 +2003,7 @@ button.message-gif {
   background: var(--selected);
 }
 
-/* app-member-row: 아바타 40px, 이름이 왼쪽 60px에서 시작한다. */
+/* app-member-row: 40px avatar, name starts 60px from the left. */
 .member-row {
   display: flex;
   align-items: center;
@@ -2060,7 +2060,7 @@ button.member-row:active {
   font-weight: 400;
 }
 
-/* 둘째 줄: 상태 메시지(글씨색) · 접속 상태나 작업 수(보조 글씨). 길면 메시지만 잘린다. */
+/* Second line: status message (text color) · presence or task count (secondary text). If long, only the message is truncated. */
 .member-status {
   display: flex;
   min-width: 0;
@@ -2091,7 +2091,7 @@ button.member-row:active {
   transform: rotate(90deg);
 }
 
-/* 오프라인인 사람: 아바타 50%, 이름은 보조 글씨색. */
+/* Offline person: avatar at 50%, name in secondary text color. */
 .member[data-offline] .avatar {
   opacity: 0.5;
 }
@@ -2100,7 +2100,7 @@ button.member-row:active {
   color: var(--text-secondary);
 }
 
-/* 펼친 행: 이름 시작 위치(60px)에 맞춰 작업마다 한 덩어리. */
+/* Expanded row: one block per task, aligned to the name start position (60px). */
 .works {
   display: grid;
   gap: 10px;
@@ -2113,7 +2113,7 @@ button.member-row:active {
   gap: 8px;
 }
 
-/* app-agent-mark: 20px 둥근 네모에 실행기 약자. 오른쪽 아래 9px 점은 러너가 붙어 있는지다. */
+/* app-agent-mark: a 20px rounded square with the runner abbreviation. The 9px dot at the bottom right shows whether the runner is attached. */
 .agent-mark,
 .agent-space {
   position: relative;
@@ -2141,7 +2141,7 @@ button.member-row:active {
   height: 9px;
   border-radius: 50%;
   background: var(--online);
-  /* 점 둘레의 고리는 놓인 바탕색이다. 기본은 펼친 멤버 행의 바탕이고, 다른 바탕에서는 --mark-ring으로 바꾼다. */
+  /* The ring around the dot is the background color it sits on. The default is the background of an expanded member row; on other backgrounds, change it with --mark-ring. */
   box-shadow: 0 0 0 2px var(--mark-ring, var(--selected-solid));
   content: "";
 }
@@ -2185,7 +2185,7 @@ button.member-row:active {
   font-family: var(--mono);
 }
 
-/* app-badge. 테두리 배지("N시간 전 기준")는 앞에 11px 시계 아이콘. */
+/* app-badge. The bordered badge ("as of N hours ago") has an 11px clock icon in front. */
 .badge {
   display: inline-flex;
   align-items: center;
@@ -2208,7 +2208,7 @@ button.member-row:active {
   color: var(--warning);
 }
 
-/* DM 칸(DESIGN.md "DM 칸"): 머리 48px에 고른 에이전트. 연결된 에이전트가 둘 이상이면 머리가 버튼이고 아래에 메뉴가 열린다. */
+/* DM column (DESIGN.md "DM column"): a 48px header with the selected agent. With two or more connected agents, the header is a button and a menu opens below it. */
 .dm-picker {
   position: relative;
   min-width: 0;
@@ -2286,7 +2286,7 @@ button.dm-head:active {
   gap: 8px;
   height: max(36px, var(--control));
   padding: 8px;
-  line-height: 1.38; /* app-menu-item은 app-caption의 줄 높이다 */
+  line-height: 1.38; /* app-menu-item uses the line height of app-caption */
 }
 
 .agent-menu .menu-item[aria-checked="true"] {
@@ -2308,7 +2308,7 @@ button.dm-head:active {
   color: var(--primary);
 }
 
-/* DM의 문답 목록(DESIGN.md "DM 칸"): 메시지처럼 거꾸로 쌓아 맨 아래가 먼저 보인다. 문답은 카드가 아니라 대화 모양이다. */
+/* DM Q&A list (DESIGN.md "DM column"): stacked in reverse like messages, so the bottom shows first. A Q&A looks like a conversation, not a card. */
 .dm-list {
   --mark-ring: var(--parchment);
   display: flex;
@@ -2317,7 +2317,7 @@ button.dm-head:active {
   padding: 0 4px 12px;
 }
 
-/* 답의 코드 바탕은 칸의 파치먼트와 겹치지 않게 흰색이다. */
+/* The code background in an answer is white so it does not blend with the column's parchment. */
 .dm-qa {
   --code-bg: var(--canvas);
   display: flex;
@@ -2326,7 +2326,7 @@ button.dm-head:active {
   min-width: 0;
 }
 
-/* 질문(app-dm-question)은 오른쪽 말풍선, 물은 시각은 그 왼쪽 아래. */
+/* The question (app-dm-question) is a right-side speech bubble; the time it was asked is at its bottom left. */
 .dm-ask {
   display: flex;
   align-items: flex-end;
@@ -2356,7 +2356,7 @@ button.dm-head:active {
   flex-wrap: wrap;
 }
 
-/* 동작 줄: 비공개면 "채널에 올리기"(app-post-action), 공개면 어디에 올랐는지와 "보기". */
+/* Action row: if private, "Post to channel" (app-post-action); if public, where it was posted and "View". */
 .dm-actions {
   display: flex;
   align-items: center;
@@ -2417,7 +2417,7 @@ button.dm-head:active {
   text-underline-offset: 2px;
 }
 
-/* 채널에 펼친 문답(app-qa-card): 누가 올렸는지, 질문, 답, 본 코드 */
+/* Q&A expanded in a channel (app-qa-card): who posted it, the question, the answer, the code viewed */
 .qa-card {
   --mark-ring: var(--canvas);
   display: grid;
@@ -2471,7 +2471,7 @@ button.dm-head:active {
   flex-wrap: wrap;
 }
 
-/* 채널에 올라온 문답의 펼친 모습: 머리에 누구의 에이전트인지, 누가 올렸는지, 오른쪽에 공개 배지 */
+/* Expanded view of a Q&A posted in a channel: the header shows whose agent it is and who posted it, with a public badge on the right */
 .qa-head.posted {
   gap: 10px;
   color: var(--ink);
@@ -2495,7 +2495,7 @@ button.dm-head:active {
   line-height: 1.33;
 }
 
-/* 아래 구분선 위에 "본 코드", 브랜치·커밋, 오른쪽에 "접기" */
+/* Above the bottom divider, "Code viewed", branch and commit, and "Collapse" on the right */
 .qa-source.posted {
   padding-top: 10px;
   border-top: 1px solid var(--divider);
@@ -2511,12 +2511,12 @@ button.dm-head:active {
   margin-left: auto;
 }
 
-/* 채널에 올라온 문답(app-qa-line): 올린 사람의 메시지 본문 안, 함께 쓴 글 아래에 둔다. */
+/* Q&A posted in a channel (app-qa-line): placed inside the poster's message body, below the text written with it. */
 .qa-row {
   padding-block: 4px;
 }
 
-/* DM의 "보기"나 올린 뒤에 간 메시지(app-message-highlight): 칠했다가 2초 동안 걷어 낸다. 움직임 줄이기 설정이면 2초 뒤에 바로 걷는다. */
+/* The message reached via the DM "View" or after posting (app-message-highlight): painted, then faded out over 2 seconds. With reduced motion, it is removed right after 2 seconds. */
 .highlight {
   border-radius: var(--rounded-md);
   animation: highlight 2s step-end;
@@ -2592,7 +2592,7 @@ button.dm-head:active {
   font-weight: 600;
 }
 
-/* @호출: 입력 칸 바로 위에 뜨는 내 에이전트 메뉴(app-popover)와, 고른 에이전트의 토큰 */
+/* @mention: my-agent menu floating directly above the composer (app-popover), and the token for the chosen agent */
 .call-menu {
   --mark-ring: var(--canvas);
   right: auto;
@@ -2662,7 +2662,7 @@ button.dm-head:active {
   color: var(--ink);
 }
 
-/* 채널 입력 칸에 붙인 DM 문답(app-qa-attachment): 입력 칸 맨 위 줄에 서고 글은 그 아래 줄에 쓴다. */
+/* DM Q&A attached to the channel composer (app-qa-attachment): stands on the top row of the composer, and the text is written on the row below. */
 .composer:has(> .qa-attachment) {
   flex-wrap: wrap;
   row-gap: 4px;
@@ -2671,7 +2671,7 @@ button.dm-head:active {
 .qa-attachment {
   --mark-ring: var(--parchment);
   display: flex;
-  /* 왼쪽으로 당긴 만큼 넓혀 한 줄을 다 차지한다. 남는 틈이 있으면 글 칸이 그 틈에 끼어 아주 좁아진다. */
+  /* Widened by the amount pulled left so it takes the whole row. If a gap remained, the text box would slip into it and become very narrow. */
   flex-basis: calc(100% + 10px);
   align-items: center;
   gap: 8px;
@@ -2709,7 +2709,7 @@ button.dm-head:active {
   height: calc(max(36px, var(--control)) - 8px);
 }
 
-/* DM 칸 안의 입력 칸과 알림: 패널 안쪽 여백(8px)에 맞춘다. */
+/* The composer and notice in the DM column: fit to the panel inner padding (8px). */
 .right-panel .composer {
   margin: 8px 0 0;
 }
@@ -2723,13 +2723,13 @@ button.dm-head:active {
   padding-inline: 8px;
 }
 
-/* 지난 문답이 있는데 연결된 에이전트가 없을 때: 입력 칸 자리에 빈 상태를 작게 둔다. */
+/* When there are past Q&As but no connected agent: a small empty state in place of the composer. */
 .empty.no-agent {
   flex: none;
   padding-block: 12px 4px;
 }
 
-/* 에이전트 답의 마크다운(DESIGN.md "에이전트 답의 마크다운") */
+/* Markdown in agent answers (DESIGN.md "Markdown in agent answers") */
 .answer {
   min-width: 0;
   line-height: 1.6;
@@ -2811,7 +2811,7 @@ button.dm-head:active {
   border-top: 1px solid var(--divider);
 }
 
-/* 멤버 목록을 불러오는 중: 메시지의 뼈대(.skeleton-row, .bone)를 행 모양(안쪽 6px 8px, 아바타 40px)으로 쓴다. */
+/* Loading the member list: reuses the message skeleton (.skeleton-row, .bone) in a row shape (6px 8px padding, 40px avatar). */
 .member-skeleton {
   display: grid;
   gap: 12px;
@@ -2826,7 +2826,7 @@ button.dm-head:active {
   height: 40px;
 }
 
-/* 834–1068px: 오른쪽 칸은 대화 위에 겹쳐 열린다(폭 320px, 떠 있는 층). */
+/* 834–1068px: the right column opens overlapping the conversation (320px wide, floating layer). */
 @media (min-width: 834px) and (max-width: 1068px) {
   .app {
     position: relative;
@@ -2848,7 +2848,7 @@ button.dm-head:active {
   }
 }
 
-/* 833px 이하: 오른쪽 칸은 아래에서 올라오는 전체 높이 시트다. */
+/* 833px and below: the right column is a full-height sheet that slides up from the bottom. */
 .sheet {
   inset: 0;
   width: 100%;
@@ -2865,7 +2865,7 @@ button.dm-head:active {
   height: 100%;
 }
 
-/* 833px 이하의 포스트와 DM: 시트가 아니라 채널처럼 화면 전체를 쓰는 대화다. 덮개, 둘레 여백, 둥근 모서리가 없다. */
+/* Posts and DMs at 833px and below: not a sheet but a full-screen conversation like a channel. No backdrop, no outer margin, no rounded corners. */
 .sheet.full {
   padding: 0;
   background: var(--canvas);
@@ -2877,7 +2877,7 @@ button.dm-head:active {
   background: var(--canvas);
 }
 
-/* 머리 왼쪽 "‹" 바로 뒤에 제목(또는 DM 칸의 에이전트)이 붙고 남은 폭을 차지한다. */
+/* Right after the "‹" at the header's left, the title (or the agent in a DM column) attaches and takes the remaining width. */
 .sheet.full .panel-head > :nth-child(2) {
   flex: 1;
   min-width: 0;
@@ -2887,7 +2887,7 @@ button.dm-head:active {
   background: var(--overlay);
 }
 
-/* 좁은 화면(833px 이하): 대화만 두고, 머리 띠 왼쪽 버튼이 채널 패널을 왼쪽 서랍으로 연다. */
+/* Narrow screens (833px and below): only the conversation shows, and the left button on the header bar opens the channel panel as a left drawer. */
 .drawer {
   inset: 0 auto 0 0;
   width: min(300px, 100vw - 56px);
@@ -2909,8 +2909,8 @@ button.dm-head:active {
 }
 
 /*
- * 채널 패널 접기(834px 이상, DESIGN.md "채널 패널 접기"). 패널 칸이 0으로 줄고 패널은 왼쪽으로 빠지며,
- * 대화 칸이 창 왼쪽 8px까지 넓어진다. 꺼내 보면(.peek) 패널이 같은 자리에서 대화 위에 떠 보인다(app-side-panel-peek).
+ * Collapsing the channel panel (834px and above, DESIGN.md "Collapsing the channel panel"). The panel column shrinks to 0 and the panel slides out to the left,
+ * and the conversation column widens to 8px from the window's left edge. When peeked (.peek), the panel floats over the conversation in the same place (app-side-panel-peek).
  */
 .app > .side-panel {
   width: 240px;
@@ -2920,7 +2920,7 @@ button.dm-head:active {
   grid-template-columns: 0 minmax(0, 1fr);
 }
 
-/* 빈 패널 칸 뒤에 남는 칸 사이 8px을 메운다. */
+/* Fill the 8px column gap left behind the empty panel column. */
 .app.folded > .conversation {
   margin-left: -8px;
 }
@@ -3016,7 +3016,7 @@ button.dm-head:active {
   }
 }
 
-/* 접고 펴기와 꺼내 보기: 240ms. 접힌 패널은 빠져나간 뒤에 숨는다. 움직임 줄이기 설정이면 바로 바뀐다. */
+/* Collapse/expand and peek: 240ms. A collapsed panel is hidden after it slides out. With reduced motion, it switches immediately. */
 @media (prefers-reduced-motion: no-preference) {
   .app {
     transition: grid-template-columns 240ms cubic-bezier(0.16, 1, 0.3, 1);
@@ -3070,7 +3070,7 @@ button.dm-head:active {
   }
 }
 
-/* 설정 창(DESIGN.md "설정 창"): 왼쪽 목록 220px, 오른쪽에 고른 항목. 덮개, Esc, 닫기로 닫힌다. */
+/* Settings window (DESIGN.md "Settings window"): a 220px list on the left, the selected item on the right. Closes via the backdrop, Esc, or the close button. */
 .settings {
   width: min(980px, 100vw - 32px);
   height: min(676px, 100dvh - 32px);
@@ -3238,7 +3238,7 @@ code.settings-value {
   font-family: var(--mono);
 }
 
-/* 고르기 단추: 겉은 단추 모양이고 속은 네이티브 select다. 키보드와 읽기 프로그램이 그대로 쓴다. */
+/* Select button: looks like a button, but inside is a native select. Keyboard and screen readers use it as is. */
 .settings-select {
   position: relative;
   display: inline-flex;
@@ -3262,7 +3262,7 @@ code.settings-value {
   cursor: pointer;
 }
 
-/* 테두리가 없는 칸이라 입력 중에는 안쪽 1px Action Blue 선을 테두리로 쓴다(바깥 고리 없음). */
+/* This box has no border, so while typing a 1px inner Action Blue line is used as the border (no outer ring). */
 .settings-select:focus-within {
   box-shadow: inset 0 0 0 1px var(--primary);
 }
@@ -3328,15 +3328,15 @@ code.settings-value {
   }
 }
 
-/* ---- 부딪힘 포럼과 포스트 (DESIGN.md "부딪힘 포럼", "포스트") ---- */
+/* ---- Conflict forum and Post (DESIGN.md "Conflict forum", "Post") ---- */
 
 .category + .category {
   margin-top: 16px;
 }
 
 /*
- * 포럼 줄 밑의 가지: 왼쪽 30px 들여, 부딪힘 아이콘 아래에서 내려오는 1px 세로선 하나로 잇는다(│ │ └).
- * 중간 포스트는 세로선만 지나가고, 마지막 포스트에서만 꺾는다. 14px, 새 글이 있으면 600과 점.
+ * Branch under a forum row: indented 30px from the left, joined by one 1px vertical line coming down from under the conflict icon (│ │ └).
+ * Middle Posts only have the vertical line passing through; only the last Post bends. 14px; 600 and a dot if there is something new.
  */
 .branches {
   margin: 0 0 0 19px;
@@ -3405,7 +3405,7 @@ code.settings-value {
   background: var(--primary);
 }
 
-/* 옆 칸의 포스트는 480px이다. 834–1068px에서는 대화 위에 뜨되 창에 맞게 줄어든다. */
+/* A Post in the side column is 480px. At 834–1068px it floats over the conversation but shrinks to fit the window. */
 @media (min-width: 1069px) {
   .app.with-post {
     grid-template-columns: 240px minmax(0, 1fr) 480px;
@@ -3422,7 +3422,7 @@ code.settings-value {
   }
 }
 
-/* 포럼 머리 띠 아래 */
+/* Below the forum header bar */
 .forum {
   display: flex;
   flex: 1;
@@ -3492,7 +3492,7 @@ code.settings-value {
   border: 0;
 }
 
-/* app-tag-chip: 28px, 테두리. 켜면(app-tag-chip-on) 바탕 6%, 글자색, 600. */
+/* app-tag-chip: 28px, bordered. When on (app-tag-chip-on): 6% background, text color, 600. */
 .tag-chip {
   display: inline-flex;
   flex: none;
@@ -3527,7 +3527,7 @@ code.settings-value {
   flex: none;
 }
 
-/* app-popover: 칩 바로 아래에 열린다. */
+/* app-popover: opens directly below the chip. */
 .forum-menu {
   position: absolute;
   top: calc(100% + 6px);
@@ -3559,7 +3559,7 @@ code.settings-value {
   font-weight: 600;
 }
 
-/* 포스트 목록: 목록 보기는 한 줄에 한 장, 카드 보기는 2열 격자. */
+/* Post list: list view is one card per row; card view is a 2-column grid. */
 .forum-list {
   position: relative;
   display: grid;
@@ -3583,7 +3583,7 @@ code.settings-value {
   min-width: 0;
 }
 
-/* app-forum-post: 파치먼트 바탕 한 장. 고른 것은 바탕 6%와 안쪽 1px 선. 풀린 것은 70%. */
+/* app-forum-post: one sheet on a parchment background. The selected one gets a 6% background and an inner 1px line. A resolved one is at 70%. */
 .forum-post {
   display: grid;
   flex: 1;
@@ -3655,7 +3655,7 @@ code.settings-value {
   line-height: 1.33;
 }
 
-/* 사람 줄(시안 27-B): 22px 아바타를 5px 겹치고 이름을 " · "로 잇는다. 아바타 둘레는 카드 바탕색 2px 고리. */
+/* People row (mockup 27-B): 22px avatars overlap by 5px and names are joined with " · ". The avatar outline is a 2px ring in the card background color. */
 .forum-post-people {
   display: inline-flex;
   align-items: center;
@@ -3685,7 +3685,7 @@ code.settings-value {
   gap: 6px;
 }
 
-/* 제목 앞 판정 아이콘(DESIGN.md "목록의 판정"): 보조 글씨색, 깨짐과 직접 충돌만 경고색. */
+/* Verdict icon before the title (DESIGN.md "Verdict strip"): secondary text color; only broken and direct conflicts use the warning color. */
 .verdict-icon {
   flex: none;
   color: var(--text-secondary);
@@ -3708,7 +3708,7 @@ code.settings-value {
   }
 }
 
-/* 포스트의 이슈 번호 "#44"(ADR-0032): 제목 바로 뒤에 보조 글씨로. 머리 띠에서는 GitHub 이슈로 가는 링크다. */
+/* The Post's issue number "#44" (ADR-0032): directly after the title, in secondary text. In the header bar it is a link to the GitHub issue. */
 .issue-number {
   flex: none;
   color: var(--text-secondary);
@@ -3734,13 +3734,13 @@ a.issue-number:hover {
   font-size: 15px;
 }
 
-/* AI가 쓴 글의 표시(DESIGN.md "AI가 쓴 글"): 테두리 배지에 12px bot 아이콘과 "AI". */
+/* Marker for AI-written text (DESIGN.md "AI-written text"): a bordered badge with a 12px bot icon and "AI". */
 .ai-badge {
   flex: none;
   padding: 0 6px;
 }
 
-/* 크게 본 포스트의 머리 띠: ‹ 부딪힘 › 제목 */
+/* Header bar of a Post in full view: ‹ Conflict › title */
 .post-title {
   display: flex;
   align-items: center;
@@ -3768,7 +3768,7 @@ a.issue-number:hover {
   white-space: nowrap;
 }
 
-/* 옆 칸 포스트의 머리: 제목 17px/600과 크게 보기. 닫기는 오른쪽 칸 머리가 붙인다. */
+/* Header of a Post in the side column: 17px/600 title and full view. The close button is attached by the right column header. */
 .post-head {
   display: flex;
   flex: 1;
@@ -3790,12 +3790,12 @@ a.issue-number:hover {
   text-decoration: none;
 }
 
-/* 옆 칸 포스트: 입력 칸은 칸 안쪽 폭을 그대로 쓴다. */
+/* Post in the side column: the composer uses the column's inner width as is. */
 .right-slot .panel-body > .composer {
   margin: 4px 0 0;
 }
 
-/* 포스트의 첫 글: Omagari 표시(app-omagari-mark)와 알림 카드(app-alert-card) */
+/* A Post's first message: the Omagari mark (app-omagari-mark) and alert card (app-alert-card) */
 .omagari-mark {
   display: grid;
   place-items: center;
@@ -3836,7 +3836,7 @@ a.issue-number:hover {
   }
 }
 
-/* 위험한 단추(app-button-danger): 오류색 글씨 */
+/* Dangerous button (app-button-danger): error-color text */
 .button.danger {
   color: var(--error);
 }
@@ -3845,7 +3845,7 @@ a.issue-number:hover {
   background: var(--error-bg);
 }
 
-/* 포스트 머리 띠의 "결정 정리하기": 이름이 늘 보이는 머리 띠 단추 */
+/* "Organize Decision" in the Post header bar: a header-bar button whose name always shows */
 .header-button.named {
   display: inline-flex;
   align-items: center;
@@ -3861,7 +3861,7 @@ a.issue-number:hover {
   color: var(--primary);
 }
 
-/* 결정 상태 띠(app-decision-strip): 대화 위에 늘 붙는다. 좁으면 줄을 바꾼다. */
+/* Decision status strip (app-decision-strip): always attached above the conversation. Wraps when narrow. */
 .decision-strip {
   display: flex;
   flex: none;
@@ -3941,7 +3941,7 @@ a.issue-number:hover {
   font-size: 13px;
 }
 
-/* 대화에 쌓이는 결정 PR의 한 줄(13px 보조, 안쪽 4px 20px 4px 24px) */
+/* One row of a Decision PR stacked in the conversation (13px secondary, inner padding 4px 20px 4px 24px) */
 .decision-line {
   display: flex;
   align-items: center;
@@ -3952,7 +3952,7 @@ a.issue-number:hover {
   line-height: 1.38;
 }
 
-/* 결정 정리하기 대화 상자(폭 560px, 높이 776px까지) */
+/* Organize Decision dialog (560px wide, up to 776px tall) */
 .decision-dialog {
   width: min(560px, 100vw - 32px);
   max-height: min(776px, 100dvh - 32px);
@@ -4175,14 +4175,14 @@ a.issue-number:hover {
   text-decoration: underline;
 }
 
-/* 긴 검사 명령은 오른쪽 절반 안에서 줄을 바꾼다. */
+/* A long check command wraps inside the right half. */
 .settings-command {
   max-width: 50%;
   overflow-wrap: anywhere;
   text-align: right;
 }
 
-/* 판정 띠(app-verdict-strip): 결정 상태 띠와 같은 모양이고 위에 선다. 경고색은 깨짐에만 쓴다. */
+/* Verdict strip (app-verdict-strip): same shape as the Decision status strip and stands above it. The warning color is used only for broken. */
 .verdict {
   flex: none;
   margin: 8px 20px 0;
@@ -4253,9 +4253,9 @@ a.issue-number:hover {
   white-space: pre;
 }
 
-/* ---- 라벨, 중요도, 포럼 필터 (DESIGN.md 시안 51~55) ---- */
+/* ---- Labels, importance, forum filter (DESIGN.md mockups 51~55) ---- */
 
-/* 라벨 색 점: GitHub 라벨 색, 안쪽 1px 12% 선. 색은 점에만 쓴다. */
+/* Label color dot: the GitHub label color, with an inner 1px 12% line. The color is used only on the dot. */
 .label-dot {
   display: inline-block;
   flex: none;
@@ -4263,7 +4263,7 @@ a.issue-number:hover {
   box-shadow: inset 0 0 0 1px #0000001f;
 }
 
-/* app-label-badge: 22px, 1px 선, 글자색, 앞에 8px 색 점 */
+/* app-label-badge: 22px, 1px line, text color, with an 8px color dot in front */
 .label-badge {
   display: inline-flex;
   align-items: center;
@@ -4278,7 +4278,7 @@ a.issue-number:hover {
   white-space: nowrap;
 }
 
-/* app-importance-discuss: 글자색 바탕에 흰 글씨 */
+/* app-importance-discuss: white text on a text-color background */
 .badge.discuss {
   background: var(--ink);
   color: var(--on-dark);
@@ -4290,7 +4290,7 @@ a.issue-number:hover {
   align-items: center;
 }
 
-/* 칩 아래에 열리는 창(app-popover). 필터 칩은 300px, 포스트의 라벨 창은 260px로 오른쪽에 맞춘다. */
+/* Window that opens below a chip (app-popover). The filter chip's is 300px; a Post's label window is 260px, aligned right. */
 .forum-menu.pop {
   width: 220px;
 }
@@ -4375,7 +4375,7 @@ a.issue-number:hover {
   color: var(--error);
 }
 
-/* 체크 상자 모양: 16px, 켜면 강조색 */
+/* Checkbox shape: 16px, accent color when on */
 .check-box {
   display: grid;
   flex: none;
@@ -4393,7 +4393,7 @@ a.issue-number:hover {
   background: var(--primary);
 }
 
-/* 필터 줄(시안 53-D): 조건 칩. 저장된 필터와 다르면 테두리가 강조색이다. */
+/* Filter row (mockup 53-D): condition chips. If different from the saved filter, the border is the accent color. */
 .filter-row {
   flex-wrap: wrap;
   align-items: center;
@@ -4436,7 +4436,7 @@ a.issue-number:hover {
   font-size: 12px;
 }
 
-/* 채널 패널의 포럼 줄(시안 55-D): 줄 끝 20px 꺾쇠로 내 포스트를 접고, 접으면 수와 점이 남는다. */
+/* Forum row in the channel panel (mockup 55-D): a 20px chevron at the row end collapses my Posts; when collapsed, the count and dot remain. */
 .forum-row {
   position: relative;
 }
@@ -4471,7 +4471,7 @@ a.issue-number:hover {
   background: var(--hover);
 }
 
-/* 포럼들 아래 구분선 뒤의 "다른 포스트" */
+/* "Other Posts" after the divider below the forums */
 .other-posts {
   margin-top: 6px;
   padding-top: 6px;
@@ -4482,12 +4482,12 @@ a.issue-number:hover {
   color: var(--text-secondary);
 }
 
-/* 포럼 만들기·고치기 대화 상자(시안 52): 폭 560px */
+/* Create/edit forum dialog (mockup 52): 560px wide */
 .forum-dialog {
   width: min(560px, 100vw - 32px);
 }
 
-/* "만들기"의 종류 고르기(시안 88-A): 라디오 카드 둘을 나란히. 고른 카드는 강조색 선. */
+/* Choosing the kind under "Create" (mockup 88-A): two radio cards side by side. The chosen card has an accent-color line. */
 .kind-pick {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -4638,7 +4638,7 @@ a.issue-number:hover {
   margin-right: auto;
 }
 
-/* 설정 창의 라벨(시안 51-D4): 왼쪽 목록 230px, 오른쪽 고치는 칸, 사이 20px */
+/* Settings window labels (mockup 51-D4): a 230px list on the left, an edit area on the right, 20px between */
 .settings-page > * {
   flex: none;
 }
@@ -4826,7 +4826,7 @@ a.issue-number:hover {
   flex: 1;
 }
 
-/* 토론 띠(app-debate-strip, DESIGN.md "토론"): 판정 띠와 같은 모양이고 그 위에 선다. 끝난 토론은 바탕 없이 보조 글씨다. */
+/* Debate strip (app-debate-strip, DESIGN.md "Debate"): same shape as the verdict strip and stands above it. A finished debate has no background and uses secondary text. */
 .debate-strip {
   display: flex;
   flex: none;
@@ -4890,7 +4890,7 @@ a.issue-number:hover {
   background: var(--canvas);
 }
 
-/* 대화에 쌓이는 토론: 요청, 대행 줄, 입장 카드(app-debate-card), 빈 자리(app-debate-card-ghost), 고르기와 결론 */
+/* Debates stacked in the conversation: the request, the proxy row, stance cards (app-debate-card), the empty slot (app-debate-card-ghost), and the choice and conclusion */
 .debate-log {
   display: grid;
   gap: 8px;
@@ -4964,7 +4964,7 @@ a.issue-number:hover {
   font-size: 12px;
 }
 
-/* 덮인 주인(app-spoiler): 폭이 늘 136px라 이름 길이도 대행 여부도 새지 않는다. */
+/* Covered owner (app-spoiler): always 136px wide, so neither the name length nor whether it is a proxy leaks. */
 .spoiler {
   display: inline-grid;
   place-items: center;
@@ -5242,14 +5242,14 @@ a.issue-number:hover {
   line-height: 1.5;
 }
 
-/* 좁은 화면에서는 머리 띠가 넘치지 않게 토론 버튼과 결정 정리하기의 이름을 뺀다(aria-label이 이름이다). */
+/* On narrow screens the debate button and the Organize Decision button drop their names so the header bar does not overflow (aria-label is the name). */
 @media (max-width: 833px) {
   .debate-button span {
     display: none;
   }
 }
 
-/* 좁은 화면의 줄과 버튼은 44px이다(DESIGN.md "앱의 좁은 화면"). 기본 규칙보다 뒤에 둬야 이긴다. */
+/* Rows and buttons on narrow screens are 44px (DESIGN.md "App on narrow screens"). Must come after the default rule to win. */
 @media (max-width: 833px) {
   .branch-item,
   .tag-chip {
@@ -5264,9 +5264,9 @@ a.issue-number:hover {
   }
 }
 
-/* ---- 워크스페이스와 레포 (DESIGN.md "워크스페이스와 레포", 시안 101) ---- */
+/* ---- Workspace and repo (DESIGN.md "Workspace and repos", mockup 101) ---- */
 
-/* 이름 줄(시안 101-1): 계정 아바타, 작은 계정 이름, 굵은 레포 이름이나 "전체". 누르면 바로 아래에 레포 고르기 메뉴가 열린다. */
+/* Name row (mockup 101-1): account avatar, small account name, bold repo name or "All". Pressing it opens the repo-picker menu directly below. */
 .workspace.picker {
   display: flex;
   padding: 0 4px;
@@ -5325,7 +5325,7 @@ a.issue-number:hover {
   white-space: nowrap;
 }
 
-/* 계정 아바타: GitHub 아바타, 조직은 둥근 네모, 개인 계정은 동그라미. 받지 못하면 첫 글자. */
+/* Account avatar: the GitHub avatar; an organization is a rounded square, a personal account a circle. If it cannot be fetched, the first letter. */
 .account-mark {
   display: grid;
   flex: none;
@@ -5356,7 +5356,7 @@ a.issue-number:hover {
   object-fit: cover;
 }
 
-/* 레포 고르기 메뉴(시안 101-1, 101-3): 288px, 찾기 칸, 계정마다 접히는 묶음. */
+/* Repo-picker menu (mockups 101-1, 101-3): 288px, a search box, groups that collapse per account. */
 .place-menu {
   z-index: 4;
   width: 288px;
@@ -5364,7 +5364,7 @@ a.issue-number:hover {
   overflow-y: auto;
 }
 
-/* 좁은 화면의 서랍에서는 서랍 폭에 맞춘다. */
+/* In the drawer on narrow screens, it fits the drawer width. */
 .drawer .place-menu {
   right: 0;
   width: auto;
@@ -5459,7 +5459,7 @@ a.issue-number:hover {
   margin-top: 2px;
 }
 
-/* 레포 줄의 ⋯: 올렸을 때와 키보드로 갔을 때 보인다. */
+/* The ⋯ on a repo row: shows on hover and on keyboard focus. */
 .repo-more {
   display: grid;
   flex: none;
@@ -5508,7 +5508,7 @@ a.menu-item {
   text-decoration: none;
 }
 
-/* 레포 넣기(시안 91-A): 테두리 목록에 레포마다 48px 한 줄. */
+/* Add repo (mockup 91-A): a bordered list with one 48px row per repo. */
 .repo-dialog {
   width: min(560px, 100vw - 32px);
 }
@@ -5570,7 +5570,7 @@ a.menu-item {
   font-size: 13px;
 }
 
-/* 혼자일 때 포스트의 사람 줄(시안 100-A): 부딪힌 내 브랜치 둘. */
+/* People row of a Post when alone (mockup 100-A): my two conflicting branches. */
 .forum-post-branches {
   overflow: hidden;
   font-family: var(--mono);
@@ -5579,7 +5579,7 @@ a.menu-item {
   white-space: nowrap;
 }
 
-/* 포럼 만들기의 레포 칩(시안 92-A)과 패널 어디에 보일지 알리는 띠 */
+/* The repo chip in forum creation (mockup 92-A) and the strip that says where it shows in the panel */
 .forum-dialog-repos {
   margin: 16px 0 0;
   padding: 0;
@@ -5627,8 +5627,8 @@ a.menu-item {
   }
 
   /*
-   * 좁은 화면의 머리 띠(시안 94-B): 60px, 이름과 설명을 두 줄로 쌓는다. 제목 묶음이 남는 폭을 다 쓰고 줄어들고
-   * 버튼들은 줄어들지 않아, 이름과 설명과 버튼이 겹치지 않는다.
+   * Header bar on narrow screens (mockup 94-B): 60px, name and description stacked on two rows. The title group takes all remaining width and shrinks,
+   * and the buttons do not shrink, so the name, description, and buttons do not overlap.
    */
   .channel-header {
     height: 60px;
@@ -5662,7 +5662,7 @@ a.menu-item {
   }
 }
 
-/* 넓은 화면에서도 설명이 이름보다 먼저 줄어든다. */
+/* Even on wide screens, the description shrinks before the name. */
 .channel-members {
   flex: 0 1 auto;
   min-width: 0;
@@ -5671,7 +5671,7 @@ a.menu-item {
   white-space: nowrap;
 }
 
-/* 메뉴의 글은 이름 줄의 말줄임(.workspace p)을 따르지 않는다. */
+/* Text in the menu does not follow the ellipsis of the name row (.workspace p). */
 .place-menu p {
   grid-column: auto;
   margin-top: 0;
@@ -5679,7 +5679,7 @@ a.menu-item {
   white-space: normal;
 }
 
-/* 사람을 누르면 프로필 카드가 뜬다(DESIGN.md "사람 아바타와 이름"). 올리면 밑줄이다. */
+/* Pressing a person opens the profile card (DESIGN.md "Person avatar and name"). Underlined on hover. */
 .person {
   padding: 0;
   border: 0;
@@ -5704,7 +5704,7 @@ button.person {
   gap: 6px;
 }
 
-/* 프로필 카드(app-profile-card): 누른 자리 옆에 뜨는 320px 카드. 833px 이하는 아래 시트다. */
+/* Profile card (app-profile-card): a 320px card that floats beside where it was pressed. At 833px and below it is a bottom sheet. */
 .profile-card {
   --mark-ring: var(--canvas);
   position: fixed;
@@ -5853,7 +5853,7 @@ button.person {
   width: 100%;
 }
 
-/* 프로필 전체 보기: 오른쪽 칸 안의 한 목록. 칸 바탕은 파치먼트다. */
+/* Full profile view: one list inside the right column. The column background is parchment. */
 .profile-view {
   --mark-ring: var(--parchment);
   display: grid;

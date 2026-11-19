@@ -1333,8 +1333,8 @@ export async function startServer(options: {
     { hash: string; login: string; repo: string; workspace: string }
   >();
   /**
-   * Whether it's OK to send to a web connection. It must be open, and the repo (and its workspace) that connection chose must still be visible to that person.
-   * Every send to the web goes through this, so a connection that lost access while push access is being reread doesn't receive anything before it's closed.
+   * Whether it's OK to send to a web or runner connection. It must be open, and the repo that connection chose (for a runner, the one it's linked to) must still be visible to that person.
+   * Every send to the web and to runners goes through this, so a connection that lost access while push access is being reread doesn't receive anything before it's closed.
    */
   const open = (socket: WSContext, watcher: { login: string; repo: string }) =>
     socket.readyState === 1 && sees(watcher.login, watcher.repo); // OPEN
@@ -2142,7 +2142,7 @@ export async function startServer(options: {
         runner.repo === repo &&
         runner.login === login &&
         (!to || socket === to) &&
-        socket.readyState === 1
+        open(socket, runner)
       )
         socket.send(frame);
   };
@@ -2217,7 +2217,7 @@ export async function startServer(options: {
   /** Sends that member's inbox to runners whose inbox changed. To `to` (a runner that just attached), send even if it's the same. */
   const shareInbox = (to?: WSContext) => {
     for (const [socket, { login, repo }] of runners) {
-      if (socket.readyState !== 1) continue; // OPEN
+      if (!open(socket, { login, repo })) continue;
       const items = inboxOf(repo, login);
       const json = JSON.stringify(items);
       if (socket !== to && sentInbox.get(socket) === json) continue;
@@ -2729,11 +2729,7 @@ export async function startServer(options: {
       sent.set(repo, json);
       const frame = encode(serverToRunner, "situation", { works, claims });
       for (const [socket, runner] of runners)
-        if (
-          runner.repo === repo &&
-          socket.readyState === 1 && // OPEN
-          (changed || socket === to)
-        )
+        if (runner.repo === repo && open(socket, runner) && (changed || socket === to))
           socket.send(frame);
     }
   };

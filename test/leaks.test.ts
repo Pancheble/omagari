@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { api, ContractFailure, call } from "@omagari/contract";
-import { startRunner } from "@omagari/runner";
+import { callRunner, startRunner } from "@omagari/runner";
 import { eventually, REPO, REPO2, REPO3, startWorld, tempRepo } from "./harness.ts";
 
 const refused = (code: string) => (error: ContractFailure) => error.code === code;
@@ -73,4 +73,29 @@ test("권한을 다시 읽는 사이 권한을 잃은 웹 연결은 그 레포�
   await call(world.owner, api.send, { channel: channel.id, text: "한 번 더" });
   //(before, watching.received.map((m) => m.kind));
   assert.equal(watching.received.length, before); // 멤버 목록, 라벨, 채널 어느 것도 가지 않았다
+});
+
+test("권한을 다시 읽는 사이 권한을 잃은 러너는 그 레포의 상황을 받지 않는다", async (t) => {
+  const world = await startWorld({ accept: [REPO, REPO2], recheckMs: 50, observeMs: 50 });
+  t.after(world.stop);
+  world.github.grant("alice");
+  const alice = await world.login("alice");
+  const desk = await world.desk(alice);
+  t.after(desk.remove);
+  // 러너가 서버에서 받은 상황을 CLI 몫으로 그대로 돌려준다. 서버를 다시 묻지 않으니 권한을 잃은 뒤에도 본다.
+  const situation = async () =>
+    JSON.stringify(await callRunner(desk.folder, "situation", { executor: "claude-code" }));
+
+  // 권한이 있을 때는 owner의 상태 한 줄이 alice의 러너까지 간다.
+  await call(world.owner, api.setStatus, { branch: "main", text: "before revoke" });
+  await eventually(async () => assert.match(await situation(), /before revoke/));
+
+  // 재확인이 alice의 둘째 레포에서 멈추고, 첫 레포(REPO)의 권한만 지워진 사이다.
+  const release = world.github.hold("alice", REPO2);
+  t.after(release);
+  world.github.revoke("alice");
+  await eventually(async () => assert.rejects(call(alice, api.members)));
+  await call(world.owner, api.setStatus, { branch: "main", text: "after revoke" });
+  await new Promise((done) => setTimeout(done, 300));
+  assert.doesNotMatch(await situation(), /after revoke/);
 });

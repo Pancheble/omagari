@@ -46,7 +46,7 @@ const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
   ["minute", 1],
 ];
 
-/** "3 minutes ago" / "3분 전": how long ago `iso` was, in the current language. */
+/** "3 minutes ago" or its Korean form: how long ago `iso` was, in the current language. */
 export function ago(iso: string) {
   const minutes = Math.floor((Date.now() - Date.parse(iso)) / 60_000);
   if (minutes < 1) return t.justNow;
