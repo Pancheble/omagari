@@ -18,6 +18,7 @@ import {
   setWorkspace,
   signedOut,
 } from "./api.ts";
+import { setLanguage, t, useLanguage } from "./i18n.ts";
 import { Centered, Login } from "./login.tsx";
 import { Tooltip } from "./tooltip.tsx";
 import { Workspace } from "./workspace.tsx";
@@ -35,11 +36,13 @@ function App() {
   const [state, setState] = useState<State>(() =>
     savedSession() ? { kind: "checking" } : { kind: "out" },
   );
+  useLanguage(); // redraws every screen when the language changes
 
   /** 세션이 끝났다. 로그인으로 돌아가 그렇다고 알린다. */
   const expire = useCallback(() => {
     saveSession(undefined);
-    setState({ kind: "out", notice: "로그인이 끝났어요. 다시 로그인해 주세요." });
+    setLanguage("en"); // before login it's always English (ADR-0045)
+    setState({ kind: "out", notice: t.login.expired });
   }, []);
 
   /** 세션으로 나를 읽어 들어간다. 세션이 끝났으면 로그인으로, 서버에 닿지 않으면 세션을 둔 채 다시 시도를 보인다. */
@@ -56,6 +59,7 @@ function App() {
         const workspace =
           workspaces.find((space) => space.id === saved)?.id ?? workspaces[0]?.id ?? "";
         setWorkspace(workspace);
+        setLanguage(me.prefs.language);
         setState({ kind: "in", session, me, workspaces, workspace });
       } catch (error) {
         if (!signedOut(error)) return setState({ kind: "unreachable", session });
@@ -75,11 +79,11 @@ function App() {
   if (state.kind === "unreachable") {
     return (
       <Centered>
-        <h1>서버에 닿지 않아요</h1>
-        <p>네트워크를 확인하고 다시 시도해 주세요. 로그인은 남아 있어요.</p>
+        <h1>{t.login.unreachableTitle}</h1>
+        <p>{t.login.unreachableBody}</p>
         <div className="actions">
           <button type="button" className="button outline" onClick={() => enter(state.session)}>
-            다시 시도
+            {t.tryAgain}
           </button>
         </div>
       </Centered>
@@ -90,6 +94,7 @@ function App() {
     // 서버에 닿지 않아도 이 브라우저에서는 로그아웃한다. 화면을 먼저 닫아, 서버가 끝난 세션의
     // 실시간 길을 닫는 것을 "로그인이 끝났어요"로 잘못 알리지 않는다.
     saveSession(undefined);
+    setLanguage("en");
     setState({ kind: "out" });
     void call(server(session), api.logout).catch(() => {});
   };

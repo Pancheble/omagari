@@ -4,21 +4,22 @@ import {
   ContractFailure,
   call,
   EXECUTOR_NAMES,
-  IMPORTANCE_LABELS,
   type Importance,
   type Label,
+  Language,
   type MemberView,
 } from "@omagari/contract";
-import { Bot, MessagesSquare, Plus, RefreshCw, Search, Tag, X } from "lucide-react";
+import { Bot, Languages, MessagesSquare, Plus, RefreshCw, Search, Tag, X } from "lucide-react";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { type Me, server } from "./api.ts";
 import { type PostItem, settled } from "./forum.tsx";
+import { LANGUAGE_NAMES, language, setLanguage, t } from "./i18n.ts";
 import { ImportanceBadge, LabelDot, useLabels } from "./labels.tsx";
 import { Mark } from "./members.tsx";
 import { Avatar, personName } from "./workspace.tsx";
 
 type Reply = Awaited<ReturnType<typeof call<typeof api.settings>>>;
-type Page = "agent" | "alerts" | "labels";
+type Page = "agent" | "language" | "alerts" | "labels";
 
 /** 검사 명령을 정하는 법, 샌드박스 도구를 까는 법(README "검사 명령"). */
 const CHECK_HELP = "https://github.com/omagari-dev/omagari#검사-명령";
@@ -84,14 +85,29 @@ export function Settings({
     } catch (error) {
       check(error);
       setSettings(before);
-      setSaveError("바꾸지 못했어요. 잠시 뒤 다시 시도해 주세요.");
+      setSaveError(t.settings.saveFailed);
+    }
+  };
+
+  /** Switches the screen first, and goes back if the server doesn't take it. */
+  const pickLanguage = async (next: Language) => {
+    const before = language;
+    setLanguage(next);
+    setSaveError(undefined);
+    try {
+      await call(server(session), api.setPrefs, { language: next });
+    } catch (error) {
+      check(error);
+      setLanguage(before);
+      setSaveError(t.settings.saveFailed);
     }
   };
 
   const items: [Page, string, ReactNode][] = [
-    ["agent", "내 에이전트", <Bot key="agent" size={18} aria-hidden />],
-    ["alerts", "부딪힘 알림", <MessagesSquare key="alerts" size={18} aria-hidden />],
-    ["labels", "라벨", <Tag key="labels" size={18} aria-hidden />],
+    ["agent", t.settings.pages.agent, <Bot key="agent" size={18} aria-hidden />],
+    ["language", t.settings.pages.language, <Languages key="language" size={18} aria-hidden />],
+    ["alerts", t.settings.pages.alerts, <MessagesSquare key="alerts" size={18} aria-hidden />],
+    ["labels", t.settings.pages.labels, <Tag key="labels" size={18} aria-hidden />],
   ];
   const item = ([id, name, icon]: (typeof items)[number]) => (
     <button
@@ -111,13 +127,16 @@ export function Settings({
   if (page === "labels") {
     // 라벨은 설정 읽기와 따로 실시간으로 받는 목록을 쓴다.
     body = <LabelsPage posts={posts} session={session} check={check} />;
+  } else if (page === "language") {
+    // Comes with `api.me`, not the settings read, so it works even when that fails.
+    body = <LanguagePage onPick={pickLanguage} />;
   } else if (failed) {
     body = (
       <div className="empty">
-        <h2>설정을 읽지 못했어요</h2>
-        <p>서버에 닿지 않았어요.</p>
+        <h2>{t.settings.loadFailedTitle}</h2>
+        <p>{t.settings.loadFailedBody}</p>
         <button type="button" className="button outline" onClick={load}>
-          다시 시도
+          {t.tryAgain}
         </button>
       </div>
     );
@@ -147,25 +166,24 @@ export function Settings({
       onClose={onClose}
       onClick={(event) => event.target === event.currentTarget && dialog.current?.close()}
     >
-      <nav className="settings-nav" aria-label="설정 항목">
+      <nav className="settings-nav" aria-label={t.settings.nav}>
         <div className="settings-me">
           <Avatar name={me.name} login={me.login} size={36} />
           <span className="names">
             <strong>{personName(me.name, me.login)}</strong>
           </span>
         </div>
-        <h3>나</h3>
-        {item(items[0] as (typeof items)[number])}
-        <h3>워크스페이스 · {workspace}</h3>
-        {item(items[1] as (typeof items)[number])}
-        {item(items[2] as (typeof items)[number])}
+        <h3>{t.settings.me}</h3>
+        {items.slice(0, 2).map(item)}
+        <h3>{t.settings.workspace(workspace ?? "")}</h3>
+        {items.slice(2).map(item)}
       </nav>
       <section className={page === "labels" ? "settings-page labels-page" : "settings-page"}>
         <h2 id={title}>{pageName}</h2>
         <button
           type="button"
           className="header-button settings-close"
-          aria-label="설정 닫기"
+          aria-label={t.settings.close}
           onClick={() => dialog.current?.close()}
         >
           <X size={18} aria-hidden />
@@ -191,32 +209,31 @@ function AgentPage({
   onSwitch: (on: boolean) => void;
 }) {
   const { answered } = settings;
+  const words = t.settings.agent;
   return (
     <>
-      <Group
-        title="남이 물을 때"
-        note="답할 때는 내 기기의 러너가 내 폴더를 읽기만 하고, 내 사용량이 쓰여요."
-      >
+      <Group title={words.whenAsked} note={words.whenAskedNote}>
         <SwitchRow
-          name="남의 질문에 답하기"
+          name={words.answerSwitch}
           on={settings.askSwitch}
-          description={
-            settings.askSwitch
-              ? "다른 멤버의 에이전트가 물으면 내 에이전트가 내 폴더를 읽고 답해요."
-              : "꺼 두었어요. 묻는 쪽은 바로 “받지 않는다”를 들어요."
-          }
+          description={settings.askSwitch ? words.answerOn : words.answerOff}
           onChange={onSwitch}
         />
         <Row
-          name="내 에이전트가 답한 것"
+          name={words.answered}
           description={
             answered.last
-              ? `지난 ${ANSWERED_DAYS}일 동안 ${answered.count}번 · 마지막은 ${answered.last.name}의 에이전트가 물은 “${answered.last.text}”`
-              : `지난 ${ANSWERED_DAYS}일 동안 답한 질문이 없어요`
+              ? words.answeredSome(
+                  answered.count,
+                  ANSWERED_DAYS,
+                  answered.last.name,
+                  answered.last.text,
+                )
+              : words.answeredNone(ANSWERED_DAYS)
           }
         />
       </Group>
-      <Group title="연결된 에이전트">
+      <Group title={words.connected}>
         {mine?.agents.length ? (
           mine.agents.map((agent) => {
             const off = agent.state === "offline";
@@ -227,25 +244,55 @@ function AgentPage({
                 name={EXECUTOR_NAMES[agent.executor]}
                 description={
                   off
-                    ? "러너가 꺼져 있어요"
+                    ? words.runnerOff
                     : agent.state === "answering"
-                      ? "러너 켜짐 · 답하는 중"
-                      : "러너 켜짐"
+                      ? words.runnerAnswering
+                      : words.runnerOn
                 }
               >
                 {off ? (
-                  <span className="settings-off">꺼짐</span>
+                  <span className="settings-off">{t.settings.off}</span>
                 ) : (
-                  <span className="badge outline">연결됨</span>
+                  <span className="badge outline">{words.connectedBadge}</span>
                 )}
               </Row>
             );
           })
         ) : (
-          <Row name="연결된 에이전트가 없어요" description="이 기기에서 러너를 켜면 여기 보여요." />
+          <Row name={words.none} description={words.noneHint} />
         )}
       </Group>
     </>
+  );
+}
+
+/** The member's own language (ADR-0045). Saved on the server, so it follows them to other tabs and devices. */
+function LanguagePage({ onPick }: { onPick: (language: Language) => void }) {
+  const nameId = useId();
+  const descriptionId = useId();
+  return (
+    <Group>
+      <Row
+        name={t.settings.language.name}
+        nameId={nameId}
+        description={t.settings.language.description}
+        descriptionId={descriptionId}
+      >
+        <select
+          className="text-input"
+          aria-labelledby={nameId}
+          aria-describedby={descriptionId}
+          value={language}
+          onChange={(event) => onPick(Language.parse(event.target.value))}
+        >
+          {Language.options.map((id) => (
+            <option key={id} value={id} lang={id}>
+              {LANGUAGE_NAMES[id]}
+            </option>
+          ))}
+        </select>
+      </Row>
+    </Group>
   );
 }
 
@@ -267,11 +314,11 @@ function AlertsPage({
         {...settings.mergeCheck}
         runner={online === false ? "offline" : settings.mergeCheck.runner}
       />
-      <Group title="워크스페이스">
-        <Row name="이름">
+      <Group title={t.settings.alerts.workspace}>
+        <Row name={t.settings.alerts.name}>
           <code className="settings-value">{workspace}</code>
         </Row>
-        <Row name="레포">
+        <Row name={t.settings.alerts.repo}>
           <code className="settings-value">{repo}</code>
         </Row>
       </Group>
@@ -287,45 +334,39 @@ const help = (text: string) => (
 
 /** 합쳐 돌려 보기(시안 30-C). 읽기만 한다. 켜고 끄는 것은 러너에서 한다(ADR-0034). */
 function MergeCheckGroup({ runner, check }: Reply["mergeCheck"]) {
-  const off = <span className="settings-off">꺼짐</span>;
+  const words = t.settings.alerts;
+  const off = <span className="settings-off">{t.settings.off}</span>;
   const rows: Record<typeof runner, [string, ReactNode]> = {
     on: [
-      "켜져 있어요. 샌드박스 안에서만 돌아요.",
+      words.runOn,
       <span key="on" className="badge outline">
-        켜짐
+        {t.settings.on}
       </span>,
     ],
-    off: ["꺼 두었어요. 다른 멤버의 러너가 돌린 판정은 그대로 보여요.", off],
-    no_sandbox: ["이 기기에 샌드박스 도구가 없어 돌리지 않아요.", help("까는 법")],
-    offline: ["러너가 꺼져 있어요.", off],
+    off: [words.runOff, off],
+    no_sandbox: [words.noSandbox, help(words.howToInstall)],
+    offline: [words.runnerOff, off],
   };
   const [description, control] = rows[runner];
   const problem = check && "problem" in check ? check.problem : undefined;
   return (
-    <Group
-      title="합쳐 돌려 보기"
-      note="레포 기본 브랜치의 설정 파일에서 읽어요. 바꾸려면 그 파일을 고쳐 머지하세요. 모든 멤버에게 같아요. 켜고 끄는 것은 웹이 아니라 러너에서 해요. 서버가 내 기기에서 돌릴 것을 정하지 못하게 하려는 거예요."
-    >
+    <Group title={words.mergeRun} note={words.mergeRunNote}>
       <Row
-        name="검사 명령"
+        name={words.checkCommand}
         description={
           !check
-            ? "러너가 붙으면 레포의 설정 파일을 읽어 와요."
+            ? words.checkWaiting
             : "config" in check
-              ? "합친 것에 돌리는 명령이에요."
-              : {
-                  missing: "레포에 설정 파일이 없어요. 머지하면 돌리기 시작해요.",
-                  invalid: "레포의 설정 파일을 읽지 못했어요. JSON이 아니거나 꼴이 달라요.",
-                  unknown_branch: "러너가 레포의 기본 브랜치를 몰라 설정 파일을 읽지 못했어요.",
-                }[check.problem]
+              ? words.checkConfig
+              : words.checkProblems[check.problem]
         }
       >
         {check && "config" in check && (
           <code className="settings-value settings-command">{check.config.check}</code>
         )}
-        {problem && help("정하는 법")}
+        {problem && help(words.howToSet)}
       </Row>
-      <Row name="내 러너에서 돌리기" description={description}>
+      <Row name={words.runOnMine} description={description}>
         {control}
       </Row>
     </Group>
@@ -337,12 +378,12 @@ const Group = ({
   note,
   children,
 }: {
-  title: string;
+  title?: string;
   note?: string;
   children: ReactNode;
 }) => (
   <div className="settings-section">
-    <h3>{title}</h3>
+    {title && <h3>{title}</h3>}
     <div className="settings-group">{children}</div>
     {note && <p>{note}</p>}
   </div>
@@ -432,6 +473,7 @@ function LabelsPage({
   check: (error: unknown) => unknown;
 }) {
   const labels = useLabels();
+  const words = t.settings.labels;
   const [query, setQuery] = useState("");
   /** 고른 라벨의 이름. 없으면 새 라벨이다. */
   const [picked, setPicked] = useState<string | undefined>(labels[0]?.name);
@@ -500,10 +542,10 @@ function LabelsPage({
       const code = failure instanceof ContractFailure ? failure.code : undefined;
       setError(
         code === "conflict"
-          ? "같은 이름의 라벨이 이미 있어요."
+          ? words.taken
           : code === "github_failed"
-            ? "GitHub이 라벨을 받지 않았어요. 토큰의 권한을 확인해 주세요."
-            : "저장하지 못했어요. 잠시 뒤 다시 시도해 주세요.",
+            ? words.githubRefused
+            : words.saveFailed,
       );
     } finally {
       setBusy(false);
@@ -520,15 +562,15 @@ function LabelsPage({
               type="search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="라벨 찾기"
-              aria-label="라벨 찾기"
+              placeholder={words.find}
+              aria-label={words.find}
               autoComplete="off"
             />
           </div>
           <button
             type="button"
             className="header-button"
-            aria-label="새 라벨"
+            aria-label={words.new}
             aria-pressed={picked === undefined}
             onClick={() => pick(undefined)}
           >
@@ -560,20 +602,20 @@ function LabelsPage({
         }}
       >
         <div className="labels-preview">
-          <p>포스트에서 이렇게 보여요</p>
-          <strong>refund의 reason 필드</strong> <span className="issue-number">#44</span>
+          <p>{words.preview}</p>
+          <strong>{words.previewTitle}</strong> <span className="issue-number">#44</span>
           <span className="labels-preview-badges">
-            <span className="badge warning">직접 충돌</span>
+            <span className="badge warning">{words.directConflict}</span>
             <span className="label-badge">
               <LabelDot color={colorOk ? fields.color : undefined} />
-              {fields.name.trim() || "새 라벨"}
+              {fields.name.trim() || words.new}
             </span>
             {fields.importance === "discuss" && <ImportanceBadge importance="discuss" />}
           </span>
         </div>
         <div className="labels-row">
           <div className="field">
-            <label htmlFor={ids.name}>이름</label>
+            <label htmlFor={ids.name}>{words.name}</label>
             <input
               id={ids.name}
               className="text-input"
@@ -584,7 +626,7 @@ function LabelsPage({
             />
           </div>
           <div className="field">
-            <label htmlFor={ids.color}>색</label>
+            <label htmlFor={ids.color}>{words.color}</label>
             <div className="labels-color">
               <LabelDot color={colorOk ? fields.color : undefined} size={20} />
               <span className="labels-hex">
@@ -603,7 +645,7 @@ function LabelsPage({
               <button
                 type="button"
                 className="header-button"
-                aria-label="다른 색 뽑기"
+                aria-label={words.reroll}
                 onClick={() => set({ color: randomColor() })}
               >
                 <RefreshCw size={16} aria-hidden />
@@ -612,7 +654,7 @@ function LabelsPage({
           </div>
         </div>
         <div className="field">
-          <label htmlFor={ids.description}>설명</label>
+          <label htmlFor={ids.description}>{words.description}</label>
           <input
             id={ids.description}
             className="text-input"
@@ -623,14 +665,9 @@ function LabelsPage({
           />
         </div>
         <fieldset className="field labels-importance">
-          <legend>중요도</legend>
+          <legend>{words.importance}</legend>
           <div className="radio-cards">
-            {(
-              [
-                ["reference", "알림으로 쌓여요. 이슈를 열지 않아요."],
-                ["discuss", "사람이 보고 이야기해요. 붙으면 GitHub 이슈를 열어요."],
-              ] as const
-            ).map(([id, text]) => (
+            {(["reference", "discuss"] as const).map((id) => (
               <label key={id} className="radio-card">
                 <input
                   type="radio"
@@ -638,16 +675,12 @@ function LabelsPage({
                   checked={fields.importance === id}
                   onChange={() => set({ importance: id })}
                 />
-                <strong>{IMPORTANCE_LABELS[id]}</strong>
-                <small>{text}</small>
+                <strong>{t.importance[id]}</strong>
+                <small>{words.importanceHelp[id]}</small>
               </label>
             ))}
           </div>
-          {opening > 0 && (
-            <p className="help">
-              논의로 바꾸면 이 라벨이 붙은 열린 포스트 {opening}개에 이슈가 열려요.
-            </p>
-          )}
+          {opening > 0 && <p className="help">{words.opening(opening)}</p>}
         </fieldset>
         {error && (
           <p className="help error" role="alert">
@@ -655,23 +688,21 @@ function LabelsPage({
           </p>
         )}
         <div className="labels-actions">
-          <p className="help">
-            이름, 색, 설명은 GitHub 라벨도 같이 고쳐져요. 중요도는 모든 멤버에게 같아요.
-          </p>
+          <p className="help">{words.help}</p>
           <button
             type="button"
             className="button outline"
             disabled={!dirty}
             onClick={() => pick(label)}
           >
-            되돌리기
+            {words.revert}
           </button>
           <button
             type="submit"
             className="button primary"
             disabled={busy || !dirty || !colorOk || !fields.name.trim()}
           >
-            {label ? "저장" : "만들기"}
+            {label ? words.save : words.create}
           </button>
         </div>
       </form>

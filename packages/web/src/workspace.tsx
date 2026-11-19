@@ -82,6 +82,7 @@ import {
   postTitle,
   settled,
 } from "./forum.tsx";
+import { setLanguage } from "./i18n.ts";
 import { type CreateKind, ForumDialog, LabelsContext, PostLabels } from "./labels.tsx";
 import { useLive } from "./live.ts";
 import { MemberList, MemberSkeleton } from "./members.tsx";
@@ -586,7 +587,12 @@ export function Workspace({
         loadRepos(repos);
         // 끊긴 사이에 온 답은 다시 오지 않는다. 불러 둔 DM을 버리고 열려 있는 것은 다시 읽는다.
         setDms({});
-      } else if (event.kind === "draft") setIncoming(event.payload);
+        // A language picked elsewhere while we were cut off doesn't come again.
+        call(server(session), api.me)
+          .then((me) => setLanguage(me.prefs.language))
+          .catch(check);
+      } else if (event.kind === "prefs") setLanguage(event.payload.language);
+      else if (event.kind === "draft") setIncoming(event.payload);
       else if (event.kind === "channel") add(event.payload);
       else if (event.kind === "labels" && repos[0])
         setLabelsByRepo((all) => ({ ...all, [repos[0] as string]: event.payload }));
