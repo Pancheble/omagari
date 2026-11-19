@@ -1403,6 +1403,87 @@ svg.lucide {
   flex-basis: 100%;
 }
 
+/* 입력 칸의 이모지 버튼(DESIGN.md "입력")과 `:` 자동 완성(DESIGN.md "채팅의 이모지"). 팔레트는 입력 칸 바로 위에 오른쪽을 맞춘다. */
+.emoji-anchor {
+  display: contents;
+}
+
+.composer-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: var(--control);
+  height: var(--control);
+  padding: 0;
+  border: 0;
+  border-radius: var(--rounded-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    transform 120ms ease-out,
+    background-color 120ms ease-out;
+}
+
+.composer-icon:hover,
+.composer-icon[aria-expanded="true"] {
+  background: var(--selected);
+  color: var(--ink);
+}
+
+.composer-icon:active {
+  transform: scale(0.95);
+}
+
+@media (min-width: 834px) {
+  .composer .emoji-palette {
+    top: auto;
+    right: 0;
+    bottom: calc(100% + 4px);
+    left: auto;
+  }
+}
+
+.emoji-suggest {
+  right: auto;
+  width: 300px;
+}
+
+.emoji-suggest .menu-item {
+  gap: 8px;
+  justify-content: flex-start;
+}
+
+.emoji-suggest .menu-item[aria-selected="true"] {
+  background: var(--selected);
+}
+
+.suggest-emoji {
+  flex: none;
+  font-family: var(--emoji);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.suggest-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.suggest-tag {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .composer-tools {
   display: flex;
   flex: 1;

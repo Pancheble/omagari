@@ -135,6 +135,43 @@ const isTone = (value: unknown): value is number =>
 const isList = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every((emoji) => typeof emoji === "string");
 
+/** 고른 이모지를 "최근 사용"의 맨 앞에 기억한다. */
+export const remember = (emoji: string) =>
+  store(
+    RECENT_KEY,
+    [emoji, ...stored(RECENT_KEY, [], isList).filter((other) => other !== emoji)].slice(
+      0,
+      MAX_RECENT,
+    ),
+  );
+
+/** 불러 둔 데이터가 있으면 돌려준다. 없으면 `loadEmoji()`로 불러야 한다. */
+export const loadedEmoji = () => loaded;
+
+export type Found = { emoji: string; label: string; tag?: string };
+
+/**
+ * `:` 자동 완성(DESIGN.md "채팅의 이모지"): 한국어 이름과 찾는 말에서 `limit`개까지, 최근 사용한 것을 먼저 놓는다.
+ * `tag`는 찾는 말로 맞았을 때 맞은 말이다(이름으로 맞으면 없다).
+ */
+export function findEmoji({ items }: Data, query: string, limit = 5): Found[] {
+  const words = query.trim().toLowerCase();
+  const recent = stored(RECENT_KEY, [], isList);
+  const rank = (emoji: string) => {
+    const at = recent.indexOf(emoji);
+    return at < 0 ? recent.length : at;
+  };
+  return items
+    .flatMap((item): Found[] => {
+      if (item.label.toLowerCase().includes(words))
+        return [{ emoji: item.emoji, label: item.label }];
+      const tag = item.tags.find((tag) => tag.toLowerCase().includes(words));
+      return tag ? [{ emoji: item.emoji, label: item.label, tag }] : [];
+    })
+    .sort((a, b) => rank(a.emoji) - rank(b.emoji))
+    .slice(0, limit);
+}
+
 type Section = { name: string; Icon: LucideIcon; emojis: Emoji[] };
 
 /**
@@ -146,11 +183,14 @@ export function EmojiPalette({
   onPick,
   onClear,
   onClose,
+  hideClear,
 }: {
   current: string | null;
   onPick: (emoji: string) => void;
   onClear: () => void;
   onClose: () => void;
+  /** 이모지 칸을 비우는 일이 없는 곳(채팅 입력 칸)은 "지우기"를 두지 않는다. */
+  hideClear?: boolean;
 }) {
   const [data, setData] = useState(loaded);
   const [query, setQuery] = useState("");
@@ -269,7 +309,7 @@ export function EmojiPalette({
   };
 
   const pick = (emoji: string) => {
-    store(RECENT_KEY, [emoji, ...recent.filter((other) => other !== emoji)].slice(0, MAX_RECENT));
+    remember(emoji);
     onPick(emoji);
   };
 
@@ -315,9 +355,11 @@ export function EmojiPalette({
         >
           ✋{MODIFIERS[tone]}
         </button>
-        <button type="button" className="button quiet" onClick={onClear}>
-          지우기
-        </button>
+        {!hideClear && (
+          <button type="button" className="button quiet" onClick={onClear}>
+            지우기
+          </button>
+        )}
       </div>
       {/* ponytail: 2천 칸을 가상 스크롤 없이 모두 그린다. 느린 기기에서 무거우면 보이는 줄만 그린다. */}
       <div className="emoji-list" ref={list} onScroll={onScroll}>
