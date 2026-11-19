@@ -1763,6 +1763,8 @@ export async function startServer(options: {
     }
     return changed;
   };
+  const labelNameExists = (name: string) =>
+    !!db.prepare("SELECT 1 FROM labels WHERE name = ?").get(name);
   /** 레포의 라벨 이름이 바뀌었다. 포스트와 이슈 라벨에서 이름을 바꾸고 웹에 알린다. */
   const renameLabel = (repo: string, from: string, to: string) => {
     for (const post of editPostLabels(repo, (labels) => labels.map((l) => (l === from ? to : l))))
@@ -1781,7 +1783,11 @@ export async function startServer(options: {
       ).every((r) => r === repo);
       const labels = only
         ? old.labels.map((l) => (l === from ? to : l))
-        : [...old.labels, ...(old.labels.includes(to) ? [] : [to])];
+        : [
+            // 다른 레포에 옛 이름 라벨이 남아 있을 때만 옛 이름을 둔다. 아니면 안 보이는 레포의 옛 이름이 포럼에 남아 샌다.
+            ...old.labels.filter((l) => l !== from || labelNameExists(from)),
+            ...(old.labels.includes(to) ? [] : [to]),
+          ];
       const filter = { ...old, labels: [...new Set(labels)] };
       db.prepare("UPDATE channels SET filter = ? WHERE id = ?").run(JSON.stringify(filter), row.id);
       broadcastChannel(ownerOf(repo), { ...row, filter: JSON.stringify(filter) });
@@ -3375,12 +3381,30 @@ export async function startServer(options: {
    */
   const channelFor = (login: string, row: Parameters<typeof channelView>[0]) => {
     const view = channelView(row);
-    const repos = view.filter?.repos;
-    if (!view.filter || !repos?.length) return view;
-    const seen = repos.filter((repo) => sees(login, repo));
-    return seen.length
-      ? ({ ...view, filter: { ...view.filter, repos: seen } } as Channel)
-      : undefined;
+    if (!view.filter) return view;
+    let filter = view.filter;
+    const repos = filter.repos;
+    if (repos?.length) {
+      const seen = repos.filter((repo) => sees(login, repo));
+      if (!seen.length) return undefined;
+      filter = { ...filter, repos: seen };
+    }
+    // 라벨 이름도 같다. 보이는 레포에 없고 안 보이는 레포에만 있는 라벨 이름은 뺀다. 아무 레포에도 없는 이름은 남긴다.
+    if ("labels" in filter) {
+      const hidden = new Set(
+        (
+          db
+            .prepare(
+              "SELECT DISTINCT name FROM labels WHERE repo NOT IN (SELECT repo FROM access WHERE login = ?) AND name NOT IN (SELECT l.name FROM labels l JOIN access a ON a.repo = l.repo WHERE a.login = ?)",
+            )
+            .all(login, login) as { name: string }[]
+        ).map((l) => l.name.toLowerCase()),
+      );
+      const labels = filter.labels.filter((l) => !hidden.has(l.toLowerCase()));
+      if (!labels.length) return undefined;
+      filter = { ...filter, labels } as typeof filter;
+    }
+    return { ...view, filter } as Channel;
   };
   /** 워크스페이스의 웹마다 그 사람에게 보이는 채널을 보낸다. 이제 안 보이는 사람에게는 이미 받았을 수 있어 지우라고 보낸다. */
   const broadcastChannel = (workspace: string, row: Parameters<typeof channelView>[0]) => {

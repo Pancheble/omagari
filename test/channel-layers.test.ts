@@ -272,8 +272,9 @@ test("포럼은 레포로 거르고, 레포의 라벨 이름을 바꾸면 그 �
   const filterOf = async (id: string) =>
     (await call(owner, api.channels)).channels.find((c) => c.id === id)?.filter;
   assert.deepEqual(await filterOf(payForum.id), { labels: ["충돌"], repos: [REPO2] });
-  assert.deepEqual(await filterOf(allForum.id), { labels: ["직접 충돌", "충돌"] });
-  // (가짜 GitHub는 라벨을 레포끼리 나누지 않아 REPO도 다음 주기에 같은 이름을 받는다. REPO만 거르는 포럼이 그대로인지는 여기서 가리지 않는다.)
+  // 가짜 GitHub는 라벨을 레포끼리 나누지 않아 REPO도 다음 주기에 같은 이름을 받는다. 어느 레포에도 옛 이름이 없어지면 옛 이름은
+  // 포럼에서 빠지는데, 그 때가 이 호출보다 먼저일지 나중일지는 주기에 달렸다. 그래서 끝에 이르는 모습만 본다(REPO만 거르는 포럼이 그대로인지는 가리지 않는다).
+  await eventually(async () => assert.deepEqual(await filterOf(allForum.id), { labels: ["충돌"] }));
   await eventually(async () => {
     assert.deepEqual(await forumsOf(owner, REPO2), [ids(payForum, allForum, reference)]);
   });
@@ -428,4 +429,43 @@ test("비공개 레포의 이름은 push 권한이 없는 멤버에게 포럼의
     await call(alice, api.updateForum, { id: made.id, name: "내 것", filter: { labels: ["가"] } })
   ).channel;
   assert.deepEqual(cleared.filter, { labels: ["가"] });
+});
+
+test("포럼의 라벨 조건도 push 권한이 없는 레포의 라벨 이름은 보이지 않고, 라벨 이름을 바꿔도 새지 않는다", async (t) => {
+  const world = await startWorld({ accept: [REPO, REPO2] });
+  t.after(world.stop);
+  const owner = world.owner as As & { login: string };
+  world.github.admin("owner", REPO2);
+  world.github.grant("owner", REPO2);
+  await call(owner, api.addRepo, { repo: REPO2 });
+  world.github.grant("alice", REPO2); // alice는 REPO2만 보고 REPO는 모른다
+  const alice = await world.login("alice");
+  const live = await world.live(alice);
+  const all = { ...owner, repos: [REPO, REPO2] };
+
+  await call(on(owner, REPO), api.createLabel, { name: "비밀", color: "ff0000", description: "" });
+  const forum = (await call(all, api.createForum, { name: "라벨", filter: { labels: ["비밀"] } }))
+    .channel;
+  const labelsOf = async (as: As) =>
+    (await call(as, api.channels)).channels.find((c) => c.id === forum.id)?.filter;
+  assert.deepEqual(await labelsOf(owner), { labels: ["비밀"] });
+  // 안 보이는 레포의 라벨뿐이면 포럼이 alice에게는 없다.
+  assert.equal(await labelsOf(alice), undefined);
+
+  // 보이는 레포의 라벨을 더하면 그것만 보이고, 이름을 바꿔도 안 보이는 새 이름은 새지 않는다.
+  await call(on(owner, REPO2), api.createLabel, { name: "공개", color: "00ff00", description: "" });
+  await call(all, api.updateForum, {
+    id: forum.id,
+    name: "라벨",
+    filter: { labels: ["비밀", "공개"] },
+  });
+  await call(on(owner, REPO), api.editLabel, { name: "비밀", next: { name: "더비밀" } });
+  assert.deepEqual(
+    new Set(((await labelsOf(owner)) as { labels: string[] }).labels),
+    new Set(["공개", "더비밀"]),
+  );
+  assert.deepEqual(await labelsOf(alice), { labels: ["공개"] });
+  await eventually(() => assert.ok(live.received.some((m) => m.kind === "channel")));
+  const frames = live.received.filter((m) => m.kind === "channel");
+  assert.equal(JSON.stringify(frames).includes("비밀"), false);
 });
