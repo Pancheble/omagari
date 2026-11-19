@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** Contract version. Sent in every envelope; a different one is rejected. Bump it on every breaking change. */
-export const CONTRACT_VERSION = 56;
+export const CONTRACT_VERSION = 57;
 
 /** Error shape. Shared by the runner/server `error` message and the HTTP error body (`{ error }`). */
 export const ContractError = z.strictObject({
@@ -2158,6 +2158,8 @@ export const api = {
     method: "GET",
     path: "/api/settings",
     response: z.strictObject({
+      /** This server's version (`git describe --tags`), shown under Info in the settings window. */
+      version: z.string(),
       askSwitch: z.boolean(),
       answered: z.strictObject({
         count: z.number(),

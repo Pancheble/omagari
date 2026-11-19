@@ -197,6 +197,7 @@ test("레포가 하나이던 판의 DB로 켜도 있던 것이 그 레포에 그
     "discuss",
   );
   assert.deepEqual((await call(owner, api.settings)).mergeCheck.check, { problem: "missing" });
+  assert.match((await call(owner, api.settings)).version, /\S/);
   assert.deepEqual(
     (await call(owner, api.history, { channel: "p1" })).messages.map((m) => m.kind),
     ["text", "decision"],

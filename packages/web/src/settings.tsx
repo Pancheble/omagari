@@ -9,7 +9,19 @@ import {
   Language,
   type MemberView,
 } from "@omagari/contract";
-import { Bot, Languages, MessagesSquare, Plus, RefreshCw, Search, Tag, X } from "lucide-react";
+import {
+  Bell,
+  Bot,
+  GitMerge,
+  Info,
+  Languages,
+  Palette,
+  Plus,
+  RefreshCw,
+  Search,
+  Tag,
+  X,
+} from "lucide-react";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { type Me, server } from "./api.ts";
 import { type PostItem, settled } from "./forum.tsx";
@@ -19,7 +31,7 @@ import { Mark } from "./members.tsx";
 import { Avatar, personName } from "./workspace.tsx";
 
 type Reply = Awaited<ReturnType<typeof call<typeof api.settings>>>;
-type Page = "agent" | "language" | "alerts" | "labels";
+type Page = "agent" | "language" | "appearance" | "notifications" | "alerts" | "labels" | "info";
 
 /** How to set the check command and install sandbox tools (README "Check command"). */
 const CHECK_HELP = "https://github.com/omagari-dev/omagari/blob/dev/docs/setup.md#check-command";
@@ -106,8 +118,15 @@ export function Settings({
   const items: [Page, string, ReactNode][] = [
     ["agent", t.settings.pages.agent, <Bot key="agent" size={18} aria-hidden />],
     ["language", t.settings.pages.language, <Languages key="language" size={18} aria-hidden />],
-    ["alerts", t.settings.pages.alerts, <MessagesSquare key="alerts" size={18} aria-hidden />],
+    ["appearance", t.settings.pages.appearance, <Palette key="appearance" size={18} aria-hidden />],
+    [
+      "notifications",
+      t.settings.pages.notifications,
+      <Bell key="notifications" size={18} aria-hidden />,
+    ],
+    ["alerts", t.settings.pages.alerts, <GitMerge key="alerts" size={18} aria-hidden />],
     ["labels", t.settings.pages.labels, <Tag key="labels" size={18} aria-hidden />],
+    ["info", t.settings.pages.info, <Info key="info" size={18} aria-hidden />],
   ];
   const item = ([id, name, icon]: (typeof items)[number]) => (
     <button
@@ -130,6 +149,13 @@ export function Settings({
   } else if (page === "language") {
     // Comes with `api.me`, not the settings read, so it works even when that fails.
     body = <LanguagePage onPick={pickLanguage} />;
+  } else if (page === "appearance" || page === "notifications") {
+    // Placeholders: #312 (dark theme) and #313 (browser notifications) fill them.
+    body = (
+      <div className="settings-section">
+        <p>{t.settings[page].soon}</p>
+      </div>
+    );
   } else if (failed) {
     body = (
       <div className="empty">
@@ -152,8 +178,15 @@ export function Settings({
         }
       />
     );
+  } else if (page === "info") {
+    body = <InfoPage workspace={workspace ?? ""} repo={me.repo} version={settings.version} />;
   } else {
-    body = <AlertsPage settings={settings} online={online} workspace={workspace} repo={me.repo} />;
+    body = (
+      <MergeCheckGroup
+        {...settings.mergeCheck}
+        runner={online === false ? "offline" : settings.mergeCheck.runner}
+      />
+    );
   }
 
   return (
@@ -174,9 +207,9 @@ export function Settings({
           </span>
         </div>
         <h3>{t.settings.me}</h3>
-        {items.slice(0, 2).map(item)}
+        {items.slice(0, 4).map(item)}
         <h3>{t.settings.workspace(workspace ?? "")}</h3>
-        {items.slice(2).map(item)}
+        {items.slice(4).map(item)}
       </nav>
       <section className={page === "labels" ? "settings-page labels-page" : "settings-page"}>
         <h2 id={title}>{pageName}</h2>
@@ -271,7 +304,7 @@ function LanguagePage({ onPick }: { onPick: (language: Language) => void }) {
   const nameId = useId();
   const descriptionId = useId();
   return (
-    <Group>
+    <Group title={t.settings.language.title} note={t.settings.language.note}>
       <Row
         name={t.settings.language.name}
         nameId={nameId}
@@ -296,30 +329,30 @@ function LanguagePage({ onPick }: { onPick: (language: Language) => void }) {
   );
 }
 
-function AlertsPage({
-  settings,
-  online,
+/** Read-only facts about this workspace and server. */
+function InfoPage({
   workspace,
   repo,
+  version,
 }: {
-  settings: Reply;
-  /** My runner, seen from the live member list. None if unknown. */
-  online?: boolean;
   workspace: string;
   repo: string;
+  version: string;
 }) {
+  const words = t.settings.info;
   return (
     <>
-      <MergeCheckGroup
-        {...settings.mergeCheck}
-        runner={online === false ? "offline" : settings.mergeCheck.runner}
-      />
-      <Group title={t.settings.alerts.workspace}>
-        <Row name={t.settings.alerts.name}>
+      <Group title={words.workspace}>
+        <Row name={words.name}>
           <code className="settings-value">{workspace}</code>
         </Row>
-        <Row name={t.settings.alerts.repo}>
+        <Row name={words.repo}>
           <code className="settings-value">{repo}</code>
+        </Row>
+      </Group>
+      <Group title={words.server}>
+        <Row name={words.version}>
+          <code className="settings-value">{version}</code>
         </Row>
       </Group>
     </>

@@ -3258,6 +3258,7 @@ export async function startServer(options: {
     }[];
     const last = answered[0];
     return {
+      version,
       askSwitch: !db.prepare("SELECT 1 FROM ask_off WHERE login = ?").get(login),
       answered: {
         count: answered.length,
