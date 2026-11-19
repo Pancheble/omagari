@@ -253,6 +253,22 @@ const FORUMS = `(SELECT json_group_array(json_object('id', f.id, 'filter', json(
 const POST_IMPORTANCE = `CASE WHEN EXISTS (SELECT 1 FROM json_each(c.labels) j
   JOIN labels l ON l.repo = c.repo AND l.name = j.value AND l.importance = 'discuss') THEN 'discuss' ELSE 'reference' END`;
 
+/** The original message (of a reply or a thread) in the same channel as JSON `{ login, name, text, comment }`, or NULL. */
+const ORIGINAL = (
+  column: string,
+) => `(SELECT json_object('login', o.login, 'name', COALESCE(op.name, o.login),
+    'text', COALESCE(oq.question, o.text), 'comment', o.comment) FROM messages o
+    LEFT JOIN people op ON op.login = o.login LEFT JOIN qas oq ON oq.id = o.qa
+    WHERE o.id = ${column} AND o.channel = m.channel)`;
+/** The thread under `m` as JSON `{ count, last, writers }` (up to three writers, latest first), or NULL without replies (ADR-0047). */
+const THREAD = `(SELECT json_object('count', COUNT(*), 'last', MAX(t.at), 'writers',
+    json((SELECT json_group_array(json_object('login', w.login, 'name', COALESCE(wp.name, w.login)) ORDER BY w.latest DESC)
+      FROM (SELECT login, MAX(id) AS latest FROM messages WHERE thread_of = m.id GROUP BY login ORDER BY latest DESC LIMIT 3) w
+      LEFT JOIN people wp ON wp.login = w.login)))
+  FROM messages t WHERE t.thread_of = m.id HAVING COUNT(*) > 0)`;
+/** A message that shows in the channel: not in a thread, or a thread reply also sent to the channel. */
+const IN_CHANNEL = "(m.thread_of IS NULL OR m.also_in_channel = 1)";
+
 const MESSAGES = `SELECT m.id, m.channel, m.login, m.text, m.note, m.at, m.github, p.name,
   c.issue, c.issue_url, c.issue_title, c.issue_labels, c.issue_open, c.labels, ${POST_IMPORTANCE} AS importance,
   q.id AS qa, q.executor, q.question, q.at AS asked, q.answer, q.visibility,
@@ -264,10 +280,8 @@ const MESSAGES = `SELECT m.id, m.channel, m.login, m.text, m.note, m.at, m.githu
   COALESCE(${ownerSql("a.repo")}, (SELECT ch.workspace FROM channels ch WHERE ch.id = m.channel)) AS workspace,
   (SELECT json_group_array(json_array(r.emoji, r.login, COALESCE(rp.name, r.login)) ORDER BY r.at, r.rowid)
     FROM reactions r LEFT JOIN people rp ON rp.login = r.login WHERE r.message = m.id) AS reactions,
-  m.reply_to, m.notify, (SELECT json_object('login', o.login, 'name', COALESCE(op.name, o.login),
-    'text', COALESCE(oq.question, o.text), 'comment', o.comment) FROM messages o
-    LEFT JOIN people op ON op.login = o.login LEFT JOIN qas oq ON oq.id = o.qa
-    WHERE o.id = m.reply_to AND o.channel = m.channel) AS original FROM messages m
+  m.reply_to, m.notify, ${ORIGINAL("m.reply_to")} AS original,
+  m.thread_of, m.also_in_channel, ${ORIGINAL("m.thread_of")} AS thread_original, ${THREAD} AS thread FROM messages m
   LEFT JOIN people p ON p.login = m.login
   LEFT JOIN qas q ON q.id = m.qa
   LEFT JOIN alerts a ON a.id = m.alert
@@ -315,6 +329,12 @@ type MessageRow = {
   notify: number | null;
   /** JSON of the original message `{ login, name, text, comment }`. NULL if it can't be read. */
   original: string | null;
+  /** For a reply in a thread: the thread's original message number, whether it also shows in the channel (1, 0), and the original like `original`. */
+  thread_of: number | null;
+  also_in_channel: number | null;
+  thread_original: string | null;
+  /** JSON of the thread under this message `{ count, last, writers }`. NULL without replies. */
+  thread: string | null;
 } & Pick<QaRow, "executor" | "question" | "answer" | "visibility">;
 
 /**
@@ -412,21 +432,33 @@ const firstLine = (text: string) => {
   return lines.find((line) => line !== "" && !line.startsWith(">")) ?? lines[0] ?? "";
 };
 
-const replyView = (row: MessageRow) => {
-  if (row.reply_to === null) return {};
-  const original = row.original === null ? null : JSON.parse(row.original);
+/** The original message's JSON (`ORIGINAL`) as the contract's `original`. */
+const originalView = (json: string | null) => {
+  if (json === null) return null;
+  const original = JSON.parse(json);
   return {
-    replyTo: {
-      id: row.reply_to,
-      notify: row.notify === 1,
-      original: original && {
-        login: original.login,
-        name: original.name,
-        line: firstLine(original.text ?? "").slice(0, POST_LINE),
-      },
-    },
+    login: original.login,
+    name: original.name,
+    line: firstLine(original.text ?? "").slice(0, POST_LINE),
   };
 };
+
+const replyView = (row: MessageRow) => ({
+  ...(row.reply_to !== null && {
+    replyTo: { id: row.reply_to, notify: row.notify === 1, original: originalView(row.original) },
+  }),
+  ...(row.thread_of !== null && {
+    threadOf: { id: row.thread_of, original: originalView(row.thread_original) },
+  }),
+  ...(row.also_in_channel === 1 && { alsoInChannel: true as const }),
+  ...(row.thread !== null && {
+    thread: (({ count, last, writers }) => ({
+      count,
+      writers,
+      last: new Date(last).toISOString(),
+    }))(JSON.parse(row.thread)),
+  }),
+});
 
 const messageView = (row: MessageRow): ChannelMessage => {
   if (row.alert !== null) {
@@ -618,6 +650,11 @@ export async function startServer(options: {
   if (!db.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'reply_to'").get())
     db.exec(`ALTER TABLE messages ADD COLUMN reply_to INTEGER REFERENCES messages (id);
       ALTER TABLE messages ADD COLUMN notify INTEGER`);
+  // Threads (ADR-0047): `thread_of` is the thread's original message in the same chat channel, `also_in_channel` whether the reply also shows in the channel (1, 0).
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'thread_of'").get())
+    db.exec(`ALTER TABLE messages ADD COLUMN thread_of INTEGER REFERENCES messages (id);
+      ALTER TABLE messages ADD COLUMN also_in_channel INTEGER;
+      CREATE INDEX messages_thread ON messages (thread_of)`);
   // The post on an alert (Q&A Q3) is one line of a channel. So text, past conversation, DMs, `@mentions`, and posting to the channel run the same way as in a channel.
   // `alert` is the number of the message the alert stands on, and NULL for a chat channel. A post's `name` is a name a person can't write (it starts with a line break),
   // so it never collides with a chat channel's name. `postName` builds the name people read. The v0.1.0 table has no `alert`.
@@ -3294,7 +3331,7 @@ export async function startServer(options: {
       ...(alert ? [alert] : []),
       ...(
         db
-          .prepare(`${MESSAGES} WHERE m.channel = ? ORDER BY m.id DESC LIMIT ?`)
+          .prepare(`${MESSAGES} WHERE m.channel = ? AND ${IN_CHANNEL} ORDER BY m.id DESC LIMIT ?`)
           .all(channel, CHANNEL_CONTEXT - (alert ? 1 : 0)) as MessageRow[]
       ).reverse(),
     ].map(messageView);
@@ -3319,15 +3356,65 @@ export async function startServer(options: {
     return messageView(row);
   };
 
+  /**
+   * A thread's original message (ADR-0047): a message a person wrote in the same chat channel that isn't itself in a thread.
+   * Posts and DMs have no threads, and threads don't nest. All of these, and anything `originalOf` refuses, get the same `invalid_request`.
+   */
+  const threadOriginalOf = (channel: string, threadOf: number | undefined, replyTo?: number) => {
+    if (threadOf === undefined) return undefined;
+    const row =
+      replyTo === undefined &&
+      (db
+        .prepare(
+          `${MESSAGES} WHERE m.id = ? AND m.channel = ? AND m.alert IS NULL AND m.decision IS NULL
+           AND m.thread_of IS NULL AND (SELECT alert FROM channels WHERE id = m.channel) IS NULL`,
+        )
+        .get(threadOf, channel) as MessageRow | undefined);
+    if (!row)
+      throw new ContractFailure({
+        code: "invalid_request",
+        message:
+          "A thread opens only under a message in the same chat channel, not in a post, a DM, another thread, or a reply",
+      });
+    return row;
+  };
+  /** Inserts the reply and thread columns of a message being sent. */
+  const sentColumns = (body: {
+    replyTo?: number;
+    notify: boolean;
+    threadOf?: number;
+    alsoInChannel: boolean;
+  }) => [
+    body.replyTo ?? null,
+    body.replyTo === undefined ? null : Number(body.notify),
+    body.threadOf ?? null,
+    body.threadOf === undefined ? null : Number(body.alsoInChannel),
+  ];
+
   mount(app, api.ask, (body, c) => {
-    const { agent, executor, channel, message, visibility, model, effort, notify } = body;
+    const { agent, executor, channel, message, visibility, model, effort } = body;
     mustOwn(agent, c.get("login") as string);
     mustWrite(channel, c);
-    const { replyTo } = body;
-    // Only a public `@mention` can be a reply. DMs have no replies.
-    if (replyTo !== undefined && visibility !== "public")
-      throw new ContractFailure({ code: "invalid_request", message: "DMs don't have replies" });
+    const { replyTo, threadOf } = body;
+    // Only a public `@mention` can be a reply or sit in a thread. DMs have neither.
+    if ((replyTo !== undefined || threadOf !== undefined) && visibility !== "public")
+      throw new ContractFailure({
+        code: "invalid_request",
+        message: "DMs don't have replies or threads",
+      });
     const original = originalOf(channel, replyTo);
+    const opened = threadOriginalOf(channel, threadOf, replyTo);
+    // The thread so far, read before the `@mention` lands in it: the original, then its latest replies.
+    const thread =
+      opened &&
+      [
+        opened,
+        ...(
+          db
+            .prepare(`${MESSAGES} WHERE m.thread_of = ? ORDER BY m.id DESC LIMIT ?`)
+            .all(opened.id, CHANNEL_CONTEXT - 1) as MessageRow[]
+        ).reverse(),
+      ].map(messageView);
     visit(agent, channelWorkspace(channel) ?? workspaceOf(c));
     // For posts and repo channels, that repo's runner answers; for workspace channels, the last runner attached in that workspace (ADR-0043).
     const socket = runnerOf(agent, executor, channelRepo(channel), channelWorkspace(channel));
@@ -3344,8 +3431,8 @@ export async function startServer(options: {
     const id = Number(lastInsertRowid);
     if (visibility === "public") {
       db.prepare(
-        "INSERT INTO messages (channel, login, qa, at, reply_to, notify) VALUES (?, ?, ?, ?, ?, ?)",
-      ).run(channel, agent, id, at, replyTo ?? null, replyTo === undefined ? null : Number(notify));
+        "INSERT INTO messages (channel, login, qa, at, reply_to, notify, thread_of, also_in_channel) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run(channel, agent, id, at, ...sentColumns(body));
     }
     const frame = encode(serverToRunner, "ask", {
       executor,
@@ -3353,12 +3440,14 @@ export async function startServer(options: {
       message,
       recent,
       ...(original && { replyTo: original }),
+      ...(thread && { thread }),
       model,
       effort,
     });
     asks.set((JSON.parse(frame) as { id: string }).id, { socket, login: agent, executor, qa: id });
     socket.send(frame);
     const shared = shareQa(id); // to the same member's other screens too, and to everyone in the channel if it's an `@call`
+    if (opened) shareRow(db.prepare(`${MESSAGES} WHERE m.id = ?`).get(opened.id) as MessageRow); // its thread summary
     if (visibility === "public") posted(channel);
     shareMembers(); // answering
     return shared;
@@ -4349,7 +4438,7 @@ export async function startServer(options: {
     }
   };
 
-  mount(app, api.history, ({ channel, before }, c) => {
+  mount(app, api.history, ({ channel, before, thread }, c) => {
     const login = c.get("login") as string;
     mustExist(channel, c);
     visit(login, workspaceOf(c));
@@ -4357,12 +4446,14 @@ export async function startServer(options: {
     const rows = db
       .prepare(
         `${MESSAGES} WHERE m.channel = ? AND m.id < ?
+         AND ${thread === undefined ? IN_CHANNEL : "(m.id = ? OR m.thread_of = ?)"}
          AND (a.repo IS NULL OR (a.repo IN (SELECT repo FROM access WHERE login = ?) AND ${ownerSql("a.repo")} = ?))
          ORDER BY m.id DESC LIMIT ?`,
       )
       .all(
         channel,
         before ?? Number.MAX_SAFE_INTEGER,
+        ...(thread === undefined ? [] : [thread, thread]),
         login,
         workspaceOf(c),
         HISTORY_PAGE,
@@ -4370,25 +4461,23 @@ export async function startServer(options: {
     return { messages: rows.reverse().map(messageView) };
   });
 
-  mount(app, api.send, ({ channel, text, replyTo, notify }, c) => {
+  mount(app, api.send, (body, c) => {
+    const { channel, text, replyTo, threadOf } = body;
     mustWrite(channel, c);
     visit(c.get("login") as string, workspaceOf(c));
     originalOf(channel, replyTo);
+    threadOriginalOf(channel, threadOf, replyTo);
     const { lastInsertRowid } = db
       .prepare(
-        "INSERT INTO messages (channel, login, text, at, reply_to, notify) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO messages (channel, login, text, at, reply_to, notify, thread_of, also_in_channel) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       )
-      .run(
-        channel,
-        c.get("login") as string,
-        text,
-        Date.now(),
-        replyTo ?? null,
-        replyTo === undefined ? null : Number(notify),
-      );
+      .run(channel, c.get("login") as string, text, Date.now(), ...sentColumns(body));
     const message = shareRow(
       db.prepare(`${MESSAGES} WHERE m.id = ?`).get(lastInsertRowid) as MessageRow,
     );
+    // The original's thread summary changed, so it goes to everyone again.
+    if (threadOf !== undefined)
+      shareRow(db.prepare(`${MESSAGES} WHERE m.id = ?`).get(threadOf) as MessageRow);
     posted(channel);
     syncSoon(channel);
     return { message };
@@ -4596,9 +4685,11 @@ export async function startServer(options: {
               `${MESSAGES} WHERE m.id > ? OR q.settled >= (SELECT at FROM messages WHERE id = ?)
                OR a.updated >= (SELECT at FROM messages WHERE id = ?) OR m.reacted >= (SELECT at FROM messages WHERE id = ?)
                OR (c.id IS NOT NULL AND EXISTS (SELECT 1 FROM messages WHERE channel = c.id AND id > ?))
+               OR EXISTS (SELECT 1 FROM messages t WHERE t.thread_of = m.id AND t.id > ?)
                ORDER BY m.id`,
             )
             .all(
+              payload.after,
               payload.after,
               payload.after,
               payload.after,

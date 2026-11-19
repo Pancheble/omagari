@@ -9,8 +9,9 @@ import {
   MAX_MESSAGE_CHARS,
   type MemberView,
   type Qa,
+  type ThreadSummary,
 } from "@omagari/contract";
-import { ArrowUp, Hash, Reply, TextQuote } from "lucide-react";
+import { ArrowUp, Hash, MessagesSquare, Reply, TextQuote } from "lucide-react";
 import {
   type ComponentProps,
   type Dispatch,
@@ -57,8 +58,16 @@ export type View = {
   older?: boolean;
 };
 
-/** What a send carries when it's a reply (ADR-0047). */
-export type ReplyBody = { replyTo: number; notify: boolean };
+/** What a send carries when it's a reply or sits in a thread (ADR-0047). */
+export type ReplyBody =
+  | { replyTo: number; notify: boolean }
+  | { threadOf: number; alsoInChannel: boolean };
+
+/** A message people wrote (text or Q&A), the kind that can be replied to, quoted, or opened as a thread. */
+type Said = Exclude<ChannelMessage, { kind: "alert" | "decision" }>;
+/** Whether a message shows in the channel: anything but a thread reply that wasn't also sent to the channel. */
+const inChannel = (message: ChannelMessage) =>
+  !("threadOf" in message && message.threadOf) || !!message.alsoInChannel;
 /** How long a touch holds before the long-press menu opens on narrow screens. */
 const LONG_PRESS_MS = 500;
 
@@ -147,6 +156,8 @@ export function Conversation({
   onOlder,
   searchGifs,
   onReact,
+  onThread,
+  thread,
 }: {
   channel?: Channel;
   view?: View;
@@ -184,6 +195,13 @@ export function Conversation({
   searchGifs?: (query: string) => Promise<Gif[]>;
   /** Adds (`on`) or removes a reaction on a message (`message`, its id). */
   onReact: (message: number, emoji: string, on: boolean) => Promise<void>;
+  /** Opens the thread under a message (`id`). Only chat channels have threads; missing in posts and inside a thread. */
+  onThread?: (id: number) => void;
+  /**
+   * This conversation is a thread in the right column (draft 114-A): `view` holds the original and its replies, sends go into the thread,
+   * and the "Also send to # channel" checkbox sits under the composer.
+   */
+  thread?: { id: number; alsoSend: boolean; onAlsoSend: (on: boolean) => void };
 }) {
   const [text, setText] = useState("");
   const [token, setToken] = useState<ExecutorId>();
@@ -207,7 +225,7 @@ export function Conversation({
       area.current?.setSelectionRange(next.caret, next.caret);
     });
   };
-  const reply = (message: Exclude<ChannelMessage, { kind: "alert" | "decision" }>) => {
+  const reply = (message: Said) => {
     setReplying({ id: message.id, login: message.login, name: message.name, notify: true });
     area.current?.focus();
   };
@@ -224,7 +242,9 @@ export function Conversation({
     if (!message && !qa) return;
     const called = token;
     const replied = qa ? undefined : replying;
-    const body = replied && { replyTo: replied.id, notify: replied.notify };
+    const body: ReplyBody | undefined = thread
+      ? { threadOf: thread.id, alsoInChannel: thread.alsoSend }
+      : replied && { replyTo: replied.id, notify: replied.notify };
     setText("");
     setToken(undefined);
     setReplying(undefined);
@@ -260,12 +280,14 @@ export function Conversation({
     setFailure(undefined);
     scroller.current?.scrollTo({ top: 0 });
     try {
-      await onSend(url);
+      await onSend(url, thread && { threadOf: thread.id, alsoInChannel: thread.alsoSend });
     } catch {
       setFailure({ text: t.conversation.failed.gif, gif: url });
     }
   };
 
+  /** What the list shows: the channel's messages, or the whole thread. */
+  const messages = thread ? (view?.messages ?? []) : (view?.messages.filter(inChannel) ?? []);
   const react = (message: number, emoji: string, on: boolean) =>
     void onReact(message, emoji, on).catch(() =>
       setFailure({ text: on ? t.conversation.failed.react : t.conversation.failed.unreact }),
@@ -303,7 +325,7 @@ export function Conversation({
             {t.conversation.retry}
           </button>
         </div>
-      ) : view.messages.length === 0 ? (
+      ) : messages.length === 0 ? (
         <div className="empty">
           <h2>{t.conversation.emptyTitle(channel.name)}</h2>
           <p>{t.conversation.emptyBody}</p>
@@ -320,20 +342,26 @@ export function Conversation({
         >
           <div className="log" role="log" aria-label={t.conversation.logLabel(channel.name)}>
             {view.older && <SkeletonRow />}
-            {view.messages.map((message, i) => {
-              const previous = view.messages[i - 1];
+            {messages.map((message, i) => {
+              const previous = messages[i - 1];
               const newDay = !previous || dayOf(previous.at) !== dayOf(message.at);
               // A Q&A never groups, and the message after a Q&A gets its header again.
               const grouped =
                 !newDay &&
-                !(message.kind === "text" && message.replyTo) &&
+                !(message.kind === "text" && (message.replyTo || message.alsoInChannel)) &&
+                !(thread && i === 1) &&
                 message.kind === "text" &&
                 previous?.kind === "text" &&
                 previous.login === message.login &&
                 Date.parse(message.at) - Date.parse(previous.at) < GROUP_MS;
               return (
                 <Fragment key={message.id}>
-                  {newDay && <div className="day">{dayLabel(message.at)}</div>}
+                  {thread && i === 1 && (
+                    <div className="day thread-divider">
+                      {t.conversation.thread.replies(messages.length - 1)}
+                    </div>
+                  )}
+                  {newDay && !thread && <div className="day">{dayLabel(message.at)}</div>}
                   {message.kind === "alert" ? (
                     <AlertLine message={message} edited={edited} />
                   ) : message.kind === "decision" ? (
@@ -345,8 +373,10 @@ export function Conversation({
                       me={me}
                       nameOf={nameOf}
                       onReact={(emoji, on) => react(message.id, emoji, on)}
-                      onReply={() => reply(message)}
+                      onReply={thread ? undefined : () => reply(message)}
                       onQuote={() => quote(quotable(message), message.login)}
+                      onThread={onThread && (() => onThread(message.threadOf?.id ?? message.id))}
+                      compact={!!thread}
                       state={
                         message.kind === "qa"
                           ? agentsOf(message.login)?.find(
@@ -363,13 +393,19 @@ export function Conversation({
           </div>
         </div>
       )}
-      <SelectionQuote within=".message[data-login]" onQuote={quote} />
+      <SelectionQuote
+        within={thread ? ".thread .message[data-login]" : ".message[data-login]:not(.thread *)"}
+        onQuote={quote}
+      />
       {channel && (
         <CallComposer
           area={area}
           reply={replying && !attached && <ReplyStrip replying={replying} onChange={setReplying} />}
           onEscape={replying && (() => setReplying(undefined))}
-          label={label ?? t.conversation.sendTo(channel.name)}
+          label={
+            label ??
+            (thread ? t.conversation.thread.placeholder : t.conversation.sendTo(channel.name))
+          }
           agents={agentsOf(me) ?? []}
           owner={members?.find((member) => member.login === me)?.name ?? me}
           value={text}
@@ -383,6 +419,16 @@ export function Conversation({
             searchGifs && { search: searchGifs, onPick: (gif) => void sendGif(giphyUrl(gif.id)) }
           }
         />
+      )}
+      {channel && thread && (
+        <label className="also-send">
+          <input
+            type="checkbox"
+            checked={thread.alsoSend}
+            onChange={(event) => thread.onAlsoSend(event.target.checked)}
+          />
+          {t.conversation.thread.alsoSend(channel.name)}
+        </label>
       )}
     </>
   );
@@ -559,15 +605,22 @@ function Message({
   onReact,
   onReply,
   onQuote,
+  onThread,
+  compact,
 }: {
-  message: Exclude<ChannelMessage, { kind: "alert" | "decision" }>;
+  message: Said;
   grouped: boolean;
   state?: MemberView["agents"][number]["state"];
   me: string;
   nameOf: (login: string) => string;
   onReact: (emoji: string, on: boolean) => void;
-  onReply: () => void;
+  /** Missing inside a thread, where a reply can't be a reply (it can still quote). */
+  onReply?: () => void;
   onQuote: () => void;
+  /** Opens this message's thread (for a thread reply, the thread it sits in). Missing in posts and inside a thread. */
+  onThread?: () => void;
+  /** Drawn in the thread column: 28px avatar, 14px text, no thread line or summary. */
+  compact?: boolean;
 }) {
   // A message that is just one GIPHY URL shows as a picture. A note written with a Q&A stays as text.
   const gif = message.kind === "text" ? giphyId(message.text) : undefined;
@@ -585,7 +638,7 @@ function Message({
   }, [menu]);
   return (
     <article
-      className={`message${grouped ? " grouped" : ""}${picking ? " picking" : ""}${message.replyTo ? " replying" : ""}`}
+      className={`message${grouped ? " grouped" : ""}${picking ? " picking" : ""}${message.replyTo ? " replying" : ""}${compact ? " compact" : ""}`}
       data-qa={message.kind === "qa" ? message.qa.id : undefined}
       data-message={message.id}
       data-login={message.login}
@@ -595,10 +648,10 @@ function Message({
         if (event.target !== event.currentTarget || event.metaKey || event.ctrlKey) return;
         // With text selected, Q belongs to the selection's "Quote" button.
         if (document.getSelection()?.toString().trim()) return;
-        const key = event.key.toLowerCase();
-        if (key !== "r" && key !== "q") return;
+        const run = { r: onReply, t: onThread, q: onQuote }[event.key.toLowerCase()];
+        if (!run) return;
         event.preventDefault();
-        (key === "r" ? onReply : onQuote)();
+        run();
       }}
       onTouchStart={() => {
         press.current = window.setTimeout(() => setMenu(true), LONG_PRESS_MS);
@@ -613,15 +666,28 @@ function Message({
           onPick={(emoji) => onReact(emoji, true)}
           onOpen={setPicking}
         />
-        <button
-          type="button"
-          className="message-tool"
-          aria-label={r.reply}
-          title={r.reply}
-          onClick={onReply}
-        >
-          <Reply size={16} aria-hidden />
-        </button>
+        {onReply && (
+          <button
+            type="button"
+            className="message-tool"
+            aria-label={r.reply}
+            title={r.reply}
+            onClick={onReply}
+          >
+            <Reply size={16} aria-hidden />
+          </button>
+        )}
+        {onThread && (
+          <button
+            type="button"
+            className="message-tool"
+            aria-label={t.conversation.thread.thread}
+            title={t.conversation.thread.thread}
+            onClick={onThread}
+          >
+            <MessagesSquare size={16} aria-hidden />
+          </button>
+        )}
         <button
           type="button"
           className="message-tool"
@@ -641,22 +707,27 @@ function Message({
         >
           {[
             { label: r.reply, icon: Reply, run: onReply },
+            { label: t.conversation.thread.thread, icon: MessagesSquare, run: onThread },
             { label: r.quote, icon: TextQuote, run: onQuote },
-          ].map(({ label, icon: Icon, run }) => (
-            <button
-              key={label}
-              type="button"
-              role="menuitem"
-              className="menu-item"
-              onClick={() => {
-                setMenu(false);
-                run();
-              }}
-            >
-              <Icon size={18} aria-hidden />
-              {label}
-            </button>
-          ))}
+          ].flatMap(({ label, icon: Icon, run }) =>
+            run
+              ? [
+                  <button
+                    key={label}
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    onClick={() => {
+                      setMenu(false);
+                      run();
+                    }}
+                  >
+                    <Icon size={18} aria-hidden />
+                    {label}
+                  </button>,
+                ]
+              : [],
+          )}
         </div>
       )}
       {message.replyTo && <ReplyLine replyTo={message.replyTo} />}
@@ -666,7 +737,7 @@ function Message({
         </time>
       ) : (
         <Person login={message.login} avatar>
-          <Avatar name={message.name} login={message.login} size={36} />
+          <Avatar name={message.name} login={message.login} size={compact ? 28 : 36} />
         </Person>
       )}
       <div className="message-body">
@@ -685,17 +756,43 @@ function Message({
             )}
           </p>
         )}
+        {message.alsoInChannel && message.threadOf && !compact && (
+          <p className="thread-copy">
+            {t.conversation.thread.repliedIn}
+            <button type="button" className="thread-copy-link" onClick={onThread}>
+              {message.threadOf.original?.line ?? t.conversation.reply.gone}
+            </button>
+          </p>
+        )}
         {message.text &&
           (gif ? <MessageGif id={gif} /> : <MessageText text={message.text} nameOf={nameOf} />)}
         {message.kind === "qa" && <QaLine message={message} state={state ?? "offline"} />}
         <Reactions reactions={message.reactions} me={me} onReact={onReact} />
+        {message.thread && onThread && (
+          <ThreadSummaryRow thread={message.thread} onOpen={onThread} />
+        )}
       </div>
     </article>
   );
 }
 
+/** The row under a thread's original (draft 114-A): up to three writers, the reply count, and the last reply's time. Pressing it opens the thread. */
+function ThreadSummaryRow({ thread, onOpen }: { thread: ThreadSummary; onOpen: () => void }) {
+  return (
+    <button type="button" className="thread-summary" onClick={onOpen}>
+      <span className="thread-writers">
+        {thread.writers.map((writer) => (
+          <Avatar key={writer.login} name={writer.name} login={writer.login} size={20} />
+        ))}
+      </span>
+      <strong>{t.conversation.thread.replies(thread.count)}</strong>
+      <span className="thread-last">{t.conversation.thread.last(timeOf(thread.last))}</span>
+    </button>
+  );
+}
+
 /** What quoting a whole message copies: its text, or for a Q&A its answer (its question while it has none). */
-const quotable = (message: Exclude<ChannelMessage, { kind: "alert" | "decision" }>) =>
+const quotable = (message: Said) =>
   message.kind === "text"
     ? message.text
     : message.qa.answer.state === "answered"
