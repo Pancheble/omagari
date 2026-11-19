@@ -39,6 +39,7 @@ import {
   type Debate,
   decode,
   encode,
+  IMPORTANCE_LABELS,
   type MergeRun,
   RUNNER_SOCKET,
   runnerToServer,
@@ -450,7 +451,9 @@ await call(world.owner, api.createForum, {
   name: "결제 팀",
   filter: { labels: ["결제", "결정 필요"] },
 });
-const reference = (await call(world.owner, api.channels)).channels.find((c) => c.name === "참고");
+const reference = (await call(world.owner, api.channels)).channels.find(
+  (c) => c.name === IMPORTANCE_LABELS.reference,
+);
 assert.ok(reference);
 await call(world.owner, api.updateForum, {
   id: reference.id,

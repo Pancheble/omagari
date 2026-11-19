@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
-import { eventually, startWorld, tempRepo, writer } from "./harness.ts";
+import { eventually, startWorld, tempRepo, textOf, writer } from "./harness.ts";
 
 // 러너를 CLI로 다섯 번 켜고 끈다. 관측은 붙자마자 보내므로 주기(3초)를 기다리지 않지만, 단계가 많아 시간 제한을 늘린다.
 test("주인이 러너마다 공유 수준을 고르고 다시 켜도 그 수준이 남는다. 기본은 full, declared는 경로만, intent는 작업만 올리고, 낮추면 올라간 내용이 서버에서 내려간다", {
@@ -49,7 +49,11 @@ test("주인이 러너마다 공유 수준을 고르고 다시 켜도 그 수준
           .filter((work) => work.login === "alice")
           .map((work) => ({
             ...work,
-            line: work.line && { source: work.line.source, text: work.line.text },
+            line:
+              work.line &&
+              (work.line.source === "files"
+                ? work.line
+                : { source: work.line.source, text: work.line.text }),
           })),
         [{ login: "alice", branch: "feat", base, share, files, line, offlineSince: null }],
       ),
@@ -71,7 +75,7 @@ test("주인이 러너마다 공유 수준을 고르고 다시 켜도 그 수준
       { path: "gone.ts", deleted: true },
       { path: "image.png", omitted: "binary" },
     ],
-    { source: "files", text: "Editing committed.ts and 3 more" },
+    { source: "files", file: "committed.ts", more: 3 },
   );
   let { stdout } = await runner.stop();
   assert.match(stdout, /Observation \(share level full\)/);
@@ -86,7 +90,8 @@ test("주인이 러너마다 공유 수준을 고르고 다시 켜도 그 수준
   ];
   await observed("declared", declared, {
     source: "files",
-    text: "Editing committed.ts and 3 more",
+    file: "committed.ts",
+    more: 3,
   });
   ({ stdout } = await runner.stop());
   assert.match(
@@ -98,7 +103,7 @@ test("주인이 러너마다 공유 수준을 고르고 다시 켜도 그 수준
   await write("later.ts", "꺼진 동안 쓴 내용\n");
   runner = await launch();
   const later = [...declared, { path: "later.ts", omitted: "share" }];
-  await observed("declared", later, { source: "files", text: "Editing committed.ts and 4 more" });
+  await observed("declared", later, { source: "files", file: "committed.ts", more: 4 });
   const fixing = await setStatus("결제 흐름 고치는 중");
   await observed("declared", later, fixing);
   ({ stdout } = await runner.stop());

@@ -15,6 +15,7 @@ import {
   DEFINITION_KINDS,
   EXECUTOR_NAMES,
   ExecutorId,
+  filesText,
   MERGE_RUN_LABELS,
   PLAN_KINDS,
   Plan,
@@ -426,7 +427,7 @@ async function status() {
             ? `${quote(line.text)} (${ago(line.at)})`
             : line.source === "pull"
               ? `${quote(line.text)} (draft PR)`
-              : quote(line.text);
+              : quote(filesText(line));
       // The Work's agent: the executor that last sent a hook or status set on that branch. Left out if unknown (ADR-0015).
       const executor = seen.find((work) => work.branch === branch)?.executor;
       console.log(

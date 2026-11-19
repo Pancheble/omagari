@@ -125,11 +125,9 @@ const DAY_MS = 24 * 60 * 60_000;
 const dayOf = (ms: number) => new Intl.DateTimeFormat("sv-SE", { timeZone: TIME_ZONE }).format(ms);
 
 /** The line for the file being edited, shown when the agent wrote no line. None if nothing changed. */
-function filesLine(files: ObservedFile[]) {
+function filesLine(files: ObservedFile[]): StatusLine | null {
   const [first] = files;
-  if (!first) return null;
-  const others = files.length > 1 ? ` and ${files.length - 1} more` : "";
-  return `Editing ${basename(first.path)}${others}`;
+  return first ? { source: "files", file: basename(first.path), more: files.length - 1 } : null;
 }
 
 const hash = (session: string) => createHash("sha256").update(session).digest("hex");
@@ -1488,9 +1486,7 @@ export async function startServer(options: {
           ? { source: "agent", text, at: new Date(at).toISOString() }
           : draft !== undefined
             ? { source: "pull", text: draft }
-            : changes !== null
-              ? { source: "files", text: changes }
-              : null;
+            : changes;
       const offlineSince = since === null ? null : new Date(since).toISOString();
       return { login, branch, base, share, files, line, offlineSince };
     });

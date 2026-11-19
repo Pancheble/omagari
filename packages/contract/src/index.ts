@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** Contract version. Sent in every envelope; a different one is rejected. Bump it on every breaking change. */
-export const CONTRACT_VERSION = 54;
+export const CONTRACT_VERSION = 55;
 
 /** Error shape. Shared by the runner/server `error` message and the HTTP error body (`{ error }`). */
 export const ContractError = z.strictObject({
@@ -125,9 +125,17 @@ export type Work = z.infer<typeof Work>;
 export const StatusLine = z.discriminatedUnion("source", [
   z.strictObject({ source: z.literal("agent"), text: z.string(), at: z.string() }),
   z.strictObject({ source: z.literal("pull"), text: z.string() }),
-  z.strictObject({ source: z.literal("files"), text: z.string() }),
+  /** The first changed file's name and how many more changed. Each place words it (the web in the viewer's language). */
+  z.strictObject({
+    source: z.literal("files"),
+    file: z.string(),
+    more: z.number().int().nonnegative(),
+  }),
 ]);
 export type StatusLine = z.infer<typeof StatusLine>;
+/** English words for a `files` line, for the CLI and hooks ("Editing payment.ts and 3 more"). */
+export const filesText = (line: { file: string; more: number }) =>
+  `Editing ${line.file}${line.more > 0 ? ` and ${line.more} more` : ""}`;
 
 /**
  * One work members see: its observation and its status line. The web (`api.works`) and the runner (`situation`) share it.

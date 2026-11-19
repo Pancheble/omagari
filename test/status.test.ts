@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { api, call } from "@omagari/contract";
-import { eventually, startWorld } from "./harness.ts";
+import { eventually, startWorld, textOf } from "./harness.ts";
 
 /** 관측과 GitHub 읽기를 짧게 돈다. 기본값(3초, 1분)이면 단계마다 오래 기다린다. */
 const FAST = { observeMs: 50, followMs: 50 };
@@ -74,7 +74,7 @@ test("보이는 줄은 오프라인 → 에이전트가 쓴 줄 → 초안 PR �
   for (const path of ["payment.ts", "src/cart.ts", "src/order.ts", "test/payment.test.ts"]) {
     await write(folder, path);
   }
-  const files = { source: "files", text: "Editing payment.ts and 3 more" };
+  const files = { source: "files", file: "payment.ts", more: 3 };
   await eventually(async () => assert.deepEqual(await lineOf(), files));
 
   // 초안이 아닌 PR의 제목은 쓰지 않는다. 초안 PR이면 그 제목이다.
@@ -118,12 +118,12 @@ test("한 멤버가 여러 브랜치에서 일하면 상태 한 줄은 작업(�
   await git("switch", "--create", "refund", "main");
   await world.cli("status", "set", "환불 붙이는 중");
   await eventually(async () =>
-    assert.equal((await workOf(world, "refund")).line?.text, "환불 붙이는 중"),
+    assert.equal(textOf((await workOf(world, "refund")).line), "환불 붙이는 중"),
   );
 
   await git("switch", "payment");
   await eventually(async () =>
-    assert.equal((await workOf(world, "payment")).line?.text, "결제 붙이는 중"),
+    assert.equal(textOf((await workOf(world, "payment")).line), "결제 붙이는 중"),
   );
 });
 
@@ -141,7 +141,7 @@ test("그 브랜치가 머지되면 에이전트가 쓴 줄이 지워진다. 머
 
   world.github.merge(pull);
   await eventually(async () =>
-    assert.deepEqual(await lineOf(), { source: "files", text: "Editing payment.ts" }),
+    assert.deepEqual(await lineOf(), { source: "files", file: "payment.ts", more: 0 }),
   );
 
   await world.cli("status", "set", "끝: 결제 모듈 붙임");
@@ -162,11 +162,11 @@ test("관측된 변경이 있다가 0이 되면 에이전트가 쓴 줄이 지�
 
   await world.cli("status", "set", "결제 붙이기 시작");
   await sleep(SETTLE_MS);
-  assert.equal((await lineOf())?.text, "결제 붙이기 시작");
+  assert.equal(textOf(await lineOf()), "결제 붙이기 시작");
 
   await write(folder, "payment.ts");
   await eventually(async () => assert.equal((await workOf(world, "payment")).files.length, 1));
-  assert.equal((await lineOf())?.text, "결제 붙이기 시작");
+  assert.equal(textOf(await lineOf()), "결제 붙이기 시작");
 
   await rm(join(folder, "payment.ts"));
   await eventually(async () => assert.equal(await lineOf(), null));
@@ -246,7 +246,7 @@ test("오프라인이 되면 마지막 관측과 상태 한 줄이 떨어진 시
   });
   assert.ok(Date.parse(offlineSince as string) >= stopped);
   const kept = await refund();
-  assert.equal(kept.line?.text, "환불 붙이는 중");
+  assert.equal(textOf(kept.line), "환불 붙이는 중");
   assert.deepEqual(kept.files, [{ path: "refund.ts", content: "refund.ts\n" }]);
 
   // 서버가 다시 떠도 떨어진 시각은 그대로다. 붙어 있던 owner의 러너는 다시 붙는다.
@@ -286,6 +286,6 @@ test("7일 동안 오프라인이면 그 멤버의 관측과 상태 한 줄이 �
   // 다시 붙으면 관측은 새로 올라오지만 지워진 상태 한 줄은 돌아오지 않는다.
   await desk_.start();
   await eventually(async () =>
-    assert.deepEqual((await refund()).line, { source: "files", text: "Editing refund.ts" }),
+    assert.deepEqual((await refund()).line, { source: "files", file: "refund.ts", more: 0 }),
   );
 });

@@ -11,7 +11,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import { text } from "node:stream/consumers";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
-import { ago, ExecutorId, type NearbyWork, type WorkView } from "@omagari/contract";
+import { ago, ExecutorId, filesText, type NearbyWork, type WorkView } from "@omagari/contract";
 import { callRunner, claimOwner, claimPlace, inboxNotice, runnerPaths } from "@omagari/runner";
 
 /** Upper limit on the injected text. Claude Code sends anything longer to a file and shows only the first 2,000 characters (ADR-0005). */
@@ -123,7 +123,7 @@ function workLine(work: WorkView & { line: NonNullable<WorkView["line"]> }, same
       ? `${quote(line.text)} (written by the agent, ${ago(line.at)})`
       : line.source === "pull"
         ? `${quote(line.text)} (draft PR title)`
-        : `${quote(line.text)} (made from the changed files)`,
+        : `${quote(filesText(line))} (made from the changed files)`,
   );
   if (same.length > 0) {
     const named = same.slice(0, SAME_FILES_SHOWN).map(quote).join(", ");

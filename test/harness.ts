@@ -59,6 +59,10 @@ process.env.GIT_CONFIG_NOSYSTEM = "1";
 delete process.env.CLAUDECODE;
 
 /** 워크스페이스의 레포. `tempRepo`의 origin이 이 레포를 가리킨다. */
+/** The sentence a status line carries (`text`), or undefined for a `files` line, which carries parts. */
+export const textOf = (line: { source: string } | null | undefined) =>
+  line && "text" in line ? (line.text as string) : undefined;
+
 export const REPO = "omagari-test/space";
 /** 같은 계정의 두 번째 레포(ADR-0043). 가짜 GitHub에서 PR, 이슈, 라벨을 `REPO`와 함께 쓴다. */
 export const REPO2 = "omagari-test/other";
