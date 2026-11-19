@@ -6,7 +6,9 @@ import { api, call } from "@omagari/contract";
 import { StrictMode, useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  lastKey,
   type Me,
+  placeKey,
   remember,
   remembered,
   type Workspace as Space,
@@ -20,9 +22,8 @@ import { Centered, Login } from "./login.tsx";
 import { Tooltip } from "./tooltip.tsx";
 import { Workspace } from "./workspace.tsx";
 
-/** 이 기기에서 마지막에 고른 워크스페이스와, 워크스페이스마다 마지막에 본 채널(주소의 `#…`). */
+/** 이 기기에서 마지막에 고른 워크스페이스. */
 const WORKSPACE_KEY = "omagari.workspace";
-const LAST_KEY = "omagari.last-channel";
 
 type State =
   | { kind: "checking" }
@@ -92,12 +93,12 @@ function App() {
     setState({ kind: "out" });
     void call(server(session), api.logout).catch(() => {});
   };
-  /** 워크스페이스를 바꾼다. 앱 틀을 새로 그리고, 그 워크스페이스에서 마지막에 본 채널로 간다(시안 89-A). */
-  const switchTo = (workspace: string) => {
-    remember(`${LAST_KEY}.${state.workspace}`, location.hash);
+  /** 다른 계정의 곳(레포나 "전체")으로 간다. 앱 틀을 새로 그리고, 그곳에서 마지막에 본 채널로 간다(시안 101). */
+  const switchTo = (workspace: string, place: string) => {
     remember(WORKSPACE_KEY, workspace);
+    remember(placeKey(workspace), place);
     setWorkspace(workspace);
-    history.replaceState(null, "", remembered(`${LAST_KEY}.${workspace}`) || location.pathname);
+    history.replaceState(null, "", remembered(lastKey(workspace, place)) || location.pathname);
     setState({ ...state, workspace });
   };
   return (
@@ -108,14 +109,15 @@ function App() {
       workspaces={state.workspaces}
       workspace={state.workspace}
       onSwitch={switchTo}
-      onRepos={(id, repos) =>
+      onRepos={(repos) =>
         setState((now) =>
           now.kind === "in"
             ? {
                 ...now,
-                workspaces: now.workspaces.map((space) =>
-                  space.id === id ? { ...space, repos } : space,
-                ),
+                workspaces: now.workspaces.map((space) => ({
+                  ...space,
+                  repos: repos.filter((repo) => repo.split("/")[0]?.toLowerCase() === space.id),
+                })),
               }
             : now,
         )

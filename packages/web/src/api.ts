@@ -88,3 +88,8 @@ export function remember(key: string, value: string) {
 
 /** 레포 이름(`owner/name`의 name). */
 export const repoName = (repo: string) => repo.split("/")[1] ?? repo;
+
+/** 워크스페이스마다 마지막에 본 곳(레포 이름이나 "전체"), 곳마다 마지막에 본 채널(주소의 `#…`). 이 기기에 남는다. */
+export const placeKey = (workspace: string) => `omagari.place.${workspace}`;
+export const lastKey = (workspace: string, place: string) =>
+  `omagari.last-channel.${workspace}.${place}`;

@@ -60,6 +60,7 @@ const hasStatus = (member?: MemberView): member is MemberView =>
 export function ProfilePanel({
   me,
   mine,
+  solo = false,
   onLogout,
   onSettings,
   onPresence,
@@ -67,6 +68,8 @@ export function ProfilePanel({
 }: {
   me: Me;
   mine?: MemberView;
+  /** 멤버가 나 하나다(시안 100-A). 접속 점과 접속 상태 글을 빼고 GitHub 아이디를 쓴다. */
+  solo?: boolean;
   onLogout: () => void;
   onSettings: () => void;
   onPresence: SetPresence;
@@ -111,11 +114,11 @@ export function ProfilePanel({
         aria-controls={open ? menu : undefined}
         onClick={() => setOpen(!open)}
       >
-        <Avatar name={me.name} size={36} presence={mine?.presence} />
+        <Avatar name={me.name} size={36} presence={solo ? undefined : mine?.presence} />
         <span className="names">
           <strong>{me.name}</strong>
           <span>
-            {hasStatus(mine) ? <StatusText {...mine} /> : chosen ? MINE[chosen] : me.login}
+            {hasStatus(mine) ? <StatusText {...mine} /> : chosen && !solo ? MINE[chosen] : me.login}
           </span>
         </span>
       </button>

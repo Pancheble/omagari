@@ -169,7 +169,7 @@ const VIEWS = [
   ["card", "카드"],
 ] as const;
 /** 포럼 머리 띠의 왼쪽: 20px 포럼 아이콘, 이름, 보조 글. "다른 포스트"는 받은 편지함 아이콘이다. */
-export const ForumTitle = ({ forum }: { forum: Channel }) => {
+export const ForumTitle = ({ forum, solo = false }: { forum: Channel; solo?: boolean }) => {
   const Icon = forum.id === OTHER.id ? Inbox : MessagesSquare;
   return (
     <div className="channel-title">
@@ -180,7 +180,9 @@ export const ForumTitle = ({ forum }: { forum: Channel }) => {
       <span className="channel-members forum-lead">
         {forum.id === OTHER.id
           ? "어느 포럼에도 맞지 않는 포스트예요"
-          : "Omagari가 알림을 포스트로 올려요"}
+          : solo
+            ? "Omagari가 내 브랜치끼리 부딪힌 것을 포스트로 올려요"
+            : "Omagari가 알림을 포스트로 올려요"}
       </span>
     </div>
   );
@@ -199,10 +201,16 @@ export function Forum({
   selected,
   unread,
   me,
+  solo,
+  account,
   repos,
   onSaveFilter,
 }: {
   forum: Channel;
+  /** 멤버가 나 하나다(시안 100-A). 사람 줄에 사람 대신 부딪힌 내 브랜치 둘을 쓴다. */
+  solo: boolean;
+  /** 워크스페이스의 계정 이름 */
+  account: string;
   /** 워크스페이스에서 내게 보이는 레포들. 필터 줄의 레포 칩이 고른다. */
   repos: string[];
   /** 내 GitHub 아이디. 사람 줄에서 내 이름 대신 "나"를 쓴다. */
@@ -276,6 +284,7 @@ export function Forum({
         <ViewMenu sort={sort} view={view} onSort={setSort} onView={setView} />
         <span className="forum-rule" aria-hidden />
         <FilterRow
+          account={account}
           repos={repos}
           states={states}
           counts={counts}
@@ -311,6 +320,7 @@ export function Forum({
                 selected={post.alert === selected}
                 unread={unread(post)}
                 me={me}
+                solo={solo}
               />
             </li>
           ))}
@@ -397,6 +407,7 @@ function PostRow({
   selected,
   unread,
   me,
+  solo,
 }: {
   /** 지금 보는 포럼. 같은 포스트가 여러 포럼에 보여도 지금 포럼에서 연다. */
   forum: string;
@@ -404,6 +415,7 @@ function PostRow({
   selected: boolean;
   unread: boolean;
   me: string;
+  solo: boolean;
 }) {
   const { alert } = post.message;
   const resolved = settled(post);
@@ -446,14 +458,21 @@ function PostRow({
         )}
       </span>
       <span className="forum-post-meta">
-        <span className="forum-post-people">
-          {alert.works.map((work) => (
-            <Avatar key={work.login} name={work.name} size={22} />
-          ))}
-          <span className="forum-post-names">
-            {alert.works.map((work) => (work.login === me ? "나" : work.name)).join(" · ")}
+        {solo ? (
+          // 혼자면 부딪힌 것은 내 브랜치끼리다(시안 100-A).
+          <span className="forum-post-branches">
+            {alert.works.map((work) => work.branch).join(" ↔ ")}
           </span>
-        </span>
+        ) : (
+          <span className="forum-post-people">
+            {alert.works.map((work) => (
+              <Avatar key={work.login} name={work.name} size={22} />
+            ))}
+            <span className="forum-post-names">
+              {alert.works.map((work) => (work.login === me ? "나" : work.name)).join(" · ")}
+            </span>
+          </span>
+        )}
         <span aria-hidden>·</span>
         <MessageCircle size={16} aria-hidden />
         <span className="sr-only">글 </span>

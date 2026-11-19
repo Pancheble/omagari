@@ -4893,11 +4893,17 @@ a.issue-number:hover {
   }
 }
 
-/* ---- 워크스페이스와 레포 (DESIGN.md "워크스페이스와 레포", 시안 89~94) ---- */
+/* ---- 워크스페이스와 레포 (DESIGN.md "워크스페이스와 레포", 시안 101) ---- */
 
-/* 워크스페이스 고르기(시안 89-A): 이름 줄이 버튼이 되고 바로 아래에 280px 목록이 열린다. */
+/* 이름 줄(시안 101-1): 계정 아바타, 작은 계정 이름, 굵은 레포 이름이나 "전체". 누르면 바로 아래에 레포 고르기 메뉴가 열린다. */
 .workspace.picker {
+  display: flex;
   padding: 0 4px;
+}
+
+.workspace.picker .forum-menu-wrap {
+  flex: 1;
+  min-width: 0;
 }
 
 .workspace-button {
@@ -4906,7 +4912,8 @@ a.issue-number:hover {
   gap: 8px;
   width: 100%;
   min-width: 0;
-  padding: 4px 6px;
+  min-height: 44px;
+  padding: 4px 6px 4px 4px;
   border: 0;
   border-radius: var(--rounded-sm);
   background: transparent;
@@ -4927,31 +4934,34 @@ a.issue-number:hover {
   transform: scale(0.95);
 }
 
-.workspace-button h1 {
-  flex: 1;
-  min-width: 0;
-}
-
-.workspace-button svg {
+.workspace-button > svg {
   flex: none;
   color: var(--text-secondary);
 }
 
-.workspace.picker .forum-menu-wrap {
+.place-names {
+  display: grid;
   flex: 1;
   min-width: 0;
 }
 
-.workspace.picker {
-  display: flex;
+.place-names small {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.33;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
+/* 계정 아바타: GitHub 아바타, 조직은 둥근 네모, 개인 계정은 동그라미. 받지 못하면 첫 글자. */
 .account-mark {
   display: grid;
   flex: none;
   place-items: center;
   width: 28px;
   height: 28px;
+  overflow: hidden;
   border-radius: var(--rounded-sm);
   background: var(--ink);
   color: var(--on-dark);
@@ -4959,126 +4969,133 @@ a.issue-number:hover {
   font-weight: 600;
 }
 
-.workspace-menu {
-  z-index: 4;
-  width: 280px;
+.account-mark.account-22 {
+  width: 22px;
+  height: 22px;
+  font-size: 11px;
 }
 
-.workspace-row {
-  min-height: 40px;
-  height: auto;
-  padding-block: 6px;
+.account-mark[data-kind="user"] {
+  border-radius: var(--pill);
 }
 
-.workspace-row .pop-name {
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.workspace-row .pop-name small {
-  font-weight: 400;
-}
-
-.workspace-row > svg {
-  color: var(--primary);
-}
-
-/* 두 층 사이드바(시안 90-A): 층 머리 "<워크스페이스> 전체"와 "레포", 그 사이 1px 선(위아래 10px). */
-.layer-title {
-  display: flex;
-  align-items: center;
-  height: 28px;
-  padding: 0 10px;
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.layer-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--divider);
-}
-
-.layer-head .category-add {
-  opacity: 1;
-}
-
-.repo-group {
-  margin-top: 2px;
-}
-
-.repo-head {
-  position: relative;
-  display: flex;
-  align-items: center;
-  height: 30px;
-  padding-right: 6px;
-  border-radius: var(--rounded-sm);
-}
-
-.repo-head:hover,
-.repo-head[data-menu] {
-  background: var(--hover);
-}
-
-.repo-name {
-  display: flex;
-  flex: 1;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
+.account-mark img {
+  width: 100%;
   height: 100%;
-  padding: 0 0 0 10px;
-  border: 0;
+  object-fit: cover;
+}
+
+/* 레포 고르기 메뉴(시안 101-1, 101-3): 288px, 찾기 칸, 계정마다 접히는 묶음. */
+.place-menu {
+  z-index: 4;
+  width: 288px;
+  max-height: min(560px, 100vh - 80px);
+  overflow-y: auto;
+}
+
+/* 좁은 화면의 서랍에서는 서랍 폭에 맞춘다. */
+.drawer .place-menu {
+  right: 0;
+  width: auto;
+}
+
+.place-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--hairline);
   border-radius: var(--rounded-sm);
+  color: var(--text-secondary);
+}
+
+.place-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
   background: transparent;
   color: var(--ink);
-  font-size: 15px;
+  font: inherit;
+  font-size: 13px;
+}
+
+.place-account {
+  justify-content: flex-start;
+  gap: 8px;
+  height: 36px;
   font-weight: 600;
-  text-align: left;
-  cursor: pointer;
 }
 
-.repo-name svg {
+.place-account:disabled {
+  opacity: 1;
+  cursor: default;
+}
+
+.place-chevron {
   flex: none;
   color: var(--text-secondary);
-}
-
-.repo-name span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.repo-name small {
-  flex: none;
-  margin-left: auto;
-  padding-right: 4px;
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 400;
-}
-
-.repo-chevron {
-  flex: none;
-  color: var(--text-secondary);
-  cursor: pointer;
   transition: transform 150ms ease-out;
 }
 
-.repo-head:has(.repo-name[aria-expanded="false"]) .repo-chevron {
+.place-account[aria-expanded="false"] .place-chevron {
   transform: rotate(-90deg);
 }
 
+.place-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  border-radius: var(--rounded-sm);
+}
+
+.place-row:hover,
+.place-row[data-menu] {
+  background: var(--hover);
+}
+
+.place-row .menu-item,
+.place-add {
+  min-height: 32px;
+  padding-left: 36px;
+}
+
+.place-row .menu-item:hover:not(:disabled) {
+  background: transparent;
+}
+
+.forum-menu .place-row .menu-item[aria-checked="true"] {
+  background: transparent;
+}
+
+.place-row > .menu-item > svg {
+  flex: none;
+  color: var(--text-secondary);
+}
+
+.place-row > .menu-item > .place-check {
+  color: var(--primary);
+}
+
+.place-add {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.place-group + .place-group {
+  margin-top: 2px;
+}
+
+/* 레포 줄의 ⋯: 올렸을 때와 키보드로 갔을 때 보인다. */
 .repo-more {
   display: grid;
+  flex: none;
   place-items: center;
   width: 28px;
   height: 28px;
+  margin-right: 2px;
   padding: 0;
   border: 0;
   border-radius: var(--rounded-sm);
@@ -5093,21 +5110,18 @@ a.issue-number:hover {
   color: var(--ink);
 }
 
-.repo-head:hover .repo-more,
-.repo-head:focus-within .repo-more {
+.place-row:hover .repo-more,
+.place-row:focus-within .repo-more,
+.repo-more[aria-expanded="true"] {
   opacity: 1;
 }
 
-/* 메뉴는 레포 머리 폭에 맞춘다. 채널 목록이 스크롤 칸이라 240px로 열면 패널 밖이 잘린다. */
-.repo-head .forum-menu-wrap {
-  position: static;
-}
-
 .repo-menu {
+  top: calc(100% + 2px);
   right: 0;
-  left: 0;
-  z-index: 4;
-  width: auto;
+  left: auto;
+  z-index: 5;
+  width: 240px;
 }
 
 .header-actions[hidden] {
@@ -5121,11 +5135,6 @@ a.issue-number:hover {
 a.menu-item {
   color: var(--ink);
   text-decoration: none;
-}
-
-.repo-list {
-  margin: 2px 0 0;
-  padding-left: 14px;
 }
 
 /* 레포 넣기(시안 91-A): 테두리 목록에 레포마다 48px 한 줄. */
@@ -5182,6 +5191,23 @@ a.menu-item {
   margin-top: 12px;
 }
 
+.repo-account {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 13px;
+}
+
+/* 혼자일 때 포스트의 사람 줄(시안 100-A): 부딪힌 내 브랜치 둘. */
+.forum-post-branches {
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* 포럼 만들기의 레포 칩(시안 92-A)과 패널 어디에 보일지 알리는 띠 */
 .forum-dialog-repos {
   margin: 16px 0 0;
@@ -5217,8 +5243,10 @@ a.menu-item {
 }
 
 @media (max-width: 833px) {
-  .repo-head {
-    height: 44px;
+  .place-row .menu-item,
+  .place-account,
+  .place-add {
+    min-height: 44px;
   }
 
   .repo-more {
@@ -5272,8 +5300,8 @@ a.menu-item {
   white-space: nowrap;
 }
 
-/* 워크스페이스 목록의 글은 이름 줄의 말줄임(.workspace p)을 따르지 않는다. */
-.workspace-menu p {
+/* 메뉴의 글은 이름 줄의 말줄임(.workspace p)을 따르지 않는다. */
+.place-menu p {
   grid-column: auto;
   margin-top: 0;
   overflow: visible;

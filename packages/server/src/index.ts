@@ -91,7 +91,7 @@ import type { GitHub, RepoLabel } from "./github.ts";
 import { createApp, type Env, mount } from "./http.ts";
 import { labelsFor } from "./labeler.ts";
 
-export { type GitHub, type Pull, type RepoLabel, realGitHub } from "./github.ts";
+export { type Account, type GitHub, type Pull, type RepoLabel, realGitHub } from "./github.ts";
 
 /** push 권한을 다시 확인하는 주기. Room의 10분에서 시작한다(ADR-0011). */
 const RECHECK_MS = 10 * 60_000;
@@ -970,6 +970,11 @@ export async function startServer(options: {
   );
   const hasColumn = (table: string, column: string) =>
     db.prepare(`SELECT 1 FROM pragma_table_info('${table}') WHERE name = '${column}'`).get();
+  // 계정의 종류와 아바타(시안 101의 이름 줄). 멤버의 push 권한을 읽을 때 GitHub에서 함께 읽어 고친다.
+  if (!hasColumn("workspaces", "kind")) {
+    db.exec("ALTER TABLE workspaces ADD COLUMN kind TEXT NOT NULL DEFAULT 'organization'");
+    db.exec("ALTER TABLE workspaces ADD COLUMN avatar TEXT");
+  }
   if (!hasColumn("channels", "workspace")) {
     // 채널의 이름은 워크스페이스마다 하나다. 표 전체에 하나이던 UNIQUE를 빼려고 표를 다시 만든다. messages가 가리키는 표라 외래 키를 잠시 끈다.
     db.exec("PRAGMA foreign_keys = OFF");
@@ -2681,6 +2686,12 @@ export async function startServer(options: {
       const can = await github.canPush(token, repo);
       if (stopped) break;
       if (can && can.name !== repo && moveRepo(repo, can.name)) repo = can.name;
+      if (can?.account)
+        db.prepare("UPDATE workspaces SET kind = ?, avatar = ? WHERE id = ?").run(
+          can.account.kind,
+          can.account.avatar,
+          ownerOf(repo),
+        );
       if (can === undefined) unknown.push(repo);
       else if (can.push) {
         push.push(repo);
@@ -2850,15 +2861,22 @@ export async function startServer(options: {
 
   mount(app, api.workspaces, (_, c) => {
     const repos = reposOf(c.get("login") as string);
-    const names = new Map(
-      (db.prepare("SELECT id, name FROM workspaces").all() as { id: string; name: string }[]).map(
-        ({ id, name }) => [id, name],
-      ),
+    const rows = new Map(
+      (
+        db.prepare("SELECT id, name, kind, avatar FROM workspaces").all() as {
+          id: string;
+          name: string;
+          kind: "organization" | "user";
+          avatar: string | null;
+        }[]
+      ).map((row) => [row.id, row]),
     );
     return {
       workspaces: [...new Set(repos.map(ownerOf))].map((id) => ({
         id,
-        name: names.get(id) ?? id,
+        name: rows.get(id)?.name ?? id,
+        kind: rows.get(id)?.kind ?? "organization",
+        avatar: rows.get(id)?.avatar ?? null,
         repos: repos.filter((repo) => ownerOf(repo) === id),
       })),
     };

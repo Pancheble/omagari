@@ -19,8 +19,9 @@
 // - DEMO_CHECK=none: 기본 브랜치에 검사 명령(.omagari.json)을 두지 않는다. 설정 창의 "검사 명령 없음"을 본다.
 // - 워크스페이스와 레포(ADR-0043, #238): 워크스페이스 "omagari-test"에 레포 둘(space, other)과 "나"가 Admin이지만 넣지 않은 레포(billing),
 //   다른 계정의 워크스페이스 "other-team"(레포 code)이 있다. 레포마다 채팅 채널, other만 보는 포럼("other 논의"), 두 레포를 보는 포럼("릴리즈")이 있다.
+//   other-team은 개인 계정이다(이름 줄의 아바타가 동그라미).
 // - DEMO_AS=minsu: 브라우저 로그인을 Admin이 아닌 박민수로 한다(omagari-test에서는 space에만, other-team의 code에 push 권한). 레포 넣기·빼기가 없다.
-//   other의 채널 주소(콘솔에 찍는다)로 가면 "이 레포는 볼 수 없어요"가 보인다.
+//   other의 채널 주소(콘솔에 찍는다)로 가면 "이 레포는 볼 수 없어요"가 보인다. other-team에는 박민수 혼자라 혼자일 때(시안 100-A)가 보인다.
 // - 끝내면(Ctrl+C) 임시 레포와 DB를 지운다. 이름이 *.test.ts가 아니라 npm test와 CI는 돌리지 않는다.
 // - 포스트마다 가짜 GitHub 이슈가 열리고 글이 댓글로 간다. 포스트 "박민수 · 최하준"에는 GitHub에서 단 댓글과 바꾼 제목·라벨이 들어온다.
 // - GitHub 머지를 막아 둔 채로 끝난다("머지 막힘"을 보이려고). 그 뒤로 Omagari가 하는 머지는 모두 막힌다.
@@ -892,7 +893,9 @@ fake.admin("owner", REPO2);
 fake.admin("owner", "omagari-test/billing");
 fake.grant("owner", REPO2);
 fake.grant("seoyeon", REPO2);
-fake.grant("owner", REPO3);
+// other-team은 개인 계정이다(아바타가 동그라미, 시안 101-3). DEMO_AS=minsu면 박민수 혼자 쓰는 워크스페이스라 혼자일 때(100-A)가 보인다.
+fake.account(REPO3.split("/")[0] as string, { kind: "user", avatar: null });
+if (process.env.DEMO_AS !== "minsu") fake.grant("owner", REPO3);
 fake.grant("minsu", REPO3);
 await call(world.owner, api.addRepo, { repo: REPO2 });
 const repoChannel = async (name: string, repo: string) =>
@@ -908,7 +911,10 @@ await call(world.owner, api.createForum, {
   name: "릴리즈",
   filter: { importance: "discuss", repos: [REPO, REPO2] },
 });
-const team = { ...world.owner, workspace: REPO3.split("/")[0] };
+const team = {
+  ...(process.env.DEMO_AS === "minsu" ? await world.login("minsu") : world.owner),
+  workspace: REPO3.split("/")[0],
+};
 await say(
   team,
   (await call(team, api.createChannel, { name: "일반" })).channel.id,

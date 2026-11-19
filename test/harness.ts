@@ -29,7 +29,7 @@ import {
   webToServer,
 } from "@omagari/contract";
 import { type Executor, type Sandbox, type SandboxInput, startRunner } from "@omagari/runner";
-import { type GitHub, type Pull, type RepoLabel, startServer } from "@omagari/server";
+import { type Account, type GitHub, type Pull, type RepoLabel, startServer } from "@omagari/server";
 
 const executable = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 const CLI = executable("../packages/cli/src/main.ts");
@@ -195,6 +195,8 @@ export function fakeGitHub() {
   const known = new Set(REPOS);
   const moves = new Map<string, string>();
   const exists = (repo: string) => known.has(moves.get(repo) ?? repo);
+  /** 계정의 종류와 아바타(`account`로 바꾼다). 없으면 아바타 없는 조직이다. */
+  const accounts = new Map<string, Account>();
   const pulls: (Pull & {
     branch: string;
     number?: number;
@@ -274,7 +276,12 @@ export function fakeGitHub() {
       // GitHub처럼 옮겨진 레포의 옛 이름은 새 레포로 넘겨 준다.
       const repo = moves.get(asked) ?? asked;
       if (!known.has(repo)) return { push: false, name: asked };
-      return { push: pushers.has(`${repo} ${tokens.get(token)}`), name: repo };
+      const owner = repo.split("/")[0] as string;
+      return {
+        push: pushers.has(`${repo} ${tokens.get(token)}`),
+        name: repo,
+        account: accounts.get(owner) ?? { kind: "organization", avatar: null },
+      };
     },
     async canAdmin(token, repo) {
       return admins.has(`${moves.get(repo) ?? repo} ${tokens.get(token)}`);
@@ -458,6 +465,10 @@ export function fakeGitHub() {
     },
     grant: (login: string, repo = REPO) => pushers.add(`${repo} ${login}`),
     revoke: (login: string, repo = REPO) => pushers.delete(`${repo} ${login}`),
+    /** GitHub에 레포 `repo`를 새로 만든다(워크스페이스에 넣기 전의 레포). */
+    create: (repo: string) => known.add(repo),
+    /** 계정 `owner`의 종류와 아바타를 둔다(GitHub에서 개인 계정이거나 아바타가 있는 계정). */
+    account: (owner: string, account: Account) => accounts.set(owner, account),
     /** `login`을 `repo`의 Admin으로 둔다. */
     admin: (login: string, repo = REPO) => admins.add(`${repo} ${login}`),
     /** `branch`를 head로 하는 PR을 연다. 기본은 초안이다. */

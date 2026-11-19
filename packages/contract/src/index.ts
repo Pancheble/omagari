@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 49;
+export const CONTRACT_VERSION = 50;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -1623,6 +1623,13 @@ export const Workspace = z.strictObject({
   id: z.string(),
   /** 계정 이름 그대로(`owner/name`의 owner). */
   name: z.string(),
+  /**
+   * GitHub 계정 종류. 웹은 아바타 모양만 가른다(조직은 네모, 개인은 동그라미). 멤버가 나 하나인지는 이것이 아니라 멤버 수로 정한다.
+   * 멤버의 push 권한을 읽을 때 GitHub에서 함께 읽고, 아직 읽지 못했으면 `organization`이다.
+   */
+  kind: z.enum(["organization", "user"]),
+  /** GitHub 계정 아바타 주소. 아직 읽지 못했으면 null이고, 웹은 계정 이름 첫 글자를 쓴다. */
+  avatar: z.string().nullable(),
   /** 이 멤버에게 보이는 이 워크스페이스의 레포들, 넣은 순서. */
   repos: z.array(z.string()),
 });

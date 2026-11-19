@@ -44,7 +44,12 @@ import {
   useSyncExternalStore,
 } from "react";
 import {
+  lastKey,
   type Me,
+  placeKey,
+  remember,
+  remembered,
+  repoName,
   type Workspace as Space,
   savedPicks,
   savePicks,
@@ -55,9 +60,9 @@ import {
   type AdminRepo,
   byName,
   ChannelList,
+  PlacePicker,
   RepoDialog,
   useCollapsed,
-  WorkspacePicker,
 } from "./channels.tsx";
 import { ChannelTitle, Conversation, type View } from "./conversation.tsx";
 import { DEBATE_STRIP, DebateDialog, DebateLog, DebateStrip, ProxyDialog } from "./debate.tsx";
@@ -78,6 +83,7 @@ import {
 import { type CreateKind, ForumDialog, LabelsContext, PostLabels } from "./labels.tsx";
 import { useLive } from "./live.ts";
 import { MemberList, MemberSkeleton } from "./members.tsx";
+import { ALL, placeIn, placeOf } from "./places.ts";
 import { ProfilePanel } from "./profile.tsx";
 import { Settings } from "./settings.tsx";
 
@@ -169,12 +175,13 @@ export function Workspace({
 }: {
   me: Me;
   session: string;
-  /** 내가 들어간 워크스페이스들과 지금 고른 것의 id(시안 89-A) */
+  /** 내가 들어간 워크스페이스들과 지금 고른 것의 id */
   workspaces: Space[];
   workspace: string;
-  onSwitch: (workspace: string) => void;
-  /** 레포를 넣거나 뺐다. 앱이 워크스페이스 목록을 고쳐, 워크스페이스를 바꿔도 지금 목록이 보인다. */
-  onRepos: (workspace: string, repos: string[]) => void;
+  /** 다른 계정의 곳(레포나 "전체")을 골랐다(시안 101). */
+  onSwitch: (workspace: string, place: string) => void;
+  /** 레포를 넣거나 뺐다(내게 보이는 레포 전부). 앱이 워크스페이스 목록을 고친다. */
+  onRepos: (repos: string[]) => void;
   onLogout: () => void;
   /** 세션이 끝났다(API나 실시간 연결이 그렇게 답했다). */
   onSignedOut: () => void;
@@ -185,8 +192,8 @@ export function Workspace({
   const [createKind, setCreateKind] = useState<CreateKind>("chat");
   const forumEditor = useRef<HTMLDialogElement>(null);
   const space = workspaces.find((other) => other.id === workspace) ?? (workspaces[0] as Space);
-  /** 이 워크스페이스에서 내게 보이는 레포들. 레포를 넣고 빼면 바뀐다. */
-  const [repos, setRepos] = useState(space.repos);
+  /** 이 워크스페이스에서 내게 보이는 레포들. 레포를 넣고 빼면 앱이 바꿔 준다. */
+  const repos = space.repos;
   /** 레포마다의 라벨(ADR-0039, ADR-0043). 붙을 때 읽고, 실시간 연결의 `labels`(첫 레포의 것)로 갈아 끼운다. */
   const [labelsByRepo, setLabelsByRepo] = useState<Record<string, Label[]>>({});
   /** 포럼의 필터가 고르는 라벨: 레포들의 라벨을 이름으로 합친 것. */
@@ -198,20 +205,24 @@ export function Workspace({
     ).values(),
   ];
   const repoDialog = useRef<HTMLDialogElement>(null);
-  /** 내가 Admin인 레포(레포 넣기 목록). 없으면 읽는 중이다. */
-  const [adminRepos, setAdminRepos] = useState<AdminRepo[] | "error">();
-  const loadAdmin = () =>
-    call(server(session), api.adminRepos)
-      .then(({ repos: list }) => setAdminRepos(list))
+  /** 계정마다 내가 Admin인 레포(레포 넣기 목록과 레포 줄의 ⋯). 없으면 아직 읽지 않았다. */
+  const [admins, setAdmins] = useState<Record<string, AdminRepo[] | "error">>({});
+  /** 읽는 중인 계정. 메뉴가 같은 계정을 거듭 읽지 않게 한다. */
+  const reading = useRef(new Set<string>());
+  const loadAdmin = (id: string) => {
+    reading.current.add(id);
+    return call({ ...server(session), workspace: id }, api.adminRepos)
+      .then(({ repos: list }) => setAdmins((all) => ({ ...all, [id]: list })))
       .catch((error) => {
         check(error);
-        setAdminRepos("error");
-      });
+        setAdmins((all) => ({ ...all, [id]: "error" }));
+      })
+      .finally(() => reading.current.delete(id));
+  };
   // biome-ignore lint/correctness/useExhaustiveDependencies: 워크스페이스를 열 때 한 번 읽는다
-  useEffect(() => void loadAdmin(), []);
-  const admin = new Set(
-    Array.isArray(adminRepos) ? adminRepos.filter((r) => r.added).map((r) => r.name) : [],
-  );
+  useEffect(() => void loadAdmin(workspace), []);
+  /** "레포 넣기" 창을 연 계정 */
+  const [adding, setAdding] = useState(workspace);
   useEffect(() => {
     const wide = matchMedia(WIDE);
     const close = () => wide.matches && drawer.current?.close();
@@ -347,15 +358,33 @@ export function Workspace({
   /** 채널마다 불러 둔 대화. 연 적 없는 채널은 없고, 처음 열 때 지난 대화를 읽는다. */
   const [views, setViews] = useState<Record<string, View>>({});
   /** 주소는 `#채널 id`, 포럼의 포스트는 `#포럼 id/알림 번호`(옆 칸), 크게 보면 `#포럼 id/알림 번호/big`. */
-  const [hashChannel, hashPost, hashSize] = useHash().split("/");
+  const hash = useHash();
+  const [hashChannel, hashPost, hashSize] = hash.split("/");
   const found =
     channels?.find((channel) => channel.id === hashChannel) ??
     (hashChannel === OTHER.id ? OTHER : undefined);
+  /** 메뉴에서 고른 곳(레포 이름이나 "전체"). 이 기기에 남는다. */
+  const [picked, setPicked] = useState(() => remembered(placeKey(workspace)));
+  /** 지금 보는 곳(시안 101): 주소의 채널이 선 곳, 없으면 고른 곳이다. 패널은 늘 이곳의 것이다. */
+  const here = found ? placeOf(found, repos) : placeIn(repos, picked);
+  const inPlace = channels?.filter((channel) => placeOf(channel, repos) === here);
   const current =
     found ??
-    channels?.find((channel) => channel.kind === "chat" && !channel.repo) ??
-    channels?.find((channel) => channel.kind === "chat") ??
-    channels?.[0];
+    inPlace?.find((channel) => channel.kind === "chat" && !channel.repo) ??
+    inPlace?.find((channel) => channel.kind === "chat") ??
+    inPlace?.[0];
+  // 지금 보는 곳과 그곳에서 본 채널을 기억한다. 메뉴로 다시 오면 그 채널로 간다.
+  useEffect(() => {
+    if (here !== picked) setPicked(here);
+    remember(placeKey(workspace), here);
+    if (found) remember(lastKey(workspace, here), `#${hash}`);
+  }, [here, hash, found, picked, workspace]);
+  /** 메뉴에서 곳을 고른다. 다른 계정이면 앱이 그 워크스페이스로 바꾼다. 그곳에서 마지막에 본 채널로 간다. */
+  const pick = (id: string, place: string) => {
+    if (id !== workspace) return onSwitch(id, place);
+    setPicked(place);
+    location.hash = remembered(lastKey(workspace, place)) ?? "";
+  };
   const forum = current?.kind === "forum";
   /** 포럼 포스트 전부. 포럼을 처음 읽을 때까지는 없다. */
   const [posts, setPosts] = useState<PostItem[]>();
@@ -409,6 +438,19 @@ export function Workspace({
     } catch {}
   }, [postChannel?.id, openCount]);
   const [forumCollapsed, toggleForumCollapsed] = useCollapsed("omagari.forum-collapsed");
+  /** 포럼 id마다 선 곳 */
+  const forumPlace = new Map(channels?.map((channel) => [channel.id, placeOf(channel, repos)]));
+  /** 그곳에 새 글이 있나: 그곳 포럼에 달린 내 열린 포스트에 안 읽은 글이 있다(패널의 가지와 같은 것). */
+  const fresh = (place: string) =>
+    !!posts?.some(
+      (item) =>
+        !settled(item) &&
+        unread(item) &&
+        mine(item) &&
+        item.forums.some((id) => forumPlace.get(id) === place),
+    );
+  /** 멤버가 나 하나다(시안 100-A). 계정 종류가 아니라 멤버 수로 정한다. */
+  const solo = members?.length === 1 && members[0]?.login === me.login;
   // biome-ignore lint/correctness/useExhaustiveDependencies: 대화를 옮기면 붙인 문답을 뺀다
   useEffect(() => setAttached(undefined), [active?.id]);
 
@@ -584,27 +626,26 @@ export function Workspace({
       .catch(() => {});
   };
 
-  /** 레포를 넣고 뺀 뒤: 보이는 레포가 바뀌었으니 채널과 레포마다인 것을 다시 읽는다. */
-  const reposChanged = (all: string[]) => {
-    const next = all.filter((repo) => repo.split("/")[0]?.toLowerCase() === workspace);
-    setRepos(next);
-    onRepos(workspace, next);
+  /** 계정 `id`의 레포를 넣고 뺀 뒤: 보이는 레포가 바뀌었으니 지금 워크스페이스면 채널과 레포마다인 것을 다시 읽는다. */
+  const reposChanged = (id: string, all: string[]) => {
+    onRepos(all);
+    void loadAdmin(id);
+    if (id !== workspace) return;
     call(server(session), api.channels)
       .then((list) => setChannels(byName(list.channels)))
       .catch(check);
-    loadRepos(next);
-    void loadAdmin();
+    loadRepos(all.filter((repo) => repo.split("/")[0]?.toLowerCase() === workspace));
   };
   const addRepo = async (repo: string) => {
     try {
-      reposChanged((await call(server(session), api.addRepo, { repo })).repos);
+      reposChanged(adding, (await call(server(session), api.addRepo, { repo })).repos);
     } catch (error) {
       throw check(error);
     }
   };
-  const removeRepo = async (repo: string) => {
+  const removeRepo = async (id: string, repo: string) => {
     try {
-      reposChanged((await call(server(session), api.removeRepo, { repo })).repos);
+      reposChanged(id, (await call(server(session), api.removeRepo, { repo })).repos);
     } catch (error) {
       throw check(error);
     }
@@ -656,8 +697,12 @@ export function Workspace({
     }
   };
 
+  /** 채팅 채널은 지금 보는 곳에 만든다. 레포가 하나뿐인 계정이면 그 레포의 채널이다. */
   const create = async (name: string) => {
-    const { channel } = await call(server(session), api.createChannel, { name });
+    const { channel } = await call(server(session), api.createChannel, {
+      name,
+      repo: here === ALL ? undefined : here,
+    });
     add(channel);
     location.hash = channel.id;
   };
@@ -736,15 +781,28 @@ export function Workspace({
     <ChannelPanel
       me={me}
       head={
-        <WorkspacePicker
-          workspaces={workspaces.map((other) =>
-            other.id === workspace ? { ...other, repos } : other,
-          )}
-          current={{ ...space, repos }}
+        <PlacePicker
+          workspaces={workspaces}
+          current={space}
+          place={here}
+          fresh={fresh}
+          admin={admins}
           action={action}
-          onSwitch={onSwitch}
+          onAdmin={(id) => !reading.current.has(id) && void loadAdmin(id)}
+          onPick={(id, place) => {
+            onPick?.();
+            pick(id, place);
+          }}
+          onAddRepo={(id) => {
+            drawer.current?.close();
+            setAdding(id);
+            if (!reading.current.has(id)) void loadAdmin(id);
+            repoDialog.current?.showModal();
+          }}
+          onRemoveRepo={removeRepo}
         />
       }
+      solo={solo}
       mine={members?.find((member) => member.login === me.login)}
       onLogout={onLogout}
       onSettings={() => {
@@ -755,20 +813,8 @@ export function Workspace({
       onMessage={setMessage}
     >
       <ChannelList
-        workspace={space.name}
-        repos={repos}
-        admin={admin}
-        onAddRepo={
-          Array.isArray(adminRepos) && adminRepos.length > 0
-            ? () => {
-                drawer.current?.close();
-                void loadAdmin();
-                repoDialog.current?.showModal();
-              }
-            : undefined
-        }
-        onRemoveRepo={removeRepo}
-        channels={channels}
+        channels={inPlace}
+        other={here === placeOf(OTHER, repos) && !!posts?.some((item) => item.forums.length === 0)}
         current={current?.id}
         post={openPost?.alert}
         posts={posts}
@@ -1033,9 +1079,11 @@ export function Workspace({
                 <IssueNumber post={openPost} />
               </div>
             ) : forum && current ? (
-              <ForumTitle forum={current} />
+              <ForumTitle forum={current} solo={solo} />
             ) : (
-              current && <ChannelTitle channel={current} members={members?.length} />
+              current && (
+                <ChannelTitle channel={current} members={solo ? undefined : members?.length} />
+              )
             )}
             {/* 오른쪽 칸을 여는 버튼들. 평소에는 아이콘만, 연 버튼만 이름이 붙는다. */}
             <div className="header-actions" hidden={missing}>
@@ -1075,18 +1123,21 @@ export function Workspace({
                   {shown === "agent" && <span>내 에이전트</span>}
                 </button>
               )}
-              <button
-                ref={membersButton}
-                type="button"
-                className="header-button"
-                aria-label="멤버 목록"
-                aria-expanded={shown === "members"}
-                aria-controls={shown === "members" ? rightId : undefined}
-                onClick={() => toggleRight("members")}
-              >
-                <Users size={18} aria-hidden />
-                {shown === "members" && <span>멤버 목록</span>}
-              </button>
+              {/* 혼자면 멤버 목록이 뜻이 없어 버튼을 두지 않는다(시안 100-A). */}
+              {!solo && (
+                <button
+                  ref={membersButton}
+                  type="button"
+                  className="header-button"
+                  aria-label="멤버 목록"
+                  aria-expanded={shown === "members"}
+                  aria-controls={shown === "members" ? rightId : undefined}
+                  onClick={() => toggleRight("members")}
+                >
+                  <Users size={18} aria-hidden />
+                  {shown === "members" && <span>멤버 목록</span>}
+                </button>
+              )}
             </div>
           </header>
           {missing ? (
@@ -1096,17 +1147,21 @@ export function Workspace({
                 push 권한이 있는 사람만 이 레포의 채널과 포스트를 봐요. GitHub에서 권한을 받으면
                 10분 안에 패널에 생겨요.
               </p>
+              {/* 레포 이름은 쓰지 않는다. 레포가 하나뿐인 계정이면 "전체"가 없어 그 레포로 간다(시안 93-C, 101). */}
               <button
                 type="button"
                 className="button outline"
                 onClick={() => {
+                  setPicked(repos.length > 1 ? ALL : repos[0]);
                   location.hash = "";
                 }}
               >
-                {space.name} 전체로 가기
+                {repos.length > 1
+                  ? `${space.name} 전체로 가기`
+                  : `${repoName(repos[0] ?? "")}로 가기`}
               </button>
             </div>
-          ) : channels?.length === 0 ? (
+          ) : inPlace?.length === 0 && !found ? (
             <div className="empty">
               <h2>아직 채널이 없어요</h2>
               <p>채널을 만들어 멤버들과 이야기를 시작해 보세요.</p>
@@ -1122,6 +1177,8 @@ export function Workspace({
               selected={openPost?.alert}
               unread={unread}
               me={me.login}
+              solo={solo}
+              account={space.name}
               repos={repos}
               onSaveFilter={(filter) => updateForum(current, current.name, filter)}
             />
@@ -1183,7 +1240,7 @@ export function Workspace({
             onClose={closeRight}
           />
         )}
-        {shown === "members" && (
+        {shown === "members" && !solo && (
           <RightPanel id={rightId} title="멤버 목록" sheet={!wide} onClose={closeRight}>
             {live === "reconnecting" && members && (
               <p className="banner info" role="status">
@@ -1207,11 +1264,20 @@ export function Workspace({
         >
           <div className="side-panel">{panel(() => drawer.current?.close())}</div>
         </dialog>
-        <RepoDialog dialog={repoDialog} account={space.name} repos={adminRepos} onAdd={addRepo} />
+        <RepoDialog
+          dialog={repoDialog}
+          account={workspaces.find((other) => other.id === adding) ?? space}
+          repos={admins[adding]}
+          onAdd={addRepo}
+        />
         <ForumDialog
+          // 곳을 바꾸면 새로 그려 레포 칩이 지금 보는 곳으로 골라진 채로 열린다.
+          key={here}
           dialog={creator}
           posts={previews}
+          account={space.name}
           repos={repos}
+          start={here === ALL || repos.length < 2 ? [] : [here]}
           kind={createKind}
           onKind={setCreateKind}
           onCreateChat={create}
@@ -1223,6 +1289,7 @@ export function Workspace({
             dialog={forumEditor}
             forum={current}
             posts={previews}
+            account={space.name}
             repos={repos}
             onSave={(name, filter) => updateForum(current, name, filter)}
             onDelete={() => deleteForum(current)}
@@ -1375,6 +1442,7 @@ export function RightPanel({
 function ChannelPanel({
   me,
   head,
+  solo,
   mine,
   onLogout,
   onSettings,
@@ -1383,8 +1451,9 @@ function ChannelPanel({
   children,
 }: {
   me: Me;
-  /** 워크스페이스 이름 줄(워크스페이스 고르기) */
+  /** 이름 줄(레포 고르기) */
   head: ReactNode;
+  solo: boolean;
   mine?: MemberView;
   onLogout: () => void;
   onSettings: () => void;
@@ -1399,6 +1468,7 @@ function ChannelPanel({
       <ProfilePanel
         me={me}
         mine={mine}
+        solo={solo}
         onLogout={onLogout}
         onSettings={onSettings}
         onPresence={onPresence}
