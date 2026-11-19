@@ -18,7 +18,7 @@ test("실행기 없는 러너가 붙은 멤버에게 묻는 것은 보내지 않
   const asked = await world.cli("ask", "bob", "charge()에 재시도를 넣나요?");
   assert.equal(asked.code, 0, asked.stderr);
   // 실행기가 없으니 답할 러너가 없다: 보내지 않고 오프라인으로 남겨 둔다.
-  assert.match(asked.stdout, /^bob의 러너가 오프라인이라 질문 #\d+를 남겨 두었다\./);
+  assert.match(asked.stdout, /^bob's runner is offline, so question #\d+ is waiting\./);
 
   // 서버가 살아 있다: 다른 멤버의 요청이 그대로 답을 받는다.
   const members = await call(world.owner, api.members);

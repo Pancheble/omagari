@@ -116,9 +116,9 @@ test("레포 폴더에서 명령 하나로 로그인하고 러너를 켠다. 러
 
   const runner = world.launchCliIn(desk.folder, "runner");
   t.after(() => runner.stop("SIGKILL"));
-  const [, code] = await runner.output(/코드 (\S+)/);
+  const [, code] = await runner.output(/enter code (\S+)/);
   world.github.approve(code, "alice"); // 사람이 브라우저에서 코드를 넣었다
-  await runner.output(new RegExp(`러너가 켜졌다: alice의 에이전트, ${REPO} ↔ ${desk.folder}`));
+  await runner.output(new RegExp(`Runner started: alice's agent, ${REPO} ↔ ${desk.folder}`));
   assert.equal((await world.agents(world.owner)).alice, "online");
 
   // 떨어지면 오프라인이다.
@@ -140,8 +140,8 @@ test("레포 폴더에서 명령 하나로 로그인하고 러너를 켠다. 러
   // 다시 켜면 남겨 둔 세션으로 붙는다. 다시 로그인하지 않는다.
   const again = world.launchCliIn(desk.folder, "runner");
   t.after(() => again.stop("SIGKILL"));
-  await again.output(/러너가 켜졌다: alice/);
-  assert.doesNotMatch((await again.stop()).stdout, /GitHub 로그인/);
+  await again.output(/Runner started: alice/);
+  assert.doesNotMatch((await again.stop()).stdout, /GitHub login/);
 });
 
 test("Git 레포가 아닌 폴더에서는 로그인하기 전에 이유를 말하고 켜지지 않는다", async (t) => {
@@ -152,8 +152,8 @@ test("Git 레포가 아닌 폴더에서는 로그인하기 전에 이유를 말�
 
   const result = await world.cliIn(folder, "runner");
   assert.equal(result.code, 1);
-  assert.match(result.stderr, /Git 레포가 아닌 폴더다/);
-  assert.doesNotMatch(result.stdout, /GitHub 로그인/);
+  assert.match(result.stderr, /Not a Git repo folder/);
+  assert.doesNotMatch(result.stdout, /GitHub login/);
 });
 
 test("워크스페이스의 레포가 아닌 폴더에서는 이유를 말하고 켜지지 않는다", async (t) => {
@@ -165,7 +165,7 @@ test("워크스페이스의 레포가 아닌 폴더에서는 이유를 말하고
 
   const runner = world.launchCliIn(other.folder, "runner");
   t.after(() => runner.stop("SIGKILL"));
-  const [, code] = await runner.output(/코드 (\S+)/);
+  const [, code] = await runner.output(/enter code (\S+)/);
   world.github.approve(code, "alice");
   const result = await runner.exited;
   assert.equal(result.code, 1);
@@ -184,7 +184,7 @@ test("같은 레포에 러너를 하나 더 켜면 이유를 말하고 켜지지
       session: world.owner.session,
       ...stubbed(),
     }),
-    /이 레포의 러너가 이미 켜져 있다/,
+    /A runner for this repo is already on/,
   );
   assert.equal((await world.cli("runner", "ask", "아직 있나?")).stdout, "가짜 답\n");
   assert.deepEqual(await world.agents(world.owner), { owner: "online" });

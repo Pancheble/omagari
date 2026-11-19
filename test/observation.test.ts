@@ -281,9 +281,9 @@ test("러너를 켤 때 로그인하기 전에 무엇이 서버로 나가는지 
 
   const runner = world.launchCliIn(desk.folder, "runner");
   t.after(() => runner.stop("SIGKILL"));
-  const [, code] = await runner.output(/코드 (\S+)/);
+  const [, code] = await runner.output(/enter code (\S+) at/);
   world.github.approve(code, "alice");
-  await runner.output(/러너가 켜졌다/);
+  await runner.output(/Runner started/);
   await eventually(async () =>
     assert.deepEqual(
       (await world.works(world.owner)).filter((work) => work.login === "alice"),
@@ -302,14 +302,23 @@ test("러너를 켤 때 로그인하기 전에 무엇이 서버로 나가는지 
   );
 
   const { stdout } = await runner.stop();
-  const notice = stdout.slice(0, stdout.indexOf("GitHub 로그인"));
-  assert.match(notice, /바꾼 파일의 경로와 내용이 서버로 나가/);
-  assert.match(notice, /커밋한 것, 커밋하지 않은 것, 추적하지 않는 새 파일/);
+  const notice = stdout.slice(0, stdout.indexOf("GitHub login"));
   assert.match(
     notice,
-    /나가지 않는 것: gitignore된 파일과 \.env, \.env\.\*\(\.env\.example은 나간다\)/,
+    /the paths and content of the files changed since it split from the default branch go to the server/,
   );
-  assert.match(notice, /경로만 나가는 것: 바이너리, 512KiB를 넘는 파일, 합계 8MiB를 넘는 몫/);
+  assert.match(
+    notice,
+    /Committed changes, uncommitted changes, and new untracked files are all sent/,
+  );
+  assert.match(
+    notice,
+    /Not sent: gitignored files and \.env, \.env\.\* \(\.env\.example is sent\)/,
+  );
+  assert.match(
+    notice,
+    /Paths only: binaries, files over 512KiB, and whatever goes over the 8MiB total/,
+  );
 });
 
 test("Git이 지웠다고 보는 경로는 디스크를 다시 읽지 않는다: 추적을 끊고 gitignore한 파일도, 링크로 바뀐 폴더 너머의 파일도 지운 것으로만 올라간다", async (t) => {

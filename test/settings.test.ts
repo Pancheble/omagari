@@ -72,9 +72,9 @@ test("설정은 레포의 검사 명령과 내 러너의 합쳐 돌려 보기를
   t.after(aliceDesk.remove);
   const runner = world.launchCliIn(aliceDesk.folder, "runner", "--merge-check", "off");
   t.after(() => runner.stop("SIGKILL"));
-  const [, code] = await runner.output(/코드 (\S+) /);
+  const [, code] = await runner.output(/enter code (\S+) /);
   world.github.approve(code as string, "alice");
-  await runner.output(/러너가 켜졌다/);
+  await runner.output(/Runner started/);
   const alice = await world.login("alice");
   assert.equal((await mergeCheck(alice)).runner, "off");
   await runner.stop();

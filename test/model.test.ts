@@ -165,16 +165,19 @@ test("러너는 알린 고를 거리에 없는 모델이나, 고른 모델에 �
     state: "failed",
     error: {
       code: "invalid_message",
-      message: "Claude Code가 알리지 않은 모델이다: --dangerously-skip-permissions",
+      message: "Claude Code didn't report this model: --dangerously-skip-permissions",
     },
   });
   assert.deepEqual(await ask({ model: "claude-haiku-4-5-20251001", effort: "high" }), {
     state: "failed",
-    error: { code: "invalid_message", message: "Haiku 4.5에 고를 수 없는 effort다: high" },
+    error: { code: "invalid_message", message: "This effort can't be chosen for Haiku 4.5: high" },
   });
   assert.deepEqual(await ask({ effort: "ultra" }), {
     state: "failed",
-    error: { code: "invalid_message", message: "기본 모델에 고를 수 없는 effort다: ultra" },
+    error: {
+      code: "invalid_message",
+      message: "This effort can't be chosen for the default model: ultra",
+    },
   });
   assert.deepEqual(await fake.calls(), []);
 });

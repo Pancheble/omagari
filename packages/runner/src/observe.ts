@@ -1,5 +1,5 @@
-// 관측: 등록한 폴더와 그 연결된 워크트리의 Git 상태에서 작업마다 바꾼 파일과 그 내용을 읽는다(ADR-0002, ADR-0006, ADR-0007).
-// 읽기만 한다. 작업 폴더의 어떤 파일도, Git이 덤으로 하는 인덱스 갱신도 쓰지 않는다.
+// Observation: for each Work, reads the changed files and their content from the Git state of the registered folder and its linked worktrees (ADR-0002, ADR-0006, ADR-0007).
+// Read-only. It doesn't write any file in the work folder, nor the index refresh Git does on the side.
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstat, readFile, readlink } from "node:fs/promises";
@@ -10,37 +10,37 @@ import { compare, parsable, usesIn } from "./symbols.ts";
 
 const execFileAsync = promisify(execFile);
 
-/** 파일 하나의 내용 상한. 넘으면 경로만 보낸다. Room의 값에서 시작한다(ADR-0007). */
+/** Upper limit on one file's content. Past it, only the path is sent. It starts from Room's value (ADR-0007). */
 export const FILE_LIMIT = 512 * 1024;
-/** 한 번에 보내는 내용의 합계 상한. 워크트리를 모두 합해 센다. 넘는 몫은 경로만 보낸다. 보내는 꼴(JSON 문자열)의 바이트로 센다. */
+/** Upper limit on the total content sent at once. Counted across all worktrees. What goes over is sent as paths only. Counted in bytes of the form that's sent (a JSON string). */
 export const TOTAL_LIMIT = 8 * 1024 * 1024;
 
-const ALWAYS = `  커밋한 것, 커밋하지 않은 것, 추적하지 않는 새 파일이 모두 나간다. 푸시하지 않은 것도 나간다.
-  나가지 않는 것: gitignore된 파일과 .env, .env.*(.env.example은 나간다).`;
+const ALWAYS = `  Committed changes, uncommitted changes, and new untracked files are all sent. Unpushed changes are sent too.
+  Not sent: gitignored files and .env, .env.* (.env.example is sent).`;
 
-/** 러너를 켤 때 주인에게 알리는 것: 이 공유 수준에서 무엇이 서버로 나가는가. */
+/** What the owner is told when the runner starts: what goes to the server at this share level. */
 export function observationNotice(share: ShareLevel) {
   const what = {
-    full: `이 폴더와 연결된 워크트리의 브랜치마다, 기본 브랜치와 갈라진 뒤 바꾼 파일의 경로와 내용이 서버로 나가 멤버들이 본다.
+    full: `For each branch in this folder and its linked worktrees, the paths and content of the files changed since it split from the default branch go to the server, and members can see them.
 ${ALWAYS}
-  경로만 나가는 것: 바이너리, ${FILE_LIMIT / 1024}KiB를 넘는 파일, 합계 ${TOTAL_LIMIT / 1024 / 1024}MiB를 넘는 몫.`,
-    declared: `이 폴더와 연결된 워크트리의 브랜치마다, 기본 브랜치와 갈라진 뒤 바꾼 파일의 경로가 서버로 나가 멤버들이 본다. 내용은 그 브랜치가 선점(omagari claim)한 경로 안의 파일만 나간다.
+  Paths only: binaries, files over ${FILE_LIMIT / 1024}KiB, and whatever goes over the ${TOTAL_LIMIT / 1024 / 1024}MiB total.`,
+    declared: `For each branch in this folder and its linked worktrees, the paths of the files changed since it split from the default branch go to the server, and members can see them. Content goes only for files inside paths that branch has claimed (omagari claim).
 ${ALWAYS}
-  경로만 나가는 것: 선점한 경로 밖의 파일, 바이너리, ${FILE_LIMIT / 1024}KiB를 넘는 파일, 합계 ${TOTAL_LIMIT / 1024 / 1024}MiB를 넘는 몫.`,
-    intent: `이 폴더와 연결된 워크트리의 브랜치 이름과 기준 커밋, 에이전트가 쓴 상태 한 줄만 서버로 나간다. 바꾼 파일의 경로도 내용도 나가지 않는다.`,
+  Paths only: files outside claimed paths, binaries, files over ${FILE_LIMIT / 1024}KiB, and whatever goes over the ${TOTAL_LIMIT / 1024 / 1024}MiB total.`,
+    intent: `Only each branch's name and base commit in this folder and its linked worktrees, plus the status line the agent wrote, go to the server. Neither the paths nor the content of changed files go.`,
   }[share];
-  return `관측(공유 수준 ${share}): ${what}
-  공유 수준은 omagari runner --share <full|declared|intent>로 고른다. 고른 것은 이 레포에 남는다.`;
+  return `Observation (share level ${share}): ${what}
+  You pick the share level with omagari runner --share <full|declared|intent>. Your pick is kept in this repo.`;
 }
 
-/** 추적되더라도 늘 빼는 것: 경로의 어느 마디든 `.env`이거나 `.env.`로 시작한다. `.env.example`은 남긴다. */
+/** Always left out even if tracked: any path segment that is `.env` or starts with `.env.`. `.env.example` stays. */
 export const secret = (path: string) =>
   path
     .split("/")
     .some((part) => part === ".env" || (part.startsWith(".env.") && part !== ".env.example"));
 
 const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
-/** 글이면 그 글을, 바이너리면(NUL이 있거나 UTF-8이 아니면) 없음을 돌려준다. */
+/** The text if it's text, or none if it's binary (it has a NUL or isn't UTF-8). */
 function asText(bytes: Buffer) {
   if (bytes.includes(0)) return;
   try {
@@ -53,15 +53,15 @@ function asText(bytes: Buffer) {
 const git = async (folder: string, ...args: string[]) =>
   (
     await execFileAsync("git", ["-C", folder, ...args], {
-      // 인덱스 갱신처럼 잠금이 필요한 덤의 쓰기를 하지 않는다.
+      // Doesn't do side writes that need a lock, like the index refresh.
       env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
       maxBuffer: 64 * 1024 * 1024,
     })
   ).stdout;
 
-/** 등록한 폴더와 그 연결된 워크트리의 폴더. 폴더가 없어진 것(prunable)과 작업 트리가 없는 것(bare)은 뺀다. */
+/** The registered folder and the folders of its linked worktrees. Leaves out ones whose folder is gone (prunable) and ones with no working tree (bare). */
 async function worktrees(folder: string) {
-  // -z: 줄 끝이 NUL, 워크트리 하나가 끝나면 NUL이 하나 더 온다. 경로에 줄바꿈이 있어도 그대로 읽는다.
+  // -z: lines end with NUL, and one more NUL comes after each worktree. Paths with newlines are read as they are.
   const list = await git(folder, "worktree", "list", "--porcelain", "-z");
   return list.split("\0\0").flatMap((record) => {
     const [first = "", ...attributes] = record.split("\0");
@@ -71,13 +71,13 @@ async function worktrees(folder: string) {
 }
 
 /**
- * `folder`(등록한 폴더)와 그 연결된 워크트리마다 체크아웃된 작업을 공유 수준대로 읽는다. 브랜치가 아니면(detached HEAD) 작업이 없다.
- * full은 내용을, declared는 그 작업이 선점한 경로(`claimed`) 안의 것만 내용을 읽고, 나머지는 경로만 읽는다. intent의 경로는 서버로 나가지 않는다(러너가 뺀다).
- * 기준 커밋은 HEAD와 `remote`의 기본 브랜치(`refs/remotes/<remote>/HEAD`)가 갈라진 지점이다.
- * 읽지 못한 워크트리는 빼고 그 까닭을 `problems`에 담는다. 하나가 안 읽혀도 나머지는 올라간다.
- * `folders`는 작업(브랜치)마다 체크아웃된 폴더다. 브랜치 하나는 워크트리 하나에만 체크아웃된다.
+ * Reads the Work checked out in `folder` (the registered folder) and each of its linked worktrees, at the share level. If it isn't a branch (detached HEAD), there's no Work.
+ * full reads content. declared reads content only inside the paths that Work has claimed (`claimed`) and only paths for the rest. intent's paths don't go to the server (the runner removes them).
+ * The base commit is where HEAD and the default branch of `remote` (`refs/remotes/<remote>/HEAD`) split.
+ * A worktree it can't read is left out and the reason goes in `problems`. If one can't be read, the rest still go up.
+ * `folders` is the folder checked out for each Work (branch). One branch is checked out in only one worktree.
  */
-/** 견준 정의 줄. 기준 커밋, 경로, 내용이 같으면 다시 읽지 않는다. 가장 오래 넣은 것부터 버린다. */
+/** Compared definition lines. If the base commit, path, and content are the same, it doesn't read again. The oldest entries are dropped first. */
 const compared = new Map<string, ReturnType<typeof compare>>();
 const COMPARED_LIMIT = 2000;
 
@@ -114,13 +114,13 @@ export async function observe(
       (out) => out.trim(),
       () => {
         throw new Error(
-          `기준 커밋을 찾지 못했다: ${remote}의 기본 브랜치를 모르거나 ${branch}와 갈라진 지점이 없다. ` +
-            `git remote set-head ${remote} --auto 로 기본 브랜치를 정하라`,
+          `couldn't find the base commit: the default branch of ${remote} is unknown or has no split point with ${branch}. ` +
+            `set the default branch with git remote set-head ${remote} --auto`,
         );
       },
     );
-    // 기준 커밋과 작업 트리의 차이(커밋한 것과 안 한 것)와, 추적하지 않는 새 파일(gitignore된 것은 빼고).
-    // Git이 지웠다고 보는 경로는 디스크를 다시 보지 않는다. 추적을 끊고 gitignore한 파일이나 링크로 바뀐 폴더 너머의 파일을 읽지 않으려는 것이다.
+    // The difference between the base commit and the working tree (committed and not), and new untracked files (leaving out gitignored ones).
+    // For a path Git sees as deleted, it doesn't look at the disk again. This is so it doesn't read a file that was untracked and gitignored, or a file beyond a folder that turned into a link.
     const [changed, removed, untracked] = await Promise.all([
       git(tree, "diff", "--name-only", "--no-renames", "-z", base, "--"),
       git(tree, "diff", "--name-only", "--no-renames", "--diff-filter=D", "-z", base, "--"),
@@ -142,7 +142,7 @@ export async function observe(
         files.push({ path, deleted: true, ...(definitions?.length && { definitions }) });
         continue;
       }
-      // intent도 경로는 읽는다. 러너가 서버로 보낼 때 뺀다(이 기기의 훅이 내 작업의 경로를 쓴다).
+      // intent reads paths too. The runner removes them when it sends to the server (this machine's hook uses my Work's paths).
       if (!open) {
         files.push({ path, omitted: "share" });
         continue;
@@ -151,12 +151,12 @@ export async function observe(
         files.push({ path, omitted: "too_large" });
         continue;
       }
-      // 심볼릭 링크는 따라가 읽지 않는다. Git이 담는 것처럼 가리키는 경로가 내용이다.
+      // Doesn't follow symbolic links. As Git stores them, the path it points to is the content.
       const bytes = stat.isSymbolicLink()
         ? await readlink(full, { encoding: "buffer" }).catch(() => undefined)
         : stat.isFile()
           ? await readFile(full).catch(() => undefined)
-          : undefined; // 하위 모듈처럼 파일이 아닌 것
+          : undefined; // something that isn't a file, like a submodule
       const content = bytes && asText(bytes);
       if (content === undefined) {
         files.push({ path, omitted: "binary" });
@@ -173,7 +173,7 @@ export async function observe(
     }
     return { branch, base, share, files };
 
-    /** 기준 커밋의 판과 견준 정의 줄(ADR-0026). 내용을 올리는 파일만 부른다. 읽을 수 없는 언어면 없음이다. */
+    /** The base commit's version and the compared definition lines (ADR-0026). Only called for files whose content is uploaded. None for a language it can't read. */
     async function changedDefinitions(path: string, content?: string) {
       if (!parsable(path)) return;
       const hash =
@@ -181,7 +181,7 @@ export async function observe(
       const key = `${base}\0${path}\0${hash}`;
       let found = compared.get(key);
       if (!found) {
-        const before = await git(tree, "cat-file", "blob", `${base}:${path}`).catch(() => ""); // 없던 새 파일
+        const before = await git(tree, "cat-file", "blob", `${base}:${path}`).catch(() => ""); // a new file that didn't exist
         found = compare(path, before, content);
         compared.set(key, found);
         if (compared.size > COMPARED_LIMIT) compared.delete(compared.keys().next().value as string);
@@ -191,15 +191,15 @@ export async function observe(
   }
 }
 
-/** 쓰는 곳을 찾은 결과. 파일의 경로, 크기, 고친 시각과 이름이 같으면 다시 읽지 않는다. 가장 오래 넣은 것부터 버린다. */
+/** The result of finding where something is used. If the file's path, size, modified time, and name are the same, it doesn't read again. The oldest entries are dropped first. */
 const used = new Map<string, number[]>();
 const USED_LIMIT = 20_000;
 
 /**
- * 사본(`folder`)에서 `symbols`의 이름마다 쓰는 곳. 추적하는 파일과 추적하지 않는 새 파일 가운데 읽을 수 있는 언어의 것만 본다.
- * 관측처럼 gitignore된 파일과 .env 계열, 파일 하나의 상한을 넘는 것은 읽지 않는다. `omagari impact`와 간접 충돌이 쓴다.
+ * For each name in `symbols`, where it's used in the copy (`folder`). Looks only at tracked files and new untracked files in a language it can read.
+ * Like observation, it doesn't read gitignored files, .env files, or files over the one-file limit. `omagari impact` and indirect conflicts use it.
  */
-// ponytail: 물을 때마다 사본의 파일 목록을 다시 받고, 크기와 고친 시각이 그대로인 파일은 지난 결과를 쓴다. 큰 레포에서 무거워지면 파일 감시로 바뀐 파일만 다시 본다.
+// ponytail: every time it's asked, it gets the copy's file list again and reuses the last result for files whose size and modified time are unchanged. If it gets heavy on a big repo, switch to a file watcher and re-read only changed files.
 export async function uses(folder: string, symbols: string[]) {
   const found = new Map(symbols.map((symbol) => [symbol, [] as { path: string; line: number }[]]));
   if (symbols.length === 0) return found;
@@ -210,8 +210,8 @@ export async function uses(folder: string, symbols: string[]) {
   for (const path of paths) {
     const full = join(folder, path);
     const stat = await lstat(full).catch(() => undefined);
-    if (!stat?.isFile() || stat.size > FILE_LIMIT) continue; // 지운 파일, 링크, 큰 파일
-    let content: string | undefined | null = null; // 아직 읽지 않았다
+    if (!stat?.isFile() || stat.size > FILE_LIMIT) continue; // deleted file, link, big file
+    let content: string | undefined | null = null; // not read yet
     for (const symbol of symbols) {
       const key = `${full}\0${stat.size}\0${stat.mtimeMs}\0${symbol}`;
       let lines = used.get(key);

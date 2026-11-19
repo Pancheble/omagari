@@ -196,16 +196,16 @@ test("서버의 계약이 더 새로우면 깔린 클론이 빨리 감기되고 
   // 처음엔 옛 계약으로, 받은 뒤 다시 켠 러너는 새 계약으로 붙었다. 그래도 안 맞으면 거듭 받지 않고 멈춘다.
   assert.deepEqual(world.hellos, [CONTRACT_VERSION, CONTRACT_VERSION + 1]);
   assert.notEqual(started.code, 0);
-  assert.match(started.stdout, /서버의 계약이 더 새로워 이 클론을 받는다/);
-  assert.match(started.stdout, /dev를 .* 받았다/);
+  assert.match(started.stdout, /The server's contract is newer, so this clone will be updated/);
+  assert.match(started.stdout, /Updated dev from .* to .*/);
   // 안내 문구는 깔린 클론의 브랜치를 말한다.
-  assert.match(started.stdout, /`dev`를 받고/);
+  assert.match(started.stdout, /Pull `dev`/);
   assert.doesNotMatch(started.stdout, /`main`/);
 
   const log = await world.omagari("runner", "log");
   assert.match(
     log.stdout,
-    new RegExp(`러너가 클론을 받음 dev ${before.slice(0, 7)} → ${after.slice(0, 7)}`),
+    new RegExp(`Runner updated its clone dev ${before.slice(0, 7)} → ${after.slice(0, 7)}`),
   );
   assert.equal(await world.git(world.observed.folder, "status", "--porcelain"), observedStatus);
   assert.equal(await world.git(world.observed.folder, "rev-parse", "HEAD"), observedHead);
@@ -218,7 +218,7 @@ test("깔린 클론에 고친 파일이 있으면 아무것도 바뀌지 않고 
 
   const started = await world.omagari(...runner);
   assert.notEqual(started.code, 0);
-  assert.match(started.stderr, /자동으로 받지 못했다.*고친 파일이 있다/s);
+  assert.match(started.stderr, /Could not update automatically.*has modified files/s);
   assert.equal(await world.git(world.installed, "rev-parse", "HEAD"), before);
   assert.deepEqual(world.hellos, [CONTRACT_VERSION]);
   await assert.rejects(readFile(join(world.installed, "npm-called")));
@@ -231,7 +231,7 @@ test("깔린 클론이 빨리 감기가 안 되면 아무것도 바뀌지 않고
 
   const started = await world.omagari(...runner);
   assert.notEqual(started.code, 0);
-  assert.match(started.stderr, /git pull --ff-only.*안 됐다/s);
+  assert.match(started.stderr, /`git pull --ff-only` failed/);
   assert.equal(await world.git(world.installed, "rev-parse", "HEAD"), before);
   await assert.rejects(readFile(join(world.installed, "npm-called")));
 });
@@ -242,7 +242,7 @@ test("서버가 더 낡았으면 받지 않고 서버를 올리라고 알린다"
 
   const started = await world.omagari(...runner);
   assert.notEqual(started.code, 0);
-  assert.match(started.stderr, /서버가 더 오래됐어요/);
+  assert.match(started.stderr, /The server is older/);
   assert.equal(await world.git(world.installed, "rev-parse", "HEAD"), before);
   assert.deepEqual(world.hellos, [CONTRACT_VERSION]);
 });

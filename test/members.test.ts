@@ -138,7 +138,7 @@ test("웹은 실시간 연결에서 멤버 목록을 바로 받고, 작업과 �
   );
   assert.deepEqual(owner()?.works, []);
   await world.signInCli(world.owner);
-  assert.match((await world.cli("status")).stdout, /owner · .*\n {2}작업 없음/);
+  assert.match((await world.cli("status")).stdout, /owner · .*\n {2}no Work/);
   await writer(world.repo.folder)("payment.ts", "pay\n");
   await eventually(() => assert.equal(owner()?.works[0]?.line?.text, "payment.ts 수정 중"));
   await call(world.owner, api.setStatus, { branch: "payment", text: "결제 붙이는 중" });

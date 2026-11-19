@@ -61,7 +61,10 @@ test("포스트에 종류 라벨이 붙고, 논의 포스트 하나가 GitHub �
   assert.deepEqual(direct.labels, ["직접 충돌"]);
   assert.equal(direct.importance, "reference");
   await eventually(async () =>
-    assert.match((await world.cliIn(desk.folder, "status")).stdout, /- 직접 충돌: 내 작업과 owner/),
+    assert.match(
+      (await world.cliIn(desk.folder, "status")).stdout,
+      /- Direct conflict: merging my Work and owner/,
+    ),
   );
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.equal(fake.issues.length, 0);

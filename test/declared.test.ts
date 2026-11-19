@@ -105,7 +105,7 @@ test("선점에 계획을 붙이면 코드를 바꾸기 전에 쓰는 작업에 
   ]);
   assert.match(
     claimed,
-    /^payment의 선점을 걸었다: "src\/pay.ts"의 "refund" 줄 4-6 · 계획: 시그니처 변경 "refund" "refund\(amount, reason\)"\n/,
+    /^Claimed on payment: "refund" in "src\/pay.ts" lines 4-6 · plan: 시그니처 변경 "refund" "refund\(amount, reason\)"\n/,
   );
   const signature = { kind: "signature", symbol: "refund", detail: "refund(amount, reason)" };
   const first = await eventually(async () => {
@@ -131,19 +131,19 @@ test("선점에 계획을 붙이면 코드를 바꾸기 전에 쓰는 작업에 
   await receives(
     world,
     desk.folder,
-    `- 선언된 계약 변경: 내 작업과 owner의 브랜치 "payment". 한쪽이 심볼을 바꾸겠다고 선점에 선언했고(코드는 아직 안 바뀌었을 수 있다), 다른 쪽이 그 이름을 쓴다. "refund"(나: 씀 "src/checkout.ts":1, "src/checkout.ts":2 / 상대: 바꾸겠다고 선언함 "src/pay.ts":4 / 계획: 시그니처 변경 "refund" "refund(amount, reason)")`,
+    `- Declared Contract change: my Work and owner's branch "payment". One side declared in its Claim that it will change the symbol (the code may not have changed yet), and the other side uses that name. "refund" (me: 씀 "src/checkout.ts":1, "src/checkout.ts":2 / them: 바꾸겠다고 선언함 "src/pay.ts":4 / plan: 시그니처 변경 "refund" "refund(amount, reason)")`,
   );
   await receives(
     world,
     world.repo.folder,
-    `- 선언된 계약 변경: 내 작업과 alice의 브랜치 "refund". 한쪽이 심볼을 바꾸겠다고 선점에 선언했고(코드는 아직 안 바뀌었을 수 있다), 다른 쪽이 그 이름을 쓴다. "refund"(나: 바꾸겠다고 선언함 "src/pay.ts":4 / 상대: 씀 "src/checkout.ts":1, "src/checkout.ts":2 / 계획: 시그니처 변경 "refund" "refund(amount, reason)")`,
+    `- Declared Contract change: my Work and alice's branch "refund". One side declared in its Claim that it will change the symbol (the code may not have changed yet), and the other side uses that name. "refund" (me: 바꾸겠다고 선언함 "src/pay.ts":4 / them: 씀 "src/checkout.ts":1, "src/checkout.ts":2 / plan: 시그니처 변경 "refund" "refund(amount, reason)")`,
     inboxLines(claimed),
   );
 
   // 쓰는 쪽의 omagari impact가 걸린 계획을 보인다.
   assert.match(
     await omagari(world, ["impact", "refund"], desk.folder),
-    /바꾸겠다고 선언한\(계획을 붙인\) 다른 멤버의 선점:\n {2}owner의 브랜치 "payment" · "src\/pay.ts"의 "refund" 줄 4-6 · 계획: 시그니처 변경 "refund" "refund\(amount, reason\)"\n/,
+    /Other members' Claims that declare a change \(with a plan attached\):\n {2}owner's branch "payment" · "refund" in "src\/pay.ts" lines 4-6 · plan: 시그니처 변경 "refund" "refund\(amount, reason\)"\n/,
   );
 
   // 같은 심볼에 다른 곳(줄 범위)으로 새 계획을 걸면 옛 계획을 대체하고, 같은 알림이 새 계획으로 고쳐진다.
@@ -164,12 +164,12 @@ test("선점에 계획을 붙이면 코드를 바꾸기 전에 쓰는 작업에 
   const seen = await receives(
     world,
     desk.folder,
-    `- 선언된 계약 변경이 취소됐다: owner의 브랜치 "payment"가 "refund"의 계획(이름 바꾸기)을 이루지 못한 채 선점을 풀었다. 그 계획에 맞춰 고친 것이 있으면 되돌리거나 상대에게 물어본다.`,
+    `- Declared Contract change cancelled: owner's branch "payment" released the Claim on "refund" (plan: 이름 바꾸기) without carrying out the plan. If you changed anything to fit that plan, undo it or ask them.`,
   );
   await receives(
     world,
     desk.folder,
-    `- 풀렸다: 내 작업과 owner의 브랜치 "payment"의 선언된 계약 변경`,
+    `- Resolved: my Work and owner's branch "payment"'s 선언된 계약 변경`,
     seen,
   );
   assert.notEqual((await declared(world.owner))[0]?.resolved, null);
@@ -177,10 +177,10 @@ test("선점에 계획을 붙이면 코드를 바꾸기 전에 쓰는 작업에 
   const own = await receives(
     world,
     world.repo.folder,
-    `- 풀렸다: 내 작업과 alice의 브랜치 "refund"의 선언된 계약 변경`,
+    `- Resolved: my Work and alice's branch "refund"'s 선언된 계약 변경`,
     released,
   );
-  assert.ok(!own.some((line) => line.includes("취소됐다")), JSON.stringify(own));
+  assert.ok(!own.some((line) => line.includes("cancelled")), JSON.stringify(own));
 });
 
 test("계획대로 정의 줄을 바꾼 뒤 풀면 취소됨이 가지 않는다", async (t) => {
@@ -209,9 +209,9 @@ test("계획대로 정의 줄을 바꾼 뒤 풀면 취소됨이 가지 않는다
   const seen = await receives(
     world,
     desk.folder,
-    `- 풀렸다: 내 작업과 owner의 브랜치 "payment"의 선언된 계약 변경`,
+    `- Resolved: my Work and owner's branch "payment"'s 선언된 계약 변경`,
   );
-  assert.ok(!seen.some((line) => line.includes("취소됐다")), JSON.stringify(seen));
+  assert.ok(!seen.some((line) => line.includes("cancelled")), JSON.stringify(seen));
 });
 
 test("--plan은 종류가 맞아야 하고 심볼이 있어야 하며, release에는 주지 않는다", async (t) => {

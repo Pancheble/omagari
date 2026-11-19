@@ -1,5 +1,5 @@
-// 근처 작업: 고치려는 파일을 바꾸고 있는 다른 작업(내 다른 브랜치 포함, ADR-0041)과, 그 사람이 그 파일에서 바꾼 줄 범위(구현 4장, 1단계 질문 A7).
-// 서버에서 받아 둔 상황만 읽는다. 줄 범위는 그 사람의 기준 커밋에 있던 판과 올라온 내용을 이 기기의 Git으로 비교해 낸다.
+// Nearby work: other Work that's changing the file you're about to edit (including my other branches, ADR-0041), and the line ranges that person changed in that file (implementation doc section 4, stage 1 question A7).
+// It reads only the situation received from the server. It works out the line ranges by comparing, with this machine's Git, that person's base commit version and the uploaded content.
 import { execFile } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -9,7 +9,7 @@ import type { LineRange, NearbyWork, WorkView } from "@omagari/contract";
 
 const execFileAsync = promisify(execFile);
 
-/** `works` 가운데 같은 작업(`login`의 `branch`)이 아닌 것이 `path`를 바꾼 작업마다 바꾼 곳을 읽는다. */
+/** For each Work in `works` that changed `path` and isn't the same Work (`branch` of `login`), reads where it changed. */
 export async function nearby(
   folder: string,
   works: WorkView[],
@@ -32,7 +32,7 @@ export async function nearby(
   return found;
 }
 
-/** 이 기기의 Git. 레포에는 아무것도 쓰지 않는다. */
+/** This machine's Git. It writes nothing to the repo. */
 export const gitIn =
   (folder: string) =>
   (...args: string[]) =>
@@ -42,14 +42,14 @@ export const gitIn =
       maxBuffer: 64 * 1024 * 1024,
     });
 
-/** 커밋이 이 기기에 있는지. 남의 기준 커밋을 아직 받지 않았으면 없다. */
+/** Whether the commit is on this machine. Not there if you haven't fetched someone else's base commit yet. */
 export const hasCommit = (folder: string, commit: string) =>
   gitIn(folder)("cat-file", "-e", `${commit}^{commit}`).then(
     () => true,
     () => false,
   );
 
-/** `commit`에 있던 `path`의 판. 없던 파일이면 빈 판이다. */
+/** The version of `path` at `commit`. An empty version if the file didn't exist. */
 export const blobAt = (folder: string, commit: string, path: string) =>
   gitIn(folder)("cat-file", "blob", `${commit}:${path}`).then(
     ({ stdout }) => stdout,
@@ -57,12 +57,12 @@ export const blobAt = (folder: string, commit: string, path: string) =>
   );
 
 /**
- * 바꾼 곳 하나. `before`는 앞 판에서 바뀐 줄(`[from, to)`, 넣기만 했으면 넣은 자리의 빈 범위)이고,
- * `after`는 뒤 판의 줄 번호로 바꾼 곳이다(지운 줄만 있는 곳은 그 앞 줄).
+ * One changed place. `before` is the lines changed in the earlier version (`[from, to)`, an empty range at the insert point if it only inserted),
+ * and `after` is the changed place in the later version's line numbers (for a place with only deleted lines, the line before it).
  */
 export type Hunk = { before: { from: number; to: number }; after: LineRange; size: number };
 
-/** 두 판을 이 기기의 임시 폴더에서 비교해 바꾼 곳들을 낸다. */
+/** Compares two versions in a temp folder on this machine and returns the changed places. */
 export async function hunks(
   folder: string,
   before: string | Uint8Array,
@@ -74,7 +74,7 @@ export async function hunks(
       writeFile(join(scratch, "before"), before),
       writeFile(join(scratch, "after"), after),
     ]);
-    // 다르면 1로 끝난다. 그것도 결과다.
+    // If they differ it exits with 1. That's a result too.
     const diff = await gitIn(folder)(
       "diff",
       "--no-index",
@@ -93,7 +93,7 @@ export async function hunks(
     );
     return [...diff.toString().matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm)].map(
       ([, old = "0", oldCount = "1", start = "0", count = "1"]) => {
-        // 지우기만 한 곳(`+n,0`)과 넣기만 한 곳(`-n,0`)은 n 줄 뒤다.
+        // A place with only deletions (`+n,0`) and a place with only insertions (`-n,0`) are n lines later.
         const at = Number(oldCount) === 0 ? Number(old) + 1 : Number(old);
         const from = Math.max(Number(start), 1);
         return {
@@ -108,14 +108,14 @@ export async function hunks(
   }
 }
 
-/** 기준 커밋의 판(없던 파일이면 빈 판)과 `content`를 비교해, `content`의 줄 번호로 바꾼 곳을 낸다. */
+/** Compares the base commit's version (an empty version if the file didn't exist) with `content` and returns the changed places in `content`'s line numbers. */
 async function changedLines(
   folder: string,
   base: string,
   path: string,
   content: string,
 ): Promise<NearbyWork["change"]> {
-  // 그 사람의 기준 커밋을 이 기기가 아직 받지 않았으면 비교할 판이 없다.
+  // If this machine hasn't fetched that person's base commit, there's no version to compare.
   if (!(await hasCommit(folder, base))) return { kind: "unknown", reason: "base" };
   const found = await hunks(folder, await blobAt(folder, base, path), content);
   return { kind: "lines", ranges: found.map((hunk) => hunk.after) };
