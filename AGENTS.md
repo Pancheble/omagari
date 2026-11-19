@@ -39,7 +39,7 @@ When you ask, say where you looked and which answer you would pick. Don't just a
 
 - There are two branches. `dev` is the default, where work collects. `main` is the released version, which members and other teams' servers use. The dogfood server follows `dev` (ADR-0042). See ADR-0019.
 - Branch work from `dev`. Open PRs against `dev`. Merge with squash only.
-- Commit messages and PR titles use the form `prefix(scope): summary`. Prefixes: feat, fix, docs, refactor, test, chore, ci, perf. The scope is optional (lowercase letters, digits, hyphens). The summary is in English, 50 characters or fewer, with no period at the end. For a breaking change, add `!` after the prefix. A squash commit's title and body become the PR's title and body. `.githooks/commit-msg` checks commits, and the "PR title check" workflow checks PR titles.
+- Commit messages and PR titles use the form `prefix(scope): summary`. Prefixes: feat, fix, docs, refactor, test, chore, ci, perf. The scope is optional (lowercase letters, digits, hyphens). The summary is in English, 50 characters or fewer, with no period at the end. For a breaking change, add `!` after the prefix. The PR's title and body become the squash commit's title and body. `.githooks/commit-msg` checks commits, and the "PR title check" workflow checks PR titles.
 - Changes to `README.md` come with the matching change to `README.ko.md` in the same PR.
 - Maintainers release by hand (ADR-0019, ADR-0022). Don't open PRs against `main`.
 - The version is a git tag. Keep `version` in package.json at `0.0.0` and don't bump it.
