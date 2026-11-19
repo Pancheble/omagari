@@ -3,7 +3,7 @@
 // It doesn't call the server. It reads only the situation the runner on the same machine has already received from the server (implementation doc, section 4).
 // The Session-start hook (SessionStart) injects the team's current situation. The Pre-edit hook (PreToolUse) injects the Nearby work and other people's Claims for the file you're about to edit.
 // Both put the pending news from this work's Inbox first. The Pre-edit hook also runs on shell commands to hand over the Inbox (it doesn't inject Nearby work there).
-// `omagari install` sets it up for each executor and passes that executor as the first argument (`omagari-hook claude-code`, ADR-0015).
+// `omagari setup` sets it up for each executor and passes that executor as the first argument (`omagari-hook claude-code`, ADR-0015).
 // It runs in every repo on this machine, so in a repo where no runner has ever been started it does nothing (ADR-0016).
 import { execFile } from "node:child_process";
 import { access, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
