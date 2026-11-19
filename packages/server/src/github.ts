@@ -19,8 +19,12 @@ export type GitHub = {
   ): Promise<{ token: string } | { pending: true; intervalMs?: number } | { error: string }>;
   /** 토큰 주인의 GitHub 로그인과 프로필 이름. 이름을 비워 두었으면 `name`이 null이다. */
   user(token: string): Promise<{ login: string; name: string | null }>;
-  /** 토큰 주인이 `owner/name`에 push할 수 있나. GitHub이 답하지 못하면 `undefined`다. */
-  canPush(token: string, repo: string): Promise<boolean | undefined>;
+  /**
+   * 토큰 주인이 `owner/name`에 push할 수 있나와 GitHub이 지금 그 레포를 부르는 이름(`name`).
+   * 레포가 옮겨지거나 이름이 바뀌었으면 GitHub이 옛 이름을 새 레포로 넘겨 주어 `name`이 새 이름이다(ADR-0043).
+   * 볼 수 없으면 `name`은 물은 그대로다. GitHub이 답하지 못하면 `undefined`다.
+   */
+  canPush(token: string, repo: string): Promise<{ push: boolean; name: string } | undefined>;
   /** 토큰 주인이 `owner/name`의 Admin인가(워크스페이스에 레포를 넣고 뺀다, ADR-0043). GitHub이 답하지 못하면 `undefined`다. */
   canAdmin(token: string, repo: string): Promise<boolean | undefined>;
   /**
@@ -176,13 +180,17 @@ export function realGitHub(clientId: string): GitHub {
     return json;
   };
   /** 레포에서 토큰 주인의 권한 하나(GitHub이 돌려주는 것에 팀으로 받은 몫이 들어 있다, ADR-0043). */
+  // 옮겨지거나 이름이 바뀐 레포는 옛 이름으로 물으면 301로 새 레포(`/repositories/{id}`)를 가리키고, fetch가 따라가 `full_name`이 새 이름이다
+  // (https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#follow-redirects).
   const permission = async (token: string, repo: string, kind: "push" | "admin") => {
     const response = await get(`/repos/${repo}`, token).catch(() => undefined);
     // 401은 토큰이 끝났고, 404는 비공개 레포를 볼 수 없다. 403은 요청 한도일 수 있어 모른다고 한다.
-    if (response?.status === 401 || response?.status === 404) return false;
+    if (response?.status === 401 || response?.status === 404) return { can: false, name: repo };
     if (!response?.ok) return undefined;
-    const found = (await response.json()).permissions?.[kind];
-    return typeof found === "boolean" ? found : undefined;
+    const json = await response.json();
+    const can = json.permissions?.[kind];
+    if (typeof can !== "boolean") return undefined;
+    return { can, name: typeof json.full_name === "string" ? json.full_name : repo };
   };
 
   return {
@@ -216,8 +224,11 @@ export function realGitHub(clientId: string): GitHub {
       const { login, name } = await response.json();
       return { login, name: name || null };
     },
-    canPush: (token, repo) => permission(token, repo, "push"),
-    canAdmin: (token, repo) => permission(token, repo, "admin"),
+    async canPush(token, repo) {
+      const found = await permission(token, repo, "push");
+      return found && { push: found.can, name: found.name };
+    },
+    canAdmin: async (token, repo) => (await permission(token, repo, "admin"))?.can,
     // 내 레포: GET /user/repos(https://docs.github.com/en/rest/repos/repos#list-repositories-for-the-authenticated-user)의 `permissions.admin`.
     // push 권한이 있는 사람: GET /repos/{owner}/{repo}/collaborators?permission=push(팀으로 받은 사람도 든다).
     // ponytail: 둘 다 첫 100개만 읽는다. 계정의 레포나 한 레포의 사람이 100을 넘으면 Link 머리말로 다음 쪽을 읽는다.

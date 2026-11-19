@@ -99,9 +99,9 @@ const login = await attempt("user", async () => {
   return { detail: `${me.login}(이름 ${me.name ?? "없음"})`, value: me.login };
 });
 await attempt("canPush", async () => {
-  const push = await github.canPush(token, repo);
-  expect(push === true, `push 권한이 있다고 답하지 않았다: ${push}`);
-  return { detail: "true" };
+  const found = await github.canPush(token, repo);
+  expect(found?.push === true, `push 권한이 있다고 답하지 않았다: ${JSON.stringify(found)}`);
+  return { detail: `true(GitHub의 이름 ${found?.name})` };
 });
 await attempt("canAdmin", async () => {
   const admin = await github.canAdmin(token, repo);
