@@ -20,6 +20,7 @@ import {
 } from "react";
 import { repoName } from "./api.ts";
 import { useMenu } from "./dm.tsx";
+import { t } from "./i18n.ts";
 
 /** 레포의 라벨 전부(ADR-0039). 앱 틀이 읽고 실시간으로 갈아 끼운다. 배지가 색을 찾으려고 읽는다. */
 export const LabelsContext = createContext<Label[]>([]);
@@ -50,7 +51,7 @@ export function LabelBadge({ name }: { name: string }) {
 /** 중요도 배지: 논의는 글자색 바탕(app-importance-discuss), 참고는 테두리. */
 export const ImportanceBadge = ({ importance }: { importance: Importance }) => (
   <span className={importance === "discuss" ? "badge discuss" : "badge outline"}>
-    {IMPORTANCE_LABELS[importance]}
+    {t.importance[importance]}
   </span>
 );
 

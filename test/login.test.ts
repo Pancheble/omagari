@@ -66,6 +66,7 @@ test("남겨 둔 세션으로 나와 워크스페이스를 다시 읽고, 로그
     repo: REPO,
     repos: [REPO],
     gif: false,
+    prefs: { language: "en" },
   });
   // 프로필 이름을 비워 둔 사람은 로그인이 이름이다.
   assert.deepEqual(await call(world.owner, api.me), {
@@ -75,6 +76,7 @@ test("남겨 둔 세션으로 나와 워크스페이스를 다시 읽고, 로그
     repo: REPO,
     repos: [REPO],
     gif: false,
+    prefs: { language: "en" },
   });
 
   await call(browser, api.logout);

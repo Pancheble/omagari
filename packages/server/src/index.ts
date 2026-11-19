@@ -29,6 +29,7 @@ import {
   ContractFailure,
   DEBATE_ROUNDS,
   DEFAULT_LABEL_COLORS,
+  DEFAULT_PREFS,
   type Debate,
   type DebateConclusion,
   type DebateRequest,
@@ -61,6 +62,7 @@ import {
   type ObservedFile,
   type Post,
   PRESENCE_DURATIONS,
+  type Prefs,
   type Presence,
   type PresenceDuration,
   type Qa,
@@ -816,6 +818,8 @@ export async function startServer(options: {
   ) STRICT`);
   // 남의 질문에 답하지 않게 스위치를 끈 멤버(ADR-0024). 기본은 켜짐이라 없으면 켜짐이다.
   db.exec("CREATE TABLE IF NOT EXISTS ask_off (login TEXT PRIMARY KEY) STRICT");
+  // Each member's personal settings (contract Prefs, JSON). No row means DEFAULT_PREFS.
+  db.exec("CREATE TABLE IF NOT EXISTS prefs (login TEXT PRIMARY KEY, prefs TEXT NOT NULL) STRICT");
   // 포스트의 토론(ADR-0040). 한 포스트에 토론은 하나다. `round`는 지금 라운드, `state`는 `Debate.state`다.
   // `flip`이 1이면 안의 순서를 자리의 거꾸로 둔다(주인을 가린다). `winner`는 결론이 된 자리, `by`는 정한 길, `chooser`와 `decided`는 고른 멤버와 시각(ms)이다.
   db.exec(`CREATE TABLE IF NOT EXISTS debates (
@@ -2921,6 +2925,7 @@ export async function startServer(options: {
       repo: repos[0] ?? "",
       repos,
       gif: !!options.giphy,
+      prefs: prefsOf(login),
     };
   });
 
@@ -3109,6 +3114,24 @@ export async function startServer(options: {
     else db.prepare("INSERT OR IGNORE INTO ask_off (login) VALUES (?)").run(login);
     dispatchDebates(login); // 끄면 아직 보내지 않은 자리가 나오지 않는 자리가 된다
     return { on };
+  });
+
+  const prefsOf = (login: string): Prefs => {
+    const row = db.prepare("SELECT prefs FROM prefs WHERE login = ?").get(login) as
+      | { prefs: string }
+      | undefined;
+    return { ...DEFAULT_PREFS, ...(row && JSON.parse(row.prefs)) };
+  };
+
+  mount(app, api.setPrefs, (next, c) => {
+    const login = c.get("login") as string;
+    const prefs = { ...prefsOf(login), ...next };
+    db.prepare("INSERT OR REPLACE INTO prefs (login, prefs) VALUES (?, ?)").run(
+      login,
+      JSON.stringify(prefs),
+    );
+    sendTo(login, encode(serverToWeb, "prefs", prefs));
+    return prefs;
   });
 
   mount(app, api.settings, (_, c) => {

@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 52;
+export const CONTRACT_VERSION = 53;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -457,6 +457,16 @@ export const CONFIRMED_LABEL = "확인됨";
  */
 export const Importance = z.enum(["reference", "discuss"]);
 export type Importance = z.infer<typeof Importance>;
+/** Web UI languages (ADR-0045). Everyone starts in English; Korean is a personal choice. */
+export const Language = z.enum(["en", "ko"]);
+export type Language = z.infer<typeof Language>;
+/**
+ * A member's personal settings, stored on the server so they follow the person across tabs and devices.
+ * Language comes first; more keys get added here later.
+ */
+export const Prefs = z.strictObject({ language: Language });
+export type Prefs = z.infer<typeof Prefs>;
+export const DEFAULT_PREFS: Prefs = { language: "en" };
 export const IMPORTANCE_LABELS = {
   reference: "참고",
   discuss: "논의",
@@ -1714,6 +1724,8 @@ export const api = {
       repos: z.array(z.string()),
       /** 서버 설정에 GIPHY 키가 있어 `api.gifs`를 쓸 수 있다. 없으면 웹은 GIF 버튼을 두지 않는다(ADR-0044). */
       gif: z.boolean(),
+      /** My personal settings (`api.setPrefs`). `DEFAULT_PREFS` until I change one. */
+      prefs: Prefs,
     }),
   },
   /**
@@ -2056,6 +2068,16 @@ export const api = {
     response: z.strictObject({ on: z.boolean() }),
   },
   /**
+   * Changes some of my personal settings and returns all of them. My other web connections get them as `prefs`;
+   * other members never see them.
+   */
+  setPrefs: {
+    method: "POST",
+    path: "/api/prefs",
+    body: Prefs.partial(),
+    response: Prefs,
+  },
+  /**
    * 설정 창이 읽는 것: 내 "남의 질문에 답하기" 스위치(`setAskSwitch`), 내 에이전트가 지난 `ANSWERED_DAYS`일 동안
    * 남의 질문에 답한 수와 그 가운데 마지막 질문(묻은 멤버와 질문 글, 물은 시각).
    */
@@ -2339,6 +2361,8 @@ export const serverToWeb = {
     debate: Debate.nullable(),
     request: DebateRequest.nullable(),
   }),
+  /** My personal settings changed (`api.setPrefs`). Goes only to my own connections. */
+  prefs: Prefs,
   error: ContractError,
 } satisfies Payloads;
 

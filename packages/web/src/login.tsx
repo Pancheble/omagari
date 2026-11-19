@@ -2,6 +2,7 @@ import { api, ContractFailure, call } from "@omagari/contract";
 import { Copy, ExternalLink } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { server, signedOut } from "./api.ts";
+import { t } from "./i18n.ts";
 
 type Step =
   | { kind: "idle" }
@@ -18,7 +19,7 @@ function failure(error: unknown): Step {
   }
   if (signedOut(error)) return { kind: "ended" };
   if (error instanceof ContractFailure) return { kind: "failed", reason: error.message };
-  return { kind: "failed", reason: "서버에 닿지 않아요. 네트워크를 확인하고 다시 시도해 주세요." };
+  return { kind: "failed", reason: t.login.offline };
 }
 
 /**
@@ -78,9 +79,9 @@ export function Login({
     };
     return (
       <Centered>
-        <h1>GitHub에서 이 코드를 넣어 주세요</h1>
-        <p>GitHub에서 코드를 넣고 승인하면 이 화면이 저절로 워크스페이스로 넘어가요.</p>
-        <output className="device-code" aria-label="GitHub에 넣을 코드">
+        <h1>{t.login.codeTitle}</h1>
+        <p>{t.login.codeBody}</p>
+        <output className="device-code" aria-label={t.login.codeLabel}>
           {step.userCode}
         </output>
         <div className="actions">
@@ -90,19 +91,19 @@ export function Login({
             target="_blank"
             rel="noreferrer"
           >
-            GitHub 열기
+            {t.login.openGithub}
             <ExternalLink size={16} aria-hidden />
           </a>
           <button type="button" className="button outline" onClick={copy}>
             <Copy size={16} aria-hidden />
-            코드 복사
+            {t.login.copy}
           </button>
           <button type="button" className="button quiet" onClick={cancel}>
-            취소
+            {t.login.cancel}
           </button>
         </div>
         <p className="hint" role="status">
-          {copied ? "코드를 복사했어요." : "GitHub에서 승인하기를 기다리는 중…"}
+          {copied ? t.login.copied : t.login.waiting}
         </p>
       </Centered>
     );
@@ -111,17 +112,14 @@ export function Login({
   if (step.kind === "refused") {
     return (
       <Centered>
-        <h1>이 워크스페이스에 들어올 수 없어요</h1>
+        <h1>{t.login.refusedTitle}</h1>
         <div className="banner error" role="alert">
           {step.reason}
         </div>
-        <p>
-          워크스페이스에는 레포에 push 권한이 있는 계정만 들어와요. 레포 관리자에게 권한을 받거나,
-          GitHub에서 다른 계정으로 바꾼 뒤 다시 로그인해 주세요.
-        </p>
+        <p>{t.login.refusedBody}</p>
         <div className="actions">
           <button type="button" className="button primary" onClick={start}>
-            다시 로그인
+            {t.login.again}
           </button>
         </div>
       </Centered>
@@ -131,13 +129,13 @@ export function Login({
   if (step.kind === "ended" || step.kind === "failed") {
     return (
       <Centered>
-        <h1>로그인하지 못했어요</h1>
+        <h1>{t.login.failedTitle}</h1>
         <div className="banner error" role="alert">
-          {step.kind === "ended" ? "코드가 만료됐거나 GitHub에서 승인하지 않았어요." : step.reason}
+          {step.kind === "ended" ? t.login.ended : step.reason}
         </div>
         <div className="actions">
           <button type="button" className="button primary" onClick={start}>
-            다시 로그인
+            {t.login.again}
           </button>
         </div>
       </Centered>
@@ -151,10 +149,8 @@ export function Login({
           {notice}
         </div>
       )}
-      <h1>Omagari에 로그인</h1>
-      <p>
-        GitHub 계정으로 들어와요. 워크스페이스 레포에 push 권한이 있으면 초대 없이 들어올 수 있어요.
-      </p>
+      <h1>{t.login.title}</h1>
+      <p>{t.login.body}</p>
       <div className="actions">
         <button
           type="button"
@@ -163,7 +159,7 @@ export function Login({
           disabled={step.kind === "starting"}
           aria-busy={step.kind === "starting"}
         >
-          {step.kind === "starting" ? "GitHub에 묻는 중…" : "GitHub으로 로그인"}
+          {step.kind === "starting" ? t.login.starting : t.login.start}
         </button>
       </div>
     </Centered>
