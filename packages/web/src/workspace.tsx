@@ -163,6 +163,7 @@ export function Workspace({
   workspaces,
   workspace,
   onSwitch,
+  onRepos,
   onLogout,
   onSignedOut,
 }: {
@@ -172,6 +173,8 @@ export function Workspace({
   workspaces: Space[];
   workspace: string;
   onSwitch: (workspace: string) => void;
+  /** 레포를 넣거나 뺐다. 앱이 워크스페이스 목록을 고쳐, 워크스페이스를 바꿔도 지금 목록이 보인다. */
+  onRepos: (workspace: string, repos: string[]) => void;
   onLogout: () => void;
   /** 세션이 끝났다(API나 실시간 연결이 그렇게 답했다). */
   onSignedOut: () => void;
@@ -585,6 +588,7 @@ export function Workspace({
   const reposChanged = (all: string[]) => {
     const next = all.filter((repo) => repo.split("/")[0]?.toLowerCase() === workspace);
     setRepos(next);
+    onRepos(workspace, next);
     call(server(session), api.channels)
       .then((list) => setChannels(byName(list.channels)))
       .catch(check);
