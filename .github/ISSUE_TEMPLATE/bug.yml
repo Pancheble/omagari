@@ -1,26 +1,26 @@
-name: 버그 신고
-description: 기대와 다르게 동작하는 것을 알려 주세요
-title: "[버그] "
+name: Bug report
+description: Tell us about something that doesn't work the way you expected
+title: "[Bug] "
 labels: ["type:fix"]
 body:
   - type: markdown
     attributes:
       value: |
-        보안 취약점이라면 이 양식 대신 [SECURITY.md](../../SECURITY.md)의 비공개 신고를 써 주세요.
+        If this is a security vulnerability, don't use this form. Report it privately, as described in [SECURITY.md](../../SECURITY.md).
   - type: textarea
     id: what-happened
     attributes:
-      label: 무슨 일이 있었나요?
-      description: 실제로 일어난 일과 기대한 일을 적어 주세요.
+      label: What happened?
+      description: Describe what actually happened and what you expected.
     validations:
       required: true
   - type: textarea
     id: steps
     attributes:
-      label: 재현 방법
-      description: 다른 사람이 같은 결과를 볼 수 있게 순서대로 적어 주세요.
+      label: Steps to reproduce
+      description: List the steps in order so someone else can see the same result.
       placeholder: |
-        1. `omagari runner`를 켠다
+        1. Run `omagari runner`
         2. ...
         3. ...
     validations:
@@ -28,14 +28,14 @@ body:
   - type: textarea
     id: environment
     attributes:
-      label: 환경
-      description: 운영체제, Node.js 버전, 커밋이나 릴리즈 태그, 에이전트 종류(Claude Code, Codex)
+      label: Environment
+      description: OS, Node.js version, commit or release tag, and agent (Claude Code, Codex)
     validations:
       required: false
   - type: textarea
     id: logs
     attributes:
-      label: 로그나 화면
-      description: 관련 로그나 스크린샷이 있으면 붙여 주세요. 개인 정보와 비밀 값은 지워 주세요.
+      label: Logs or screenshots
+      description: Attach relevant logs or screenshots if you have them. Remove personal information and secret values.
     validations:
       required: false
