@@ -195,6 +195,10 @@ export function fakeGitHub() {
   const known = new Set(REPOS);
   const moves = new Map<string, string>();
   const exists = (repo: string) => known.has(moves.get(repo) ?? repo);
+  /** 레포와 사람의 GitHub 숫자 id. 처음 볼 때 붙고, 옮기거나 이름을 바꿔도 따라간다(`move`, `rename`). */
+  const ids = new Map<string, number>();
+  let nextId = 1;
+  const idOf = (key: string) => ids.get(key) ?? (ids.set(key, nextId++), nextId - 1);
   /** 계정의 종류와 아바타(`account`로 바꾼다). 없으면 아바타 없는 조직이다. */
   const accounts = new Map<string, Account>();
   const pulls: (Pull & {
@@ -272,7 +276,12 @@ export function fakeGitHub() {
     async user(token) {
       const login = tokens.get(token);
       if (!login) throw new Error("모르는 토큰이다");
-      return { login, name: names.get(login) ?? null, avatar: avatars.get(login) ?? null };
+      return {
+        id: idOf(`user ${login}`),
+        login,
+        name: names.get(login) ?? null,
+        avatar: avatars.get(login) ?? null,
+      };
     },
     async canPush(token, asked) {
       // GitHub처럼 옮겨진 레포의 옛 이름은 새 레포로 넘겨 준다.
@@ -282,6 +291,7 @@ export function fakeGitHub() {
       return {
         push: pushers.has(`${repo} ${tokens.get(token)}`),
         name: repo,
+        id: idOf(`repo ${repo}`),
         account: accounts.get(owner) ?? { kind: "organization", avatar: null },
       };
     },
@@ -459,11 +469,33 @@ export function fakeGitHub() {
       known.delete(from);
       known.add(to);
       moves.set(from, to);
+      ids.set(`repo ${to}`, idOf(`repo ${from}`));
+      ids.delete(`repo ${from}`);
       for (const set of [pushers, admins])
         for (const key of [...set])
           if (key.startsWith(`${from} `)) {
             set.delete(key);
             set.add(key.replace(from, to));
+          }
+    },
+    /** 레포 `repo`가 GitHub에서 지워지고 누군가 같은 이름으로 새로 만들었다. id가 새로 붙고 옛 권한과 옛 이름 넘겨 주기는 없다. */
+    recreate(repo: string) {
+      known.add(repo);
+      moves.delete(repo);
+      ids.delete(`repo ${repo}`);
+      for (const set of [pushers, admins])
+        for (const key of [...set]) if (key.startsWith(`${repo} `)) set.delete(key);
+    },
+    /** 사람이 GitHub 이름을 `from`에서 `to`로 바꿨다. id와 토큰과 권한이 따라가고, 옛 이름은 다른 사람이 가져갈 수 있다. */
+    rename(from: string, to: string) {
+      ids.set(`user ${to}`, idOf(`user ${from}`));
+      ids.delete(`user ${from}`);
+      for (const [token, login] of tokens) if (login === from) tokens.set(token, to);
+      for (const set of [pushers, admins])
+        for (const key of [...set])
+          if (key.endsWith(` ${from}`)) {
+            set.delete(key);
+            set.add(key.replace(/ [^ ]+$/, ` ${to}`));
           }
     },
     grant: (login: string, repo = REPO) => pushers.add(`${repo} ${login}`),
