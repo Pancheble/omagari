@@ -1284,20 +1284,22 @@ export async function startServer(options: {
     WSContext,
     { hash: string; login: string; repo: string; workspace: string }
   >();
+  /**
+   * 웹 연결로 보내도 되는지. 열려 있고, 그 연결이 고른 레포(와 그 워크스페이스)가 아직 그 사람에게 보여야 한다.
+   * push 권한을 다시 읽는 사이에 권한을 잃은 연결이 닫히기 전에도 받지 않게, 웹으로 가는 모든 보내기가 이것을 지난다.
+   */
+  const open = (socket: WSContext, watcher: { login: string; repo: string }) =>
+    socket.readyState === 1 && sees(watcher.login, watcher.repo); // OPEN
   /** 워크스페이스의 것을 그 워크스페이스를 고른 웹 모두에 보낸다. 다른 워크스페이스를 고른 연결에는 같은 사람의 것도 가지 않는다. */
   const broadcast = (workspace: string, frame: string) => {
     for (const [socket, watcher] of watchers)
-      if (socket.readyState === 1 && watcher.workspace === workspace) socket.send(frame); // OPEN
+      if (watcher.workspace === workspace && open(socket, watcher)) socket.send(frame);
   };
   /** 레포의 것을 그 레포가 보이는 웹에만, 그 레포의 워크스페이스를 고른 연결로만 보낸다. */
   const broadcastTo = (repo: string, frame: string) => {
     for (const [socket, watcher] of watchers)
-      if (
-        socket.readyState === 1 &&
-        watcher.workspace === ownerOf(repo) &&
-        sees(watcher.login, repo)
-      )
-        socket.send(frame); // OPEN
+      if (watcher.workspace === ownerOf(repo) && sees(watcher.login, repo) && open(socket, watcher))
+        socket.send(frame);
   };
   /** 채널의 한 줄을 그것이 보이는 웹에 보내고 계약의 꼴로 돌려준다. */
   const shareRow = (row: MessageRow) => {
@@ -1313,9 +1315,9 @@ export async function startServer(options: {
       if (
         watcher.login === login &&
         (workspace === undefined || watcher.workspace === workspace) &&
-        socket.readyState === 1
+        open(socket, watcher)
       )
-        socket.send(frame); // OPEN
+        socket.send(frame);
     }
   };
   /** 러너에 보내고 답을 기다리는 문답. 키는 보낸 `ask`의 id다. 서버가 꺼지면 잃고, 다시 뜰 때 실패로 둔다. */
@@ -1681,7 +1683,7 @@ export async function startServer(options: {
   const shareLabels = (repo: string) => {
     const frame = encode(serverToWeb, "labels", labelsView(repo));
     for (const [socket, watcher] of watchers)
-      if (watcher.repo === repo && socket.readyState === 1) socket.send(frame); // OPEN
+      if (watcher.repo === repo && open(socket, watcher)) socket.send(frame);
   };
   /** 레포의 라벨 하나(이름은 대소문자를 가리지 않는다). */
   const labelRow = (repo: string, name: string) =>
@@ -2589,11 +2591,7 @@ export async function startServer(options: {
       sentMembers.set(repo, json);
       const frame = encode(serverToWeb, "members", { members });
       for (const [socket, watcher] of watchers)
-        if (
-          watcher.repo === repo &&
-          socket.readyState === 1 && // OPEN
-          (changed || socket === to)
-        )
+        if (watcher.repo === repo && open(socket, watcher) && (changed || socket === to))
           socket.send(frame);
     }
     shareDebates(); // 러너가 붙거나 떨어지면 기다리는 자리의 `away`가 바뀐다
@@ -3326,7 +3324,7 @@ export async function startServer(options: {
   /** 워크스페이스의 웹마다 그 사람에게 보이는 채널을 보낸다. 이제 안 보이는 사람에게는 이미 받았을 수 있어 지우라고 보낸다. */
   const broadcastChannel = (workspace: string, row: Parameters<typeof channelView>[0]) => {
     for (const [socket, watcher] of watchers) {
-      if (socket.readyState !== 1 || watcher.workspace !== workspace) continue;
+      if (watcher.workspace !== workspace || !open(socket, watcher)) continue;
       const view = channelFor(watcher.login, row);
       socket.send(
         view

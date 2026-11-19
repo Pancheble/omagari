@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { api, ContractFailure, call } from "@omagari/contract";
 import { startRunner } from "@omagari/runner";
-import { eventually, REPO, REPO3, startWorld, tempRepo } from "./harness.ts";
+import { eventually, REPO, REPO2, REPO3, startWorld, tempRepo } from "./harness.ts";
 
 const refused = (code: string) => (error: ContractFailure) => error.code === code;
 
@@ -51,4 +51,26 @@ test("GitHub 이름이 바뀐 토큰의 세션은 다시 확인할 때 끝나 �
     if (login === "alice") world.github.tokens.set(token, "alice-renamed");
   await eventually(async () => assert.rejects(call(alice, api.members), refused("unauthorized")));
   assert.equal((await call(world.owner, api.me)).login, "owner");
+});
+
+test("권한을 다시 읽는 사이 권한을 잃은 웹 연결은 그 레포의 것을 받지 않는다", async (t) => {
+  const world = await startWorld({ accept: [REPO, REPO2], recheckMs: 50 });
+  t.after(world.stop);
+  world.github.grant("alice");
+  const alice = await world.login("alice");
+
+  const watching = await world.live(alice);
+  await eventually(() => watching.members());
+  // 재확인이 alice의 둘째 레포에서 멈춘다. 첫 레포(REPO)의 권한은 이미 지워졌지만 연결은 아직 끊기지 않았다.
+  const release = world.github.hold("alice", REPO2);
+  t.after(release);
+  world.github.revoke("alice");
+  await eventually(async () => assert.rejects(call(alice, api.members))); // alice의 권한이 지워졌다
+  const before = watching.received.length;
+  const { channel } = await call(world.owner, api.createChannel, { name: "결제" });
+  await call(world.owner, api.send, { channel: channel.id, text: "앨리스가 나간 뒤" });
+  await call(world.owner, api.createLabel, { name: "비밀", color: "ff0000", description: "" });
+  await call(world.owner, api.send, { channel: channel.id, text: "한 번 더" });
+  //(before, watching.received.map((m) => m.kind));
+  assert.equal(watching.received.length, before); // 멤버 목록, 라벨, 채널 어느 것도 가지 않았다
 });
