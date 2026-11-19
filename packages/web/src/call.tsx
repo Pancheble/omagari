@@ -1,7 +1,7 @@
 import { EXECUTOR_NAMES, type ExecutorId, type MemberView, type Qa } from "@omagari/contract";
 import { X } from "lucide-react";
 import { type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
-import { Composer } from "./conversation.tsx";
+import { Composer, type ComposerGifs } from "./conversation.tsx";
 import { Mark } from "./members.tsx";
 
 type Agent = MemberView["agents"][number];
@@ -28,6 +28,7 @@ export function CallComposer({
   attached,
   onDetach,
   onSubmit,
+  gifs,
 }: {
   label: string;
   /** 내 에이전트 전부. 꺼진 것도 온다. */
@@ -43,6 +44,7 @@ export function CallComposer({
   attached?: Qa;
   onDetach: () => void;
   onSubmit: () => void;
+  gifs?: ComposerGifs;
 }) {
   const area = useRef<HTMLTextAreaElement>(null);
   const list = useId();
@@ -186,6 +188,7 @@ export function CallComposer({
       onSubmit={onSubmit}
       area={area}
       emoji
+      gifs={gifs}
       menu={menu}
       before={
         attached ? (

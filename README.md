@@ -112,6 +112,8 @@ HOST=0.0.0.0 npm run server
 
 `OMAGARI_DB`(기본 `omagari.db`)와 `PORT`(기본 3000)로 DB 파일과 포트를 바꾼다. 멤버가 웹을 여는 주소가 서버가 듣는 주소와 다르면 `OMAGARI_URL`에 준다. 결정 PR의 출처(포스트 링크)가 이 주소로 적힌다.
 
+채팅의 GIF(ADR-0044)는 `GIPHY_API_KEY`에 [GIPHY 개발자 키](https://developers.giphy.com/dashboard/)를 주면 켜진다. 없으면 입력 칸에 GIF 버튼이 없다. 찾기는 서버가 키를 붙여 대신 묻고, 키는 웹에 내려가지 않는다. 베타 키의 시간당 100번을 넘지 않게 서버가 막는다. 프로덕션 키를 받았으면 `GIPHY_PER_HOUR`로 한도를 올린다. Fly에서는 `fly secrets set GIPHY_API_KEY=<키> -a "$FLY_APP"`로 넣는다.
+
 서버가 `npm run build -w @omagari/web`로 빌드한 웹 화면(`packages/web/dist`)이 있으면 같은 주소에서 낸다. 없는 경로는 화면의 첫 파일로 보낸다. 개발할 때는 지금처럼 `npm run web`(Vite)를 쓴다. 건강 확인은 `GET /api/health`다.
 
 ### Fly.io에 올리기

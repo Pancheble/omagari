@@ -5,6 +5,8 @@ import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { devNull, tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -29,7 +31,14 @@ import {
   webToServer,
 } from "@omagari/contract";
 import { type Executor, type Sandbox, type SandboxInput, startRunner } from "@omagari/runner";
-import { type Account, type GitHub, type Pull, type RepoLabel, startServer } from "@omagari/server";
+import {
+  type Account,
+  type Giphy,
+  type GitHub,
+  type Pull,
+  type RepoLabel,
+  startServer,
+} from "@omagari/server";
 
 const executable = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 const CLI = executable("../packages/cli/src/main.ts");
@@ -557,6 +566,34 @@ type ExecutorInput = Parameters<Executor>[0];
  * 가짜 샌드박스. 받은 명령, 폴더, 환경 변수, 막는 설정을 `calls`에 적고, 가두지 않고 명령을 그대로 돌린다(`sh -c`).
  * `unavailable`에 까닭을 넣으면 샌드박스를 쓸 수 없는 기기다. 실제 샌드박스는 CI에서 돌지 않을 수 있어 손 점검으로 본다(ADR-0033).
  */
+/**
+ * 가짜 GIPHY(ADR-0044): 진짜 `realGiphy`가 묻는 HTTP 서버. 받은 요청의 주소를 `asked`에 쌓고 `answer`가 주는 GIF 목록을 GIPHY 모양으로 돌려준다.
+ * 진짜 GIPHY는 손 점검으로 본다.
+ */
+export async function fakeGiphy(t: { after: (fn: () => Promise<void>) => void }) {
+  const asked: URL[] = [];
+  const fake = {
+    asked,
+    url: "",
+    /** 받은 요청에 줄 GIPHY의 `data`. 바꿔 쓴다. */
+    answer: (_url: URL): unknown[] => [],
+  };
+  const server = createServer((request, response) => {
+    const url = new URL(request.url ?? "/", "http://giphy.test");
+    asked.push(url);
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify({ data: fake.answer(url), meta: { status: 200 } }));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  fake.url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  t.after(async () => {
+    server.close();
+    await once(server, "close");
+  });
+  return fake;
+}
+
 export function fakeSandbox() {
   const fake: {
     calls: SandboxInput[];
@@ -722,6 +759,8 @@ export async function startWorld(
     behindFly?: boolean;
     /** 서버가 받을 계정과 켤 때 넣을 레포(`OMAGARI_REPO`). 주지 않으면 `REPO` 하나다. */
     accept?: string[];
+    /** GIF 찾기. 주지 않으면 GIPHY 키가 없는 서버다. 테스트는 가짜 GIPHY(`fakeGiphy`)에 대고 진짜 `realGiphy`를 꽂는다. */
+    giphy?: Giphy;
   } = {},
 ) {
   const repo = await tempRepo();
@@ -737,6 +776,7 @@ export async function startWorld(
   const serverOptions = {
     accept: options.accept ?? [REPO],
     github: fake.github,
+    giphy: options.giphy,
     database,
     recheckMs: options.recheckMs,
     heartbeatMs: options.heartbeatMs,
