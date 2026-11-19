@@ -255,7 +255,11 @@ const MESSAGES = `SELECT m.id, m.channel, m.login, m.text, m.note, m.at, m.githu
   COALESCE(a.repo, (SELECT ch.repo FROM channels ch WHERE ch.id = m.channel)) AS repo,
   COALESCE(${ownerSql("a.repo")}, (SELECT ch.workspace FROM channels ch WHERE ch.id = m.channel)) AS workspace,
   (SELECT json_group_array(json_array(r.emoji, r.login, COALESCE(rp.name, r.login)) ORDER BY r.at, r.rowid)
-    FROM reactions r LEFT JOIN people rp ON rp.login = r.login WHERE r.message = m.id) AS reactions FROM messages m
+    FROM reactions r LEFT JOIN people rp ON rp.login = r.login WHERE r.message = m.id) AS reactions,
+  m.reply_to, m.notify, (SELECT json_object('login', o.login, 'name', COALESCE(op.name, o.login),
+    'text', COALESCE(oq.question, o.text), 'comment', o.comment) FROM messages o
+    LEFT JOIN people op ON op.login = o.login LEFT JOIN qas oq ON oq.id = o.qa
+    WHERE o.id = m.reply_to AND o.channel = m.channel) AS original FROM messages m
   LEFT JOIN people p ON p.login = m.login
   LEFT JOIN qas q ON q.id = m.qa
   LEFT JOIN alerts a ON a.id = m.alert
@@ -298,6 +302,11 @@ type MessageRow = {
   workspace: string | null;
   /** 달린 반응 `[이모지, 로그인, 이름]`의 JSON 배열, 단 차례. */
   reactions: string;
+  /** 답장이면 원래 메시지의 번호와 그 사람을 부르는지(1, 0). */
+  reply_to: number | null;
+  notify: number | null;
+  /** 원래 메시지 `{ login, name, text, comment }`의 JSON. 읽을 수 없으면 NULL이다. */
+  original: string | null;
 } & Pick<QaRow, "executor" | "question" | "answer" | "visibility">;
 
 /**
@@ -389,6 +398,28 @@ const reactionsOf = (json: string): Reaction[] => {
   return [...grouped].map(([emoji, members]) => ({ emoji, members }));
 };
 
+/** 원래 메시지의 첫 줄: `>` 인용 줄과 빈 줄을 건너뛴 첫 줄. 그런 줄이 없으면 첫 줄이다. */
+const firstLine = (text: string) => {
+  const lines = text.split("\n").map((line) => line.trim());
+  return lines.find((line) => line !== "" && !line.startsWith(">")) ?? lines[0] ?? "";
+};
+
+const replyView = (row: MessageRow) => {
+  if (row.reply_to === null) return {};
+  const original = row.original === null ? null : JSON.parse(row.original);
+  return {
+    replyTo: {
+      id: row.reply_to,
+      notify: row.notify === 1,
+      original: original && {
+        login: original.login,
+        name: original.name,
+        line: firstLine(original.text ?? "").slice(0, POST_LINE),
+      },
+    },
+  };
+};
+
 const messageView = (row: MessageRow): ChannelMessage => {
   if (row.alert !== null) {
     return {
@@ -419,6 +450,7 @@ const messageView = (row: MessageRow): ChannelMessage => {
     name: row.name ?? row.login,
     at: new Date(row.at).toISOString(),
     reactions: reactionsOf(row.reactions),
+    ...replyView(row),
   };
   if (row.qa === null)
     return {
@@ -574,6 +606,10 @@ export async function startServer(options: {
   ) STRICT`);
   if (!db.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'reacted'").get())
     db.exec("ALTER TABLE messages ADD COLUMN reacted INTEGER");
+  // 답장(ADR-0047): `reply_to`는 같은 채널의 원래 메시지 번호, `notify`는 그 사람을 부르는지(1, 0)다.
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'reply_to'").get())
+    db.exec(`ALTER TABLE messages ADD COLUMN reply_to INTEGER REFERENCES messages (id);
+      ALTER TABLE messages ADD COLUMN notify INTEGER`);
   // 알림에 달린 포스트(문답 Q3)는 채널의 한 줄이다. 그래서 글, 지난 대화, DM, `@호출`, 채널에 올리기가 채널과 같은 길로 돈다.
   // `alert`는 알림이 선 메시지의 번호이고, 채팅 채널이면 NULL이다. 포스트의 `name`은 사람이 지을 수 없는 이름(줄바꿈으로 시작)이라
   // 채팅 채널의 이름과 겹치지 않는다. 사람이 읽는 이름은 `postName`이 짓는다. v0.1.0의 표에는 `alert`가 없다.
@@ -3231,9 +3267,32 @@ export async function startServer(options: {
     ].map(messageView);
   };
 
-  mount(app, api.ask, ({ agent, executor, channel, message, visibility, model, effort }, c) => {
+  /**
+   * 답장의 원래 메시지(ADR-0047). 같은 채널이나 포스트 안의 사람이 쓴 메시지(글, 공개된 문답)만 된다.
+   * 다른 곳의 것, 없는 것, 알림·결정 줄은 가리지 않고 같은 `invalid_request`다(있는지 새지 않게, #239).
+   */
+  const originalOf = (channel: string, replyTo: number | undefined) => {
+    if (replyTo === undefined) return undefined;
+    const row = db
+      .prepare(`${MESSAGES} WHERE m.id = ? AND m.channel = ? AND m.alert IS NULL AND m.decision IS NULL`)
+      .get(replyTo, channel) as MessageRow | undefined;
+    if (!row)
+      throw new ContractFailure({
+        code: "invalid_request",
+        message: "답장은 같은 채널이나 포스트 안의 메시지에만 단다",
+      });
+    return messageView(row);
+  };
+
+  mount(app, api.ask, (body, c) => {
+    const { agent, executor, channel, message, visibility, model, effort, notify } = body;
     mustOwn(agent, c.get("login") as string);
     mustWrite(channel, c);
+    const { replyTo } = body;
+    // 답장은 모두가 보는 `@호출`만 된다. DM에는 답장이 없다.
+    if (replyTo !== undefined && visibility !== "public")
+      throw new ContractFailure({ code: "invalid_request", message: "DM에는 답장이 없다" });
+    const original = originalOf(channel, replyTo);
     visit(agent, channelWorkspace(channel) ?? workspaceOf(c));
     // 포스트와 레포 채널은 그 레포의 러너가, 워크스페이스 채널은 그 워크스페이스에서 마지막에 붙은 러너가 답한다(ADR-0043).
     const socket = runnerOf(agent, executor, channelRepo(channel), channelWorkspace(channel));
@@ -3249,11 +3308,15 @@ export async function startServer(options: {
       .run(channel, agent, executor, message, at, visibility);
     const id = Number(lastInsertRowid);
     if (visibility === "public") {
-      db.prepare("INSERT INTO messages (channel, login, qa, at) VALUES (?, ?, ?, ?)").run(
+      db.prepare(
+        "INSERT INTO messages (channel, login, qa, at, reply_to, notify) VALUES (?, ?, ?, ?, ?, ?)",
+      ).run(
         channel,
         agent,
         id,
         at,
+        replyTo ?? null,
+        replyTo === undefined ? null : Number(notify),
       );
     }
     const frame = encode(serverToRunner, "ask", {
@@ -3261,6 +3324,7 @@ export async function startServer(options: {
       channel: { id: channel, name },
       message,
       recent,
+      ...(original && { replyTo: original }),
       model,
       effort,
     });
@@ -4265,12 +4329,22 @@ export async function startServer(options: {
     return { messages: rows.reverse().map(messageView) };
   });
 
-  mount(app, api.send, ({ channel, text }, c) => {
+  mount(app, api.send, ({ channel, text, replyTo, notify }, c) => {
     mustWrite(channel, c);
     visit(c.get("login") as string, workspaceOf(c));
+    originalOf(channel, replyTo);
     const { lastInsertRowid } = db
-      .prepare("INSERT INTO messages (channel, login, text, at) VALUES (?, ?, ?, ?)")
-      .run(channel, c.get("login") as string, text, Date.now());
+      .prepare(
+        "INSERT INTO messages (channel, login, text, at, reply_to, notify) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        channel,
+        c.get("login") as string,
+        text,
+        Date.now(),
+        replyTo ?? null,
+        replyTo === undefined ? null : Number(notify),
+      );
     const message = shareRow(
       db.prepare(`${MESSAGES} WHERE m.id = ?`).get(lastInsertRowid) as MessageRow,
     );
@@ -5039,7 +5113,19 @@ export async function startServer(options: {
    * 포스트의 글 하나를 이슈 댓글로. 사람의 글은 그대로, 공개된 문답은 올린 사람의 글 뒤에 AI가 쓴 답이라는 표시(DESIGN.md "AI가 쓴 글")와
    * 질문, 답을 붙인다. 아직 답이 오지 않은 문답이면 없다(답이 오면 올린다). 답하지 못한 문답은 올리지 않는다.
    */
-  const commentBody = (message: ChannelMessage) => {
+  /**
+   * 포스트의 글을 이슈 댓글로 쓴 것. 답장이면 머리에 원래 메시지를 적는다(ADR-0047): `> **login** · [original](댓글 링크)`와
+   * `> 첫 줄`, 빈 줄. 원래 메시지가 아직 댓글이 아니면 이슈로 잇는다. GitHub이 다시 메일을 보내지 않게 `@`는 쓰지 않는다.
+   */
+  const commentBody = (message: ChannelMessage, row: MessageRow, issueUrl: string) => {
+    const body = commentText(message);
+    const original = row.original === null ? null : JSON.parse(row.original);
+    if (body === undefined || !original) return body;
+    const link = original.comment === null ? issueUrl : `${issueUrl}#issuecomment-${original.comment}`;
+    const line = firstLine(original.text ?? "").slice(0, POST_LINE);
+    return [`> **${original.login}** · [original](${link})`, `> ${line}`, "", body].join("\n");
+  };
+  const commentText = (message: ChannelMessage) => {
     if (message.kind === "text") return message.text;
     if (message.kind !== "qa" || message.qa.answer.state !== "answered") return undefined;
     const { answer, executor, question } = message.qa;
@@ -5143,8 +5229,14 @@ export async function startServer(options: {
           `${MESSAGES} WHERE m.channel = ? AND m.comment IS NULL AND m.decision IS NULL ORDER BY m.id`,
         )
         .all(row.id) as MessageRow[];
-      for (const message of unsent.map(messageView)) {
-        const body = commentBody(message);
+      const issueUrl = (
+        db.prepare("SELECT issue_url FROM channels WHERE id = ?").get(row.id) as {
+          issue_url: string;
+        }
+      ).issue_url;
+      for (const sent of unsent) {
+        const message = messageView(sent);
+        const body = commentBody(message, sent, issueUrl);
         const writer = "login" in message ? tokenOf(message.login) : undefined;
         if (body === undefined || !writer) continue;
         const made = await github.comment(writer, repo, number, body).catch((e: Error) => e);

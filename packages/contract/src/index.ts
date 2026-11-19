@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 53;
+export const CONTRACT_VERSION = 54;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -183,6 +183,12 @@ export const ModelPick = z.strictObject({
   effort: z.string().optional(),
 });
 export type ModelPick = z.infer<typeof ModelPick>;
+
+/** 보낼 때 답장으로 단다(ADR-0047): 원래 메시지의 번호와, 그 사람을 부를지(기본은 부른다). */
+export const Replying = z.strictObject({
+  replyTo: z.number().int().optional(),
+  notify: z.boolean().default(true),
+});
 
 /**
  * 다른 멤버에게 보이는 사람의 접속 상태. 웹 창이 하나도 열려 있지 않거나 "오프라인으로 보이기"를 골랐으면 offline이다.
@@ -965,6 +971,18 @@ export const Reaction = z.strictObject({
 export type Reaction = z.infer<typeof Reaction>;
 
 /**
+ * 답장이 가리키는 원래 메시지(ADR-0047). 같은 채널, 포스트 안의 사람이 쓴 메시지(글이나 공개된 문답)만 가리킨다.
+ * `original`은 원래 메시지의 지금 모습이다: 쓴 사람과 첫 줄(문답이면 질문의 첫 줄, `>` 인용 줄은 건너뛴다). 읽을 수 없으면 null이다(지워졌든 볼 수 없든 같다, #239).
+ * `notify`는 원래 메시지를 쓴 사람을 부르는지다(보내는 사람이 끌 수 있다). 부르는 것은 #313이 전한다.
+ */
+export const ReplyTo = z.strictObject({
+  id: z.number(),
+  notify: z.boolean(),
+  original: z.strictObject({ login: z.string(), name: z.string(), line: z.string() }).nullable(),
+});
+export type ReplyTo = z.infer<typeof ReplyTo>;
+
+/**
  * 채널에 쌓인 것 하나. `id`는 워크스페이스 전체에서 늘어나기만 하는 번호라 채널 안의 순서이자,
  * 실시간 연결이 다시 붙을 때 이어 받을 자리(`webToServer.hello`의 `after`)다.
  * 사람이 쓴 글(`text`)과 공개된 문답(`qa`), Omagari가 올린 알림(`alert`)이 같은 번호 줄에 선다.
@@ -984,6 +1002,8 @@ export const ChannelMessage = z.discriminatedUnion("kind", [
     github: z.literal(true).optional(),
     /** 달린 반응(`api.react`). 반응이 바뀌면 같은 `id`의 것이 실시간 연결로 다시 온다. */
     reactions: z.array(Reaction),
+    /** 답장이면 그 원래 메시지. GitHub에서 들어온 댓글은 답장이 되지 않는다. */
+    replyTo: ReplyTo.optional(),
   }),
   /**
    * 공개된 문답: 채널에 올린 DM이나 `@호출`. 질문과 답이 늘 함께 있다. `login`과 `name`은 그 에이전트의 주인(올린 사람)이고,
@@ -1001,6 +1021,8 @@ export const ChannelMessage = z.discriminatedUnion("kind", [
     qa: Qa,
     /** 달린 반응. 글 메시지의 것과 같다. */
     reactions: z.array(Reaction),
+    /** 답장 안에서 `@호출`했으면 그 원래 메시지. 원래 메시지는 질문과 함께 에이전트에게 간다. */
+    replyTo: ReplyTo.optional(),
   }),
   /**
    * Omagari가 올린 알림. 쓴 사람이 없다. 알림이 고쳐지거나 풀리거나 포스트의 글 수가 바뀌면 같은 `id`의 것이 실시간 연결로 다시 온다.
@@ -1273,6 +1295,8 @@ export const serverToRunner = {
     channel: Channel.omit({ kind: true }),
     message: z.string().min(1),
     recent: z.array(ChannelMessage).max(CHANNEL_CONTEXT),
+    /** 답장 안에서 `@호출`했으면 그 원래 메시지(ADR-0047). 러너는 채널 대화처럼 지시가 아닌 데이터로 감싸 질문 앞에 둔다. */
+    replyTo: ChannelMessage.optional(),
     ...ModelPick.shape,
   }),
   /**
@@ -1847,6 +1871,7 @@ export const api = {
    * `@호출`이면 채널에 선 문답(`message`)도 돌려주고 실시간 연결의 `message`로 모두에게 간다(답이 오면 같은 번호로 다시).
    * 그 에이전트의 러너가 꺼져 있으면 쌓아 두지 않고 바로 `runner_offline`이다. 없는 채널이면 `not_found`.
    * `model`과 `effort`는 고른 것이고 없으면 "기본"이다. 서버는 그대로 러너에 넘기고, 고를 거리에 없으면 러너가 문답을 실패로 돌려준다.
+   * `replyTo`는 `@호출`(public)에만 쓰고 `send`와 같이 거절한다. 원래 메시지는 `> **login**` 인용으로 질문 앞에 붙어 러너에 간다(ADR-0047).
    */
   ask: {
     method: "POST",
@@ -1858,6 +1883,7 @@ export const api = {
       message: z.string().trim().min(1).max(MAX_MESSAGE_CHARS),
       visibility: Visibility.default("private"),
       ...ModelPick.shape,
+      ...Replying.shape,
     }),
     response: z.strictObject({ qa: Qa, message: ChannelMessage.optional() }),
   },
@@ -2228,6 +2254,8 @@ export const api = {
   /**
    * 채널이나 포스트에 글을 쓴다. 실시간 연결이 붙어 있는 웹 모두(쓴 사람 것 포함)에 `message`가 간다.
    * 포럼에는 쓰지 못한다(`invalid_request`). DM과 `@호출`(`api.ask`)도 같다.
+   * `replyTo`가 이 채널이나 포스트 안의 사람이 쓴 메시지가 아니면(다른 곳의 것, 없는 것, 알림·결정 줄) `invalid_request`다.
+   * 포스트의 답장은 GitHub 이슈 댓글 머리에 원래 메시지를 적는다(`@` 없이, ADR-0047).
    */
   send: {
     method: "POST",
@@ -2235,6 +2263,7 @@ export const api = {
     body: z.strictObject({
       channel: z.string(),
       text: z.string().trim().min(1).max(MAX_MESSAGE_CHARS),
+      ...Replying.shape,
     }),
     response: z.strictObject({ message: ChannelMessage }),
   },
