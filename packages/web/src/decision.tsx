@@ -15,6 +15,7 @@ import { useEffect, useId, useReducer, useRef, useState } from "react";
 import { server } from "./api.ts";
 import { timeOf } from "./conversation.tsx";
 import { chosen, type Picks } from "./dm.tsx";
+import { t } from "./i18n.ts";
 import { Mark } from "./members.tsx";
 import { Person } from "./profile-card.tsx";
 import { Avatar } from "./workspace.tsx";
@@ -23,18 +24,7 @@ type Message = Extract<ChannelMessage, { kind: "decision" }>;
 export type Fields = { title: string; context: string; decision: string; consequences: string };
 const EMPTY: Fields = { title: "", context: "", decision: "", consequences: "" };
 
-/** 받침이 있으면 앞, 없으면 뒤: 지은이 / 민수가. */
-export const josa = (name: string, withFinal: string, without: string) => {
-  const code = Array.from(name).at(-1)?.charCodeAt(0) ?? 0;
-  return (
-    name + (code >= 0xac00 && code <= 0xd7a3 && (code - 0xac00) % 28 !== 0 ? withFinal : without)
-  );
-};
-
-/** "#12" 뒤의 을/를: 이(2), 사(4), 오(5), 구(9)는 받침이 없다. */
-const eul = (n: number) => ("2459".includes(String(n).at(-1) ?? "") ? "를" : "을");
-
-/** 남은 시간이 흐르도록 30초마다 다시 그린다. */
+/** Redraw every 30 seconds so the time left keeps ticking. */
 function useTick() {
   const [, tick] = useReducer((count: number) => count + 1, 0);
   useEffect(() => {
@@ -43,33 +33,27 @@ function useTick() {
   }, []);
 }
 
-/** "18시간 남음", "3일 남음", "12분 남음". 닫힐 때가 지났으면 "곧 닫혀요". */
+/** "18 hours left", "3 days left", "12 minutes left". "Closing soon" once the close time has passed. */
 function remaining(closes: string) {
   const minutes = Math.ceil((Date.parse(closes) - Date.now()) / 60_000);
-  if (minutes <= 0) return "곧 닫혀요";
-  if (minutes < 60) return `${minutes}분 남음`;
-  if (minutes < 48 * 60) return `${Math.ceil(minutes / 60)}시간 남음`;
-  return `${Math.ceil(minutes / 1440)}일 남음`;
+  if (minutes <= 0) return t.decision.closingSoon;
+  if (minutes < 60) return t.decision.left(minutes, "minute");
+  if (minutes < 48 * 60) return t.decision.left(Math.ceil(minutes / 60), "hour");
+  return t.decision.left(Math.ceil(minutes / 1440), "day");
 }
 
-const WINDOWS = [
-  ["now", "바로"],
-  ["hour", "1시간"],
-  ["day", "하루"],
-  ["three_days", "3일"],
-  ["custom", "직접"],
-] as const;
+const WINDOWS = ["now", "hour", "day", "three_days", "custom"] as const;
 
-/** 창 길이를 말로: "하루", "1시간", "12시간". */
+/** The window length in words: "1 day", "1 hour", "12 hours". */
 export const windowWord = (window: DecisionWindow) =>
   typeof window === "object"
-    ? `${window.amount}${window.unit === "hour" ? "시간" : "일"}`
-    : { now: "바로", hour: "1시간", day: "하루", three_days: "3일" }[window];
+    ? t.decision.amount(window.amount, window.unit)
+    : t.decision.windowWords[window];
 
 const objectors = (decision: Decision) =>
   [...new Set(decision.objections.map((objection) => objection.name))].join(", ");
 
-/** 띠의 상태 이름과 설명, 띠 색. */
+/** The strip's state name, description, and color. */
 function describe(decision: Decision): {
   name: string;
   text: string;
@@ -77,56 +61,56 @@ function describe(decision: Decision): {
 } {
   const agreed = decision.deciders.filter((decider) => decider.agreed).length;
   const left = decision.closes ? `${remaining(decision.closes)} · ` : "";
-  const count = `동의 ${agreed}/${decision.deciders.length}`;
+  const count = t.decision.agreed(agreed, decision.deciders.length);
   switch (decision.status) {
     case "proposed":
       return {
-        name: "제안됨",
-        text: `${left}${count} · 결정자가 모두 동의하면 바로 머지해요`,
+        name: t.decision.proposed,
+        text: `${left}${count} · ${t.decision.proposedText}`,
         tone: "",
       };
     case "objected":
       return {
-        name: `이의 ${decision.objections.length}개`,
-        text: `${josa(objectors(decision), "이", "가")} 이의를 냈어요 · 모두 거둬질 때까지 머지하지 않아요`,
+        name: t.decision.objected(decision.objections.length),
+        text: t.decision.objectedText(objectors(decision)),
         tone: "warning",
       };
     case "reopened":
       return {
-        name: "다시 열림",
-        text: `이의가 모두 거둬져 창을 다시 열었어요 · ${left}${count}`,
+        name: t.decision.reopened,
+        text: `${t.decision.reopenedText} · ${left}${count}`,
         tone: "",
       };
     case "blocked":
       return {
-        name: "머지 막힘",
-        text: `창은 닫혔지만 GitHub이 막았어요${decision.reason ? `: ${decision.reason}` : ""} · 풀리면 바로 머지해요`,
+        name: t.decision.blocked,
+        text: t.decision.blockedText(decision.reason),
         tone: "warning",
       };
     case "stalled":
       return {
-        name: "머지 멈춤",
-        text: `${decision.name}의 GitHub 토큰이 듣지 않아 머지를 멈췄어요 · ${josa(decision.name, "이", "가")} 다시 로그인하면 이어 가요`,
+        name: t.decision.stalled,
+        text: t.decision.stalledText(decision.name),
         tone: "error",
       };
     case "accepted":
       return {
-        name: "수락됨",
-        text: `${decision.early ? "결정자가 모두 동의해 창을 일찍 닫고 " : ""}${decision.path}로 머지했어요`,
+        name: t.decision.accepted,
+        text: t.decision.acceptedText(decision.early, decision.path),
         tone: "",
       };
     case "closed":
       return {
-        name: "버림",
-        text: `${josa(decision.name, "이", "가")} 결정을 버려 결정 PR을 닫았어요`,
+        name: t.decision.closed,
+        text: t.decision.closedText(decision.name),
         tone: "quiet",
       };
   }
 }
 
 /**
- * 결정 상태 띠(app-decision-strip): 포스트의 대화 위에 늘 붙는다. 상태, 남은 시간과 동의 수, PR 링크,
- * 보는 사람(`me`)에 따른 버튼. 머지되거나 버린 뒤에는 버튼이 없다.
+ * Decision status strip (app-decision-strip): always sits above the post's conversation. Shows the state, time left and agree count, PR link,
+ * and buttons that depend on the viewer (`me`). No buttons once it is merged or dropped.
  */
 export function DecisionStrip({
   decision,
@@ -166,7 +150,7 @@ export function DecisionStrip({
       type="button"
       className={`button ${kind} strip-button`}
       disabled={busy}
-      onClick={() => void run(act, `${label}를 하지 못했어요`)}
+      onClick={() => void run(act, t.decision.actionFailed(label))}
     >
       {label}
     </button>
@@ -188,15 +172,17 @@ export function DecisionStrip({
           {mine ? (
             <>
               <button type="button" className="button quiet strip-button" onClick={onRevise}>
-                고쳐 올리기
+                {t.decision.revise}
               </button>
-              {button("버리기", "danger", onDiscard)}
+              {button(t.decision.discard, "danger", onDiscard)}
             </>
           ) : (
             <>
-              {decider && !decider.agreed && button("동의", "primary", () => onRespond("agree"))}
-              {!objected && button("이의", "outline", () => onRespond("object"))}
-              {objected && button("내 이의 거두기", "outline", () => onRespond("withdraw"))}
+              {decider &&
+                !decider.agreed &&
+                button(t.decision.agree, "primary", () => onRespond("agree"))}
+              {!objected && button(t.decision.object, "outline", () => onRespond("object"))}
+              {objected && button(t.decision.withdraw, "outline", () => onRespond("withdraw"))}
             </>
           )}
         </div>
@@ -205,22 +191,23 @@ export function DecisionStrip({
   );
 }
 
-/** 대화에 쌓이는 결정 PR의 한 줄: "Omagari · 지은이 결정 PR #12를 열었어요 · 이의 창 하루 · 오전 10:50". */
+/** A decision PR line in the conversation: "Omagari · Jieun opened Decision PR #12 · objection window: 1 day · 10:50 AM". */
 export function DecisionLine({ message }: { message: Message }) {
   const { decision, event, by } = message;
   const n = decision.pull.number;
-  const pull = `결정 PR #${n}`;
+  const pull = t.decision.pr(n);
   const who = by?.name ?? decision.name;
+  const e = t.decision.events;
   const words: Record<Message["event"], string> = {
-    opened: `${josa(decision.name, "이", "가")} ${pull}${eul(decision.pull.number)} 열었어요 · 이의 창 ${windowWord(decision.window)}`,
-    agreed: `${josa(who, "이", "가")} ${pull}에 동의했어요`,
-    objected: `${josa(who, "이", "가")} ${pull}에 이의를 냈어요`,
-    withdrawn: `${josa(who, "이", "가")} 이의를 거뒀어요`,
-    revised: `${josa(who, "이", "가")} 결정을 고쳐 올렸어요`,
-    merged: `${pull}${eul(n)} ${decision.early ? "결정자가 모두 동의해 일찍 " : ""}머지했어요`,
-    closed: `${pull}${eul(n)} 머지 없이 닫았어요`,
-    blocked: `GitHub이 머지를 막았어요${message.reason ? `: ${message.reason}` : ""}`,
-    stalled: `${decision.name}의 GitHub 토큰이 듣지 않아 머지를 멈췄어요`,
+    opened: e.opened(decision.name, pull, windowWord(decision.window)),
+    agreed: e.agreed(who, pull),
+    objected: e.objected(who, pull),
+    withdrawn: e.withdrawn(who),
+    revised: e.revised(who),
+    merged: e.merged(pull, decision.early),
+    closed: e.closed(pull),
+    blocked: e.blocked(message.reason),
+    stalled: e.stalled(decision.name),
   };
   return (
     <p className="decision-line">
@@ -238,9 +225,9 @@ export function DecisionLine({ message }: { message: Message }) {
 const FIELD_ROWS = { context: 4, decision: 4, consequences: 2 } as const;
 
 /**
- * 결정 정리하기 대화 상자(DESIGN.md "결정 정리하기"). 열리면 바로 내 에이전트가 초안을 쓰기 시작하고(#103),
- * 사람이 읽고 고쳐서 결정 PR을 연다. 고치려고 열었으면(`revising`) 초안을 쓰지 않고 그 결정의 칸으로 시작해 같은 PR에 올린다.
- * 에이전트는 연결된 것 가운데 첫째, 모델과 effort는 DM에서 기억해 둔 값이다.
+ * Wrap-up decision dialog (DESIGN.md "Wrapping up a decision"). On open, my agent starts writing a draft right away (#103),
+ * and a person reads it, edits it, and opens the decision PR. If opened to revise (`revising`), it writes no draft and starts from that decision's fields, posting to the same PR.
+ * The agent is the first connected one; model and effort are the values remembered in the DM.
  */
 export function DecisionDialog({
   post,
@@ -258,20 +245,20 @@ export function DecisionDialog({
   onDone,
   onClose,
 }: {
-  /** 포스트의 채널 id. */
+  /** The post's channel id. */
   post: string;
-  /** 포스트 제목. 출처 링크의 글이다. */
+  /** The post title. It is the text of the source link. */
   title: string;
   repo: string;
   me: { login: string; name: string };
   agents: MemberView["agents"];
   picks: Picks;
-  /** 이 포스트에서 말한 멤버들. 결정자로 보인다. */
+  /** Members who spoke in this post. Shown as deciders. */
   speakers: { login: string; name: string }[];
-  /** 실시간 연결로 온 초안. 이 대화 상자가 받은 `draft.id`와 맞는 것만 쓴다. */
+  /** Draft that arrived over the live connection. Only one matching the `draft.id` this dialog received is used. */
   incoming?: Draft;
   revising?: Decision;
-  /** 고치려고 열었을 때 칸에 미리 넣을 것(이 브라우저에서 올린 마지막 칸). 계약은 결정의 본문을 주지 않는다. */
+  /** What to prefill in the fields when opened to revise (the last fields posted from this browser). The contract does not give the decision body. */
   initial?: Fields;
   session: string;
   check: (error: unknown) => unknown;
@@ -283,10 +270,10 @@ export function DecisionDialog({
   const [fields, setFields] = useState<Fields>(
     initial ?? (revising ? { ...EMPTY, title: revising.title } : EMPTY),
   );
-  /** 초안 요청의 지금: 쓰는 중이면 초안, 러너가 꺼짐이면 "offline", 아직 안 불렀으면 없다. */
+  /** Current state of the draft request: the draft while writing, "offline" if the runner is off, nothing if not requested yet. */
   const [draft, setDraft] = useState<Draft | "offline">();
   const [everDrafted, setEverDrafted] = useState(false);
-  const [unit, setUnit] = useState<(typeof WINDOWS)[number][0]>("day");
+  const [unit, setUnit] = useState<(typeof WINDOWS)[number]>("day");
   const [amount, setAmount] = useState("12");
   const [per, setPer] = useState<"hour" | "day">("hour");
   const [failure, setFailure] = useState<string>();
@@ -311,18 +298,18 @@ export function DecisionDialog({
     } catch (error) {
       check(error);
       if (error instanceof ContractFailure && error.code === "runner_offline") setDraft("offline");
-      else setFailure("초안을 쓰게 하지 못했어요. 잠시 뒤 다시 시도해 주세요.");
+      else setFailure(t.decision.dialog.draftFailed);
     }
   };
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 열릴 때 한 번 초안을 쓰게 한다
+  // biome-ignore lint/correctness/useExhaustiveDependencies: write a draft once when opened
   useEffect(() => {
     dialog.current?.showModal();
     if (!revising) void write();
   }, []);
 
-  // 실시간으로 온 초안: 내가 부른 초안이면 받고, 다 썼으면 네 칸을 채운다.
+  // Draft from the live connection: take it if it is the one I requested, and fill the four fields when done.
   const mineId = draft !== undefined && draft !== "offline" ? draft.id : undefined;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 새 초안이 올 때만 본다
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only look when a new draft arrives
   useEffect(() => {
     if (!incoming || incoming.id !== mineId) return;
     setDraft(incoming);
@@ -353,7 +340,9 @@ export function DecisionDialog({
   const filled = Object.values(fields).every((value) => value.trim());
   const canOpen = filled && !pending && !sending && (!custom || customOk);
   const length = custom
-    ? `${customOk ? amountNumber : "정한"}${per === "hour" ? "시간" : "일"}`
+    ? customOk
+      ? t.decision.amount(amountNumber, per)
+      : t.decision.unset
     : windowWord(win);
 
   const submit = async () => {
@@ -369,8 +358,8 @@ export function DecisionDialog({
       check(error);
       setFailure(
         error instanceof ContractFailure && error.code === "github_failed"
-          ? "GitHub이 결정 PR을 받지 않았어요. 로그인과 레포 권한을 확인해 주세요."
-          : "결정 PR을 열지 못했어요. 잠시 뒤 다시 시도해 주세요.",
+          ? t.decision.dialog.githubRefused
+          : t.decision.dialog.openFailed,
       );
     } finally {
       setSending(false);
@@ -385,30 +374,37 @@ export function DecisionDialog({
       const runner = !failed || failed.error.code === "runner_offline";
       return {
         tone: "warning",
-        title: "초안을 쓸 수 없어요",
-        text: runner
-          ? "Claude Code 러너가 꺼져 있어요. 직접 쓰거나, 러너를 켜고 다시 쓰게 하세요."
-          : "에이전트가 초안을 쓰지 못했어요. 직접 쓰거나 다시 쓰게 하세요.",
+        title: t.decision.dialog.draftBlockedTitle,
+        text: runner ? t.decision.dialog.runnerOff : t.decision.dialog.agentFailed,
       };
     }
-    if (!draft) return { tone: "", title: "초안을 쓰게 하는 중", text: "에이전트를 부르고 있어요" };
-    const read = `이 포스트의 글 ${draft.read.texts}개와 문답 ${draft.read.qas}개`;
-    const name = `${owner}의 ${EXECUTOR_NAMES[draft.executor]}`;
+    if (!draft)
+      return {
+        tone: "",
+        title: t.decision.dialog.startingTitle,
+        text: t.decision.dialog.startingText,
+      };
+    const read = t.decision.dialog.read(draft.read.texts, draft.read.qas);
+    const name = t.decision.dialog.agentOf(owner, EXECUTOR_NAMES[draft.executor]);
     if (draft.state.state === "pending")
       return {
         tone: "",
-        title: `${name}가 초안을 쓰는 중`,
-        text: `${read}를 읽고 있어요`,
+        title: t.decision.dialog.writing(name),
+        text: t.decision.dialog.reading(read),
         stop: true,
       };
     if (draft.state.state === "stopped")
-      return { tone: "", title: "초안 쓰기를 멈췄어요", text: "직접 쓰거나 다시 쓰게 하세요." };
+      return {
+        tone: "",
+        title: t.decision.dialog.stoppedTitle,
+        text: t.decision.dialog.stoppedText,
+      };
     if (draft.state.state !== "drafted") return undefined;
     const { model, effort } = draft.state;
     return {
       tone: "",
-      title: `${name}가 쓴 초안이에요`,
-      text: `${read}를 읽고 썼어요. 읽어 보고 고친 뒤 여세요.`,
+      title: t.decision.dialog.drafted(name),
+      text: t.decision.dialog.draftedText(read),
       model: model ? (effort ? `${model} · ${effort}` : model) : undefined,
     };
   })();
@@ -450,8 +446,8 @@ export function DecisionDialog({
   );
 
   return (
-    // 덮개를 누르면 닫힌다. 키보드로는 Esc가 닫는다(dialog가 해 준다).
-    // biome-ignore lint/a11y/useKeyWithClickEvents: Esc는 dialog가 맡는다
+    // Clicking the backdrop closes it. Esc closes it from the keyboard (the dialog handles that).
+    // biome-ignore lint/a11y/useKeyWithClickEvents: the dialog handles Esc
     <dialog
       ref={dialog}
       className="dialog decision-dialog"
@@ -467,7 +463,7 @@ export function DecisionDialog({
           if (canOpen) void submit();
         }}
       >
-        <h2 id={heading}>{revising ? "결정 고쳐 올리기" : "결정 정리하기"}</h2>
+        <h2 id={heading}>{revising ? t.decision.dialog.reviseTitle : t.decision.dialog.title}</h2>
         {band && (
           <div className={band.tone ? `draft-band ${band.tone}` : "draft-band"} role="status">
             {band.tone ? null : agent && <Mark agent={agent} aria-hidden />}
@@ -477,23 +473,38 @@ export function DecisionDialog({
             </p>
             {band.stop && (
               <button type="button" className="button quiet strip-button" onClick={stop}>
-                그만 쓰기
+                {t.decision.dialog.stop}
               </button>
             )}
             {band.model && <span className="badge outline">{band.model}</span>}
           </div>
         )}
         <div className="draft-fields">
-          {field("title", "제목", "무엇을 정했나요")}
-          {field("context", "맥락", "왜 정해야 했나요", FIELD_ROWS.context)}
-          {field("decision", "결정", "무엇으로 정했나요", FIELD_ROWS.decision)}
-          {field("consequences", "결과", "그래서 무엇이 바뀌나요", FIELD_ROWS.consequences)}
+          {field("title", t.decision.dialog.title_, t.decision.dialog.titleHint)}
+          {field(
+            "context",
+            t.decision.dialog.context,
+            t.decision.dialog.contextHint,
+            FIELD_ROWS.context,
+          )}
+          {field(
+            "decision",
+            t.decision.dialog.decision,
+            t.decision.dialog.decisionHint,
+            FIELD_ROWS.decision,
+          )}
+          {field(
+            "consequences",
+            t.decision.dialog.consequences,
+            t.decision.dialog.consequencesHint,
+            FIELD_ROWS.consequences,
+          )}
         </div>
         {!revising && (
           <fieldset className="window" disabled={sending}>
-            <legend>이의 창</legend>
+            <legend>{t.decision.dialog.window}</legend>
             <div className="segments">
-              {WINDOWS.map(([id, word]) => (
+              {WINDOWS.map((id) => (
                 <label key={id} className="segment">
                   <input
                     type="radio"
@@ -501,7 +512,7 @@ export function DecisionDialog({
                     checked={unit === id}
                     onChange={() => setUnit(id)}
                   />
-                  <span>{word}</span>
+                  <span>{t.decision.windowNames[id]}</span>
                 </label>
               ))}
             </div>
@@ -513,34 +524,32 @@ export function DecisionDialog({
                   min={1}
                   max={9999}
                   inputMode="numeric"
-                  aria-label="이의 창 길이"
+                  aria-label={t.decision.dialog.windowLength}
                   aria-invalid={!customOk}
                   value={amount}
                   onChange={(event) => setAmount(event.target.value)}
                 />
                 <select
                   className="text-input"
-                  aria-label="단위"
+                  aria-label={t.decision.dialog.unit}
                   value={per}
                   onChange={(event) => setPer(event.target.value as "hour" | "day")}
                 >
-                  <option value="hour">시간</option>
-                  <option value="day">일</option>
+                  <option value="hour">{t.decision.dialog.hours}</option>
+                  <option value="day">{t.decision.dialog.days}</option>
                 </select>
-                <span>동안</span>
+                <span>{t.decision.dialog.for}</span>
               </div>
             )}
             <p className="help">
-              {win === "now"
-                ? "열자마자 머지해요. 이의를 낼 틈이 없으니 되돌리기 쉬운 것만 고르세요."
-                : `${length} 동안 아무도 이의를 내지 않으면 머지해요. 결정자가 모두 동의하면 더 일찍 머지해요.`}
+              {win === "now" ? t.decision.dialog.nowNote : t.decision.dialog.windowNote(length)}
             </p>
           </fieldset>
         )}
         {!revising && (
           <div className="auto-box">
             <p>
-              <strong>결정자</strong>
+              <strong>{t.decision.dialog.deciders}</strong>
               {[me, ...speakers.filter((s) => s.login !== me.login)].map((s) => (
                 <span key={s.login} className="decider">
                   <Person login={s.login} className="decider-person">
@@ -551,7 +560,7 @@ export function DecisionDialog({
               ))}
             </p>
             <p>
-              <strong>출처</strong>
+              <strong>{t.decision.dialog.source}</strong>
               <a href={`${location.pathname}${location.hash}`}>{title}</a>
             </p>
           </div>
@@ -561,9 +570,7 @@ export function DecisionDialog({
             {failure}
           </p>
         )}
-        <p className="help dialog-note">
-          {owner}의 이름으로 {repo}에 {revising ? "새 커밋을 올려요" : "결정 PR을 열어요"}.
-        </p>
+        <p className="help dialog-note">{t.decision.dialog.note(owner, repo, !!revising)}</p>
         <div className="dialog-actions decision-actions">
           {!revising && (
             <button
@@ -572,14 +579,14 @@ export function DecisionDialog({
               disabled={pending || sending}
               onClick={() => void write()}
             >
-              {everDrafted ? "다시 쓰게 하기" : "초안 쓰게 하기"}
+              {everDrafted ? t.decision.dialog.writeAgain : t.decision.dialog.write}
             </button>
           )}
           <button type="button" className="button quiet" onClick={close}>
-            취소
+            {t.decision.dialog.cancel}
           </button>
           <button type="submit" className="button primary" disabled={!canOpen}>
-            {revising ? "고쳐 올리기" : "결정 PR 열기"}
+            {revising ? t.decision.dialog.revise : t.decision.dialog.open}
           </button>
         </div>
       </form>

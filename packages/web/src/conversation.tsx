@@ -31,6 +31,7 @@ import { useEmojiInput } from "./emoji-input.tsx";
 import { AlertLine } from "./forum.tsx";
 import { GifButton, MessageGif } from "./gif.tsx";
 import { giphyId, giphyUrl } from "./giphy.ts";
+import { language } from "./i18n.ts";
 import type { LiveState } from "./live.ts";
 import { Person } from "./profile-card.tsx";
 import { ReactButton, Reactions } from "./reactions.tsx";
@@ -63,7 +64,7 @@ function dayLabel(iso: string) {
   const days = Math.round((midnight(today) - midnight(date)) / 86_400_000);
   if (days === 0) return "오늘";
   if (days === 1) return "어제";
-  return date.toLocaleDateString("ko-KR", {
+  return date.toLocaleDateString(language, {
     year: date.getFullYear() === today.getFullYear() ? undefined : "numeric",
     month: "long",
     day: "numeric",
@@ -72,9 +73,9 @@ function dayLabel(iso: string) {
 }
 
 export const timeOf = (iso: string) =>
-  new Date(iso).toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit" });
+  new Date(iso).toLocaleTimeString(language, { hour: "numeric", minute: "2-digit" });
 export const fullTime = (iso: string) =>
-  new Date(iso).toLocaleString("ko-KR", { dateStyle: "long", timeStyle: "short" });
+  new Date(iso).toLocaleString(language, { dateStyle: "long", timeStyle: "short" });
 
 /** 채널 머리 띠의 왼쪽: `# 채널 이름`과 멤버 수. 채널의 멤버는 워크스페이스의 멤버 모두다. */
 export function ChannelTitle({ channel, members }: { channel: Channel; members?: number }) {

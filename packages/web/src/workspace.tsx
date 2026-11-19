@@ -82,7 +82,7 @@ import {
   postTitle,
   settled,
 } from "./forum.tsx";
-import { setLanguage } from "./i18n.ts";
+import { setLanguage, t } from "./i18n.ts";
 import { type CreateKind, ForumDialog, LabelsContext, PostLabels } from "./labels.tsx";
 import { useLive } from "./live.ts";
 import { MemberList, MemberSkeleton } from "./members.tsx";
@@ -923,7 +923,7 @@ export function Workspace({
     <button
       type="button"
       className="header-button named debate-button"
-      aria-label={debate ? "토론 보기" : "토론 열기"}
+      aria-label={debate ? t.debate.view : t.debate.open}
       onClick={() => {
         if (!debate) return setDebating({ open: true });
         const strip = document.getElementById(DEBATE_STRIP);
@@ -932,7 +932,7 @@ export function Workspace({
       }}
     >
       <MessagesSquare size={18} aria-hidden />
-      <span>{debate ? "토론 보기" : "토론 열기"}</span>
+      <span>{debate ? t.debate.viewShort : t.debate.openShort}</span>
     </button>
   );
 
@@ -941,11 +941,11 @@ export function Workspace({
     <button
       type="button"
       className="header-button named debate-button"
-      aria-label="결정 정리하기"
+      aria-label={t.debate.writeUp}
       onClick={() => setDeciding({})}
     >
       <PenLine size={18} aria-hidden />
-      <span>결정 정리하기</span>
+      <span>{t.debate.writeUpShort}</span>
     </button>
   );
 
@@ -1114,11 +1114,7 @@ export function Workspace({
                   </div>
                 ) : big && openPost && current ? (
                   <div className="post-title">
-                    <a
-                      className="header-button"
-                      href={`#${current.id}`}
-                      aria-label="포럼으로 돌아가기"
-                    >
+                    <a className="header-button" href={`#${current.id}`} aria-label={t.forum.back}>
                       <ChevronLeft size={18} aria-hidden />
                     </a>
                     <a className="post-crumb" href={`#${current.id}`}>
@@ -1143,7 +1139,7 @@ export function Workspace({
                     <button
                       type="button"
                       className="header-button"
-                      aria-label="포럼 고치기"
+                      aria-label={t.forum.create.edit}
                       onClick={() => forumEditor.current?.showModal()}
                     >
                       <Settings2 size={18} aria-hidden />
