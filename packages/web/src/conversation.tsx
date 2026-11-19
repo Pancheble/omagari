@@ -28,6 +28,7 @@ import { DecisionLine, DecisionStrip } from "./decision.tsx";
 import { QaLine } from "./dm.tsx";
 import { AlertLine } from "./forum.tsx";
 import type { LiveState } from "./live.ts";
+import { Person } from "./profile-card.tsx";
 import { VerdictStrip } from "./verdict.tsx";
 import { Avatar, personName } from "./workspace.tsx";
 
@@ -443,12 +444,16 @@ function Message({
           {timeOf(message.at)}
         </time>
       ) : (
-        <Avatar name={message.name} login={message.login} size={36} />
+        <Person login={message.login} avatar>
+          <Avatar name={message.name} login={message.login} size={36} />
+        </Person>
       )}
       <div className="message-body">
         {!grouped && (
           <p className="message-head">
-            <strong>{personName(message.name, message.login)}</strong>
+            <strong>
+              <Person login={message.login}>{personName(message.name, message.login)}</Person>
+            </strong>
             <time dateTime={message.at} title={fullTime(message.at)}>
               {timeOf(message.at)}
             </time>
