@@ -45,6 +45,14 @@ npm test            # runs the tests
 
 Tests use the framework in `test/harness.ts`. It starts a real server and a real runner on a temporary Git repo, and drives and checks them only through the server API and the input and output of the CLI and hook binaries. If you fix a bug, add a test that catches it.
 
+## Try the UI without a team
+
+Start the demo server. It fakes GitHub and seeds a workspace with members, forums, and conflicts. `DEMO_AGENT=fake` makes your agent answer with canned replies, so it doesn't use your subscription.
+
+```bash
+DEMO_AGENT=fake node test/demo.ts
+```
+
 ## Design docs
 
 We keep decisions in the repo.
