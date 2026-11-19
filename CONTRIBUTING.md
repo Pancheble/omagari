@@ -5,7 +5,7 @@ Omagari에 관심 가져 주셔서 고맙습니다. 무엇을 만드는지와 �
 ## 시작하기
 
 ```bash
-git clone https://github.com/Pancheble/omagari.git
+git clone https://github.com/omagari-dev/omagari.git
 cd omagari
 git config core.hooksPath .githooks
 npm ci

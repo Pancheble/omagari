@@ -30,7 +30,7 @@
 
 ## 집행
 
-행동 강령을 어기는 행동은 이 레포의 관리자 @Pancheble에게 알려 주세요. 공개하기 어려운 내용이면 GitHub의 [비공개 보안 신고](https://github.com/Pancheble/omagari/security/advisories/new)로 보내 주세요. 모든 신고는 신속하고 공정하게 검토됩니다. 신고한 사람의 신원은 필요한 범위를 넘어 공개하지 않습니다.
+행동 강령을 어기는 행동은 이 레포의 관리자 @Pancheble에게 알려 주세요. 공개하기 어려운 내용이면 GitHub의 [비공개 보안 신고](https://github.com/omagari-dev/omagari/security/advisories/new)로 보내 주세요. 모든 신고는 신속하고 공정하게 검토됩니다. 신고한 사람의 신원은 필요한 범위를 넘어 공개하지 않습니다.
 
 관리자는 위반의 심각도에 따라 다음 조치를 취할 수 있습니다.
 
