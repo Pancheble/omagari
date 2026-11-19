@@ -158,6 +158,6 @@ test("멤버가 아닌 사람의 이슈 댓글은 공개로 올라가는 토론 
     asked,
     /<github_comment from="mallory \(mallory\)"[^>]*>\nOUTSIDER-TEXT\n<\/github_comment>/,
   );
-  assert.match(asked, /워크스페이스 멤버가 아닌 사람이 썼을 수 있/);
+  assert.match(asked, /may have been written by someone who isn't a workspace member/);
   assert.doesNotMatch(asked, /<message from="mallory/);
 });

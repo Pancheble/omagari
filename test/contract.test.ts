@@ -45,7 +45,7 @@ function gitBranch() {
     cwd: import.meta.dirname,
     encoding: "utf8",
   }).trim();
-  return branch === "HEAD" ? "이 클론의 브랜치" : branch;
+  return branch === "HEAD" ? "this clone's branch" : branch;
 }
 
 /** 러너인 척 서버에 붙는 날 연결. 계약을 거치지 않고 프레임을 그대로 보낸다. */
@@ -258,7 +258,10 @@ test("러너는 문답만 받는다. 계약에 없는 요청도, 도구를 넓�
   assert.partialDeepStrictEqual(w, {
     kind: "error",
     re: "w",
-    payload: { code: "invalid_message", message: "이 러너가 돌리지 않는 실행기다: codex" },
+    payload: {
+      code: "invalid_message",
+      message: "This is an executor the runner doesn't run: codex",
+    },
   });
   assert.partialDeepStrictEqual(z, { kind: "answer", re: "z", payload: { text: "가짜 답" } });
   // 실행기에 닿은 것은 제대로 된 문답 하나이고, 도구와 폴더는 러너가 정한 것이다.
@@ -279,8 +282,8 @@ test("러너는 계약 버전이 다른 서버를 알아보고 켜지지 않는�
 
 test("러너는 계약 버전이 달라 거절되면 무엇을 올려야 하는지 알린다", async (t) => {
   const advice = {
-    newer: `\`${gitBranch()}\`를 받고(\`git pull\`, \`npm ci\`) 러너를 다시 켜세요`,
-    older: "서버가 더 오래됐어요. 서버를 올려야 해요(서버를 띄운 사람에게 알리세요)",
+    newer: `Pull \`${gitBranch()}\` (\`git pull\`, \`npm ci\`) and turn the runner back on`,
+    older: "The server is older. Update the server (tell whoever runs it)",
   };
   for (const [contract, todo] of [
     [CONTRACT_VERSION + 1, advice.newer],
@@ -308,7 +311,7 @@ test("러너는 계약 버전이 달라 거절되면 무엇을 올려야 하는�
 
     await assert.rejects(startRunner(server.runner), {
       code: "version_mismatch",
-      message: `서버는 v0.3.0, 이 기기는 ${gitVersion()}이에요. ${todo}`,
+      message: `The server is on v0.3.0, and this machine is on ${gitVersion()}. ${todo}`,
     });
     await server.closed;
   }
@@ -328,7 +331,10 @@ test("러너는 서버가 hello를 거절하면 연결을 닫고 켜지지 않�
 test("러너는 hello에 답하지 않는 서버를 끝없이 기다리지 않는다", async (t) => {
   const server = await fakeServer(t, () => {});
 
-  await assert.rejects(startRunner({ ...server.runner, welcomeTimeoutMs: 50 }), /답하지 않았다/);
+  await assert.rejects(
+    startRunner({ ...server.runner, welcomeTimeoutMs: 50 }),
+    /The server didn't answer/,
+  );
   await server.closed;
 });
 

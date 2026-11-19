@@ -1,5 +1,5 @@
-// 직접 충돌: 내 작업과 다른 멤버의 작업이 함께 바꾼 파일을 3-way로 합쳐 보고, 줄이 부딪히는 것을 찾는다(ADR-0023).
-// 조상은 두 작업의 기준 커밋이 갈라진 지점의 판이다. 상대 내용은 서버에서 받아 둔 관측이고, 내 내용은 내 작업 폴더의 지금 파일이다.
+// Direct conflict: tries a 3-way merge on the files my Work and another member's Work both changed, and finds the lines that clash (ADR-0023).
+// The ancestor is the version at the point where the two Works' base commits split. The other side's content is the observation received from the server, and mine is the current file in my work folder.
 import { createHash } from "node:crypto";
 import { lstat, mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -21,8 +21,8 @@ type Pair = Extract<ConflictPair, { kind: "direct" }>;
 type Found = Pair["files"][number] | undefined;
 
 /**
- * 주기마다 Git을 다시 부르지 않게 둔 것. `files`는 같은 입력의 결과이고(키는 조상, 경로, 두 내용의 해시),
- * 이번 계산에서 쓰인 것만 다음으로 넘겨 쌓이지 않는다. `ancestors`는 두 기준 커밋의 갈림점이다. 커밋은 바뀌지 않으니 찾은 것만 둔다.
+ * Kept so Git isn't called again every cycle. `files` holds results for the same input (the key is ancestor, path, and the hashes of both contents),
+ * and only what was used in this calculation is passed on, so nothing piles up. `ancestors` is the split point of two base commits. Commits don't change, so only found ones are kept.
  */
 export type Memo = { files: Map<string, Found>; ancestors: Map<string, string> };
 export const newMemo = (): Memo => ({ files: new Map(), ancestors: new Map() });
@@ -34,9 +34,9 @@ const digest = (...parts: (string | Uint8Array)[]) => {
 };
 
 /**
- * `mine`(이 러너의 작업과 그 폴더)과 `works` 가운데 다른 작업이 함께 바꾼 파일마다 부딪히는지 본다. 같은 작업(`login`의 같은 브랜치)만 건너뛴다.
- * 내 다른 브랜치의 작업도 남의 작업처럼 본다(ADR-0041).
- * 줄이 부딪히거나 상대 내용을 읽을 수 없는 파일이 있는 쌍만 돌려준다. intent인 내 작업은 계산하지 않는다(서버로 경로가 나가지 않는다).
+ * For each file that `mine` (this runner's Work and its folder) and another Work in `works` both changed, checks whether they clash. Only the same Work (same branch of `login`) is skipped.
+ * My other branches' Work is treated like other people's Work (ADR-0041).
+ * Returns only pairs that have clashing lines or a file whose other-side content can't be read. It doesn't calculate for my Work if it's intent (no paths go to the server).
  */
 export async function conflicts(
   repo: string,
@@ -47,7 +47,7 @@ export async function conflicts(
 ): Promise<{ pairs: Pair[]; memo: Memo }> {
   const next: Memo = { files: new Map(), ancestors: memo.ancestors };
   const pairs: Pair[] = [];
-  // 합쳐 볼 파일이 있을 때만 임시 폴더를 만든다. 주기마다 도는 것이라 함께 바꾼 파일이 없으면 Git도 부르지 않는다.
+  // Makes the temp folder only when there are files to merge. This runs every cycle, so if no file was changed by both, it doesn't call Git either.
   let scratch: string | undefined;
   try {
     for (const { work, folder } of mine) {
@@ -92,20 +92,20 @@ export async function conflicts(
   return { pairs, memo: next };
 }
 
-/** 같은 작업: 같은 사람의 같은 브랜치(ADR-0041). 같은 사람이어도 브랜치가 다르면 다른 작업이다. */
+/** Same Work: the same branch of the same person (ADR-0041). Even the same person's different branch is a different Work. */
 export const sameWork = (
   other: { login: string; branch: string },
   login: string,
   branch?: string,
 ) => other.login === login && other.branch === branch;
 
-/** 두 기준 커밋의 갈림점. 상대의 기준 커밋이 이 기기에 없으면 빈 글이다(다음 주기에 다시 본다). */
+/** The split point of two base commits. An empty string if the other side's base commit isn't on this machine (it looks again next cycle). */
 async function ancestorOf(repo: string, mine: string, theirs: string, known: Map<string, string>) {
   const key = `${mine} ${theirs}`;
   const found = known.get(key);
   if (found) return found;
   if (!(await hasCommit(repo, theirs))) return "";
-  // 갈림점이 없는 두 커밋(이어지지 않은 역사)도 합쳐 볼 판이 없다.
+  // Two commits with no split point (unconnected history) have no version to try merging either.
   const ancestor = await gitIn(repo)("merge-base", mine, theirs).then(
     ({ stdout }) => stdout.toString().trim(),
     () => "",
@@ -115,7 +115,7 @@ async function ancestorOf(repo: string, mine: string, theirs: string, known: Map
   return ancestor;
 }
 
-/** 내 작업 폴더의 지금 파일. 없으면(지웠으면) 없음이다. 심볼릭 링크는 Git이 담는 것처럼 가리키는 경로가 내용이다. */
+/** The current file in my work folder. None if it's gone (deleted). A symbolic link's content is the path it points to, as Git stores it. */
 async function readMine(full: string) {
   const stat = await lstat(full).catch(() => undefined);
   if (!stat) return undefined;
@@ -123,8 +123,8 @@ async function readMine(full: string) {
 }
 
 /**
- * 파일 하나를 `git merge-file`로 합쳐 본다. 깨끗하면 없음, 부딪히면 두 사본의 부딪히는 줄이다.
- * 한쪽이 지우고 다른 쪽이 조상과 다르게 고쳤으면 줄 없이 부딪힌다. 합치지 못하는 것(바이너리)은 읽을 수 없는 것으로 둔다.
+ * Tries to merge one file with `git merge-file`. None if it's clean, or the clashing lines of the two copies if it clashes.
+ * If one side deleted it and the other changed it differently from the ancestor, it clashes without lines. What can't be merged (binary) is treated as unreadable.
  */
 async function merge(
   repo: string,
@@ -137,7 +137,7 @@ async function merge(
   const base = await blobAt(repo, ancestor, path);
   if (ours === undefined || theirs === undefined) {
     const kept = ours ?? (theirs === undefined ? undefined : Buffer.from(theirs));
-    // 둘 다 지웠거나, 남은 쪽이 조상 그대로면 부딪히지 않는다.
+    // If both deleted it, or the remaining side is the same as the ancestor, there's no clash.
     if (kept === undefined || Buffer.compare(kept, base) === 0) return undefined;
     return { path, mine: [], theirs: [] };
   }
@@ -147,7 +147,7 @@ async function merge(
     string,
   ];
   await Promise.all([writeFile(o, ours), writeFile(b, base), writeFile(t, theirs)]);
-  // 부딪힌 곳의 수로 끝나고(0이면 깨끗하다), 합치지 못하면 음수(255)로 끝난다.
+  // It exits with the number of clashing places (0 means clean), and with a negative number (255) if it can't merge.
   const code = await gitIn(repo)("merge-file", "-p", "--quiet", o, b, t).then(
     () => 0,
     (error) => (typeof error.code === "number" ? error.code : 255),
@@ -159,10 +159,10 @@ async function merge(
 }
 
 /**
- * `hunks` 가운데 조상의 줄에서 `others`와 겹치거나 맞닿는 것의 줄 범위. Git은 맞닿은 고침도 부딪힘으로 본다.
- * 부딪힘 여부는 `git merge-file`이 정하고, 이것은 어디인지를 적을 뿐이다.
+ * The line range of the ancestor's lines in `hunks` that overlap or touch `others`. Git counts touching edits as a clash too.
+ * Whether they clash is decided by `git merge-file`; this only writes down where.
  */
-// ponytail: 부딪힌 곳의 줄을 두 diff에서 다시 찾는다. merge-file의 출력에서 곧바로 줄을 읽어야 할 만큼 어긋나면 그때 바꾼다.
+// ponytail: finds the clashing lines again in the two diffs. If it drifts so far that lines must be read straight from merge-file's output, change it then.
 function touching(hunks: Hunk[], others: Hunk[]): LineRange[] {
   return hunks
     .filter(({ before: a }) => others.some(({ before: b }) => a.from <= b.to && b.from <= a.to))
@@ -171,7 +171,7 @@ function touching(hunks: Hunk[], others: Hunk[]): LineRange[] {
 
 type SymbolPair = Extract<ConflictPair, { kind: "indirect" | "duplicate" | "declared" }>;
 
-/** 작업의 바뀐 파일들에서 `changes`인 정의 줄을 이름마다 모은 곳. */
+/** Where the definition lines that are `changes` in a Work's changed files are collected, per name. */
 function defined(work: Work | WorkView, changes: Definition["change"][]) {
   const found = new Map<string, SymbolPlace[]>();
   for (const file of work.files) {
@@ -187,12 +187,12 @@ function defined(work: Work | WorkView, changes: Definition["change"][]) {
 }
 
 /**
- * 정의 줄 위의 추정 부딪힘(ADR-0023, ADR-0026). `mine`(이 러너의 작업과 그 폴더)과 `works` 가운데 같은 작업이 아닌 것마다 본다(ADR-0041).
- * - 간접 충돌(추정): 상대가 정의 줄을 바꾸거나 없앤 심볼을 내 작업의 사본에서 이름으로 찾는다. 쓰는 곳이 있으면 싣는다.
- *   반대 방향(내가 바꾼 것을 상대가 쓰는 것)은 상대 러너가 자기 사본으로 계산한다.
- * - 중복 구현: 두 작업에 같은 이름의 새 정의가 생겼다. 내 정의 줄은 내용을 올리는 수준(full)에서만 있어, 그때만 계산한다(ADR-0026).
- * - 선언된 계약 변경: 다른 작업의 선점에 붙은 계획(`claims`)의 심볼을 내 작업의 사본에서 이름으로 찾는다. 코드가 아직 바뀌지 않았어도 싣는다.
- * intent인 내 작업은 계산하지 않는다(서버로 경로가 나가지 않는다). 심볼이 하나라도 있는 쌍과 종류만 돌려준다.
+ * Estimated clashes on definition lines (ADR-0023, ADR-0026). Checks `mine` (this runner's Work and its folder) against each Work in `works` that isn't the same Work (ADR-0041).
+ * - Indirect conflict (estimated): finds, by name in my Work's copy, a symbol whose definition line the other side changed or removed. If it's used, it's included.
+ *   The opposite direction (the other side using what I changed) is calculated by the other runner on its own copy.
+ * - Duplicate work: a new definition with the same name appeared in both Works. My definition lines exist only at the level that uploads content (full), so it's calculated only then (ADR-0026).
+ * - Declared Contract change: finds, by name in my Work's copy, a symbol in the plan attached to another Work's Claim (`claims`). It's included even if the code hasn't changed yet.
+ * If my Work is intent, it doesn't calculate (no paths go to the server). It returns only pairs and kinds that have at least one symbol.
  */
 export async function symbolConflicts(
   mine: { work: Work; folder: string }[],
@@ -210,7 +210,7 @@ export async function symbolConflicts(
       defs: defined(theirs, ["changed", "removed"]),
     }));
     const planned = claims.filter((c) => !sameWork(c, login, work.branch) && c.plan);
-    // 내 사본은 한 번만 읽는다: 상대들이 바꾼 이름과 계획한 이름을 모두 모아 찾는다.
+    // Reads my copy once: collects all the names the others changed and planned, and looks them up.
     const used = await uses(folder, [
       ...new Set([
         ...changing.flatMap(({ defs }) => [...defs.keys()]),
@@ -231,7 +231,7 @@ export async function symbolConflicts(
       });
       if (duplicate.length > 0) pairs.push({ kind: "duplicate", ...ends, symbols: duplicate });
     }
-    // 계획은 선점마다 있다. 같은 상대 작업의 것을 한 쌍으로 묶는다.
+    // A plan exists for each Claim. Plans from the same other Work are grouped into one pair.
     const declared = new Map<string, SymbolPair>();
     for (const c of planned) {
       const plan = c.plan;

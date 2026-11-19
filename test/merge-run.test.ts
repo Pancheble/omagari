@@ -194,8 +194,8 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo "pay
   assert.equal(fake.calls.length, 0);
   await alertWith(world.owner, "carol");
   // 알림이 처음 들어간 것은 넘겨 둔다. 판정이 나면 다시 들어오는지 본다.
-  const OWNER_SEES = `- 간접 충돌(추정): 내 작업과 bob의 브랜치 "currency"`;
-  const BOB_SEES = `- 간접 충돌(추정): 내 작업과 owner의 브랜치 "payment"`;
+  const OWNER_SEES = `- Indirect conflict (estimated): my Work and bob's branch "currency"`;
+  const BOB_SEES = `- Indirect conflict (estimated): my Work and owner's branch "payment"`;
   await receives(world, folder, OWNER_SEES);
   await receives(world, bob.desk.folder, BOB_SEES);
 
@@ -246,7 +246,7 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo "pay
     assert.ok(line, "깨짐 판정이 든 소식이 오지 않았다");
     assert.match(
       line,
-      /· 합쳐 돌려 본 판정: 깨짐\(돌린 멤버 owner, 검사 명령 "sh check\.sh", \d+초\)\. 출력 끝: "bob\.ts\\ncommitted\.ts\\ndraft\.ts\\npay\.ts\\nuse\.ts\\npay\(1\)에 currency가 빠졌다"$/,
+      /· Merge run verdict: 깨짐 \(run by member owner, check command "sh check\.sh", \d+s\)\. End of output: "bob\.ts\\ncommitted\.ts\\ndraft\.ts\\npay\.ts\\nuse\.ts\\npay\(1\)에 currency가 빠졌다"$/,
     );
   });
   await receives(world, bob.desk.folder, BOB_SEES);
@@ -287,10 +287,10 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo "pay
   const log = (await world.cli("runner", "log")).stdout;
   assert.match(
     log,
-    /검사 명령 "sh check\.sh" {2}합쳐 돌려 보기 payment \+ bob의 currency {2}폴더 .+ {2}판정 깨짐 /,
+    /check command "sh check\.sh" {2}merge run payment \+ currency of bob {2}folder .+ {2}verdict 깨짐 /,
   );
-  assert.match(log, /합쳐 돌려 보기 payment \+ carol의 reason {2}폴더 .+ {2}판정 통과 /);
-  assert.match(log, /합쳐 돌려 보기 payment \+ bob의 currency {2}폴더 .+ {2}판정 통과 /);
+  assert.match(log, /merge run payment \+ reason of carol {2}folder .+ {2}verdict 통과 /);
+  assert.match(log, /merge run payment \+ currency of bob {2}folder .+ {2}verdict 통과 /);
 
   // 지표: 오늘 돌려 본 것은 넷이다. bob의 깨짐, carol의 통과, owner가 고친 뒤 다시 돌린 carol과 bob의 통과. 돌려 보는 중과 다시 올린 것(같은 지문)은 세지 않는다.
   await world.signInCli(world.owner);
@@ -299,7 +299,7 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo "pay
   const [header, today] = shown.stdout.trimEnd().split("\n");
   assert.equal(
     header,
-    "날짜(Asia/Seoul)  들어온 멤버  문답  돌려 봄  통과  깨짐  가릴 수 없음  돌리지 못함  토론 열림  끝남(실험)  끝남(근거)  끝남(사람)  끝남(만료)  결정 PR",
+    "Date (Asia/Seoul)  Members joined  Q&As  Merge runs  통과  깨짐  가릴 수 없음  돌리지 못함  Debates opened  Ended (experiment)  Ended (evidence)  Ended (human)  Ended (expired)  Decision PRs",
   );
   assert.match(
     today ?? "",
@@ -331,7 +331,7 @@ test("검사 명령이 없거나 샌드박스를 쓸 수 없거나 줄이 부딪
   // 기본 브랜치에 검사 명령이 없다.
   await alertWith(world.owner, "bob", (a) => {
     assert.equal(a.run?.verdict, "not_run");
-    assert.match(a.run?.reason ?? "", /기본 브랜치\(origin\/main\)에 \.omagari\.json이 없다/);
+    assert.match(a.run?.reason ?? "", /The default branch \(origin\/main\) has no \.omagari\.json/);
   });
 
   // 검사 명령이 머지되면 다시 돈다. 샌드박스를 쓸 수 없으면 가두지 않고 돌리지 않는다.
@@ -372,7 +372,7 @@ test("검사 명령이 없거나 샌드박스를 쓸 수 없거나 줄이 부딪
   );
   await alertWith(world.owner, "bob", (a) => {
     assert.equal(a.run?.verdict, "not_run");
-    assert.equal(a.run?.reason, "줄이 부딪혀 합쳐지지 않는다: src/pay.ts");
+    assert.equal(a.run?.reason, "Lines conflict, so it can't merge: src/pay.ts");
   });
   assert.equal(fake.calls.length, 4);
 });
@@ -470,7 +470,7 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
   assert.equal(mine.confirmed, false);
   assert.equal(fake.calls.length, 3);
   // 소켓 막기로 깨졌으므로 까닭이 붙는다(#163). 소켓과 상관없이 깨진 bob의 것에는 붙지 않는다.
-  assert.match(mine.run?.reason ?? "", /이 기기\(Linux\)에서는 샌드박스가 유닉스 소켓을 막는다/);
+  assert.match(mine.run?.reason ?? "", /On this machine \(Linux\) the sandbox blocks Unix sockets/);
 
   // bob의 작업이 혼자서도 깨진다: 가릴 수 없음이고 그쪽이 적힌다.
   await rm(join(folder, "src/owner-oops"));
@@ -545,8 +545,16 @@ if grep -q currency src/pay.ts && grep -qs "pay(1)" src/draft.ts; then echo 합�
   const withBob = async () =>
     (await indirect(world.owner)).filter((a) => a.works.some((w) => w.login === "bob")).length;
   assert.equal(await withBob(), 1);
-  await receives(world, folder, `- 풀렸다: 내 작업과 bob의 브랜치 "currency"`);
-  await receives(world, bob.desk.folder, `- 풀렸다: 내 작업과 owner의 브랜치 "payment"`);
+  await receives(
+    world,
+    folder,
+    `- Resolved: my Work and bob's branch "currency"'s 간접 충돌(추정)`,
+  );
+  await receives(
+    world,
+    bob.desk.folder,
+    `- Resolved: my Work and owner's branch "payment"'s 간접 충돌(추정)`,
+  );
   await eventually(async () => {
     assert.equal(await brokenMark(world, "owner", "payment"), false);
     assert.equal(await brokenMark(world, "bob", "currency"), false);

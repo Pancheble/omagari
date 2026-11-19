@@ -50,6 +50,16 @@ colors:
   dark-selected: "#ffffff14"
   dark-selected-solid: "#353537"
   dark-warning: "#ffb340"
+  dark-warning-bg: "#ffb34024"
+  dark-error: "#ff6961"
+  dark-error-bg: "#ff453a24"
+  dark-hover: "#ffffff0d"
+  dark-divider: "#ffffff1a"
+  dark-tile: "#48484a"
+  dark-overlay: "#0000008a"
+  dark-online: "#30d158"
+  dark-away: "#ffd60a"
+  dark-dnd: "#ff453a"
 
 typography:
   hero-display:
@@ -1052,7 +1062,7 @@ These subsections were decided on 2026-11-11 in issue #17, after looking at the 
 | Typeface        | IBM Plex Sans KR; IBM Plex Mono for code. Korean letter-spacing 0                                                                                                           |
 | Message         | List style, 15px body                                                                                                                                                       |
 | Q&A             | A collapsed single line and a bordered card                                                                                                                                 |
-| Dark mode       | Only the color values are set; stage 1 screens ship light mode only                                                                                                         |
+| Dark mode       | Light, dark, or follow the system (the default), per person. The dark screen swaps the color values (stage 6, draft 108-A)                                                  |
 
 ## Colors
 
@@ -1106,21 +1116,30 @@ These subsections were decided on 2026-11-11 in issue #17, after looking at the 
 
 ### Dark mode
 
-Dark mode color values are set as `dark-*` tokens. Stage 1 screens ship light mode only; dark mode that follows the system setting is put off until later.
+The whole web app has a dark screen (2026-11-19 draft 108-A. We didn't pick 108-B, a deeper black like Apple's system dark, or 108-C, a softer gray). Which one shows is the "Appearance" setting ("Settings window"); the default follows the system. The dark screen is the light screen with the CSS color variables swapped, so components don't get their own dark rules. The table maps each light value to its dark value.
 
-| Role              | Light                       | Dark                                   |
-| ----------------- | --------------------------- | -------------------------------------- |
-| Window background | `{colors.canvas}`           | `{colors.dark-window}` #1d1d1f         |
-| Panel             | `{colors.canvas-parchment}` | `{colors.dark-panel}` #272729          |
-| Input             | `{colors.canvas}`           | `{colors.dark-field}` #2a2a2c          |
-| Chip              | `{colors.chip}`             | `{colors.dark-chip}` #3a3a3c           |
-| Text              | `{colors.ink}`              | `{colors.dark-text}` #ffffff           |
-| Secondary text    | `{colors.text-secondary}`   | `{colors.dark-text-secondary}` #a1a1a6 |
-| Line              | `{colors.hairline}`         | `{colors.dark-line}` (white 14%)       |
-| Selected row      | `{colors.selected}`         | `{colors.dark-selected}` (white 8%)    |
-| Warning text      | `{colors.warning}`          | `{colors.dark-warning}` #ffb340        |
+| Role                                    | Light                       | Dark                                                              |
+| --------------------------------------- | --------------------------- | ----------------------------------------------------------------- |
+| Window background (`--canvas`)          | `{colors.canvas}`           | `{colors.dark-window}` #1d1d1f                                    |
+| Panel (`--parchment`)                   | `{colors.canvas-parchment}` | `{colors.dark-panel}` #272729                                     |
+| Input                                   | `{colors.canvas}`           | `{colors.dark-field}` #2a2a2c                                     |
+| Chip (`--chip`)                         | `{colors.chip}`             | `{colors.dark-chip}` #3a3a3c                                      |
+| Text (`--ink`)                          | `{colors.ink}`              | `{colors.dark-text}` #ffffff                                      |
+| Secondary text                          | `{colors.text-secondary}`   | `{colors.dark-text-secondary}` #a1a1a6                            |
+| Line (`--hairline`)                     | `{colors.hairline}`         | `{colors.dark-line}` (white 14%)                                  |
+| Divider                                 | `{colors.divider}`          | `{colors.dark-divider}` (white 10%)                               |
+| Hover row                               | `{colors.hover}`            | `{colors.dark-hover}` (white 5%)                                  |
+| Selected row                            | `{colors.selected}`         | `{colors.dark-selected}` (white 8%)                               |
+| Selected row, solid                     | `{colors.selected-solid}`   | `{colors.dark-selected-solid}` #353537                            |
+| Workspace mark and dark tile (`--tile`) | `{colors.surface-tile-1}`   | `{colors.dark-tile}` #48484a                                      |
+| Warning text / background               | `{colors.warning}` / `-bg`  | `{colors.dark-warning}` / `{colors.dark-warning-bg}`              |
+| Error text / background                 | `{colors.error}` / `-bg`    | `{colors.dark-error}` / `{colors.dark-error-bg}`                  |
+| Presence: online, away, do not disturb  | `online`, `away`, `dnd`     | `{colors.dark-online}`, `{colors.dark-away}`, `{colors.dark-dnd}` |
+| Overlay behind dialogs                  | `{colors.overlay}`          | `{colors.dark-overlay}` (black 54%)                               |
 
-Accent icons on a dark background use `{colors.primary-on-dark}`. That blue doesn't reach 4.5:1 as small text, so text like the name in a selected row stays white and only the icon turns blue.
+- **Accent**: links, accent icons, and accent text ("View history ›") use `{colors.primary-on-dark}` #2997ff (4.9:1 on the panel, 5.6:1 on the window). On a selected row it drops under 4.5:1, so the name in a selected row stays white and only the icon turns blue. Filled blue things with white on them (the default button, a switch that's on, a checked box) use `{colors.primary-focus}` #0071e3 instead (white on it is 4.7:1).
+- **Labels** (2026-11-19 draft 109-A. We didn't pick 109-B, which tints the whole badge like GitHub's dark theme, or 109-C, which keeps the color and adds a white ring): the label color is still only on the dot. On the dark screen, keep the dot's hue and saturation and raise its HSL lightness 1% at a time until the dot is at least 3:1 against `{colors.dark-panel}`. Colors that already pass stay as they are (`#fbca04`, `#c5def5`). For example `#b60205` gets lighter. The person still sets one color, and the label editor's color field shows the color they set, not the computed one.
+- Text on badges, banners, and settings rows has to reach 4.5:1 (WCAG AA) with these values. #312 checks it on the main screens.
 
 ## Typography
 
@@ -1800,10 +1819,12 @@ On a post with an evidence label ("Confirmed", "Contract change"), the owner age
 
 A window opened from "Settings" in the status menu (2026-11-13 draft 16-B, like macOS System Settings). We add items when we need them.
 
+One window holds both personal settings and workspace settings, as two groups in the left list (2026-11-19 draft 106-A, like Slack's preferences. We didn't pick 106-B, which opens workspace settings as a separate window from the workspace name menu like Discord's server settings, or 106-C, which puts Me / Workspace tabs over the list). Discord splits them because server settings are for admins. In Omagari every member can change labels, so there's no reason to open them somewhere else. Personal settings are saved on the server per member and follow you to your other devices. Only the browser's notification permission is per browser.
+
 - **`app-settings-window`** 980×676px (widened from 820×580px for the label item's two columns, 2026-11-17), `{rounded.lg}`, a back cover of `{colors.overlay}`, `role="dialog"` and `aria-modal`. It closes with Esc, pressing the cover, or the 32px close button (×) at the top right.
 - **Left list** (220px, parchment, 1px line on the right, 16px 10px padding): at the very top, my 36px avatar and name ("Name (login)", with no separate GitHub ID line). Under that, group titles (12px/600 secondary) and `{component.app-settings-item}` rows (36px tall, an 18px icon and a 15px name, `{colors.hover}` on hover, the picked row gets `{colors.selected}` and 600 weight, `aria-current`).
-  - "Me": My agent
-  - "Workspace · omagari": Conflict alerts, Labels (18px Lucide `tag`)
+  - "Me" (나): My agent (Lucide `bot`), Language (언어, `languages`), Appearance (모양, `palette`), Notifications (알림, `bell`)
+  - "Workspace · omagari" (워크스페이스 · omagari): Merge run (합쳐 돌려 보기, `git-merge`), Labels (라벨, `tag`), Info (정보, `info`). "Merge run" was called "Conflict alerts" (부딪힘 알림) until its "Workspace" group moved to "Info" and merge run was all that was left.
 - **Right side**: parchment background, padding 4px 28px 28px. At the top, the picked item's name (`{typography.app-title}`). The implementation sits right under the 4px top padding at 24px tall, and the first group title follows right under it (we meant to space it with a 60px row, but we leave it as is to match the implementation, 2026-11-16 @Pancheble #139 review). 24px between groups.
   - A group title (13px/600 secondary, padding 0 16px 6px), `{component.app-settings-group}` (white background, `{rounded.md}`, 1px line), and under that a description (12px secondary, padding 6px 16px 0).
   - `{component.app-settings-row}` (min height 52px, padding 10px 16px, 1px line between rows): on the left a name (15px) and a description (13px secondary), on the right the control (switch, picker button, link, badge).
@@ -1811,19 +1832,44 @@ A window opened from "Settings" in the status menu (2026-11-13 draft 16-B, like 
 - **My agent**:
   - "When others ask": an "Answer other people's questions" switch (on by default, ADR-0024). The description is, when on, "When another member's agent asks, my agent reads my folder and answers.", and when off, "It's off. Whoever asks hears "not accepting" right away." The next row is "What my agent answered" (description "3 times in the last 7 days · the last was calcRefund(), asked by Minsu's Codex", on the right "View history ›" in the accent color). Under the group: "When answering, the runner on my machine only reads my folder, and my usage is used."
   - "Connected agents": one row per agent. The agent mark, the name, "This machine · runner on", and on the right a "Connected" outline badge. For an agent whose runner is off, the mark is dimmed to 50%, "The runner is off", and on the right "Off" (12px secondary).
-- **Conflict alerts**:
+- **Language** (#303): one group "Language" with a "Screen language" row (description "Dates and times show in this language too.") and an "English / 한국어" picker button on the right. Under the group: "It always starts in English. The language you pick follows you to your other devices." (ADR-0045)
+- **Appearance** (2026-11-19 draft 107-A. We didn't pick 107-B, one row with a three-way segmented control, or 107-C, three radio rows): one group "Appearance" holding three cards side by side, 12px apart, as a `radiogroup`. Each card has a 96px picture of the app (a list panel and a conversation panel drawn with bars, rounded 8px) and under it a radio and the name: "Light" (밝게), "Dark" (어둡게), "Match system" (시스템 따라, the default). The picture uses that look's own colors, and "Match system" is cut diagonally, light on the top left and dark on the bottom right. A card is `{colors.canvas}` with a 1px line, `{rounded.md}`, 10px padding. The picked card gets a 2px `{colors.primary}` line. Under the group: "Match system: your computer is light right now, so it's light. It follows right away when you change your computer. The look you pick follows you to your other devices." (the middle sentence names the look the system has now). Slack (light, dark, system) and Discord (theme swatches) pick looks from pictures like this too.
+- **Notifications** (2026-11-19 draft 110-C. We didn't pick 110-A, a switch per kind with conflicts split into two rows, or 110-B, a permission banner and checkboxes): browser notifications for work that's waiting on me (`docs/stage6-questions.md` Q9).
+  - Group "Browser notifications" (브라우저 알림): one row "Get notifications in this browser" (이 브라우저에서 알림 받기), description "Your browser asks once when you turn it on." and a switch. This switch is per browser, and turning it on is the only moment we ask the browser for permission.
+  - Group "What to notify me about" (알려 줄 것): not a `{component.app-settings-group}` but one card per kind, 10px apart (`{colors.canvas}`, 1px line, `{rounded.md}`, padding 14px 16px). In a card: the name and description on the left, a switch on the right, and under them a small preview of the notification that kind sends (`{colors.selected}` box, `{rounded.sm}` 10px, padding 8px 10px, a 20px Omagari mark, the title at 12px/600 and the body at 12px secondary). The three kinds and their defaults:
+    1. "Conflicts on my work" (내 작업의 부딪힘), description "When another member touches what I'm editing", on. Under the description, a segmented control "Discuss only / FYI too" (논의만 / 참고도), default "Discuss only". Conflicts whose label importance is FYI only notify when "FYI too" is picked.
+    2. "Answers to what I asked" (내가 물은 것의 답), description "When what I asked in a DM or with an @call gets an answer", on.
+    3. "Decisions and debates I'm in" (내가 낄 결정과 토론), description "When a decision I decide on is proposed, or a debate needs my agent's stance", on.
+  - Under the cards: "Notifications don't show while you're on Do not disturb or looking at the Omagari tab."
+  - When the cards don't fit, the right side scrolls, as for any item.
+  - **States** (draft 111, the same whatever the layout):
+    - Not asked yet: the switch is off. Pressing it calls the browser's permission prompt (the browser draws it). Allow turns the switch on. Block goes to the next state.
+    - Blocked by the browser: the switch is disabled at 40%, its description is "Your browser blocked it, so it can't turn on.", and under the group a `{component.app-banner-warning}`-colored note with a 16px `lock`: "Your browser blocked notifications. Change it to Allow from the lock on the left of the address bar → Notifications." Omagari can't ask again (a browser rule), so it only tells you the way. The kind settings stay as they were.
+    - Do not disturb: at the top of the item, a `{colors.selected}` note with a 16px `circle-minus`: "You're on Do not disturb, so notifications don't show. It ends in 1 hour." and on the right "Turn off now" (underlined, 600). When Do not disturb ends, the note goes away, and what happened in the meantime isn't sent as a burst of notifications (only the unread dots show it).
+  - **The notification** (2026-11-19 draft 112-A. We didn't pick 112-B, who did it as the title, or 112-C, where it happened as the title): the title says what happened, the body says who and where. The OS draws it, so only the title and body are ours. Pressing it goes to that post or DM.
+
+    | Kind     | English title / body                                                        | 한국어 제목 / 본문                                                               |
+    | -------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+    | Conflict | "Conflict on your work" / "Minsu's Claude Code is also editing refund.ts"   | "내 작업에 부딪힘이 생겼어요" / "민수의 Claude Code도 refund.ts를 고치고 있어요" |
+    | Answer   | "Your question got an answer" / "Jieun's Codex: It clamps at 0 since #212." | "물어본 것에 답이 왔어요" / "지은의 Codex: #212부터 0 아래로는 안 내려가요."     |
+    | Decision | "Your call is needed" / "Decision: Send refund mail from a queue"           | "결정이 필요해요" / "결정: 환불 메일을 큐로 보내기"                              |
+
+    A debate that needs my agent's stance uses the decision title with the body "Debate: <agenda>" ("토론: <안건>").
+- **Merge run** (formerly "Conflict alerts"):
   - "Forum to post alerts to" is gone (ADR-0039). You create and edit forums on the forum screen ("Create a forum" and the filter row under "Conflict forum").
   - "Merge run" (2026-11-13 draft 30-C. We didn't pick 30-A, which makes a new item, or 30-B, which puts it under My agent): the item's first group. It has no switch. You turn it on and off from the runner, not the web (ADR-0034).
     - "Check command" row: description "The command that runs on the merged result.", on the right the command (13px monospace secondary text, read only). If the repo has no config file, the description is "The repo has no config file. Once you merge one, it starts running.", and on the right "How to set one ›" (accent color).
     - "Run on my runner" row: when on, the description is "It's on. It only runs inside the sandbox." and a "On" outline badge. If you turned it off, "It's off. Verdicts that other members' runners ran still show." and "Off" (12px secondary). If there's no sandbox tool, "This machine has no sandbox tool, so it doesn't run." and "How to install ›" (accent color). If the runner is off, "The runner is off." and "Off".
     - "How to set one" is how to merge `.omagari.json` (`{"check": "<check command>", "setup": "<setup command>"}`) into the default branch, and the way to turn a runner you switched off back on is `omagari runner --merge-check on` (ADR-0034).
     - Description under the group: "It reads from the config file on the repo's default branch. To change it, edit that file and merge it. It's the same for every member. Turning it on and off happens on the runner, not the web, so the server can't decide what runs on my machine."
-  - "Workspace": name and repo (13px monospace), read only.
+- **Info** (정보): read only.
+  - "Workspace" group: "Name" and "Repo" rows, values on the right in 13px monospace secondary (moved here from "Conflict alerts").
+  - "This server" group: "Version" (the server's version tag, monospace) and "Source code" (description "The source this server runs.", on the right the source URL with a 13px `external-link` in the accent color). The URL is the server's `OMAGARI_SOURCE_URL` (#325, AGPL section 13).
 - **Labels** (2026-11-17 draft 51-D4. We didn't pick 51-A, a one-line list, 51-B, two groups for Discuss and FYI, 51-C, where rows expand, 51-E, editing right in the row, 51-F, where expanding shows importance only, or 51-G, which turns the whole settings window into a screen): a 230px list on the left, an edit pane on the right, 20px apart. A label is the repo's GitHub label, and importance exists only in Omagari (ADR-0039).
   - **Left**: at the top, a "Find a label" field (32px tall, white background, 1px line, 14px magnifier) and a 32px `+` button ("New label"). Under that, a `{component.app-settings-item}` row per label: a 10px color dot, the name, and importance at the end of the row ("Discuss" is `{component.app-importance-discuss}`, "FYI" is `{component.app-badge-outline}`). The picked row gets `{colors.selected}` and 600 weight.
   - **Right**: a 1px `{colors.divider}` vertical line on the left, 20px padding on the left inside. From the top:
     1. "Here's how it looks in a post" (`{colors.selected}` box, `{rounded.md}`): the post title and issue number, then the kind badge, this label's `{component.app-label-badge}`, and the importance mark.
-    2. The name field and color on one row. The color is a 20px color dot, a six-digit hex field with a `#` in front (monospace), and a 32px "Pick another color" button (Lucide `refresh-cw`). Like GitHub, you set just one color. The dark-mode color is computed from it (the same way GitHub takes label colors as `--label-r/g/b/h/s/l` and computes them per theme. The formula is in Known Gaps).
+    2. The name field and color on one row. The color is a 20px color dot, a six-digit hex field with a `#` in front (monospace), and a 32px "Pick another color" button (Lucide `refresh-cw`). Like GitHub, you set just one color. The dark-mode color is computed from it (the formula is under "Dark mode" in Colors).
     3. A description field.
     4. Importance: two radio cards side by side (white background, 1px line, `{rounded.md}`, padding 12px, the picked card gets an accent-color line). "FYI · Stacks up as alerts. Doesn't open an issue." and "Discuss · People look at it and talk it through. Opens a GitHub issue once attached." Under that, "Changing to Discuss opens issues on the 3 open posts with this label." (12px secondary).
     5. At the bottom right, "Reset" (outline) and "Save" (blue background). The name, color, and description also change on the GitHub label, and importance is the same for every member.
@@ -1994,7 +2040,7 @@ The structural breakpoints that matter for agents: 1440px (content lock), 1068px
 
 ## Known Gaps
 
-- Dark-mode counterparts for store and accessories utility cards were not surfaced on the analyzed pages. The app's dark values are set as `dark-*` tokens, but stage 1 ships light mode only.
+- Dark-mode counterparts for store and accessories utility cards were not surfaced on the analyzed pages. The app's dark values are the `dark-*` tokens ("Dark mode" in Colors).
 - The homepage's embedded video/player frame uses `{colors.surface-black}`; interior player controls are not documented (they're a platform widget, not a web-design token).
 - Some component imagery is dynamic (rotating product hero) and its specific copy varies per surface — component specs name the structure, not the rotating content.
 - Atmospheric photography (environment page mountain vista) is a content asset, not a design token; the documented `{component.environment-quote-card}` describes the structural surface only.
@@ -2002,7 +2048,8 @@ The structural breakpoints that matter for agents: 1440px (content lock), 1068px
 - App: the forum filter draft (53-D, 52) lets you add labels to a group ("All labels whose importance is Discuss") and has "Status" in the filter row. The contract's `ForumFilter` is either one importance or one list of labels, and has no status, so #194 fit the screen to it without widening the contract: turning a group on means you can't pick labels separately (they're locked), and the status chip lives only on the viewer's screen, not in the forum's filter (starts as "Open"). We didn't add "+ Filter" because there's no condition to add. If we want to use groups and labels together, we widen `ForumFilter`.
 - App: the drafts have no place to edit and delete a forum, so #194 put a "Edit forum" (Lucide `settings-2`) button in the forum header band, and it opens the same dialog as "Create a forum" (titled "Edit forum", with "Delete forum" at the bottom left, which needs a second press to delete). "Other posts" hides the row when it has 0. For a new label, the `+` in the label item clears the right pane and changes it to "Create". A save failure shows an error text under the right pane. We didn't re-check these three against a draft.
 - App: "Posts that involve me" in the channel panel can't use the people who spoke in a post, because the contract doesn't have them. We take it as posts with an alert that touches my work and a last message, or posts where my message is in the conversation I've read on this screen. We miss messages I wrote long ago in a post I haven't opened.
-- App: we haven't set the formula for changing label colors on the dark screen. Like stage 1, we only ship the light screen. We also haven't drawn the narrow screens for the stage 4 drafts (51–55).
+- App: we haven't drawn the narrow screens for the stage 4 drafts (51–55).
+- App: what the stage 6 settings drafts (106–112) didn't draw: the settings window on a narrow screen, how notifications look while the Omagari tab is open in another window, and the debate notification (we wrote its body above without a draft).
 - App: we haven't drawn a separate narrow-screen verdict strip, and it wraps lines like the decision status strip. The merge run's config file is `.omagari.json` (`check`, `setup`) as drafted, and the option to turn it off on the runner is `omagari runner --merge-check off` (ADR-0034, #127).
 - App: the preview of conflicting lines in the forum's card view comes later (2026-11-13 @Pancheble dropped it from stage 2). The alert only has line numbers, and to carry the line content, the runner needs a contract change that sends content at the share level (ADR-0007). The card view isn't the default view either. The spec for when we add it: top of the card, 12px monospace, line height 1.55, padding 14px 16px. For a direct conflict, two people's lines in `{colors.warning}` on a `{colors.warning-bg}` background, and for a definition line change, two -/+ lines on a `{colors.selected}` background.
 - App: things we didn't draw in the debate (2026-11-17 drafts 56–60): the auto-join switch (a row in the settings window next to the ask switch, ADR-0024), stance cards in the expanded view and on narrow screens, the dark screen, the look of an expanded experiment patch and output, how the conversation looks on a post whose debate ended after 14 days, what happens when starting a stand-in fails, and a mark in the forum list and sidebar that points at a post in debate. Also, an option's owner and the stand-in mark are covered like a spoiler while picking (draft 61). Read the implementation doc's chapter 7, which only says "a stand-in mark goes on a statement", in line with this.

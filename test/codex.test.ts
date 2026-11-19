@@ -80,6 +80,7 @@ test("Codex에게 물으면 러너가 codex exec를 읽기 전용으로 화면 �
     first?.input ?? "",
     /<channel_messages channel="결제">\n<message from="owner \(owner\)" at="[^"]+">\n결제는 payment\.ts에 있다\n<\/message>\n<\/channel_messages>\n\n결제는 어디서\?$/,
   );
+  assert.match(first?.input ?? "", /Answer in the language the question was asked in\./);
   assert.doesNotMatch(second?.input ?? "", /payment\.ts/);
   assert.match(
     second?.input ?? "",
@@ -115,7 +116,7 @@ test("Codex의 턴이 실패하면 문답이 그 이유로 실패하고, 다음 
     state: "failed",
     error: {
       code: "executor_failed",
-      message: "Codex가 답하지 못했다(종료 코드 1): 사용량 한도에 걸렸다",
+      message: "Codex couldn't answer (exit code 1): 사용량 한도에 걸렸다",
     },
   });
   assert.partialDeepStrictEqual((await ask("다시")).answer, {
@@ -140,7 +141,7 @@ test("러너는 codex가 깔려 있고 로그인했을 때만 Codex 에이전트
 
   const out = world.launchCliIn(desk.folder, "runner");
   t.after(() => out.stop("SIGKILL"));
-  await out.output(/에이전트: Claude Code\n/);
+  await out.output(/Agents: Claude Code\n/);
   assert.deepEqual(await agentsOf(world, "alice"), [{ executor: "claude-code", state: "online" }]);
   await out.stop();
 
@@ -148,7 +149,7 @@ test("러너는 codex가 깔려 있고 로그인했을 때만 Codex 에이전트
   await writer(world.codex)("auth.json", "{}");
   const signedIn = world.launchCliIn(desk.folder, "runner");
   t.after(() => signedIn.stop("SIGKILL"));
-  await signedIn.output(/에이전트: Claude Code, Codex\n/);
+  await signedIn.output(/Agents: Claude Code, Codex\n/);
   await eventually(async () =>
     assert.deepEqual(await agentsOf(world, "alice"), [
       { executor: "claude-code", state: "online" },
@@ -232,9 +233,11 @@ test("omagari install이 Codex에도 두 훅과 상태 한 줄 스킬을 깔고 
   const [, codexLine, ...more] = installed.stdout.trimEnd().split("\n");
   assert.deepEqual(more, []);
   assert.ok(
-    codexLine?.startsWith(`Codex: ${hooksFile}에 세션 시작 훅과 편집 전 훅을, ${skillFile}에`),
+    codexLine?.startsWith(
+      `Codex: installed the session-start and pre-edit hooks in ${hooksFile} and the status line skill in ${skillFile}`,
+    ),
   );
-  assert.match(codexLine ?? "", /Codex에서 \/hooks를 열어 두 훅을 신뢰해야 돈다/);
+  assert.match(codexLine ?? "", /Open \/hooks in Codex and trust both hooks for them to run/);
   assert.equal(
     await readFile(skillFile, "utf8"),
     await readFile(join(world.claude, "skills", "omagari-status", "SKILL.md"), "utf8"),
@@ -268,7 +271,7 @@ test("omagari install이 Codex에도 두 훅과 상태 한 줄 스킬을 깔고 
   const folder = world.repo.folder;
   const situation = await eventually(async () => {
     const said = await runInstalled(world, start ?? "", codexInput.sessionStart(folder));
-    assert.match(said, /<omagari-situation>\n- alice · 브랜치 "main" · "pay\.ts 수정 중"/);
+    assert.match(said, /<omagari-situation>\n- alice · branch "main" · "pay\.ts 수정 중"/);
     return said;
   });
   assert.equal(await runInstalled(world, claudeStart, claudeInput.sessionStart(folder)), situation);
@@ -277,7 +280,10 @@ test("omagari install이 Codex에도 두 훅과 상태 한 줄 스킬을 깔고 
     edit ?? "",
     codexInput.applyPatch(folder, patch("*** Update File: pay.ts", "@@", "-pay", "+pay()")),
   );
-  assert.match(nearby, /^Omagari: 고치려는 파일 "pay\.ts"을 다른 작업도 바꾸고 있다/);
+  assert.match(
+    nearby,
+    /^Omagari: other Work is also changing the file you're about to edit, "pay\.ts"/,
+  );
   const claudeEdit = claude.PreToolUse.at(-1).hooks[0].command;
   assert.equal(await runInstalled(world, claudeEdit, claudeInput.edit(folder, "pay.ts")), nearby);
 
@@ -309,7 +315,11 @@ test("Codex의 패치 하나가 여러 파일을 고치면 파일마다 근처 �
     return stdout === "" ? "" : JSON.parse(stdout).hookSpecificOutput.additionalContext;
   };
   const files = (context: string) =>
-    [...context.matchAll(/^Omagari: 고치려는 파일 "([^"]+)"/gm)].map(([, path]) => path);
+    [
+      ...context.matchAll(
+        /^Omagari: other Work is also changing the file you're about to edit, "([^"]+)"/gm,
+      ),
+    ].map(([, path]) => path);
 
   const body = patch(
     "*** Update File: pay.ts",

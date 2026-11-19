@@ -1,5 +1,5 @@
-// 정의 줄과 쓰는 곳: tree-sitter로 TypeScript, TSX, JavaScript 파일을 읽는다(ADR-0026). 다른 언어는 읽지 않는다(없음을 돌려준다).
-// 정의 줄은 이름 붙은 심볼(함수, 메서드, 클래스, 타입)을 선언하는 줄이다(GLOSSARY). 본문은 정의 줄이 아니다.
+// Definition lines and usages: reads TypeScript, TSX, and JavaScript files with tree-sitter (ADR-0026). Other languages aren't read (it returns none).
+// A definition line is the line that declares a named symbol (function, method, class, type) (GLOSSARY). The body isn't a definition line.
 import { createRequire } from "node:module";
 import { dirname, extname, join } from "node:path";
 import type { Definition } from "@omagari/contract";
@@ -22,14 +22,14 @@ const wasm = dirname(createRequire(import.meta.url).resolve("@vscode/tree-sitter
 let loaded: Promise<typeof TreeSitter> | undefined;
 const languages = new Map<string, Promise<TreeSitter.Language>>();
 
-/** 읽을 수 있는 언어의 파일인가. */
+/** Whether the file is in a language it can read. */
 export const parsable = (path: string) => extname(path).toLowerCase() in GRAMMARS;
 
-/** `path`의 언어로 `content`를 읽어 `use`에 넘긴다. 읽을 수 없는 언어면 없음이다. 나무는 쓰고 나서 바로 푼다(wasm 메모리). */
+/** Reads `content` in the language of `path` and passes it to `use`. None if the language can't be read. The tree is freed right after use (wasm memory). */
 async function parse<T>(path: string, content: string, use: (root: Node) => T) {
   const grammar = GRAMMARS[extname(path).toLowerCase()];
   if (!grammar) return;
-  // 훅처럼 파싱하지 않는 쪽이 러너를 가져올 때 파서를 읽지 않게, 처음 파싱할 때 가져온다.
+  // Import the parser at the first parse, so a side that doesn't parse, like the hook, doesn't load the parser when it imports the runner.
   loaded ??= import("@vscode/tree-sitter-wasm").then(async ({ default: ts }) => {
     await ts.Parser.init();
     return ts;
@@ -55,7 +55,7 @@ async function parse<T>(path: string, content: string, use: (root: Node) => T) {
   }
 }
 
-/** 찾은 정의. `end`는 그 선언이 끝나는 줄(몸 포함)이다. */
+/** A found definition. `end` is the line where the declaration ends (body included). */
 type Found = Omit<Definition, "change"> & { text: string; at: number; end: number };
 
 const FUNCTIONS = new Set([
@@ -65,7 +65,7 @@ const FUNCTIONS = new Set([
 ]);
 const CLASSES = new Set(["class_declaration", "abstract_class_declaration"]);
 const METHODS = new Set(["method_definition", "method_signature", "abstract_method_signature"]);
-/** 몸 전체가 계약인 것: 정의 줄이 그 선언 전체다. */
+/** Cases where the whole body is the Contract: the definition line is the whole declaration. */
 const STRUCTURES: Record<string, Definition["kind"]> = {
   interface_declaration: "interface",
   type_alias_declaration: "type",
@@ -73,7 +73,7 @@ const STRUCTURES: Record<string, Definition["kind"]> = {
 };
 const VALUES = new Set(["arrow_function", "function_expression", "generator_function"]);
 
-/** `from`에서 `body` 앞까지(몸이 없으면 끝까지)의 글. 공백은 하나로 접는다. */
+/** The text from `from` up to `body` (or to the end if there's no body). Whitespace is collapsed to one. */
 const header = (from: Node, body: Node | null | undefined, end: Node = from) =>
   from.text
     .slice(0, (body ?? end).startIndex - from.startIndex + (body ? 0 : end.text.length))
@@ -81,8 +81,8 @@ const header = (from: Node, body: Node | null | undefined, end: Node = from) =>
     .trim();
 
 /**
- * 파일의 맨 위(내보낸 것 포함)에 선언된 정의와, 그 클래스의 메서드. 함수 안의 함수는 계약이 아니라 뺀다.
- * 변수는 함수를 담은 것만 함수로 본다. 메서드의 이름은 `클래스.메서드`다.
+ * Definitions declared at the top level of the file (exports included), and the methods of those classes. A function inside a function isn't a Contract, so it's left out.
+ * A variable counts as a function only if it holds a function. A method's name is `Class.method`.
  */
 function declared(root: Node) {
   const found: Found[] = [];
@@ -135,19 +135,19 @@ function declared(root: Node) {
   return found;
 }
 
-/** 파일의 정의 줄. 읽을 수 없는 언어면 없음이다. */
+/** The file's definition lines. None if the language can't be read. */
 export const definitions = (path: string, content: string) => parse(path, content, declared);
 
 /**
- * 기준 커밋의 판(`before`, 없던 파일이면 "")과 지금 판(`after`, 지운 파일이면 없음)의 정의 줄을 견준다.
- * 지금 있는 정의는 모두 싣고, 새로 생긴 것은 `added`, 정의 줄이 달라진 것은 `changed`다. 본문만 바뀐 것은 표시가 없다.
- * 없어진 정의는 `removed`이고 줄은 기준 커밋의 판의 것이다. 읽을 수 없는 언어면 없음이다.
+ * Compares the definition lines of the base commit's version (`before`, "" if the file didn't exist) and the current version (`after`, none if the file was deleted).
+ * It includes every definition that exists now. New ones are `added` and ones whose definition line changed are `changed`. A body-only change gets no mark.
+ * A definition that's gone is `removed`, and its line is from the base commit's version. None if the language can't be read.
  */
 export async function compare(path: string, before: string, after: string | undefined) {
   const old = await definitions(path, before);
   const now = after === undefined ? [] : await definitions(path, after);
   if (!old || !now) return;
-  // 겹쳐 쓴 이름(오버로드)은 한 이름의 정의 줄을 모두 합쳐 견준다.
+  // Overloaded names are compared by merging all the definition lines of that one name.
   const texts = (found: Found[]) => {
     const map = new Map<string, string>();
     for (const d of found)
@@ -169,8 +169,8 @@ export async function compare(path: string, before: string, after: string | unde
 }
 
 /**
- * 파일에서 `symbol`의 정의가 차지하는 줄 범위(선언과 몸). 겹쳐 쓴 이름(오버로드)은 모두 덮는다.
- * 읽을 수 없는 언어거나 그 이름의 정의가 없으면 없음이다.
+ * The line range a definition of `symbol` takes up in the file (declaration and body). For overloaded names, it covers all of them.
+ * None if the language can't be read or there's no definition with that name.
  */
 export async function symbolRange(path: string, content: string, symbol: string) {
   const found = (await parse(path, content, declared))?.filter((d) => named(d.name, symbol));
@@ -181,7 +181,7 @@ export async function symbolRange(path: string, content: string, symbol: string)
   };
 }
 
-/** 이름이 `symbol`인 정의인가. 메서드는 `클래스.메서드`로도 메서드 이름만으로도 찾는다. */
+/** Whether the definition has the name `symbol`. A method is found by `Class.method` or by the method name alone. */
 export const named = (name: string, symbol: string) =>
   name === symbol || name.endsWith(`.${symbol}`);
 
@@ -193,8 +193,8 @@ const IDENTIFIERS = [
 ];
 
 /**
- * 파일에서 `symbol`(메서드면 `.` 뒤의 이름)을 쓰는 줄. 이름으로만 잇는다: 같은 이름의 다른 심볼도 잡힌다.
- * 그 이름을 정의하는 자리는 뺀다. 읽을 수 없는 언어면 없음이다.
+ * The lines in the file that use `symbol` (for a method, the name after the `.`). It links by name only: another symbol with the same name is caught too.
+ * It leaves out the place that defines that name. None if the language can't be read.
  */
 export function usesIn(path: string, content: string, symbol: string) {
   const name = symbol.slice(symbol.lastIndexOf(".") + 1);

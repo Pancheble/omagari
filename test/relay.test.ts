@@ -196,7 +196,7 @@ test("한 턴이 시간 상한을 넘으면 끊고 끊긴 답으로 남긴다. �
   });
   assert.match(
     (await world.cli("runner", "log")).stdout,
-    /받은 것 "끝없이" {2}실패: 한 턴이 .+분을 넘어 끊었다\n/,
+    /received "끝없이" {2}failed: The turn went over .+ minutes and was cut off\n/,
   );
 });
 

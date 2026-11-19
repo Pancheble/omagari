@@ -66,7 +66,12 @@ test("omagari install 하나로 Claude Code에 두 훅과 상태 한 줄 스킬�
   const installed = await world.cli("install");
   assert.equal(installed.code, 0, installed.stderr);
   const skillFile = join(world.claude, "skills", "omagari-status", "SKILL.md");
-  assert.ok(installed.stdout.startsWith(`Claude Code: ${settingsFile(world)}에`), installed.stdout);
+  assert.ok(
+    installed.stdout.startsWith(
+      `Claude Code: installed the session-start and pre-edit hooks in ${settingsFile(world)}`,
+    ),
+    installed.stdout,
+  );
   assert.ok(installed.stdout.includes(skillFile), installed.stdout);
 
   // 새 세션의 Claude Code가 읽는 설정. 세션 시작은 어떻게 시작했든(비우기와 컴팩트도) 걸리고, 편집 전 훅은 파일을 고치는 도구와 셸 명령에만 걸린다.
@@ -84,14 +89,14 @@ test("omagari install 하나로 Claude Code에 두 훅과 상태 한 줄 스킬�
   await eventually(async () =>
     assert.match(
       await runInstalled(world, startCommand, sessionStartInput(world.repo.folder), "SessionStart"),
-      /<omagari-situation>\n- alice · 브랜치 "main" · "pay\.ts 수정 중" \(바뀐 파일로 만든 줄\)\n<\/omagari-situation>/,
+      /<omagari-situation>\n- alice · branch "main" · "pay\.ts 수정 중" \(made from the changed files\)\n<\/omagari-situation>/,
     ),
   );
   const [editCommand] = matching(settings, "PreToolUse", "Edit");
   assert.ok(editCommand);
   assert.match(
     await runInstalled(world, editCommand, editInput(world.repo.folder, "pay.ts"), "PreToolUse"),
-    /^Omagari: 고치려는 파일 "pay\.ts"을 다른 작업도 바꾸고 있다[\s\S]*<omagari-nearby>\n- alice · 브랜치 "main" · /,
+    /^Omagari: other Work is also changing the file you're about to edit, "pay\.ts"[\s\S]*<omagari-nearby>\n- alice · branch "main" · /,
   );
 
   // 스킬의 설명은 늘 에이전트의 맥락에 있고, 본문은 에이전트가 스킬을 쓸 때 읽는다.
@@ -101,23 +106,23 @@ test("omagari install 하나로 Claude Code에 두 훅과 상태 한 줄 스킬�
   const description = /^description: (.+)$/m.exec(frontmatter)?.[1] ?? "";
   for (const said of [
     "omagari status set",
-    "시작할 때",
-    "방향이 바뀔 때",
-    "끝낼 때",
-    `"끝: "`,
-    "omagari status`로 본다",
+    "when you start work",
+    "when your direction changes",
+    "when you finish",
+    `"Done: "`,
+    "`omagari status`",
     "omagari ask",
     "omagari wait",
   ]) {
     assert.ok(description.includes(said), `설명에 ${said}가 없다: ${description}`);
   }
-  assert.match(body, /\*\*끝낼 때\*\*: `끝: <요약>`으로 쓴다/);
-  assert.match(body, /^omagari status set "끝: .+"$/m);
+  assert.match(body, /\*\*When you finish\*\*: write `Done: <summary>`/);
+  assert.match(body, /^omagari status set "Done: .+"$/m);
   // 묻기와 기다리기: 언제 묻고 언제 기다리는지, 답 없음은 답이나 승인이 아니다.
-  assert.match(body, /^## 묻기와 기다리기$/m);
-  assert.match(body, /\*\*언제 묻나\*\*/);
-  assert.match(body, /\*\*언제 기다리나\*\*/);
-  assert.match(body, /답이나 승인으로 치지 않는다/);
+  assert.match(body, /^## Asking and waiting$/m);
+  assert.match(body, /\*\*When to ask\*\*/);
+  assert.match(body, /\*\*When to wait\*\*/);
+  assert.match(body, /It doesn't count as an answer or an approval/);
   assert.match(body, /^omagari ask \S+ ".+"$/m);
   assert.match(body, /^omagari wait \d+$/m);
 });
@@ -194,7 +199,7 @@ test("읽을 수 없는 설정 파일은 건드리지 않고 멈춘다", async (
     await writeFile(settingsFile(world), broken);
     const { code, stderr } = await world.cli("install");
     assert.equal(code, 1, broken);
-    assert.ok(stderr.startsWith(`${settingsFile(world)}을 건드리지 않았다: `), stderr);
+    assert.ok(stderr.startsWith(`Did not touch ${settingsFile(world)}: `), stderr);
     assert.equal(await readFile(settingsFile(world), "utf8"), broken);
   }
 });
