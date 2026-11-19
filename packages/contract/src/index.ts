@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** Contract version. Sent in every envelope; a different one is rejected. Bump it on every breaking change. */
-export const CONTRACT_VERSION = 54;
+export const CONTRACT_VERSION = 55;
 
 /** Error shape. Shared by the runner/server `error` message and the HTTP error body (`{ error }`). */
 export const ContractError = z.strictObject({
@@ -188,6 +188,12 @@ export type ModelPick = z.infer<typeof ModelPick>;
 export const Replying = z.strictObject({
   replyTo: z.number().int().optional(),
   notify: z.boolean().default(true),
+  /**
+   * Sent as a reply in a thread (ADR-0047): the thread's original message. Only a channel message that isn't itself in a thread.
+   * `alsoInChannel` also shows the reply in the channel ("Also send to # channel").
+   */
+  threadOf: z.number().int().optional(),
+  alsoInChannel: z.boolean().default(false),
 });
 
 /**
@@ -982,6 +988,31 @@ export const ReplyTo = z.strictObject({
 });
 export type ReplyTo = z.infer<typeof ReplyTo>;
 
+/** The thread a reply sits in (ADR-0047): the original message's number and how it looks now (like `ReplyTo.original`). */
+export const ThreadOf = z.strictObject({ id: z.number(), original: ReplyTo.shape.original });
+export type ThreadOf = z.infer<typeof ThreadOf>;
+
+/**
+ * The thread under a channel message (DESIGN.md "Reply, thread, and quote", draft 114-A): how many replies, up to three people who wrote in it
+ * (latest first), and when the last reply came. Missing while the message has no thread.
+ */
+export const ThreadSummary = z.strictObject({
+  count: z.number().int(),
+  writers: z.array(z.strictObject({ login: z.string(), name: z.string() })).max(3),
+  last: z.string(),
+});
+export type ThreadSummary = z.infer<typeof ThreadSummary>;
+
+/** What text and Q&A messages share about threads. A reply in a thread shows in the channel only with `alsoInChannel`. */
+const Threaded = {
+  /** For a reply in a thread, the thread's original message. */
+  threadOf: ThreadOf.optional(),
+  /** A reply in a thread that also shows in the channel. */
+  alsoInChannel: z.literal(true).optional(),
+  /** The thread under this message. Changes come again with the same `id` on the live connection. */
+  thread: ThreadSummary.optional(),
+};
+
 /**
  * One item stacked in a channel. `id` is a number that only grows across the whole workspace, so it is both the order within a channel and
  * the place to resume from when the live connection reconnects (`after` in `webToServer.hello`).
@@ -1004,6 +1035,7 @@ export const ChannelMessage = z.discriminatedUnion("kind", [
     reactions: z.array(Reaction),
     /** For a reply, its original message. Comments that came in from GitHub are never replies. */
     replyTo: ReplyTo.optional(),
+    ...Threaded,
   }),
   /**
    * A public Q&A: a DM or `@mention` posted to the channel. The question and answer are always together. `login` and `name` are the owner (who posted it) of that agent,
@@ -1023,6 +1055,8 @@ export const ChannelMessage = z.discriminatedUnion("kind", [
     reactions: z.array(Reaction),
     /** If the `@mention` was made inside a reply, the original message. It goes to the agent along with the question. */
     replyTo: ReplyTo.optional(),
+    /** An `@mention` in a thread answers in that thread. */
+    ...Threaded,
   }),
   /**
    * An alert Omagari posted. It has no author. When the alert is updated or resolved or the post's message count changes, the one with the same `id` arrives again on the live connection.
@@ -1297,6 +1331,8 @@ export const serverToRunner = {
     recent: z.array(ChannelMessage).max(CHANNEL_CONTEXT),
     /** If the `@mention` was made inside a reply, the original message (ADR-0047). The runner wraps it as data, not instructions, like channel conversation, and puts it before the question. */
     replyTo: ChannelMessage.optional(),
+    /** If the `@mention` was made in a thread, the thread: its original message, then its replies, oldest first (ADR-0047). Wrapped as data like `replyTo`. */
+    thread: z.array(ChannelMessage).max(CHANNEL_CONTEXT).optional(),
     ...ModelPick.shape,
   }),
   /**
@@ -1874,6 +1910,7 @@ export const api = {
    * If that agent's runner is off, it doesn't queue and is `runner_offline` right away. If the channel doesn't exist, `not_found`.
    * `model` and `effort` are the picks, and "default" if missing. The server passes them to the runner as is, and if they aren't among the choices, the runner fails the Q&A.
    * `replyTo` is only for a public `@mention` and is refused like in `send`. The original message goes to the runner as a `> **login**` quote before the question (ADR-0047).
+   * `threadOf` is also only for a public `@mention` and is refused like in `send`. The thread goes to the runner with the question, and the answer stands in the thread.
    */
   ask: {
     method: "POST",
@@ -2250,7 +2287,12 @@ export const api = {
   history: {
     method: "POST",
     path: "/api/channels/history",
-    body: z.strictObject({ channel: z.string(), before: z.number().optional() }),
+    body: z.strictObject({
+      channel: z.string(),
+      before: z.number().optional(),
+      /** Read one thread instead (ADR-0047): its original message and its replies. Without it, the channel's messages; a reply in a thread shows only with `alsoInChannel`. */
+      thread: z.number().int().optional(),
+    }),
     response: z.strictObject({ messages: z.array(ChannelMessage) }),
   },
   /**
@@ -2258,6 +2300,8 @@ export const api = {
    * You can't write in a forum (`invalid_request`). Same for DMs and `@mentions` (`api.ask`).
    * If `replyTo` isn't a message a person wrote in this channel or post (one elsewhere, a missing one, an alert or decision line), it's `invalid_request`.
    * A reply in a post puts the original message in the head of the GitHub issue comment (without `@`, ADR-0047).
+   * `threadOf` must be a person's message in this chat channel that isn't itself in a thread; otherwise `invalid_request` (posts and DMs have no threads, and threads don't nest).
+   * A reply in a thread can't also be a `replyTo` reply. The original message comes again with its new `thread` summary on the live connection.
    */
   send: {
     method: "POST",
