@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
-import { eventually, startWorld, tempRepo, writer } from "./harness.ts";
+import { eventually, startWorld, tempRepo, textOf, writer } from "./harness.ts";
 
 // Starts and stops the runner five times with the CLI. Observation is sent right on attach, so it doesn't wait for the interval (3s), but there are many steps, so the time limit is extended.
 test("the owner picks a share level per runner and it stays after turning on again. The default is full, declared uploads paths only, intent uploads the work only, and lowering it takes the uploaded content off the server", {
@@ -49,10 +49,11 @@ test("the owner picks a share level per runner and it stays after turning on aga
           .filter((work) => work.login === "alice")
           .map((work) => ({
             ...work,
-            line: work.line && {
-              source: work.line.source,
-              text: work.line.text,
-            },
+            line:
+              work.line &&
+              (work.line.source === "files"
+                ? work.line
+                : { source: work.line.source, text: work.line.text }),
           })),
         [
           {
@@ -84,7 +85,7 @@ test("the owner picks a share level per runner and it stays after turning on aga
       { path: "gone.ts", deleted: true },
       { path: "image.png", omitted: "binary" },
     ],
-    { source: "files", text: "Editing committed.ts and 3 more" },
+    { source: "files", file: "committed.ts", more: 3 },
   );
   let { stdout } = await runner.stop();
   assert.match(stdout, /Observation \(share level full\)/);
@@ -99,7 +100,8 @@ test("the owner picks a share level per runner and it stays after turning on aga
   ];
   await observed("declared", declared, {
     source: "files",
-    text: "Editing committed.ts and 3 more",
+    file: "committed.ts",
+    more: 3,
   });
   ({ stdout } = await runner.stop());
   assert.match(
@@ -111,10 +113,7 @@ test("the owner picks a share level per runner and it stays after turning on aga
   await write("later.ts", "Content written while off\n");
   runner = await launch();
   const later = [...declared, { path: "later.ts", omitted: "share" }];
-  await observed("declared", later, {
-    source: "files",
-    text: "Editing committed.ts and 4 more",
-  });
+  await observed("declared", later, { source: "files", file: "committed.ts", more: 4 });
   const fixing = await setStatus("Fixing the payment flow");
   await observed("declared", later, fixing);
   ({ stdout } = await runner.stop());

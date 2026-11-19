@@ -228,10 +228,10 @@ test("omagari install also installs two hooks and a one-line status skill for Co
   const hooksFile = join(world.codex, "hooks.json");
   const skillFile = join(world.codex, "skills", "omagari-status", "SKILL.md");
 
-  const installed = await world.cli("install");
+  const installed = await world.setup();
   assert.equal(installed.code, 0, installed.stderr);
-  const [, codexLine, ...more] = installed.stdout.trimEnd().split("\n");
-  assert.deepEqual(more, []);
+  const [, codexLine] = installed.stdout.split("\n");
+  assert.match(installed.stdout, /Open \/hooks in Codex and trust the two Omagari hooks/);
   assert.ok(
     codexLine?.startsWith(
       `Codex: installed the session-start and pre-edit hooks in ${hooksFile} and the status line skill in ${skillFile}`,
@@ -289,7 +289,7 @@ test("omagari install also installs two hooks and a one-line status skill for Co
 
   // Even after installing again, only one remains.
   const first = await readFile(hooksFile, "utf8");
-  assert.equal((await world.cli("install")).code, 0);
+  assert.equal((await world.setup()).code, 0);
   assert.equal(await readFile(hooksFile, "utf8"), first);
 });
 

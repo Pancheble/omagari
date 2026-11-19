@@ -67,7 +67,7 @@ test("one omagari install sets up the two hooks and the status-line skill in Cla
   t.after(desk.remove);
   await writer(desk.folder)("pay.ts", "pay\n");
 
-  const installed = await world.cli("install");
+  const installed = await world.setup();
   assert.equal(installed.code, 0, installed.stderr);
   const skillFile = join(world.claude, "skills", "omagari-status", "SKILL.md");
   assert.ok(
@@ -156,7 +156,7 @@ test("existing settings and hooks stay as they are and only the Omagari hook is 
   await mkdir(world.claude, { recursive: true });
   await writeFile(settingsFile(world), JSON.stringify(seed, null, 2));
 
-  assert.equal((await world.cli("install")).code, 0);
+  assert.equal((await world.setup()).code, 0);
   const first = await readFile(settingsFile(world), "utf8");
   const { SessionStart = [], PreToolUse = [], ...others } = (await readSettings(world)).hooks;
   // What was there stays. Only the old Omagari hook is gone (a group holding only that goes whole).
@@ -187,7 +187,7 @@ test("existing settings and hooks stay as they are and only the Omagari hook is 
   assert.deepEqual(SessionStart.at(-1), { hooks: [ours] });
   assert.deepEqual(PreToolUse.at(-1), { matcher: EDIT_MATCHER, hooks: [ours] });
 
-  assert.equal((await world.cli("install")).code, 0);
+  assert.equal((await world.setup()).code, 0);
   assert.equal(
     await readFile(settingsFile(world), "utf8"),
     first,
@@ -205,7 +205,7 @@ test("an unreadable settings file is left alone and the install stops", async (t
     "[]",
   ]) {
     await writeFile(settingsFile(world), broken);
-    const { code, stderr } = await world.cli("install");
+    const { code, stderr } = await world.setup();
     assert.equal(code, 1, broken);
     assert.ok(stderr.startsWith(`Did not touch ${settingsFile(world)}: `), stderr);
     assert.equal(await readFile(settingsFile(world), "utf8"), broken);
@@ -218,7 +218,7 @@ test("hooks run in every repo on this machine, but in a Git repo that never ran 
   const other = await tempRepo();
   t.after(other.remove);
   await writer(other.folder)("pay.ts", "pay\n");
-  assert.equal((await world.cli("install")).code, 0);
+  assert.equal((await world.setup()).code, 0);
   const settings = await readSettings(world);
 
   const runs = [
@@ -237,4 +237,62 @@ test("hooks run in every repo on this machine, but in a Git repo that never ran 
     assert.deepEqual(result, { code: 0, stdout: "", stderr: "" });
   }
   await assert.rejects(access(join(other.folder, ".git", "omagari")));
+});
+
+test("omagari setup <address> logs in on a clean home, installs the hooks and keeps the address, so status reaches that server even without OMAGARI_SERVER", async (t) => {
+  const world = await startWorld();
+  t.after(world.stop);
+  world.github.grant("alice");
+
+  const bare = world.launchBare("setup", `${world.server.url}/`);
+  t.after(() => bare.stop("SIGKILL"));
+  const [, code] = await bare.output(/enter code (\S+)/);
+  world.github.approve(code, "alice");
+  const done = await bare.exited;
+  assert.equal(done.code, 0, done.stderr);
+  assert.match(done.stdout, /Logged in as alice/);
+  assert.match(done.stdout, /Open \/hooks in Codex and trust the two Omagari hooks/);
+  assert.equal((await readSettings(world)).hooks.SessionStart?.length, 1);
+
+  const status = await world.cliBare("status");
+  assert.equal(status.code, 0, status.stderr);
+  assert.match(status.stdout, /alice|owner/);
+
+  // Once more: nothing changes, it doesn't log in again, and there is one hook.
+  const before = await readFile(settingsFile(world), "utf8");
+  const again = await world.cliBare("setup");
+  assert.equal(again.code, 0, again.stderr);
+  assert.doesNotMatch(again.stdout, /GitHub login/);
+  assert.equal(await readFile(settingsFile(world), "utf8"), before);
+});
+
+test("omagari uninstall removes the hooks and skills and puts the agent config back to before setup, and only --sign-out deletes the session", async (t) => {
+  const world = await startWorld();
+  t.after(world.stop);
+  await mkdir(world.claude, { recursive: true });
+  const seed = JSON.stringify(
+    {
+      theme: "dark",
+      hooks: { PreToolUse: [{ matcher: "Edit", hooks: [{ type: "command", command: "lint" }] }] },
+    },
+    null,
+    2,
+  );
+  await writeFile(settingsFile(world), `${seed}\n`);
+
+  assert.equal((await world.setup()).code, 0);
+  assert.notEqual(await readFile(settingsFile(world), "utf8"), `${seed}\n`);
+
+  const removed = await world.cli("uninstall");
+  assert.equal(removed.code, 0, removed.stderr);
+  assert.equal(await readFile(settingsFile(world), "utf8"), `${seed}\n`);
+  await assert.rejects(access(join(world.claude, "skills", "omagari-status")));
+  // Codex, which had no config file, is left with no file either.
+  await assert.rejects(access(join(world.codex, "hooks.json")));
+  const sessions = join(world.config, "omagari", "sessions.json");
+  assert.ok((await readFile(sessions, "utf8")).includes(world.server.url));
+
+  const out = await world.cli("uninstall", "--sign-out");
+  assert.equal(out.code, 0, out.stderr);
+  assert.ok(!(await readFile(sessions, "utf8")).includes(world.server.url));
 });

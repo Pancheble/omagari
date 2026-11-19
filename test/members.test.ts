@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { api, call } from "@omagari/contract";
-import { eventually, fakeExecutor, place, startWorld, writer } from "./harness.ts";
+import { eventually, fakeExecutor, place, startWorld, textOf, writer } from "./harness.ts";
 
 /** That of an executor (fake) that doesn't report anything to choose from. What to choose from is checked by model.test. */
 const none = { models: [], efforts: [] };
@@ -35,8 +35,10 @@ test("the member list shows each person's name, each executor's agent, and one s
   // Wait not for the number of works but until both works' lines have arrived.
   await eventually(async () =>
     assert.deepEqual(
-      (await aliceOf())?.works.map((work) => work.line?.text),
-      ["wiring up payment", "Editing refund.ts"],
+      (await aliceOf())?.works.map(
+        (work) => work.line && ("text" in work.line ? work.line.text : work.line.file),
+      ),
+      ["wiring up payment", "refund.ts"],
     ),
   );
 
@@ -80,7 +82,7 @@ test("the member list shows each person's name, each executor's agent, and one s
       {
         branch: "refund",
         executor: null, // only observation, and never sent a hook or status set (ADR-0015)
-        line: { source: "files", text: "Editing refund.ts" },
+        line: { source: "files", file: "refund.ts", more: 0 },
         conflict: false,
         broken: false,
       },
@@ -97,10 +99,13 @@ test("the member list shows each person's name, each executor's agent, and one s
   assert.ok(Date.parse(offline?.offlineSince as string) >= stopped);
   assert.deepEqual(offline?.agents, [{ executor: "claude-code", state: "offline", choices: none }]);
   assert.deepEqual(
-    offline?.works.map((work) => [work.branch, work.line?.text]),
+    offline?.works.map((work) => [
+      work.branch,
+      work.line && ("text" in work.line ? work.line.text : work.line.file),
+    ]),
     [
       ["payment", "wiring up payment"],
-      ["refund", "Editing refund.ts"],
+      ["refund", "refund.ts"],
     ],
   );
 
@@ -140,12 +145,11 @@ test("the web gets the member list right away over the live connection, and foll
   await world.signInCli(world.owner);
   assert.match((await world.cli("status")).stdout, /owner · .*\n {2}no Work/);
   await writer(world.repo.folder)("payment.ts", "pay\n");
-  await eventually(() => assert.equal(owner()?.works[0]?.line?.text, "Editing payment.ts"));
-  await call(world.owner, api.setStatus, {
-    branch: "payment",
-    text: "wiring up payment",
-  });
-  await eventually(() => assert.equal(owner()?.works[0]?.line?.text, "wiring up payment"));
+  await eventually(() =>
+    assert.deepEqual(owner()?.works[0]?.line, { source: "files", file: "payment.ts", more: 0 }),
+  );
+  await call(world.owner, api.setStatus, { branch: "payment", text: "wiring up payment" });
+  await eventually(() => assert.equal(textOf(owner()?.works[0]?.line), "wiring up payment"));
 
   // While answering a Q&A, it is answering.
   const channel = await world.channel(world.owner);

@@ -279,6 +279,13 @@ await say(
   pay,
   "> **minsu**\n> A partial refund seems like it would break.\n\nRight, it won't match the receipt amount either.",
 );
+// Thread (#345): replies under minsu's webhook message, and one also sent to the channel.
+for (const [as, text, alsoInChannel] of [
+  [hajun.as, "Does the retry interval use exponential backoff?", false],
+  [minsu.as, "Yes, up to five tries.", false],
+  [seoyeon.as, "Please make the backoff cap a setting.", true],
+] as const)
+  await call(as, api.send, { channel: pay, text, threadOf: webhookOnly.id, alsoInChannel });
 
 // Collisions: the same line (direct conflict), where a function with a changed definition line is used (indirect conflict), a new definition with the same name (duplicate work), a plan attached to a claim (declared contract change).
 await own("src/config.ts", line3("owner"));

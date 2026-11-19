@@ -58,12 +58,26 @@ export const ko: Words = {
     pages: {
       agent: "내 에이전트",
       language: "언어",
+      appearance: "모양",
+      notifications: "알림",
       alerts: "합쳐 돌려 보기",
       labels: "라벨",
+      info: "정보",
     },
     language: {
+      title: "언어",
       name: "화면 언어",
-      description: "나에게만 바뀌어요. 다른 멤버는 그대로예요.",
+      description: "날짜와 시간도 이 언어로 보여요.",
+      note: "처음엔 늘 영어로 시작해요. 고른 언어는 다른 기기에서도 그대로예요.",
+    },
+    appearance: { soon: "밝게·어둡게 모양은 곧 나와요." },
+    notifications: { soon: "브라우저 알림은 곧 나와요." },
+    info: {
+      workspace: "워크스페이스",
+      name: "이름",
+      repo: "레포",
+      server: "이 서버",
+      version: "버전",
     },
     agent: {
       whenAsked: "남이 물을 때",
@@ -84,9 +98,6 @@ export const ko: Words = {
       noneHint: "이 기기에서 러너를 켜면 여기 보여요.",
     },
     alerts: {
-      workspace: "워크스페이스",
-      name: "이름",
-      repo: "레포",
       mergeRun: "합쳐 돌려 보기",
       mergeRunNote:
         "레포 기본 브랜치의 설정 파일에서 읽어요. 바꾸려면 그 파일을 고쳐 머지하세요. 모든 멤버에게 같아요. 켜고 끄는 것은 웹이 아니라 러너에서 해요. 서버가 내 기기에서 돌릴 것을 정하지 못하게 하려는 거예요.",

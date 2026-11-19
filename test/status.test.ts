@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { api, call } from "@omagari/contract";
-import { eventually, startWorld } from "./harness.ts";
+import { eventually, startWorld, textOf } from "./harness.ts";
 
 /** Runs observation and GitHub reads on a short cycle. With the defaults (3 seconds, 1 minute) every step would wait a long time. */
 const FAST = { observeMs: 50, followMs: 50 };
@@ -74,7 +74,7 @@ test("the visible line is picked in this order: offline, a line the agent wrote,
   for (const path of ["payment.ts", "src/cart.ts", "src/order.ts", "test/payment.test.ts"]) {
     await write(folder, path);
   }
-  const files = { source: "files", text: "Editing payment.ts and 3 more" };
+  const files = { source: "files", file: "payment.ts", more: 3 };
   await eventually(async () => assert.deepEqual(await lineOf(), files));
 
   // The title of a PR that isn't a draft isn't used. If it is a draft PR, that title is used.
@@ -121,12 +121,12 @@ test("when a member works on several branches, the one-line status is separate f
   await git("switch", "--create", "refund", "main");
   await world.cli("status", "set", "Hooking up refund");
   await eventually(async () =>
-    assert.equal((await workOf(world, "refund")).line?.text, "Hooking up refund"),
+    assert.equal(textOf((await workOf(world, "refund")).line), "Hooking up refund"),
   );
 
   await git("switch", "payment");
   await eventually(async () =>
-    assert.equal((await workOf(world, "payment")).line?.text, "Hooking up payment"),
+    assert.equal(textOf((await workOf(world, "payment")).line), "Hooking up payment"),
   );
 });
 
@@ -144,10 +144,7 @@ test("when that branch is merged, the line the agent wrote is cleared. A line wr
 
   world.github.merge(pull);
   await eventually(async () =>
-    assert.deepEqual(await lineOf(), {
-      source: "files",
-      text: "Editing payment.ts",
-    }),
+    assert.deepEqual(await lineOf(), { source: "files", file: "payment.ts", more: 0 }),
   );
 
   await world.cli("status", "set", "Done: added the payment module");
@@ -168,11 +165,11 @@ test("when there were observed changes and they drop to 0, the line the agent wr
 
   await world.cli("status", "set", "Starting to hook up payment");
   await sleep(SETTLE_MS);
-  assert.equal((await lineOf())?.text, "Starting to hook up payment");
+  assert.equal(textOf(await lineOf()), "Starting to hook up payment");
 
   await write(folder, "payment.ts");
   await eventually(async () => assert.equal((await workOf(world, "payment")).files.length, 1));
-  assert.equal((await lineOf())?.text, "Starting to hook up payment");
+  assert.equal(textOf(await lineOf()), "Starting to hook up payment");
 
   await rm(join(folder, "payment.ts"));
   await eventually(async () => assert.equal(await lineOf(), null));
@@ -255,7 +252,7 @@ test("when it goes offline, the last observation and one-line status are kept as
   });
   assert.ok(Date.parse(offlineSince as string) >= stopped);
   const kept = await refund();
-  assert.equal(kept.line?.text, "Hooking up refund");
+  assert.equal(textOf(kept.line), "Hooking up refund");
   assert.deepEqual(kept.files, [{ path: "refund.ts", content: "refund.ts\n" }]);
 
   // Even when the server comes back up, the drop time stays. owner's runner that was attached reattaches.
@@ -298,9 +295,6 @@ test("after 7 days offline, that member's observation and one-line status are er
   // After reattaching, the observation comes up fresh but the erased one-line status doesn't come back.
   await desk_.start();
   await eventually(async () =>
-    assert.deepEqual((await refund()).line, {
-      source: "files",
-      text: "Editing refund.ts",
-    }),
+    assert.deepEqual((await refund()).line, { source: "files", file: "refund.ts", more: 0 }),
   );
 });

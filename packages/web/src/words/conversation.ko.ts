@@ -36,6 +36,15 @@ export const conversationKo: Words["conversation"] = {
     gone: "원래 메시지를 볼 수 없어요",
     gif: "GIF",
   },
+  thread: {
+    thread: "스레드",
+    replies: (n) => `답글 ${n}개`,
+    last: (time) => `마지막 답글 ${time}`,
+    placeholder: "답글 쓰기",
+    alsoSend: (channel) => `# ${channel}에도 보내기`,
+    repliedIn: "스레드에 답글: ",
+    loadFailed: "스레드를 불러오지 못했어요",
+  },
   fromGithub: "이슈에 GitHub에서 단 댓글",
   loading: "메시지를 불러오는 중",
   call: {

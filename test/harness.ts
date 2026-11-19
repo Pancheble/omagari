@@ -59,6 +59,10 @@ process.env.GIT_CONFIG_NOSYSTEM = "1";
 delete process.env.CLAUDECODE;
 
 /** The workspace's repo. The origin of `tempRepo` points to this repo. */
+/** The sentence a status line carries (`text`), or undefined for a `files` line, which carries parts. */
+export const textOf = (line: { source: string } | null | undefined) =>
+  line && "text" in line ? (line.text as string) : undefined;
+
 export const REPO = "omagari-test/space";
 /** A second repo of the same account (ADR-0043). Uses PRs, issues, and labels in the fake GitHub alongside `REPO`. */
 export const REPO2 = "omagari-test/other";
@@ -932,10 +936,15 @@ export async function startWorld(
     login,
     /** Folder where the CLI keeps sessions. */
     config: join(data, "config"),
-    /** This machine's Claude Code user config folder (where `~/.claude` would be). `omagari install` installs here. */
+    /** This machine's Claude Code user config folder (where `~/.claude` would be). `omagari setup` installs here. */
     claude: join(data, "claude"),
-    /** This machine's Codex user config folder (where `~/.codex` would be). `omagari install` installs here. */
+    /** This machine's Codex user config folder (where `~/.codex` would be). `omagari setup` installs here. */
     codex: join(data, "codex"),
+    /** Runs `omagari setup` as if this machine's CLI had logged in as owner. The login flow is covered by login.test. */
+    async setup(...args: string[]) {
+      await this.signInCli(owner);
+      return this.cli("setup", ...args);
+    },
     /** Keeps a session as if this machine's CLI had logged in as `as`. The flow of logging in through the CLI is covered by login.test. */
     async signInCli(as: { session: string }) {
       await mkdir(join(data, "config", "omagari"), { recursive: true });
@@ -1109,6 +1118,18 @@ export async function startWorld(
     /** Runs `omagari <args>` in `cwd`. */
     cliIn: (cwd: string, ...args: string[]) =>
       run(process.execPath, [CLI, ...args], { cwd, env: cliEnv() }),
+    /** Runs `omagari <args>` in the repo folder without OMAGARI_SERVER. It finds the server only through the saved server address. */
+    cliBare: (...args: string[]) =>
+      run(process.execPath, [CLI, ...args], {
+        cwd: repo.folder,
+        env: { ...cliEnv(), OMAGARI_SERVER: undefined },
+      }),
+    /** Starts `omagari <args>` without OMAGARI_SERVER when its output must be read before it ends (the login in setup). */
+    launchBare: (...args: string[]) =>
+      launch(process.execPath, [CLI, ...args], {
+        cwd: repo.folder,
+        env: { ...cliEnv(), OMAGARI_SERVER: undefined },
+      }),
     /** Starts `omagari <args>` (the runner), which doesn't end, in `cwd`. */
     launchCliIn: (cwd: string, ...args: string[]) =>
       launch(process.execPath, [CLI, ...args], { cwd, env: cliEnv() }),

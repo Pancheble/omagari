@@ -431,10 +431,15 @@ test("an alert creates a post and its first message is the alert. You can't writ
   assert.equal(fake.calls.length, 0);
 
   // A message written in the post goes live to other members and is read again as past conversation. The alert line's message count follows.
-  await call(world.owner, api.send, {
+  const { message: postText } = await call(world.owner, api.send, {
     channel: post,
     text: "I'll fix this line",
   });
+  // A post has no threads (ADR-0047).
+  await assert.rejects(
+    call(alice, api.send, { channel: post, text: "Thread", threadOf: postText.id }),
+    { code: "invalid_request" } satisfies Partial<ContractFailure>,
+  );
   await eventually(() =>
     assert.ok(web.messages().some((m) => m.channel === post && said(m) === "I'll fix this line")),
   );

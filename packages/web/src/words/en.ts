@@ -54,12 +54,26 @@ export const en = {
     pages: {
       agent: "My agent",
       language: "Language",
+      appearance: "Appearance",
+      notifications: "Notifications",
       alerts: "Merge run",
       labels: "Labels",
+      info: "Info",
     },
     language: {
-      name: "Display language",
-      description: "Only changes it for you. Other members keep their own.",
+      title: "Language",
+      name: "Screen language",
+      description: "Dates and times show in this language too.",
+      note: "It always starts in English. The language you pick follows you to your other devices.",
+    },
+    appearance: { soon: "Light and dark looks are coming soon." },
+    notifications: { soon: "Browser notifications are coming soon." },
+    info: {
+      workspace: "Workspace",
+      name: "Name",
+      repo: "Repo",
+      server: "This server",
+      version: "Version",
     },
     agent: {
       whenAsked: "When others ask",
@@ -81,9 +95,6 @@ export const en = {
       noneHint: "Turn on the runner on this machine and it shows up here.",
     },
     alerts: {
-      workspace: "Workspace",
-      name: "Name",
-      repo: "Repo",
       mergeRun: "Merge run",
       mergeRunNote:
         "It reads from the config file on the repo's default branch. To change it, edit that file and merge it. It's the same for every member. Turning it on and off happens on the runner, not the web, so the server can't decide what runs on your machine.",

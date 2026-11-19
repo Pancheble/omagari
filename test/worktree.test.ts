@@ -34,7 +34,7 @@ test("branches of the registered folder and its linked worktrees are each observ
         base,
         share: "full",
         files: [{ path: "a.ts", content: "a\n" }],
-        line: { source: "files", text: "Editing a.ts" },
+        line: { source: "files", file: "a.ts", more: 0 },
         offlineSince: null,
       },
       {
@@ -43,7 +43,7 @@ test("branches of the registered folder and its linked worktrees are each observ
         base,
         share: "full",
         files: [{ path: "b.ts", content: "b\n" }],
-        line: { source: "files", text: "Editing b.ts" },
+        line: { source: "files", file: "b.ts", more: 0 },
         offlineSince: null,
       },
       {
@@ -52,7 +52,7 @@ test("branches of the registered folder and its linked worktrees are each observ
         base,
         share: "full",
         files: [{ path: "main.ts", content: "main\n" }],
-        line: { source: "files", text: "Editing main.ts" },
+        line: { source: "files", file: "main.ts", more: 0 },
         offlineSince: null,
       },
     ]),
