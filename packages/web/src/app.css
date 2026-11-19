@@ -1360,8 +1360,8 @@ svg.lucide {
 }
 
 /*
- * 답장과 인용(DESIGN.md "Reply, thread, and quote", 시안 113-A, 115-B).
- * 답장 줄은 머리 위 한 줄이다. 아바타 위에서 2px 갈고리가 올라와 그 줄로 꺾이고, 아바타는 이름 옆으로 내려온다.
+ * Reply and quote (DESIGN.md "Reply, thread, and quote", drafts 113-A, 115-B).
+ * The reply line sits above the header. A 2px hook rises from above the avatar and bends into it, and the avatar moves down beside the name.
  */
 .message:focus-visible {
   outline: 2px solid var(--primary-focus);
@@ -1423,7 +1423,7 @@ svg.lucide {
   color: var(--ink);
 }
 
-/* 입력 칸 위에 붙은 "~에게 답장" 띠. 입력 칸의 위 모서리는 각진다. */
+/* The "Replying to" strip joined on top of the composer. The composer's top corners go square. */
 .reply-strip {
   display: flex;
   flex: none;
@@ -1492,7 +1492,7 @@ svg.lucide {
   background: var(--hover);
 }
 
-/* 글 안의 `> ` 줄: 왼쪽 3px 선, 12px 띄우고 보조 글색. 첫 줄이 `**login**`이면 그 멤버의 아바타와 이름이다. */
+/* `> ` lines in a message: a 3px line on the left, 12px gap, secondary text. A first line of only `**login**` shows that member's avatar and name. */
 .quote {
   margin: 2px 0;
   padding-left: 12px;
@@ -1509,7 +1509,7 @@ svg.lucide {
   white-space: normal;
 }
 
-/* 글을 고르면 바로 아래 뜨는 "인용 Q" 단추(app-popover 모양) */
+/* The "Quote Q" button right below a text selection (app-popover look) */
 .selection-quote {
   position: fixed;
   z-index: 3;
@@ -1534,7 +1534,7 @@ svg.lucide {
   font: 600 11px / 16px var(--font);
 }
 
-/* 좁은 화면에서 길게 눌러 여는 메뉴 */
+/* The long-press menu on narrow screens */
 .message-menu {
   top: 4px;
   right: 12px;
