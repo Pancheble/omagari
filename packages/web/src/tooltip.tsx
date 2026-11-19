@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 
-/** 툴팁 글. `data-tip`이 있으면 그것, 없으면 글자 없이 아이콘만 있는 버튼·링크의 `aria-label`이다. */
+/** The tooltip text: `data-tip` if present, otherwise the `aria-label` of a button or link that has only an icon and no text. */
 export function tipOf(element: Element): string | undefined {
   if (!(element instanceof HTMLElement)) return undefined;
   if (element.dataset.tip) return element.dataset.tip;
@@ -10,8 +10,8 @@ export function tipOf(element: Element): string | undefined {
 }
 
 /**
- * `app-tooltip`(DESIGN.md "떠 있는 층"): 아이콘만 있는 버튼에 마우스가 0.5초 머물거나 키보드로 오면 아래에 뜬다.
- * 버튼마다 달지 않고 문서 하나에 하나를 둔다. 대화 상자 위에도 보이게 `popover`로 맨 위 층에 올린다.
+ * `app-tooltip` (DESIGN.md "Floating layer"): shows below an icon-only button when the mouse rests on it for 0.5s or keyboard focus arrives.
+ * There is one per document, not one per button. It goes to the top layer with `popover` so it also shows over dialogs.
  */
 export function Tooltip() {
   const tip = useRef<HTMLDivElement>(null);

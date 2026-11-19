@@ -7,7 +7,7 @@ const chat = (repo?: string) => ({ id: "c", name: "c", kind: "chat", repo }) as 
 const forum = (repos?: string[]) =>
   ({ id: "f", name: "f", kind: "forum", filter: { importance: "discuss", repos } }) as Channel;
 
-test("레포가 둘 이상이면 레포 채널과 레포 하나의 포럼은 그 레포에, 나머지는 전체에 선다", () => {
+test("with two or more repos, repo channels and one-repo forums sit in that repo and the rest sit in All", () => {
   const repos = ["a/one", "a/two"];
   assert.equal(placeOf(chat("a/two"), repos), "a/two");
   assert.equal(placeOf(chat(), repos), ALL);
@@ -16,12 +16,12 @@ test("레포가 둘 이상이면 레포 채널과 레포 하나의 포럼은 그
   assert.equal(placeOf(forum(), repos), ALL);
 });
 
-test("레포가 하나뿐이면 전체가 없어 워크스페이스 채널과 포럼도 그 레포에 선다", () => {
+test("with one repo there is no All, so workspace channels and forums sit in that repo too", () => {
   assert.equal(placeOf(chat(), ["a/one"]), "a/one");
   assert.equal(placeOf(forum(), ["a/one"]), "a/one");
 });
 
-test("고른 곳이 빠졌거나 레포가 하나뿐이면 첫 레포로 간다", () => {
+test("if the picked place is gone or there is one repo, go to the first repo", () => {
   assert.equal(placeIn(["a/one", "a/two"], "a/two"), "a/two");
   assert.equal(placeIn(["a/one", "a/two"], ALL), ALL);
   assert.equal(placeIn(["a/one", "a/two"], "a/gone"), "a/one");

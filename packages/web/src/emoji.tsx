@@ -1,3 +1,4 @@
+import type { Language } from "@omagari/contract";
 import {
   Apple,
   Car,
@@ -13,50 +14,42 @@ import {
   Trophy,
 } from "lucide-react";
 import { type KeyboardEvent, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { language, t } from "./i18n.ts";
 
 /**
- * 이모지 팔레트(DESIGN.md "이모지 팔레트"). 이모지와 한국어 이름, 찾는 말은 Emojibase 한국어 데이터(`emojibase-data`의 `ko`)다.
- * 데이터는 Vite가 웹 빌드의 한 조각으로 내려준다. 외부 CDN에 묻지 않는다.
+ * The emoji palette (DESIGN.md "Emoji palette"). The emoji, their names, and search words come from the Emojibase data for the current language (`en` or `ko` in `emojibase-data`).
+ * Vite ships the data as a chunk of the web build. It never asks an external CDN.
  */
 
 type Emoji = { emoji: string; label: string };
 type Item = Emoji & { tags: string[]; group: number; skins?: Emoji[] };
 type Data = { items: Item[]; labels: Map<string, string> };
 
-/** Emojibase의 분류 아홉(2번 "구성 요소"는 피부색과 머리 조각이라 뺀다). 이름은 Emojibase `ko` messages와 같다. */
-const GROUPS: [group: number, name: string, Icon: LucideIcon][] = [
-  [0, "웃는 얼굴과 감정", Smile],
-  [1, "사람과 몸", Hand],
-  [3, "동물과 자연", PawPrint],
-  [4, "음식 및 음료", Apple],
-  [5, "여행 및 장소", Car],
-  [6, "활동", Trophy],
-  [7, "사물", Lightbulb],
-  [8, "기호", Heart],
-  [9, "깃발", Flag],
+/** Emojibase's nine groups (group 2, "components", is skin tones and hair pieces, so it's left out). Names are in the dictionary, same as Emojibase's messages. */
+const GROUPS: [group: number, Icon: LucideIcon][] = [
+  [0, Smile],
+  [1, Hand],
+  [3, PawPrint],
+  [4, Apple],
+  [5, Car],
+  [6, Trophy],
+  [7, Lightbulb],
+  [8, Heart],
+  [9, Flag],
 ];
-const RECENT = "최근 사용";
-/** 피부색: 기본과 Emojibase의 다섯(tone 1~5). 이름은 Emojibase `ko` messages와 같다. */
-const TONES = [
-  "기본",
-  "밝은 피부 톤",
-  "중간 밝은 피부 톤",
-  "중간 피부 톤",
-  "중간 어두운 피부 톤",
-  "어두운 피부 톤",
-];
+/** Skin tones: default plus Emojibase's five (tone 1-5). Names are in the dictionary. */
 const MODIFIERS = ["", "🏻", "🏼", "🏽", "🏾", "🏿"];
 const MAX_RECENT = 12;
 const RECENT_KEY = "omagari.emoji.recent";
 const TONE_KEY = "omagari.emoji.tone";
 
-/** 이모지를 그릴 글꼴. 본문 글꼴(IBM Plex Sans KR)이 ©나 ↔를 흑백 글자로 그리지 않게 색 이모지 글꼴을 먼저 둔다. app.css의 `--emoji`와 같다. */
+/** The font that draws emoji. The color emoji fonts go first so the body font (IBM Plex Sans KR) doesn't draw © or ↔ as black-and-white text. Same as `--emoji` in app.css. */
 const EMOJI_FONT =
   '"Apple Color Emoji", "Noto Color Emoji", "Segoe UI Emoji", "Twemoji Mozilla", "Android Emoji", sans-serif';
 
 /**
- * 이 기기가 이 이모지를 한 글자 색 그림으로 그리는가. 모르는 이모지는 빈 네모나 글자색을 따르는 흑백 글자가 되고,
- * 모르는 ZWJ 묶음은 여러 그림으로 갈라져 넓어진다. 같은 이모지를 두 색으로 그려 같으면 색 그림이다.
+ * Does this device draw this emoji as one color glyph? An unknown emoji becomes an empty box or a black-and-white glyph in the text color,
+ * and an unknown ZWJ sequence splits into several glyphs and gets wider. If the same emoji drawn in two colors looks the same, it's a color glyph.
  */
 function drawable(emoji: string) {
   const size = 16;
@@ -78,14 +71,19 @@ function drawable(emoji: string) {
   return blue.some((value) => value !== 0) && blue.every((value, at) => value === red[at]);
 }
 
-let loading: Promise<Data> | undefined;
-let loaded: Data | undefined;
+const loading = new Map<Language, Promise<Data>>();
+const loaded = new Map<Language, Data>();
 /**
- * 데이터를 한 번 불러 이 기기가 그리는 것만 남긴다. 그리는지는 이모지 판마다 첫 이모지로 가리고(새 판부터 내려가며 처음 그리는 판까지),
- * 나라 깃발은 따로 본다(Windows는 깃발을 그리지 않는다).
+ * Load the data once and keep only what this device draws. Whether it draws is decided per emoji version by that version's first emoji (from the newest version down to the first one it draws),
+ * and country flags are checked separately (Windows doesn't draw flags).
  */
 export const loadEmoji = () => {
-  loading ??= import("emojibase-data/ko/data.json").then(({ default: all }) => {
+  const lang = language;
+  const started = loading.get(lang);
+  if (started) return started;
+  const source =
+    lang === "ko" ? import("emojibase-data/ko/data.json") : import("emojibase-data/en/data.json");
+  const promise = source.then(({ default: all }) => {
     const usable = all.filter((emoji) => emoji.group !== undefined && emoji.group !== 2);
     const firsts = new Map<number, string>();
     for (const { version, emoji } of usable) if (!firsts.has(version)) firsts.set(version, emoji);
@@ -109,10 +107,12 @@ export const loadEmoji = () => {
     const labels = new Map(
       items.flatMap((item) => [item, ...(item.skins ?? [])]).map((e) => [e.emoji, e.label]),
     );
-    loaded = { items, labels };
-    return loaded;
+    const data = { items, labels };
+    loaded.set(lang, data);
+    return data;
   });
-  return loading;
+  loading.set(lang, promise);
+  return promise;
 };
 
 const stored = <T,>(key: string, fallback: T, valid: (value: unknown) => value is T): T => {
@@ -127,15 +127,15 @@ const store = (key: string, value: unknown) => {
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch {
-    // 저장소를 막아 둔 브라우저면 이번 창에서만 기억한다.
+    // In a browser that blocks storage, it's remembered only in this window.
   }
 };
 const isTone = (value: unknown): value is number =>
-  typeof value === "number" && value >= 0 && value < TONES.length;
+  typeof value === "number" && value >= 0 && value < MODIFIERS.length;
 const isList = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every((emoji) => typeof emoji === "string");
 
-/** 고른 이모지를 "최근 사용"의 맨 앞에 기억한다. */
+/** Remember the chosen emoji at the front of "Recently used". */
 export const remember = (emoji: string) =>
   store(
     RECENT_KEY,
@@ -145,14 +145,14 @@ export const remember = (emoji: string) =>
     ),
   );
 
-/** 불러 둔 데이터가 있으면 돌려준다. 없으면 `loadEmoji()`로 불러야 한다. */
-export const loadedEmoji = () => loaded;
+/** The loaded data for the current language, if any. Otherwise call `loadEmoji()`. */
+export const loadedEmoji = () => loaded.get(language);
 
 export type Found = { emoji: string; label: string; tag?: string };
 
 /**
- * `:` 자동 완성(DESIGN.md "채팅의 이모지"): 한국어 이름과 찾는 말에서 `limit`개까지, 최근 사용한 것을 먼저 놓는다.
- * `tag`는 찾는 말로 맞았을 때 맞은 말이다(이름으로 맞으면 없다).
+ * `:` autocomplete (DESIGN.md "Emoji in chat"): up to `limit` matches from names and search words, with recently used ones first.
+ * `tag` is the search word that matched (absent if the name matched).
  */
 export function findEmoji({ items }: Data, query: string, limit = 5): Found[] {
   const words = query.trim().toLowerCase();
@@ -175,8 +175,8 @@ export function findEmoji({ items }: Data, query: string, limit = 5): Found[] {
 type Section = { name: string; Icon: LucideIcon; emojis: Emoji[] };
 
 /**
- * 이모지 팔레트. 위에서부터 찾기 줄, 분류마다 제목과 격자, 분류 막대다. 열리면 찾기 칸에 초점이 온다.
- * 이모지를 고르면 `onPick`, "지우기"는 `onClear`, Esc는 `onClose`다. 바깥 누르기는 부르는 쪽이 닫는다.
+ * The emoji palette. From the top: the search row, a heading and grid for each category, and the category bar. When it opens, focus goes to the search field.
+ * Picking an emoji calls `onPick`, "Clear" calls `onClear`, and Esc calls `onClose`. Pressing outside is closed by the caller.
  */
 export function EmojiPalette({
   current,
@@ -189,10 +189,10 @@ export function EmojiPalette({
   onPick: (emoji: string) => void;
   onClear: () => void;
   onClose: () => void;
-  /** 이모지 칸을 비우는 일이 없는 곳(채팅 입력 칸)은 "지우기"를 두지 않는다. */
+  /** Where the emoji slot is never emptied (the chat composer), there's no "Clear". */
   hideClear?: boolean;
 }) {
-  const [data, setData] = useState(loaded);
+  const [data, setData] = useState(loadedEmoji);
   const [query, setQuery] = useState("");
   const [tone, setTone] = useState(() => stored(TONE_KEY, 0, isTone));
   const [recent] = useState(() => stored(RECENT_KEY, [], isList));
@@ -208,7 +208,7 @@ export function EmojiPalette({
     search.current?.focus();
   }, [data]);
 
-  // 열 수는 목록 폭에 맞춘다: 넓은 화면은 12열, 좁은 화면(시트)은 44px 칸이 들어가는 만큼.
+  // The column count fits the list width: 12 on wide screens, and as many 44px cells as fit on narrow ones (the sheet).
   useLayoutEffect(() => {
     const viewport = list.current;
     if (!viewport) return;
@@ -231,7 +231,7 @@ export function EmojiPalette({
   const toned = (item: Item) => (tone > 0 && item.skins?.[tone - 1]) || item;
   const sections: Section[] = [
     {
-      name: RECENT,
+      name: t.profile.emoji.recent,
       Icon: Clock,
       emojis: words
         ? []
@@ -240,8 +240,8 @@ export function EmojiPalette({
             return label ? [{ emoji, label }] : [];
           }),
     },
-    ...GROUPS.map(([group, name, Icon]) => ({
-      name,
+    ...GROUPS.map(([group, Icon]) => ({
+      name: t.profile.emoji.groups[group] ?? "",
       Icon,
       emojis: (data?.items ?? [])
         .filter(
@@ -255,7 +255,7 @@ export function EmojiPalette({
     })),
   ];
   const visible = sections.filter((section) => section.emojis.length > 0);
-  /** 키보드로 옮겨 다니는 줄. 분류가 바뀌면 새 줄에서 시작한다. */
+  /** The rows you move through by keyboard. A new category starts a new row. */
   const rows = visible.flatMap((section, at) =>
     Array.from({ length: Math.ceil(section.emojis.length / columns) }, (_, row) => ({
       section: at,
@@ -263,8 +263,8 @@ export function EmojiPalette({
     })),
   );
 
-  // 찾는 말이나 열 수가 바뀌면 처음 칸으로, 목록 맨 위로 돌아간다.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 바뀐 것을 알리는 값만 본다
+  // When the search words or column count change, go back to the first cell and the top of the list.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only the values that signal a change are read
   useEffect(() => {
     setActive([0, 0]);
     setShown(0);
@@ -280,7 +280,7 @@ export function EmojiPalette({
     target?.scrollIntoView({ block: "nearest" });
   };
 
-  /** 격자의 화살표(DESIGN.md "키보드"): 칸을 옮기고, 첫 줄에서 위로 가면 찾기 칸으로 돌아간다. Enter는 칸(버튼)이 받는다. */
+  /** Arrow keys in the grid (DESIGN.md "Keyboard"): move between cells, and going up from the first row returns to the search field. Enter is handled by the cell (a button). */
   const onGridKey = (event: KeyboardEvent) => {
     const [row, column] = active;
     const last = (at: number) => (rows[at]?.emojis.length ?? 1) - 1;
@@ -299,7 +299,7 @@ export function EmojiPalette({
     event.preventDefault();
   };
 
-  /** 지금 보이는 분류: 목록 맨 위를 지난 마지막 제목. */
+  /** The category in view: the last heading that has passed the top of the list. */
   const onScroll = () => {
     const viewport = list.current;
     if (!viewport) return;
@@ -317,7 +317,7 @@ export function EmojiPalette({
     <div
       className="menu emoji-palette"
       role="dialog"
-      aria-label="이모지 고르기"
+      aria-label={t.profile.emoji.pick}
       onKeyDown={(event) => {
         if (event.key !== "Escape") return;
         event.preventDefault();
@@ -331,8 +331,8 @@ export function EmojiPalette({
           <input
             ref={search}
             type="search"
-            aria-label="이모지 찾기"
-            placeholder="이모지 찾기 (예: 웃음, 고양이)"
+            aria-label={t.profile.emoji.find}
+            placeholder={t.profile.emoji.findPlaceholder}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => {
@@ -345,10 +345,10 @@ export function EmojiPalette({
         <button
           type="button"
           className="tone-button"
-          aria-label={`피부색: ${TONES[tone]}`}
-          data-tip={`피부색: ${TONES[tone]}`}
+          aria-label={t.profile.emoji.tone(t.profile.emoji.tones[tone] ?? "")}
+          data-tip={t.profile.emoji.tone(t.profile.emoji.tones[tone] ?? "")}
           onClick={() => {
-            const next = (tone + 1) % TONES.length;
+            const next = (tone + 1) % MODIFIERS.length;
             setTone(next);
             store(TONE_KEY, next);
           }}
@@ -357,28 +357,28 @@ export function EmojiPalette({
         </button>
         {!hideClear && (
           <button type="button" className="button quiet" onClick={onClear}>
-            지우기
+            {t.profile.emoji.clear}
           </button>
         )}
       </div>
-      {/* ponytail: 2천 칸을 가상 스크롤 없이 모두 그린다. 느린 기기에서 무거우면 보이는 줄만 그린다. */}
+      {/* ponytail: draws all ~2,000 cells with no virtual scrolling. If that's heavy on slow devices, draw only the visible rows. */}
       <div className="emoji-list" ref={list} onScroll={onScroll}>
-        {data && rows.length === 0 && <p className="emoji-empty">찾는 이모지가 없어요</p>}
+        {data && rows.length === 0 && <p className="emoji-empty">{t.profile.emoji.none}</p>}
         {visible.map((section, at) => (
           <section key={section.name} className="emoji-section">
             <h3 id={`${id}-${at}`} data-section>
               {section.name}
             </h3>
-            {/* biome-ignore lint/a11y/useSemanticElements: 화살표로 칸을 옮기는 격자(WAI-ARIA grid)다. 표가 아니다 */}
+            {/* biome-ignore lint/a11y/useSemanticElements: a grid you move through with arrow keys (WAI-ARIA grid), not a table */}
             <div role="grid" aria-labelledby={`${id}-${at}`} onKeyDown={onGridKey}>
               {rows.map(
                 (row, index) =>
                   row.section === at && (
-                    // biome-ignore lint/a11y/useFocusableInteractive: 줄은 칸을 묶을 뿐이고 초점은 칸이 받는다
-                    // biome-ignore lint/a11y/useSemanticElements: 격자의 줄이다
+                    // biome-ignore lint/a11y/useFocusableInteractive: a row only groups cells, and the cells take focus
+                    // biome-ignore lint/a11y/useSemanticElements: a grid row
                     <div key={row.emojis[0]?.emoji} role="row" className="emoji-row">
                       {row.emojis.map(({ emoji, label }, column) => (
-                        // biome-ignore lint/a11y/useSemanticElements: 격자의 칸이다. 누르면 고르는 버튼이다
+                        // biome-ignore lint/a11y/useSemanticElements: a grid cell. It is a button that picks on press
                         <button
                           key={emoji}
                           type="button"
@@ -401,7 +401,7 @@ export function EmojiPalette({
           </section>
         ))}
       </div>
-      <nav className="emoji-bar" aria-label="분류">
+      <nav className="emoji-bar" aria-label={t.profile.emoji.categories}>
         {sections.map((section) => {
           const at = visible.indexOf(section);
           return (

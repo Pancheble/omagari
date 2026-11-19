@@ -13,15 +13,15 @@ export type Workspace = Awaited<
 >["workspaces"][number];
 
 /**
- * 지금 고른 워크스페이스(`Workspace.id`). 워크스페이스를 바꾸면 앱 틀을 새로 그리므로, 모든 API가 이것을 머리말로 싣는다(ADR-0043).
- * 레포마다인 API는 `repo`를 주면 그 레포로 부른다.
+ * The workspace picked now (`Workspace.id`). Switching workspaces redraws the app frame, so every API sends this as a header (ADR-0043).
+ * For per-repo APIs, pass `repo` to call that repo.
  */
 let workspace: string | undefined;
 export const setWorkspace = (id: string) => {
   workspace = id;
 };
 
-/** 웹이 부르는 서버. 화면과 같은 곳에서 API를 낸다(개발할 때는 Vite가 넘겨준다). */
+/** The server the web calls. It serves the API from the same place as the screen (in development, Vite forwards it). */
 export const server = (session?: string, repo?: string) => ({
   url: location.origin,
   session,
@@ -32,8 +32,8 @@ export const server = (session?: string, repo?: string) => ({
 const KEY = "omagari.session";
 
 /**
- * 새로 고쳐도 로그인이 남게 세션을 이 브라우저에 둔다. 저장소를 막아 둔 브라우저(사생활 보호 창 등)에서는
- * 이 탭에서만 로그인이 남는다.
+ * Keeps the session in this browser so you stay logged in after a refresh. In a browser that blocks storage (a private window, etc.),
+ * you stay logged in only in this tab.
  */
 export function savedSession() {
   try {
@@ -50,7 +50,7 @@ export function saveSession(session: string | undefined) {
   } catch {}
 }
 
-/** 멤버마다, 에이전트(실행기)마다 DM에서 고른 모델과 effort. 이 브라우저에만 남는다(ADR-0020). */
+/** The model and effort picked in the DM, per member and per Agent (executor). Kept only in this browser (ADR-0020). */
 const picksKey = (login: string) => `omagari.picks.${login}`;
 
 export function savedPicks(login: string): Partial<Record<ExecutorId, ModelPick>> {
@@ -68,11 +68,11 @@ export function savePicks(login: string, picks: Partial<Record<ExecutorId, Model
   } catch {}
 }
 
-/** 세션이 끝났거나 없는 것인가. 서버에 닿지 않은 것과 가른다. */
+/** Has the session ended or is it missing? Kept apart from not reaching the server. */
 export const signedOut = (error: unknown) =>
   error instanceof ContractFailure && error.code === "unauthorized";
 
-/** 이 기기에 남기는 작은 값. 저장소를 막아 둔 브라우저에서는 남지 않는다. */
+/** A small value kept on this device. In a browser that blocks storage, it isn't kept. */
 export function remembered(key: string) {
   try {
     return localStorage.getItem(key) ?? undefined;
@@ -86,10 +86,10 @@ export function remember(key: string, value: string) {
   } catch {}
 }
 
-/** 레포 이름(`owner/name`의 name). */
+/** A repo name (the name in `owner/name`). */
 export const repoName = (repo: string) => repo.split("/")[1] ?? repo;
 
-/** 워크스페이스마다 마지막에 본 곳(레포 이름이나 "전체"), 곳마다 마지막에 본 채널(주소의 `#…`). 이 기기에 남는다. */
+/** The last place seen per workspace (a repo name or "All"), and the last channel seen per place (the `#…` in the address). Kept on this device. */
 export const placeKey = (workspace: string) => `omagari.place.${workspace}`;
 export const lastKey = (workspace: string, place: string) =>
   `omagari.last-channel.${workspace}.${place}`;

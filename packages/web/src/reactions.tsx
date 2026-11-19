@@ -2,14 +2,14 @@ import type { Reaction } from "@omagari/contract";
 import { SmilePlus } from "lucide-react";
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { EmojiPalette } from "./emoji.tsx";
-import { josa } from "./words/ko.ts";
+import { t } from "./i18n.ts";
 
-/** 넓은 화면에서 팔레트의 높이(찾기 줄, 목록, 분류 막대). 버튼 아래에 자리가 모자라면 위로 연다. */
+/** The palette height on wide screens (search row, list, category bar). If there isn't room below the button, it opens upward. */
 const PALETTE_HEIGHT = 420;
 
 /**
- * "반응 달기" 버튼과 그 팔레트(DESIGN.md "반응"). 팔레트는 버튼 아래에 오른쪽을 맞춰 열린다.
- * 대화 목록은 칸 안에서 스크롤하므로 팔레트는 화면에 고정해 잘리지 않게 한다. 좁은 화면에서는 아래에서 올라오는 시트다(CSS).
+ * The "Add reaction" button and its palette (DESIGN.md "Reactions"). The palette opens below the button, right-aligned.
+ * The conversation list scrolls inside its pane, so the palette is fixed to the screen to avoid being clipped. On narrow screens it's a sheet that slides up from the bottom (CSS).
  */
 export function ReactButton({
   className,
@@ -55,7 +55,7 @@ export function ReactButton({
         ref={button}
         type="button"
         className={className}
-        aria-label="반응 달기"
+        aria-label={t.profile.reactions.add}
         aria-haspopup="dialog"
         aria-expanded={!!at}
         onClick={() => (at ? toggle(undefined) : open())}
@@ -83,13 +83,13 @@ export function ReactButton({
   );
 }
 
-/** 알약의 툴팁: "박민수, 이서연이 🎉로 반응". */
+/** The pill's tooltip: "Minsu Park, Seoyeon Lee reacted with 🎉". */
 const tipOf = ({ emoji, members }: Reaction) =>
-  `${josa(members.map((member) => member.name).join(", "), "이", "가")} ${emoji}로 반응`;
+  t.profile.reactions.tip(members.map((member) => member.name).join(", "), emoji);
 
 /**
- * 메시지 본문 아래의 반응 알약 줄(`app-reaction`). 내가 단 반응은 눌린 알약이고, 누르면 달거나 뗀다.
- * 줄 끝에 "반응 달기" 버튼을 둔다. 반응이 없으면 줄도 없다(그때는 메시지의 동작 띠로 단다).
+ * The row of reaction pills under a message body (`app-reaction`). A reaction I added is a pressed pill, and pressing toggles it.
+ * An "Add reaction" button sits at the end of the row. With no reactions there's no row (then you add one from the message's action strip).
  */
 export function Reactions({
   reactions,

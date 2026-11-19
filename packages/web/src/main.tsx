@@ -23,7 +23,7 @@ import { Centered, Login } from "./login.tsx";
 import { Tooltip } from "./tooltip.tsx";
 import { Workspace } from "./workspace.tsx";
 
-/** 이 기기에서 마지막에 고른 워크스페이스. */
+/** The workspace last picked on this device. */
 const WORKSPACE_KEY = "omagari.workspace";
 
 type State =
@@ -38,14 +38,14 @@ function App() {
   );
   useLanguage(); // redraws every screen when the language changes
 
-  /** 세션이 끝났다. 로그인으로 돌아가 그렇다고 알린다. */
+  /** The session ended. Go back to login and say so. */
   const expire = useCallback(() => {
     saveSession(undefined);
     setLanguage("en"); // before login it's always English (ADR-0045)
     setState({ kind: "out", notice: t.login.expired });
   }, []);
 
-  /** 세션으로 나를 읽어 들어간다. 세션이 끝났으면 로그인으로, 서버에 닿지 않으면 세션을 둔 채 다시 시도를 보인다. */
+  /** Load me from the session. If the session ended, go to login; if the server can't be reached, keep the session and show Try again. */
   const enter = useCallback(
     async (session: string) => {
       try {
@@ -54,7 +54,7 @@ function App() {
           call(server(session), api.workspaces),
         ]);
         saveSession(session);
-        // 지난번에 본 워크스페이스로 들어간다. 없어졌으면 첫째다.
+        // Enter the workspace seen last time. If it's gone, the first one.
         const saved = remembered(WORKSPACE_KEY);
         const workspace =
           workspaces.find((space) => space.id === saved)?.id ?? workspaces[0]?.id ?? "";
@@ -91,14 +91,14 @@ function App() {
   }
   const { session } = state;
   const logout = () => {
-    // 서버에 닿지 않아도 이 브라우저에서는 로그아웃한다. 화면을 먼저 닫아, 서버가 끝난 세션의
-    // 실시간 길을 닫는 것을 "로그인이 끝났어요"로 잘못 알리지 않는다.
+    // Log out in this browser even if the server can't be reached. Close the screen first, so the server closing the ended session's
+    // live connection isn't wrongly announced as "Your login ended".
     saveSession(undefined);
     setLanguage("en");
     setState({ kind: "out" });
     void call(server(session), api.logout).catch(() => {});
   };
-  /** 다른 계정의 곳(레포나 "전체")으로 간다. 앱 틀을 새로 그리고, 그곳에서 마지막에 본 채널로 간다(시안 101). */
+  /** Go to another account's place (a repo or "All"). Redraws the app frame and goes to the channel last seen there (mockup 101). */
   const switchTo = (workspace: string, place: string) => {
     remember(WORKSPACE_KEY, workspace);
     remember(placeKey(workspace), place);

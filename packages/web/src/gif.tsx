@@ -2,11 +2,12 @@ import type { Gif } from "@omagari/contract";
 import { Search } from "lucide-react";
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { giphyUrl } from "./giphy.ts";
+import { t } from "./i18n.ts";
 
-/** 치다가 이만큼 멈추면 찾는다. */
+/** Search once typing pauses this long. */
 const PAUSE_MS = 400;
 
-/** 높이가 낮은 열부터 채워 두 열의 엇갈린 격자로 나눈다. */
+/** Splits GIFs into a two-column staggered grid, filling the shorter column first. */
 function columns(gifs: Gif[]) {
   const cols: [Gif[], Gif[]] = [[], []];
   const heights = [0, 0];
@@ -19,8 +20,8 @@ function columns(gifs: Gif[]) {
 }
 
 /**
- * GIF 칸(DESIGN.md "GIF", 시안 102-A): 찾기 칸, 두 열의 엇갈린 격자, "Powered by GIPHY" 줄.
- * 찾기는 서버를 거친다(`search`). 비어 있으면 인기 GIF다. 고르면 `onPick`, Esc면 `onClose`.
+ * The GIF picker (DESIGN.md "GIF", mockup 102-A): a search field, a two-column staggered grid, and a "Powered by GIPHY" line.
+ * Search goes through the server (`search`). Empty means trending GIFs. Picking calls `onPick`, and Esc calls `onClose`.
  */
 export function GifPicker({
   search,
@@ -57,7 +58,7 @@ export function GifPicker({
   }, [query]);
 
   const cols = columns(found.gifs);
-  /** 격자의 칸 `[열, 줄]`로 초점을 옮긴다. 줄은 그 열의 끝에 맞춘다. */
+  /** Moves focus to the grid cell `[column, row]`. The row is clamped to the end of that column. */
   const focus = (col: number, row: number) => {
     const buttons = grid.current?.children[col]?.querySelectorAll("button");
     if (!buttons?.length) return;
@@ -80,7 +81,7 @@ export function GifPicker({
     <div
       className="menu gif-picker"
       role="dialog"
-      aria-label="GIF 찾기"
+      aria-label={t.profile.gif.find}
       onKeyDown={(event) => {
         if (event.key !== "Escape") return;
         event.preventDefault();
@@ -91,11 +92,11 @@ export function GifPicker({
       <label className="palette-find gif-find">
         <Search size={14} aria-hidden />
         <input
-          // biome-ignore lint/a11y/noAutofocus: 열면 바로 찾게 초점이 찾기 칸에 온다(DESIGN.md "GIF")
+          // biome-ignore lint/a11y/noAutofocus: focus goes to the search field so you can search right away (DESIGN.md "GIF")
           autoFocus
           type="search"
-          aria-label="GIF 찾기"
-          placeholder="GIPHY에서 찾기"
+          aria-label={t.profile.gif.find}
+          placeholder={t.profile.gif.placeholder}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={(event) => {
@@ -128,22 +129,22 @@ export function GifPicker({
       ) : (
         <p className="gif-empty" role="status" aria-busy={found.status === "loading"}>
           {found.status === "error"
-            ? "지금은 GIF를 찾을 수 없어요"
+            ? t.profile.gif.unavailable
             : found.status === "ready"
-              ? "찾는 GIF가 없어요"
+              ? t.profile.gif.none
               : ""}
         </p>
       )}
       <p className="gif-foot">
-        <strong>Powered by GIPHY</strong> · 찾는 말은 GIPHY로 가요
+        <strong>Powered by GIPHY</strong> · {t.profile.gif.foot}
       </p>
     </div>
   );
 }
 
 /**
- * 입력 칸의 GIF 버튼(DESIGN.md "입력")과 그 위에 열리는 GIF 칸. 고르면 칸을 닫고 `onPick`, 닫히면 `onClosed`(초점을 입력 칸으로).
- * 바깥을 누르면 닫는다.
+ * The GIF button in the composer (DESIGN.md "Composer") and the GIF picker that opens above it. Picking closes the picker and calls `onPick`; closing calls `onClosed` (focus goes back to the composer).
+ * Pressing outside closes it.
  */
 export function GifButton({
   search,
@@ -198,8 +199,8 @@ export function GifButton({
 }
 
 /**
- * 메시지 속 GIF: 주소 대신 그림. 브라우저가 GIPHY에서 바로 받는다(보내는 쪽 주소는 싣지 않는다).
- * 움직임 줄이기를 켠 사람에게는 멈춘 첫 장면을 보이고, 누르면 움직인다.
+ * A GIF in a message: a picture instead of the URL. The browser fetches it straight from GIPHY (the sender's URL isn't included).
+ * For people with reduced motion on, it shows the still first frame, and pressing it plays.
  */
 export function MessageGif({ id }: { id: string }) {
   const [play, setPlay] = useState(() => !matchMedia("(prefers-reduced-motion: reduce)").matches);
@@ -217,7 +218,7 @@ export function MessageGif({ id }: { id: string }) {
     <button
       type="button"
       className="message-gif"
-      aria-label="GIF 움직이기"
+      aria-label={t.profile.gif.play}
       onClick={() => setPlay(true)}
     >
       {image}

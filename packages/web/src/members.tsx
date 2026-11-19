@@ -1,24 +1,24 @@
-import { ago, EXECUTOR_NAMES, type ExecutorId, type MemberView } from "@omagari/contract";
+import { EXECUTOR_NAMES, type ExecutorId, type MemberView } from "@omagari/contract";
 import { Clock } from "lucide-react";
 import { type ComponentProps, use, useEffect, useReducer } from "react";
+import { ago, language, t } from "./i18n.ts";
 import { StatusText } from "./profile.tsx";
 import { PeopleContext } from "./profile-card.tsx";
 import { Avatar, PRESENCE_WORDS, personName } from "./workspace.tsx";
 
-/** 에이전트 표시에 쓰는 실행기 약자(DESIGN.md 에이전트 표시). */
+/** Executor abbreviations for the Agent mark (DESIGN.md "Agent mark"). */
 const MARKS = { "claude-code": "CC", codex: "CX" } as const satisfies Record<ExecutorId, string>;
-const STATES = { online: "온라인", answering: "답하는 중", offline: "오프라인" } as const;
 
 type Member = MemberView;
 type Agent = Member["agents"][number];
 type Work = Member["works"][number];
 
-/** 사람이 오프라인인가(접속 상태). 에이전트의 러너가 붙어 있는지와 따로 간다. 그룹과 흐린 아바타가 이것을 본다. */
+/** Is the person offline (presence)? Separate from whether an Agent's Runner is connected. The groups and the dimmed avatar follow this. */
 const offline = (member: Member) => member.presence === "offline";
 
 /**
- * 멤버 목록: "온라인 — N", "오프라인 — N"으로 묶은 사람 행. 자리 비움과 방해 금지는 온라인에 든다.
- * 행은 펼치지 않고 누르면 프로필 카드가 뜬다(DESIGN.md "멤버 목록").
+ * Member list: people rows grouped as "Online — N" and "Offline — N". Away and Do not disturb count as online.
+ * Rows don't expand; pressing one opens the profile card (DESIGN.md "Member list").
  */
 export function MemberList({
   me,
@@ -27,13 +27,13 @@ export function MemberList({
 }: {
   me: string;
   members: Member[];
-  /** 프로필 카드가 열려 있는 사람(그 행이 칠해진다) */
+  /** The person whose profile card is open (their row is highlighted) */
   cardOf?: string;
 }) {
   useMinuteTick();
   const groups = [
-    ["온라인", members.filter((member) => !offline(member))],
-    ["오프라인", members.filter(offline)],
+    [t.channels.presence.online, members.filter((member) => !offline(member))],
+    [t.channels.presence.offline, members.filter(offline)],
   ] as const;
   return groups.map(
     ([title, group]) =>
@@ -57,13 +57,13 @@ export function MemberList({
   );
 }
 
-/** 불러오는 중: 아바타 자리 원과 두 줄을 사람 셋만큼. 메시지의 뼈대와 같은 부품이다. */
+/** Loading: an avatar circle and two lines, three people' worth. Same part as the message skeleton. */
 export const MemberSkeleton = () => (
   <div
     className="member-skeleton"
     role="status"
     aria-busy="true"
-    aria-label="멤버 목록을 불러오는 중"
+    aria-label={t.profile.members.loading}
   >
     {[0, 1, 2].map((key) => (
       <div key={key} className="skeleton-row" aria-hidden>
@@ -81,22 +81,24 @@ function MemberRow({ member, me, selected }: { member: Member; me: boolean; sele
   const { open } = use(PeopleContext);
   const count = member.works.length;
   const away = offline(member);
-  // 둘째 줄: 상태 메시지 · 작업 N개. 상태 메시지가 없으면 그 자리에 접속 상태(온라인 말고)를 보조 글씨로 쓰고,
-  // 둘 다 없으면 작업 수만 쓴다. 메시지가 길면 메시지만 잘린다.
-  // 에이전트가 문답에 답하는 동안은 작업 수 앞에 "답하는 중"이 붙는다(PRD 17). 에이전트가 여럿이면 어느 것인지 쓴다.
+  // Second line: status message · N works. With no status message, the presence (other than online) goes there in secondary text,
+  // and with neither, just the work count. If the message is long, only the message is cut.
+  // While an Agent answers a Q&A, "Answering" goes before the work count (PRD 17). With several Agents, say which one.
   const answering = member.agents
     .filter((agent) => agent.state === "answering")
     .map((agent) =>
-      member.agents.length > 1 ? `${EXECUTOR_NAMES[agent.executor]} 답하는 중` : "답하는 중",
+      member.agents.length > 1
+        ? t.profile.members.answeringBy(EXECUTOR_NAMES[agent.executor])
+        : t.profile.members.answering,
     );
   const word = member.presence === "online" ? undefined : PRESENCE_WORDS[member.presence];
   const status = member.message !== null || member.emoji !== null;
-  const rest = [!status && word, ...answering, count > 0 ? `작업 ${count}개` : "작업 없음"]
+  const rest = [!status && word, ...answering, t.profile.members.works(count)]
     .filter(Boolean)
     .join(" · ");
   return (
     <li className="member" data-open={selected || undefined} data-offline={away || undefined}>
-      {/* 행은 펼치지 않고 프로필 카드를 행 왼쪽에 연다. 작업과 에이전트는 카드와 전체 보기에 있다. */}
+      {/* The row doesn't expand; the profile card opens to its left. Work and Agents are in the card and the full view. */}
       <button
         type="button"
         className="member-row"
@@ -109,7 +111,7 @@ function MemberRow({ member, me, selected }: { member: Member; me: boolean; sele
         <span className="member-names">
           <strong>
             <span className="member-name">{personName(member.name, member.login)}</span>
-            {me && <span className="me">나</span>}
+            {me && <span className="me">{t.profile.members.you}</span>}
           </strong>
           <span className="member-status">
             {status && (
@@ -125,7 +127,7 @@ function MemberRow({ member, me, selected }: { member: Member; me: boolean; sele
   );
 }
 
-/** 작업 하나: 에이전트 표시, 상태 한 줄(ADR-0010이 고른 것), 브랜치와 쓴 시각, 오프라인이면 "N시간 전 기준". */
+/** One work: Agent mark, status line (chosen in ADR-0010), branch and when it was written, and "As of 3 hours ago" if offline. */
 export function WorkItem({
   member,
   work,
@@ -139,24 +141,26 @@ export function WorkItem({
   const { line } = work;
   return (
     <li className="work">
-      {/* 에이전트를 모르는 작업은 사람 아래에 바로 둔다(ADR-0015). 줄은 표시 자리만큼 들여 맞춘다. */}
+      {/* A work with no known Agent goes right under the person (ADR-0015). The line is indented to match the mark. */}
       {agent ? <AgentMark name={member.name} agent={agent} /> : <span className="agent-space" />}
       <div className="work-body">
-        <p className={line ? "work-line" : "work-line none"}>{line?.text ?? "상태 한 줄 없음"}</p>
+        <p className={line ? "work-line" : "work-line none"}>
+          {line?.text ?? t.profile.members.noStatusLine}
+        </p>
         <p className="work-meta">
           <span className="branch">{work.branch}</span>
-          {conflict && <span className="badge warning">직접 충돌</span>}
-          {work.broken && <span className="badge warning">합치면 깨짐</span>}
+          {conflict && <span className="badge warning">{t.alertKinds.direct}</span>}
+          {work.broken && <span className="badge warning">{t.profile.members.broken}</span>}
           {line?.source === "agent" && (
-            <time dateTime={line.at} title={new Date(line.at).toLocaleString("ko-KR")}>
+            <time dateTime={line.at} title={new Date(line.at).toLocaleString(language)}>
               · {ago(line.at)}
             </time>
           )}
-          {line?.source === "pull" && <span>· 초안 PR</span>}
+          {line?.source === "pull" && <span>· {t.profile.members.draftPr}</span>}
           {member.offlineSince && (
             <span className="badge outline">
               <Clock size={11} aria-hidden />
-              {ago(member.offlineSince)} 기준
+              {t.profile.members.asOf(ago(member.offlineSince))}
             </span>
           )}
         </p>
@@ -165,29 +169,37 @@ export function WorkItem({
   );
 }
 
-/** 작업 없는 에이전트 한 줄: 표시, "지은의 Claude Code", 상태 글씨(DM 칸의 에이전트 메뉴와 같은 말). */
+/** One line for an Agent with no work: mark, "Jieun's Claude Code", and its state (same words as the Agent menu in the DM). */
 export function IdleAgent({ member, agent }: { member: Member; agent: Agent }) {
   const busy = agent.state === "answering";
   return (
     <li className="work idle-agent">
       <AgentMark name={member.name} agent={agent} />
       <span className="agent-name">
-        {member.name}의 {EXECUTOR_NAMES[agent.executor]}
+        {t.profile.members.agentOf(member.name, EXECUTOR_NAMES[agent.executor])}
       </span>
       <span className={busy ? "agent-state busy" : "agent-state"}>
-        {busy ? "답하는 중…" : agent.state === "offline" ? "러너가 꺼져 있어요" : "쉬는 중"}
+        {busy
+          ? t.profile.members.answeringDots
+          : agent.state === "offline"
+            ? t.profile.members.runnerOff
+            : t.profile.members.resting}
       </span>
     </li>
   );
 }
 
-/** 에이전트 표시: 실행기 약자와, 러너가 붙어 있는지의 점(붙어 있으면 초록 원, 아니면 빈 고리). */
+/** Agent mark: the executor abbreviation and a dot for whether the Runner is connected (green circle if so, empty ring if not). */
 function AgentMark({ name, agent }: { name: string; agent: Agent }) {
-  const label = `${name}의 ${EXECUTOR_NAMES[agent.executor]}, ${STATES[agent.state]}`;
+  const label = t.profile.members.agentLabel(
+    name,
+    EXECUTOR_NAMES[agent.executor],
+    t.profile.members.agentStates[agent.state],
+  );
   return <Mark agent={agent} role="img" aria-label={label} title={label} />;
 }
 
-/** 에이전트 표시의 모양만. 이름이 바로 옆에 보이는 곳에서는 `aria-hidden`으로 쓴다. */
+/** Just the shape of the Agent mark. Where the name is right beside it, use it with `aria-hidden`. */
 export const Mark = ({
   agent,
   ...rest
@@ -197,7 +209,7 @@ export const Mark = ({
   </span>
 );
 
-/** "3분 전"이 흐르도록 1분마다 다시 그린다. */
+/** Redraws every minute so "3m ago" keeps moving. */
 function useMinuteTick() {
   const [, tick] = useReducer((count: number) => count + 1, 0);
   useEffect(() => {

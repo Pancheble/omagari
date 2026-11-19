@@ -13,7 +13,7 @@ type Step =
   | { kind: "failed"; reason: string };
 
 function failure(error: unknown): Step {
-  // push 권한이 없으면 서버가 누가 어느 레포에 권한이 없는지 적어 보낸다. 그것이 거절의 이유다.
+  // Without push access, the server sends who lacks access to which repo. That is the reason for the refusal.
   if (error instanceof ContractFailure && error.code === "forbidden") {
     return { kind: "refused", reason: error.message };
   }
@@ -23,8 +23,8 @@ function failure(error: unknown): Step {
 }
 
 /**
- * GitHub 기기 인증으로 로그인한다. 러너와 같은 길이다(서버가 GitHub 토큰을 들고, 브라우저는 세션만 받는다).
- * 사람이 GitHub에서 코드를 넣는 동안 서버에 끝났는지 묻는다.
+ * Logs in with GitHub device authorization, the same path as the Runner (the server holds the GitHub token, and the browser gets only a session).
+ * While the person enters the code on GitHub, it asks the server whether it's done.
  */
 export function Login({
   notice,
@@ -35,7 +35,7 @@ export function Login({
 }) {
   const [step, setStep] = useState<Step>({ kind: "idle" });
   const [copied, setCopied] = useState(false);
-  /** 몇 번째 로그인인가. 취소하거나 화면을 떠나면 올려, 앞의 기다리기가 멈춘다. */
+  /** Which login attempt this is. Cancelling or leaving the screen raises it, which stops the earlier wait. */
   const attempt = useRef(0);
   useEffect(
     () => () => {
@@ -75,7 +75,7 @@ export function Login({
       try {
         await navigator.clipboard.writeText(step.userCode);
         setCopied(true);
-      } catch {} // 복사가 막혀도 코드는 화면에 있다
+      } catch {} // Even if copying is blocked, the code is on screen
     };
     return (
       <Centered>
@@ -166,7 +166,7 @@ export function Login({
   );
 }
 
-/** 로그인처럼 앱 틀 바깥의 화면. 가운데 한 줄기로 둔다. */
+/** A screen outside the app frame, like login. Laid out in one centered column. */
 export function Centered({ children }: { children: ReactNode }) {
   return (
     <main className="centered">

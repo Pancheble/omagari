@@ -236,15 +236,16 @@ const GHOST_ICONS = { submitted: EyeOff, waiting: Hourglass, off: Power, failed:
 function Ghost({ seat }: { seat: DebateSeat }) {
   const Icon = GHOST_ICONS[seat.state];
   const text = t.debate.ghost[seat.state];
-  const sub = seat.state === "submitted" ? t.debate.ghost.submittedSub : undefined;
+  const sub =
+    seat.state === "submitted"
+      ? t.debate.ghost.submittedSub
+      : seat.error && (t.debate.ghost.known[seat.error.message] ?? seat.error.message);
   return (
     <div className="debate-ghost">
       <Icon size={16} aria-hidden />
       <span>
         {text}
-        {(sub ?? seat.error?.message) && (
-          <span className="debate-meta"> · {sub ?? seat.error?.message}</span>
-        )}
+        {sub && <span className="debate-meta"> · {sub}</span>}
       </span>
     </div>
   );
