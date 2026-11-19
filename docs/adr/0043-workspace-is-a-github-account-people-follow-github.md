@@ -6,8 +6,9 @@ status: accepted
 
 ADR-0012는 서버 하나에 워크스페이스 하나, ADR-0011은 그 레포의 push 권한자만 멤버로 두었다. @Pancheble은 Notion처럼 워크스페이스 안에 레포 여럿과 팀별 권한을 두자고 했다(#211). 5단계 그릴링에서 Omagari가 사람과 팀을 따로 관리하지 않고 GitHub에 맡기기로 했다(2026-11-17 @Pancheble: "깃허브 권한이랑 똑같이", "그냥 조직을 지금 만들고 지금처럼 운영하는게 좋을수도", "개인 리포도 Omagari가 잘 작동하는지 확인은 해야해서 그냥 이대로 가자", `docs/stage5-questions.md` Q7, Q8).
 
-- **워크스페이스**: 서버 하나에 여럿이다. GitHub 계정(조직이나 개인) 하나와 짝지어지고, 그 계정의 레포를 처음 넣으면 생긴다. 만드는 화면과 Omagari의 소유자는 없다. 서버 설정에 받을 GitHub 계정 목록을 두고, 도그푸딩 서버는 `Pancheble`만 받는다.
+- **워크스페이스**: 서버 하나에 여럿이다. GitHub 계정(조직이나 개인) 하나와 짝지어지고, 그 계정의 레포를 처음 넣으면 생긴다. 만드는 화면과 Omagari의 소유자는 없다. 서버 설정에 받을 GitHub 계정 목록을 두고, 도그푸딩 서버는 `Pancheble`과 Omagari 조직을 받는다(2026-11-19 @Pancheble, #278).
 - **레포**: 그 레포의 GitHub Admin이 넣고 뺀다. 한 레포는 워크스페이스 하나에만 들어가므로 러너는 폴더의 GitHub 원격으로 워크스페이스를 찾는다.
+- **옮겨지거나 이름이 바뀐 레포**: 서버가 GitHub을 따라간다. 멤버의 push 권한을 다시 읽을 때(로그인, 10분마다) GitHub이 옛 이름을 새 레포로 넘겨 주어(301) 돌아온 `full_name`이 다르면, `repo` 열이 있는 표 모두와 레포 채널, 같은 워크스페이스 포럼의 거르기, 검사 명령을 새 이름으로 옮기고 옛 이름을 적어 둔다. 다른 계정으로 갔으면 레포 채널도 그 워크스페이스로 간다. 옛 원격의 러너, 옛 이름의 `Omagari-Repo`, 설정에 남은 옛 이름은 새 이름으로 읽는다. 새 계정이 받을 계정 밖이거나 새 이름이 이미 워크스페이스에 있으면 옮기지 않고 옛 이름으로 둔다(GitHub이 넘겨 주어 그대로 돈다). 설정으로 옛 이름과 새 이름을 주는 길은 사람이 잊으면 그 사이 따로 놀아 고르지 않았다(#278).
 - **멤버와 권한**: ADR-0011을 레포마다로 넓힌다. 레포마다 push 권한이 있으면 그 레포가 보이고 작업 중 코드를 서로 본다. 워크스페이스 레포 가운데 하나라도 push 권한이 있으면 멤버다. 초대 없이 로그인하면 들어오고, 10분마다 다시 확인한다.
 - **팀**: GitHub 팀이다. GitHub이 돌려주는 레포 권한에 팀으로 받은 몫이 이미 들어 있어, Omagari는 팀을 만들거나 가져오지 않고 `read:org`도 받지 않는다.
 - **레포마다 있는 것**: 작업, 알림, 포스트(그 레포의 GitHub 이슈), 라벨, 결정.
@@ -19,7 +20,8 @@ ADR-0012는 서버 하나에 워크스페이스 하나, ADR-0011은 그 레포�
 
 - **Omagari의 소유자, 초대, 팀(Notion식)**: GitHub과 사람 목록을 두 벌 관리한다. 팀이 GitHub에 이미 있다.
 - **로그인한 누구나 워크스페이스를 만든다**: 우리 서버가 모르는 사람의 작업 중 코드를 들고 요금을 낸다.
-- **이 레포를 지금 조직으로 옮긴다**: 개인 레포에서 잘 도는지를 도그푸딩으로 확인하지 못한다.
+- **이 레포를 지금 조직으로 옮긴다**: 개인 레포에서 잘 도는지를 도그푸딩으로 확인하지 못한다. 첫 배포(#234)부터 #238까지 개인 레포로 써 본 뒤 옮기기로 바꿨다(2026-11-19 @Pancheble, #235 댓글의 (가), #278). 조직 길(OAuth 앱 승인, 팀 권한)과 한 워크스페이스에 레포 둘, 워크스페이스 둘을 실제로 본다.
+- **옮긴 레포를 설정으로 알려 준다**(`OMAGARI_REPO`에 옛 이름=새 이름): 사람이 잊으면 옛 이름과 새 이름이 따로 논다. GitHub이 이미 알려 준다.
 - **포럼도 레포마다**: 레포가 늘면 같은 이름의 포럼이 레포마다 생긴다. 포럼은 거른 보기라 레포를 넘어도 깨지는 것이 없다.
 
 ## Consequences
@@ -35,4 +37,6 @@ ADR-0012는 서버 하나에 워크스페이스 하나, ADR-0011은 그 레포�
 - [GitHub 레포 역할](https://docs.github.com/en/organizations/managing-user-access-to-your-organizations-repositories/managing-repository-roles/repository-roles-for-an-organization)
 - [GitHub 조직 토론의 원천 레포](https://docs.github.com/en/organizations/managing-organization-settings/enabling-or-disabling-github-discussions-for-an-organization)
 - [GitHub Enterprise Server: 조직 만들기 막기](https://docs.github.com/en/enterprise-server@3.15/admin/managing-accounts-and-repositories/managing-organizations-in-your-enterprise/preventing-users-from-creating-organizations)
+- [REST API: 301은 영구 이동이니 따라간다](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#follow-redirects)
+- [레포 옮기기: 옛 주소와 git 명령을 넘겨 주고, 옛 자리에 새 레포를 만들면 끊긴다](https://docs.github.com/en/repositories/creating-and-managing-repositories/transferring-a-repository)
 - [OAuth 앱 접근 제한](https://docs.github.com/en/organizations/managing-oauth-access-to-your-organizations-data/about-oauth-app-access-restrictions)

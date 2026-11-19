@@ -216,3 +216,50 @@ test("레포가 하나이던 판의 DB로 켜도 있던 것이 그 레포에 그
     ),
   );
 });
+
+test("GitHub에서 레포를 다른 계정으로 옮기면 그 레포의 것이 새 이름 아래로 따라가고, 옛 원격과 옛 설정도 새 이름으로 읽는다", async (t) => {
+  const MOVED = "omagari-moved/space";
+  // 받을 계정에 옮겨 갈 계정이 있다. 옛 레포 이름(REPO)도 설정에 남아 있다.
+  const world = await startWorld({
+    accept: [REPO, "omagari-moved"],
+    seed: await readFile(new URL("./contract47.sql", import.meta.url), "utf8"),
+  });
+  t.after(world.stop);
+  // owner의 러너들이 올리는 작업은 때에 따라 있어 그 판의 alice 작업만 본다.
+  const seen = async (as: As) => ({
+    works: (await call(as, api.works)).works
+      .filter((w) => w.login === "alice")
+      .map((w) => [w.login, w.branch, w.line?.text]),
+    posts: (await call(as, api.posts)).posts.map((p) => [p.channel, p.labels, p.importance]),
+    decisions: (await call(as, api.decisions)).decisions.map((d) => [d.id, d.title]),
+    discuss: (await call(as, api.labels)).labels
+      .filter((l) => l.importance === "discuss")
+      .map((l) => l.name),
+    check: (await call(as, api.settings)).mergeCheck.check,
+    history: (await call(as, api.history, { channel: "p1" })).messages.map((m) => m.kind),
+    channels: (await call(as, api.channels)).channels.map((c) => `${c.kind}:${c.name}`).sort(),
+  });
+  const before = await seen(world.owner);
+  assert.deepEqual(before.works, [["alice", "payment", "결제 고치는 중"]]);
+  assert.deepEqual(before.posts, [["p1", ["직접 충돌"], "discuss"]]);
+
+  // 권한을 다시 읽을 때(여기서는 다시 로그인할 때, 서버에서는 10분마다도) 옮겨진 것을 안다.
+  world.github.move(REPO, MOVED);
+  const owner = await world.login("owner");
+  assert.deepEqual((await call(owner, api.me)).repos, [MOVED]);
+  assert.deepEqual(await seen(on(owner, MOVED)), before);
+  assert.equal(
+    (await call(owner, api.channels)).channels.find((c) => c.name === "일반")?.repo,
+    MOVED,
+  );
+  // 옛 이름으로 부르는 CLI와 옛 원격의 러너도 새 레포에 닿는다.
+  assert.deepEqual(await seen(on(owner, REPO)), before);
+  const desk = await world.desk(owner, undefined, undefined, { repo: REPO });
+  t.after(desk.remove);
+  assert.equal((await call({ ...owner, session: "old-alice-session" }, api.me)).repo, MOVED);
+
+  // 다시 떠도 설정의 옛 이름으로 빈 레포가 다시 생기지 않는다.
+  await world.restartServer();
+  await eventually(async () => assert.deepEqual((await call(owner, api.me)).repos, [MOVED]));
+  assert.deepEqual(await seen(owner), before);
+});
