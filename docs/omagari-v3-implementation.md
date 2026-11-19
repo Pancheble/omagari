@@ -86,6 +86,16 @@
 - 못 본 것: 볼륨 스냅샷에서 되살리기(스냅샷이 쌓이는지만 켜져 있다, 되살리기는 해 보지 않았다). 건강 확인에 실패하는 판이 옛 판을 남기는 동작. `dev`의 끝이 아닌 옛 CI 실행을 다시 돌렸을 때 Deploy가 건너뛰는 동작(#250의 검사, 판이 같았다). 멤버 여럿이 붙은 서버
 - 이 점검에서 정한 것: `FLY_API_TOKEN`은 레포 시크릿이 아니라 `dev`에서만 쓸 수 있는 GitHub Environment `dogfood`의 시크릿이다(#250). 첫 배포 때 계약이 42였다가 43이 되어 자동 배포가 아직 없던 서버를 손으로 한 번 더 올렸다
 
+**레포를 조직으로 옮긴 손 점검 결과** (2026-11-19, #278. `Pancheble/omagari`를 조직 `omagari-dev`로 옮기고, 서버가 따라가는 것(#279)과 워크스페이스 둘을 도그푸딩 서버에서 봤다. @Pancheble이 조직 만들기, Transfer, OAuth 승인, 웹 조작, 러너 켜기를 하고 이 세션이 옆에서 안내했다. 서버 DB는 허브가 읽기 전용으로 봤다)
+
+- [x] 옮기기 전 백업: 볼륨 스냅샷 `vs_l0oNVl4K2v2AUeG308O41bwN`(허브)
+- [x] 조직 OAuth 승인: GitHub 설정의 Omagari 앱 Organization access에서 `omagari-dev`에 Grant, 초록 ✓가 떴다(@Pancheble이 봄). 옮긴 뒤 10분마다 권한을 다시 읽어도 접근이 남았다(허브)
+- [x] 서버가 따라감: `OMAGARI_REPO="omagari-dev,Pancheble/kagami"`로 배포(#280) 뒤 로그 "Pancheble/omagari이 GitHub에서 omagari-dev/omagari로 옮겨져 따라갔다". DB에 `repo_moves` 한 줄, 레포 목록은 `omagari-dev/omagari`와 `Pancheble/kagami`, 새 이름 아래 포스트·채널 28개와 대화 32개가 그대로였다(허브)
+- [x] 워크스페이스 고르기: 웹 왼쪽 위 워크스페이스 목록에 `omagari-dev`와 `Pancheble` 둘이 나왔다(@Pancheble이 봄, 허브가 `api.me`로 확인)
+- [x] 레포 넣기: `omagari-dev`에서 "레포 넣기"로 `omagari-sandbox`(비공개)를 넣었고 DB의 레포와 권한 목록에 들어갔다(허브). 웹에서는 워크스페이스를 바꾸면 넣은 레포가 목록에서 사라지는 버그가 있다. 웹이 워크스페이스 목록을 로그인할 때만 읽어서다(#285, 새로 고치면 보인다)
+- [x] 러너: 같은 기기에서 `omagari-dev/omagari`, `omagari-dev/omagari-sandbox`, `Pancheble/kagami` 세 폴더의 러너가 서버에 붙었다. sandbox 러너는 "러너가 켜졌다: Pancheble의 에이전트, omagari-dev/omagari-sandbox"를 냈고, 세 러너 모두 서버와 연결이 살아 있었다(이 세션이 프로세스와 연결로 확인). 옛 원격(`Pancheble/omagari`)을 가진 설치 클론의 러너도 그대로 붙어 있었다
+- 못 본 것과 남은 것: 레포가 하나도 없는 계정의 첫 레포는 웹에서 넣을 수 없다(워크스페이스 목록이 볼 수 있는 레포의 계정만 보여서). 그래서 `Pancheble/kagami`는 설정으로 넣었다. 개인 계정 워크스페이스와 레포 하나뿐인 워크스페이스의 모습은 #286에서 다시 정한다
+
 
 Sources: [Claude Code 비대화 실행](https://code.claude.com/docs/en/headless), [세션 다루기](https://code.claude.com/docs/en/agent-sdk/sessions), [플랜으로 Agent SDK 쓰기](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan), [/btw 설명](https://blog.vincentqiao.com/en/posts/claude-code-btw/), [Codex 비대화 모드](https://learn.chatgpt.com/docs/non-interactive-mode)
 
