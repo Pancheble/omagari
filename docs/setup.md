@@ -20,19 +20,24 @@ omagari --version
 
 If you get `command not found`, `~/.local/bin` isn't on your PATH. Add `export PATH="$HOME/.local/bin:$PATH"` to your shell config (`~/.zshrc` and so on) and open a new terminal. Agents call `omagari` from the status line skill, so it has to be in the shell config, not just typed once.
 
-Put the server address in your shell config too. Without it, the CLI connects to `http://127.0.0.1:3000`.
+## Set up this machine
 
 ```bash
-export OMAGARI_SERVER=https://<your-team-server>
+omagari setup https://<your-team-server>
 ```
 
-## Install the hooks
+This signs you in with GitHub, saves the server address, and puts the session-start hook, the pre-edit hook, and the status line skill into this machine's agents (Claude Code and Codex). Leave the address out and it asks for one (`Server address?`).
+
+The address is saved in `~/.config/omagari/config.json`, next to `sessions.json`, and every command reads it. `OMAGARI_SERVER` still wins when it's set. Without either, the CLI connects to `http://127.0.0.1:3000`.
+
+Running `setup` again is safe: with the same address and session nothing changes, and a new address switches to it (signing in again if that server has no session yet). For Codex, open `/hooks` in Codex and trust the two Omagari hooks, or they won't run. Codex has no way to trust them in advance, so `setup` ends by saying so.
+
+To take Omagari off this machine:
 
 ```bash
-omagari install
+omagari uninstall              # removes the hooks and the skill
+omagari uninstall --sign-out   # also ends this server's session and forgets it
 ```
-
-This puts the session-start hook, the pre-edit hook, and the status line skill into this machine's agents (Claude Code and Codex). Run it once per machine; running it again keeps one copy. For Codex, open `/hooks` in Codex and trust the two hooks, or they won't run.
 
 ## Check command
 
@@ -66,7 +71,7 @@ Then restart the runner (`Ctrl-C`, then `omagari runner`).
 
 If the server's contract is newer and rejects your runner, the runner updates itself: it runs `git pull --ff-only` and `npm ci` in the install clone (the checkout that holds the runner program) and starts again with the same arguments. What it pulled (the commits before and after) goes to `omagari runner log`. It never touches the repo folder it observes. If the install clone has edited files or can't fast-forward, it changes nothing and tells you what to do. It doesn't update to an older server's contract either.
 
-If you upgraded Node or moved the checkout, run `omagari install` again, because the hook commands contain the Node and checkout paths.
+If you upgraded Node or moved the checkout, run `omagari setup` again, because the hook commands contain the Node and checkout paths.
 
 What changed in each release is on [GitHub Releases](https://github.com/omagari-dev/omagari/releases). If a release starts with "Runners need to update too", the contract between the server and the runner changed.
 

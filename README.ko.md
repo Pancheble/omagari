@@ -72,10 +72,10 @@ export OMAGARI_SERVER=https://<팀의 서버>   # 셸 설정에도 넣어 둬요
 omagari --version
 ```
 
-이 기기의 에이전트에 훅을 깔아요. 기기마다 한 번이에요. Codex는 Codex에서 `/hooks`를 열어 두 훅을 신뢰해야 돌아요.
+GitHub로 로그인하고, 서버 주소를 저장하고, 이 기기의 에이전트에 훅을 깔아요. 기기마다 한 번이에요. Codex는 Codex에서 `/hooks`를 열어 두 훅을 신뢰해야 돌아요.
 
 ```bash
-omagari install
+omagari setup https://<팀의 서버>
 ```
 
 워크스페이스 레포를 받은 폴더에서 러너를 켜 둬요. 처음이면 GitHub로 로그인해요. 러너가 켜져 있어야 팀이 내 작업과 에이전트를 봐요.
@@ -109,7 +109,8 @@ omagari runner
 
 | 명령 | 하는 일 |
 |---|---|
-| `omagari install` | 이 기기의 에이전트에 훅과 상태 한 줄 스킬을 깔아요 |
+| `omagari setup [<주소>]` | 로그인하고 서버 주소를 저장하고, 이 기기의 에이전트에 훅과 상태 한 줄 스킬을 깔아요 |
+| `omagari uninstall` | 훅과 스킬을 빼요(`--sign-out`이면 로그인도 끝내요) |
 | `omagari runner` | 레포 폴더에서 러너를 켜요(`--share full\|declared\|intent`로 올릴 것을 고르고, `--merge-check on\|off`) |
 | `omagari runner check` | 지금 내 작업에 검사 명령을 샌드박스에서 한 번 돌려 봐요 |
 | `omagari runner ask <메시지>` / `runner log` | 이 레포의 러너 세션에 묻거나, 러너가 실행한 것을 봐요 |
