@@ -66,6 +66,7 @@ import {
   type Qa,
   type Question,
   REPO_HEADER,
+  type Reaction,
   type ReplyOf,
   RUNNER_SOCKET,
   RunVerdict,
@@ -250,7 +251,9 @@ const MESSAGES = `SELECT m.id, m.channel, m.login, m.text, m.note, m.at, m.githu
   CASE WHEN c.id IS NULL THEN NULL ELSE ${FORUMS} END AS forums,
   CASE WHEN d.id IS NULL THEN NULL ELSE ${DECISION} END AS decision,
   COALESCE(a.repo, (SELECT ch.repo FROM channels ch WHERE ch.id = m.channel)) AS repo,
-  COALESCE(${ownerSql("a.repo")}, (SELECT ch.workspace FROM channels ch WHERE ch.id = m.channel)) AS workspace FROM messages m
+  COALESCE(${ownerSql("a.repo")}, (SELECT ch.workspace FROM channels ch WHERE ch.id = m.channel)) AS workspace,
+  (SELECT json_group_array(json_array(r.emoji, r.login, COALESCE(rp.name, r.login)) ORDER BY r.at, r.rowid)
+    FROM reactions r LEFT JOIN people rp ON rp.login = r.login WHERE r.message = m.id) AS reactions FROM messages m
   LEFT JOIN people p ON p.login = m.login
   LEFT JOIN qas q ON q.id = m.qa
   LEFT JOIN alerts a ON a.id = m.alert
@@ -291,6 +294,8 @@ type MessageRow = {
   repo: string | null;
   /** 이 줄이 선 워크스페이스. 알림 줄의 자리(`ALERTS`)의 것도 그 알림의 레포가 정한다. */
   workspace: string | null;
+  /** 달린 반응 `[이모지, 로그인, 이름]`의 JSON 배열, 단 차례. */
+  reactions: string;
 } & Pick<QaRow, "executor" | "question" | "answer" | "visibility">;
 
 /**
@@ -374,6 +379,14 @@ const postSummary = (row: MessageRow): Omit<Post, "alert"> => {
   };
 };
 
+/** 반응 줄을 이모지마다 묶는다. 이모지는 처음 달린 차례로 선다. */
+const reactionsOf = (json: string): Reaction[] => {
+  const grouped = new Map<string, Reaction["members"]>();
+  for (const [emoji, login, name] of JSON.parse(json) as [string, string, string][])
+    grouped.set(emoji, [...(grouped.get(emoji) ?? []), { login, name }]);
+  return [...grouped].map(([emoji, members]) => ({ emoji, members }));
+};
+
 const messageView = (row: MessageRow): ChannelMessage => {
   if (row.alert !== null) {
     return {
@@ -403,6 +416,7 @@ const messageView = (row: MessageRow): ChannelMessage => {
     login: row.login,
     name: row.name ?? row.login,
     at: new Date(row.at).toISOString(),
+    reactions: reactionsOf(row.reactions),
   };
   if (row.qa === null)
     return {
@@ -547,6 +561,17 @@ export async function startServer(options: {
   if (!db.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'note'").get())
     db.exec("ALTER TABLE messages ADD COLUMN note TEXT");
   db.exec("CREATE INDEX IF NOT EXISTS messages_by_channel ON messages (channel, id)");
+  // 메시지의 반응(ADR-0044): (메시지, 이모지, 멤버)마다 한 줄. `at`은 단 시각(ms)이다.
+  // 메시지의 `reacted`는 반응이 마지막으로 바뀐 시각(ms)이다. 다시 붙은 웹에 끊긴 사이에 바뀐 것을 다시 보내려고 둔다(떼면 줄이 없어지므로).
+  db.exec(`CREATE TABLE IF NOT EXISTS reactions (
+    message INTEGER NOT NULL REFERENCES messages (id),
+    emoji TEXT NOT NULL,
+    login TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    PRIMARY KEY (message, emoji, login)
+  ) STRICT`);
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'reacted'").get())
+    db.exec("ALTER TABLE messages ADD COLUMN reacted INTEGER");
   // 알림에 달린 포스트(문답 Q3)는 채널의 한 줄이다. 그래서 글, 지난 대화, DM, `@호출`, 채널에 올리기가 채널과 같은 길로 돈다.
   // `alert`는 알림이 선 메시지의 번호이고, 채팅 채널이면 NULL이다. 포스트의 `name`은 사람이 지을 수 없는 이름(줄바꿈으로 시작)이라
   // 채팅 채널의 이름과 겹치지 않는다. 사람이 읽는 이름은 `postName`이 짓는다. v0.1.0의 표에는 `alert`가 없다.
@@ -1288,20 +1313,22 @@ export async function startServer(options: {
     WSContext,
     { hash: string; login: string; repo: string; workspace: string }
   >();
+  /**
+   * 웹 연결로 보내도 되는지. 열려 있고, 그 연결이 고른 레포(와 그 워크스페이스)가 아직 그 사람에게 보여야 한다.
+   * push 권한을 다시 읽는 사이에 권한을 잃은 연결이 닫히기 전에도 받지 않게, 웹으로 가는 모든 보내기가 이것을 지난다.
+   */
+  const open = (socket: WSContext, watcher: { login: string; repo: string }) =>
+    socket.readyState === 1 && sees(watcher.login, watcher.repo); // OPEN
   /** 워크스페이스의 것을 그 워크스페이스를 고른 웹 모두에 보낸다. 다른 워크스페이스를 고른 연결에는 같은 사람의 것도 가지 않는다. */
   const broadcast = (workspace: string, frame: string) => {
     for (const [socket, watcher] of watchers)
-      if (socket.readyState === 1 && watcher.workspace === workspace) socket.send(frame); // OPEN
+      if (watcher.workspace === workspace && open(socket, watcher)) socket.send(frame);
   };
   /** 레포의 것을 그 레포가 보이는 웹에만, 그 레포의 워크스페이스를 고른 연결로만 보낸다. */
   const broadcastTo = (repo: string, frame: string) => {
     for (const [socket, watcher] of watchers)
-      if (
-        socket.readyState === 1 &&
-        watcher.workspace === ownerOf(repo) &&
-        sees(watcher.login, repo)
-      )
-        socket.send(frame); // OPEN
+      if (watcher.workspace === ownerOf(repo) && sees(watcher.login, repo) && open(socket, watcher))
+        socket.send(frame);
   };
   /** 채널의 한 줄을 그것이 보이는 웹에 보내고 계약의 꼴로 돌려준다. */
   const shareRow = (row: MessageRow) => {
@@ -1317,9 +1344,9 @@ export async function startServer(options: {
       if (
         watcher.login === login &&
         (workspace === undefined || watcher.workspace === workspace) &&
-        socket.readyState === 1
+        open(socket, watcher)
       )
-        socket.send(frame); // OPEN
+        socket.send(frame);
     }
   };
   /** 러너에 보내고 답을 기다리는 문답. 키는 보낸 `ask`의 id다. 서버가 꺼지면 잃고, 다시 뜰 때 실패로 둔다. */
@@ -1685,7 +1712,7 @@ export async function startServer(options: {
   const shareLabels = (repo: string) => {
     const frame = encode(serverToWeb, "labels", labelsView(repo));
     for (const [socket, watcher] of watchers)
-      if (watcher.repo === repo && socket.readyState === 1) socket.send(frame); // OPEN
+      if (watcher.repo === repo && open(socket, watcher)) socket.send(frame);
   };
   /** 레포의 라벨 하나(이름은 대소문자를 가리지 않는다). */
   const labelRow = (repo: string, name: string) =>
@@ -2593,11 +2620,7 @@ export async function startServer(options: {
       sentMembers.set(repo, json);
       const frame = encode(serverToWeb, "members", { members });
       for (const [socket, watcher] of watchers)
-        if (
-          watcher.repo === repo &&
-          socket.readyState === 1 && // OPEN
-          (changed || socket === to)
-        )
+        if (watcher.repo === repo && open(socket, watcher) && (changed || socket === to))
           socket.send(frame);
     }
     shareDebates(); // 러너가 붙거나 떨어지면 기다리는 자리의 `away`가 바뀐다
@@ -3339,7 +3362,7 @@ export async function startServer(options: {
   /** 워크스페이스의 웹마다 그 사람에게 보이는 채널을 보낸다. 이제 안 보이는 사람에게는 이미 받았을 수 있어 지우라고 보낸다. */
   const broadcastChannel = (workspace: string, row: Parameters<typeof channelView>[0]) => {
     for (const [socket, watcher] of watchers) {
-      if (socket.readyState !== 1 || watcher.workspace !== workspace) continue;
+      if (watcher.workspace !== workspace || !open(socket, watcher)) continue;
       const view = channelFor(watcher.login, row);
       socket.send(
         view
@@ -4209,6 +4232,45 @@ export async function startServer(options: {
     return { message };
   });
 
+  mount(app, api.react, ({ message, emoji, on }, c) => {
+    const login = c.get("login") as string;
+    // 볼 수 없는 메시지는 없는 메시지와 같게 답한다(#239). 채널을 볼 수 있는지는 `mustExist`가 가린다.
+    const row = db.prepare(`${MESSAGES} WHERE m.id = ?`).get(message) as MessageRow | undefined;
+    const missing = () =>
+      new ContractFailure({ code: "not_found", message: `없는 메시지다: ${message}` });
+    // 알림 줄의 자리(`ALERTS`)는 레포마다의 줄이 섞여 있으니 줄의 레포도 본다.
+    if (!row || (row.repo !== null && !sees(login, row.repo))) throw missing();
+    try {
+      mustExist(row.channel, c);
+    } catch {
+      throw missing();
+    }
+    if (row.alert !== null || row.decision !== null) {
+      throw new ContractFailure({
+        code: "invalid_request",
+        message: "알림 줄과 결정 줄에는 반응을 달 수 없다",
+      });
+    }
+    const now = Date.now();
+    db.exec("BEGIN");
+    if (on)
+      db.prepare(
+        "INSERT OR IGNORE INTO reactions (message, emoji, login, at) VALUES (?, ?, ?, ?)",
+      ).run(message, emoji, login, now);
+    else
+      db.prepare("DELETE FROM reactions WHERE message = ? AND emoji = ? AND login = ?").run(
+        message,
+        emoji,
+        login,
+      );
+    db.prepare("UPDATE messages SET reacted = ? WHERE id = ?").run(now, message);
+    db.exec("COMMIT");
+    visit(login, workspaceOf(c));
+    return {
+      message: shareRow(db.prepare(`${MESSAGES} WHERE m.id = ?`).get(message) as MessageRow),
+    };
+  });
+
   mount(app, api.metrics, ({ days }, c) => {
     // 지표는 부른 워크스페이스의 것만이다(ADR-0043).
     const workspace = workspaceOf(c);
@@ -4370,11 +4432,17 @@ export async function startServer(options: {
           const missed = db
             .prepare(
               `${MESSAGES} WHERE m.id > ? OR q.settled >= (SELECT at FROM messages WHERE id = ?)
-               OR a.updated >= (SELECT at FROM messages WHERE id = ?)
+               OR a.updated >= (SELECT at FROM messages WHERE id = ?) OR m.reacted >= (SELECT at FROM messages WHERE id = ?)
                OR (c.id IS NOT NULL AND EXISTS (SELECT 1 FROM messages WHERE channel = c.id AND id > ?))
                ORDER BY m.id`,
             )
-            .all(payload.after, payload.after, payload.after, payload.after) as MessageRow[];
+            .all(
+              payload.after,
+              payload.after,
+              payload.after,
+              payload.after,
+              payload.after,
+            ) as MessageRow[];
           for (const row of missed)
             if (row.workspace === workspace && (row.repo === null || sees(login, row.repo)))
               socket.send(encode(serverToWeb, "message", messageView(row)));

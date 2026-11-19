@@ -1,407 +1,406 @@
-# Omagari v3 구현
+# Omagari v3 implementation
+
+The plan is in the Omagari v3 tab. This tab covers how we build it and in what order.
 
-기획은 Omagari v3 탭에 있다. 이 탭은 그것을 어떻게, 어떤 순서로 만드는지를 적는다.
+## 1. Build order
 
-## 1. 만드는 순서
+We don't build it all at once. When the earlier stage is done, we open the next one. We dropped the gate between stages (2026-11-12, [ADR-0021](adr/0021-drop-stage1-headcount-gate.md)), because people only use something if there's something to use it for. We measure precision and the effect of debates with the metrics in section 12.
 
-한꺼번에 만들지 않는다. 앞 단계를 다 만들면 다음 단계를 연다. 단계마다 두었던 넘어가는 조건은 없앴다(2026-11-12, [ADR-0021](adr/0021-drop-stage1-headcount-gate.md)). 쓸 거리가 있어야 사람이 쓴다는 판단이다. 정밀도와 토론의 효과는 12장의 지표로 잰다.
+| Stage       | What we build                                                                                                                                                                                                  |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0. Measure  | We build nothing. Use Room with 2 people for a week and write down how many conflicts happened and what we couldn't resolve                                                                                    |
+| 1. Space    | Runner, channels, an agent next to each person, status line, agent DMs and @calls, session-start hook and pre-edit hook                                                                                        |
+| 2. One flow | Direct conflict and guessed-alert → conversation right there → decision PR. Claims, inbox and feed, asking and waiting, and definition lines come in here too. No debate engine, a person wraps it up          |
+| 3. Evidence | Merge run                                                                                                                                                                                                      |
+| 4. Debate   | Debate posts (agent debate, ending with experiments), grilling                                                                                                                                                 |
+| 5. Deploy   | Put up the server and build Omagari with Omagari (dogfooding). Conflicts between one person's own works, several workspaces and several repos                                                                  |
+| Later       | Conflicts across repos and workspace posts, people without push permission (view, contribute), decision retros, voice and transcription, @mentions across devices, mechanisms we turn on once they're observed |
 
-| 단계 | 만드는 것 |
-| --- | --- |
-| 0. 재 보기 | 만들지 않는다. Room을 2인으로 한 주 써 보고 부딪힘이 몇 번 났는지, 못 푼 것이 무엇인지 적는다 |
-| 1. 공간 | 러너, 채널, 사람 옆의 에이전트, 상태 한 줄, 에이전트 DM과 @호출, 세션 시작 훅과 편집 전 훅 |
-| 2. 흐름 하나 | 직접 충돌·추정 알림 → 그 자리의 대화 → 결정 PR. 선점, 편지함과 피드, 묻고 기다리기, 정의 줄도 여기서 넣는다. 토론 엔진 없이 사람이 정리한다 |
-| 3. 증거 | 합쳐 돌려 보기 |
-| 4. 토론 | 토론 포스트(에이전트 토론, 실험으로 끝내기), 그릴링 |
-| 5. 배포 | 서버를 올리고 Omagari로 Omagari를 만들며 써 본다(도그푸딩). 같은 사람의 작업끼리 부딪힘, 워크스페이스 여럿과 레포 여럿 |
-| 이후 | 레포를 넘는 부딪힘과 워크스페이스 포스트, push 권한이 없는 사람(보기, 기여), 결정 회고, 보이스와 전사, 기기를 건너는 @멘션, 관찰되면 켤 장치 |
+**What we lock down**: we only lock down the spec through stage 1. From stage 2 it's a direction, and we adjust it from what we learn using the earlier stages. Stage 1 starts with one workspace and no team split, and the many-to-many mapping between teams and repos comes after stage 2. In stage 5 a workspace gets paired with one GitHub account and holds several repos, and teams follow GitHub teams (ADR-0043). Only the owner can call an agent.
 
-**굳히는 범위**: 명세는 1단계까지만 굳힌다. 2단계부터는 방향이고, 앞 단계를 써 본 결과로 고친다. 1단계는 워크스페이스 하나에 팀 구분 없이 시작하고, 팀과 레포의 다대다 매핑은 2단계 이후에 넣는다. 5단계에서 워크스페이스를 GitHub 계정 하나와 짝짓고 레포 여럿을 넣으며, 팀은 GitHub 팀을 따른다(ADR-0043). 에이전트는 주인만 부를 수 있다.
+**What stage 1 leaves out** (ADR-0009): claims, inbox and feed, asking and waiting (`omagari ask`), and definition lines. Stage 1 observation uploads the changed files and their content, and the two hooks only show nearby work, using that observation and the status line. `omagari ask` calls the other person's agent on the other person's usage, which clashes with "only the owner can call an agent". The receiving side agrees with a switch they turn on and off (ADR-0024).
+
+**Stage 1's server and members**: there's one server, the one we run, and one workspace (ADR-0012). Only GitHub accounts with push permission on that repo join the workspace (ADR-0011). From stage 5 one server holds several workspaces, and members are decided per repo by push permission (ADR-0043). The dogfood server runs on Fly.io and follows `dev` (ADR-0042).
 
-**1단계에 넣지 않는 것**(ADR-0009): 선점, 편지함과 피드, 묻고 기다리기(`omagari ask`), 정의 줄. 1단계의 관측은 바뀐 파일과 그 내용까지 올리고, 두 훅은 그 관측과 상태 한 줄로 근처 작업만 보여 준다. `omagari ask`는 상대의 에이전트를 상대의 사용량으로 부르는 것이라 "주인만 부를 수 있다"와 어긋난다. 받는 쪽이 켜고 끄는 스위치로 동의한다(ADR-0024).
+### Order inside stage 1: runner first
 
-**1단계의 서버와 멤버**: 서버는 우리가 띄우는 하나이고 워크스페이스도 하나다(ADR-0012). 워크스페이스에는 그 레포에 push 권한이 있는 GitHub 계정만 들어온다(ADR-0011). 5단계부터 서버 하나에 워크스페이스가 여럿이고, 멤버는 레포마다 push 권한으로 정한다(ADR-0043). 도그푸딩 서버는 Fly.io에서 `dev`를 따른다(ADR-0042).
+We know how to build screens, and the uncertainty is all in the runner. So we punch through the thinnest line from start to finish first.
 
-### 1단계 안의 순서: 러너가 먼저다
+1. **Runner only**: put one message in from the terminal and an agent session on my machine answers, and a second message continues the same session
+2. **Server relay**: a message sent from another machine reaches my runner through the server
+3. **Observation**: the runner looks at Git state and uploads the changed files and their content, and the status line shows from that
+4. **Web screen**: on top of that go channels, the sidebar, and agent DMs
 
-화면은 만드는 법이 알려져 있고, 불확실한 것은 러너에 몰려 있다. 그래서 처음부터 끝까지 가는 가장 얇은 한 줄을 먼저 뚫는다.
+**What we confirmed from the docs (Claude Code)**
 
-1. **러너만**: 터미널에서 메시지 하나를 넣으면 내 기기의 에이전트 세션이 답하고, 두 번째 메시지가 같은 세션으로 이어진다
-2. **서버 중계**: 다른 기기에서 보낸 메시지가 서버를 거쳐 내 러너에 닿는다
-3. **관측**: 러너가 Git 상태를 보고 바뀐 파일과 그 내용을 올리고, 그것으로 상태 한 줄이 보인다
-4. **웹 화면**: 그 위에 채널, 사이드바, 에이전트 DM을 올린다
+| Question                                               | Answer                                                                                                                                                                                                                    |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Can we continue a session we started without a screen? | Yes. Run it with `claude -p` and continue with `--resume <session ID>`                                                                                                                                                    |
+| Can we fork the owner's work session?                  | Yes. A fork makes a new session that copies the original's history and leaves the original alone. We can read the session list on disk to find the latest session                                                         |
+| Does it stop at permission checks?                     | No. In a `-p` run, calls that need approval are denied. `--allowedTools` only decides which tools run without approval, so we narrow the tools you can use at all with `--tools` (ADR-0003)                               |
+| Can it run on a subscription?                          | Yes. `claude -p` and Agent SDK use logged in with a plan count against the subscription limit                                                                                                                             |
+| How does `/btw` work?                                  | It sees the whole conversation context but can't use tools, and the answer isn't kept in the history. Omagari's DM is a side question about the channel conversation, not about a work session, so it doesn't need a fork |
 
-**문서로 확인한 것(Claude Code)**
+**Things to watch out for from this**
 
-| 질문 | 답 |
-| --- | --- |
-| 화면 없이 띄운 세션을 이어 갈 수 있나 | 된다. `claude -p`로 실행하고 `--resume <세션 ID>`로 이어 간다 |
-| 주인의 작업 세션을 갈라 띄울 수 있나 | 된다. 포크는 원본 기록을 복사한 새 세션을 만들고 원본은 그대로 둔다. 디스크의 세션 목록을 읽어 최근 세션을 찾을 수 있다 |
-| 권한 확인에서 멈추나 | 안 멈춘다. `-p` 실행에서는 승인이 필요한 호출이 거부된다. `--allowedTools`는 승인 없이 돌 도구를 정할 뿐이라, 쓸 수 있는 도구 자체는 `--tools`로 줄인다(ADR-0003) |
-| 구독으로 돌려도 되나 | 된다. 플랜으로 로그인한 `claude -p`와 Agent SDK 사용은 구독 한도에서 차감된다 |
-| `/btw`는 어떻게 동작하나 | 대화 맥락 전체를 보지만 도구는 못 쓰고, 답은 기록에 남지 않는다. Omagari의 DM은 작업 세션이 아니라 채널 대화에 대한 곁질문이라 포크가 필요 없다 |
+- A fork splits only the conversation, not the files. If the forked agent edits files, it really changes the owner's work folder, so a runner session has to be read-only
+- `--bare` mode doesn't use the subscription login and needs an API key. It's planned to become the default for `-p`, and the runner may be affected then
 
-**여기서 나온 주의점**
+**Why fork**: a new session doesn't know what the owner was working on, and putting a message straight into the work session interrupts the work and mixes into the conversation. A fork knows the work context without getting in the way of the work.
 
-- 포크는 대화만 가르고 파일은 가르지 않는다. 포크한 에이전트가 파일을 고치면 주인의 작업 폴더에 실제로 반영되므로 러너 세션은 반드시 읽기 전용이어야 한다
-- `--bare` 모드는 구독 로그인을 쓰지 않고 API 키가 필요하다. 앞으로 `-p`의 기본값이 될 예정이라 그때 러너가 영향을 받을 수 있다
+**What to check while building**
 
-**왜 갈라 띄우나**: 새 세션은 주인이 하던 작업을 모르고, 작업 세션에 직접 메시지를 넣으면 작업이 끊기고 대화에 섞인다. 갈라 띄우면 작업 맥락을 알면서도 작업을 방해하지 않는다.
+- If we fork the session the owner is using right now, how much of the conversation comes in?
+- Codex: there's `codex exec resume <session ID>`, and `codex exec` uses the saved CLI login as is (usually a ChatGPT login) and defaults to a read-only sandbox (confirmed from the docs). **A hand check (2026-11-11, codex-cli 0.167.1) found the subscription login, session continuation, and read-only all worked as documented.** The default sandbox follows the user's setting (`sandbox_mode` in `~/.codex/config.toml`), so the runner (#16) doesn't lean on the default. It passes `-s read-only` itself and turns off MCP servers, apps, and plugins (ADR-0003). `codex exec fork` exists in 0.167.1. **A hand check (2026-11-17, codex-cli 0.167.1, owner's machine, #203) found that forking worked.** The new session answered with the context of the original session (from 2026-11-12), and the original session file's SHA-256 was the same before and after the fork. Read-only was given with `-c 'sandbox_mode="read-only"'` (`fork` has no `-s`). The shell `touch` was blocked with `Operation not permitted` and no file was created. Each fork makes a new session record. The runner (`debate.ts`) wired this in (#232). Session records are at `$CODEX_HOME/sessions/<year>/<month>/<day>/rollout-*.jsonl` (default `~/.codex`), and the `payload` of the first-line `session_meta` has `id`, `cwd`, and `git.branch` (this is the shape seen in 0.167.1 records, and we couldn't confirm it from the docs). Among sessions whose `cwd` is that work folder and whose `git.branch` is that branch, minus the ones the runner started, the runner forks the most recent with `codex exec fork <id> -`. A hand check on 2026-11-18 (0.167.1, owner's machine, #232) got a new `thread_id` with this argument shape, and it answered with the context of the original session. `fork` refuses outside a git repo with "Not inside a trusted directory" (a work folder is always inside a repo). If it can't find one, it joins without context
+- Auto-compact in a Claude Code session without a screen: it happened in a hand check. A session with a lowered threshold (`CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000`) shrank from 74,569 tokens to 3,399, the summary kept the first turn's content, and turns after the compact still remembered it. The session id stayed the same. We didn't look at Codex (undecided, below)
 
-**만들면서 확인할 것**
+**Real executor hand check results** (`test/real-executors.ts`, how to run it is in `docs/executor-check.md`)
 
-- 주인이 지금 쓰고 있는 세션을 포크하면 어디까지의 대화가 들어오는가
-- Codex: `codex exec resume <세션 ID>`가 있고, `codex exec`는 저장된 CLI 로그인(보통 ChatGPT 로그인)을 그대로 쓰며 기본이 읽기 전용 샌드박스다(문서로 확인). **손 점검(2026-11-11, codex-cli 0.167.1)에서 구독 로그인, 세션 이어 가기, 읽기 전용이 문서대로 됐다.** 기본 샌드박스는 사용자 설정(`~/.codex/config.toml`의 `sandbox_mode`)을 따르므로, 러너(#16)는 기본값에 기대지 않고 `-s read-only`를 직접 주고 MCP 서버, 앱, 플러그인을 끈다(ADR-0003). `codex exec fork`는 0.167.1에 있다. **손 점검(2026-11-17, codex-cli 0.167.1, 주인 기기, #203)에서 포크가 됐다.** 원본 세션(2026-11-12 것)의 맥락을 새 세션이 답했고, 원본 세션 파일은 SHA-256이 포크 전후 같았다. 읽기 전용은 `-c 'sandbox_mode="read-only"'`로 줬다(`fork`에는 `-s`가 없다). 셸 `touch`가 `Operation not permitted`로 막혔고 파일은 생기지 않았다. 포크마다 새 세션 기록이 생긴다. 러너(`debate.ts`)가 붙였다(#232). 세션 기록은 `$CODEX_HOME/sessions/<연>/<월>/<일>/rollout-*.jsonl`(기본 `~/.codex`)이고 첫 줄 `session_meta`의 `payload`에 `id`, `cwd`, `git.branch`가 있다(0.167.1 기록에서 본 꼴이고 문서로는 확인하지 못했다). 러너는 `cwd`가 그 작업 폴더이고 `git.branch`가 그 브랜치인 것 가운데 러너가 띄운 세션을 뺀 가장 최근 것을 `codex exec fork <id> -`로 갈라 띄운다. 2026-11-18 손 점검(0.167.1, 주인 기기, #232)에서 이 인자 꼴로 새 `thread_id`가 나오고 원본 세션의 맥락을 답했다. `fork`는 git 저장소 밖에서는 "Not inside a trusted directory"로 거절한다(작업 폴더는 늘 저장소 안이다). 찾지 못하면 맥락 없이 참여한다
-- 화면 없는 Claude Code 세션의 자동 컴팩트: 손 점검에서 일어났다. 문턱을 낮춘 세션(`CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000`)이 74,569 토큰에서 3,399 토큰으로 줄었고, 요약에 첫 턴의 내용이 남아 컴팩트 뒤의 턴도 기억했다. 세션 id는 그대로였다. Codex는 보지 않았다(아래 미정)
+- Claude Code (2026-11-11, the #7 session in this repo ran it with the owner's machine's claude.ai login, with `ANTHROPIC_MODEL=haiku` to cut usage)
+  - [x] Subscription login: it ran without an API key, and `claude auth status` shows a claude.ai login
+  - [x] Session continuation: the second turn, continued through the runner's channel session, answered the first turn's passphrase, and the session id stayed the same
+  - [x] Read-only: after being told to create and edit files, the work folder is unchanged. The answer was "I couldn't, because the only tools I can use are Glob, Grep, and Read"
+  - Long session (observation): the auto-compact line above
+- Codex (2026-11-11, @Pancheble ran `node test/real-executors.ts codex --quick`, codex-cli 0.167.1, darwin arm64, Node 24.19.0)
+  - [x] Subscription login: it ran without an API key environment variable, and `codex login status` shows a ChatGPT login
+  - [x] Session continuation: the second turn, continued with `codex exec resume <id> -`, answered the first turn's passphrase, and the session id stayed the same
+  - [x] Read-only: with no `--sandbox` (the default), after being told to create and edit files, the work folder is unchanged. The answer was "I can't write files with read-only permission"
+  - Long session: not checked (`--quick`). We put it off because it's hard to grow the context to 40k tokens on the free plan's usage
+- Codex, after wiring it into the runner (2026-11-11, the #16 session ran `node test/real-executors.ts codex --quick`, codex-cli 0.167.1). We ran a DM channel session with the runner's `codex` executor
+  - [x] Subscription login: `codex login status` shows a ChatGPT login
+  - [x] Session continuation: the second turn, continued through the runner's channel session, answered the first turn's passphrase, and the session id stayed the same
+  - [x] Read-only: after being told to create and edit files in a session the runner continued with `-s read-only`, the work folder is unchanged. The answer was "the workspace is read-only, so I can't create files"
+- Switching models in a continued session (2026-11-12, the #55 session ran it by hand on the owner's machine, in an empty Git folder, with the same flags as the runner). What we decided is ADR-0020
+  - Asking for the choices: neither calls a model. For Claude Code (2.1.319), sending the control request `initialize` to `claude -p --input-format=stream-json --output-format=stream-json --verbose --settings={"disableAllHooks":true}` got 14 `models` back within 1.7 seconds (including `default`, with `resolvedModel` and `supportedEffortLevels` attached), and it left no session record. For Codex (0.167.1), `model/list` on `codex app-server` returned 3 non-hidden models (free plan), with `supportedReasoningEfforts` and `isDefault` for each model
+  - Claude Code: a session where haiku had memorized a passphrase was continued with `--resume --model=sonnet --effort=low`, and sonnet answered the passphrase (sonnet was added to `modelUsage`). Continuing again without `--model` answered **with sonnet**, not the default in settings (Fable 5.2) (`model` in `system`/`init` was `claude-sonnet-5-5`). In the session record, the requested effort is low only on the turn that got `--effort=low`, and medium on the rest, so effort doesn't carry over. The result's `modelUsage` sums the whole session, so it can't tell which model this turn used. Running again with the runner's `claudeCode` executor gave the same: the answering model the executor returned was haiku → (`--model` sonnet, `--effort` low) sonnet → (no flags) sonnet, and it answered the passphrase through the third turn
+  - Codex: a session where `-m gpt-5.6-luna -c model_reasoning_effort=low` had memorized a passphrase was continued with `exec -m gpt-6-luna -c model_reasoning_effort=high resume <id> -`. After the warning "This session was recorded with model `gpt-5.6-luna` but is resuming with `gpt-6-luna`" (an `error` item in `item.completed`), it answered the passphrase in the same turn, and the exit code is 0. The session record's `turn_context` writes the model and effort for each turn: luna/low → 6-luna/high → (no flags) 6-luna/none → `-m gpt-5.6-terra` terra/none → (no flags) **6-luna**/none. Continuing without `-m` runs on the model in settings, not that session's model, and effort doesn't carry over either
 
-**실제 실행기 손 점검 결과** (`test/real-executors.ts`, 돌리는 법은 `docs/executor-check.md`)
+**Dogfood server first deploy hand check results** (2026-11-18~19, #234. The server is Fly.io `omagari-dogfood`, Tokyo, volume `omagari_data`. @Pancheble did the account, billing, secrets, and first `fly deploy` themselves, and this session watched from beside them. The build was fee180c (manual deploy), then contract 43 after cd14ac7 (auto deploy))
 
-- Claude Code (2026-11-11, 이 레포의 #7 세션이 주인 기기의 claude.ai 로그인으로 돌림, 사용량을 줄이려고 `ANTHROPIC_MODEL=haiku`)
-  - [x] 구독 로그인: API 키 없이 돌았고 `claude auth status`가 claude.ai 로그인이다
-  - [x] 세션 이어 가기: 러너의 채널 세션으로 이은 둘째 턴이 첫 턴의 암호를 답했고 세션 id가 그대로다
-  - [x] 읽기 전용: 파일을 만들고 고치라고 시킨 뒤에도 작업 폴더가 그대로다. 답은 "쓸 수 있는 도구가 Glob, Grep, Read뿐이라 못 했다"
-  - 긴 세션(관찰): 위의 자동 컴팩트 줄
-- Codex (2026-11-11, @Pancheble이 `node test/real-executors.ts codex --quick`으로 돌림, codex-cli 0.167.1, darwin arm64, Node 24.19.0)
-  - [x] 구독 로그인: API 키 환경 변수 없이 돌았고 `codex login status`가 ChatGPT 로그인이다
-  - [x] 세션 이어 가기: `codex exec resume <id> -`로 이은 둘째 턴이 첫 턴의 암호를 답했고 세션 id가 그대로다
-  - [x] 읽기 전용: `--sandbox` 없이(기본값) 파일을 만들고 고치라고 시킨 뒤에도 작업 폴더가 그대로다. 답은 "읽기 전용 권한으로 파일을 쓸 수 없습니다"
-  - 긴 세션: 보지 않았다(`--quick`). 무료 요금제의 사용량으로는 맥락을 4만 토큰까지 키우기 어려워 미뤘다
-- Codex, 러너에 붙인 뒤 (2026-11-11, #16 세션이 `node test/real-executors.ts codex --quick`으로 돌림, codex-cli 0.167.1). 러너의 `codex` 실행기로 DM 채널 세션을 돌렸다
-  - [x] 구독 로그인: `codex login status`가 ChatGPT 로그인이다
-  - [x] 세션 이어 가기: 러너의 채널 세션으로 이은 둘째 턴이 첫 턴의 암호를 답했고 세션 id가 그대로다
-  - [x] 읽기 전용: 러너가 `-s read-only`로 이어 간 세션에 파일을 만들고 고치라고 시킨 뒤에도 작업 폴더가 그대로다. 답은 "작업공간이 읽기 전용이라 파일을 만들 수 없다"
-- 이어 가는 세션에서 모델 바꾸기 (2026-11-12, #55 세션이 주인 기기에서 직접 돌림, 빈 Git 폴더, 러너와 같은 플래그). 정한 것은 ADR-0020
-  - 고를 거리 묻기: 둘 다 모델을 부르지 않는다. Claude Code(2.1.319)는 `claude -p --input-format=stream-json --output-format=stream-json --verbose --settings={"disableAllHooks":true}`에 제어 요청 `initialize`를 보내면 1.7초 안에 `models` 14개(`default` 포함, `resolvedModel`과 `supportedEffortLevels`가 붙는다)가 왔고 세션 기록을 남기지 않았다. Codex(0.167.1)는 `codex app-server`의 `model/list`에 숨기지 않은 모델 3개(무료 요금제)와 모델마다 `supportedReasoningEfforts`, `isDefault`가 왔다
-  - Claude Code: haiku로 암호를 기억시킨 세션을 `--resume --model=sonnet --effort=low`로 이었더니 sonnet이 암호를 답했다(`modelUsage`에 sonnet이 더해짐). 이어서 `--model` 없이 이었더니 설정의 기본(Fable 5.2)이 아니라 **sonnet으로** 답했다(`system`/`init`의 `model`이 `claude-sonnet-5-5`). 세션 기록의 요청 effort는 `--effort=low`를 준 턴만 low이고 나머지는 medium이라 effort는 이어지지 않는다. 결과의 `modelUsage`는 세션 전체를 더한 것이라 이 턴의 모델을 가리지 못한다. 러너의 `claudeCode` 실행기로 다시 돌려도 같았다: 실행기가 돌려준 답한 모델이 haiku → (`--model` sonnet, `--effort` low) sonnet → (플래그 없음) sonnet이고 셋째 턴까지 암호를 답했다
-  - Codex: `-m gpt-5.6-luna -c model_reasoning_effort=low`로 암호를 기억시킨 세션을 `exec -m gpt-6-luna -c model_reasoning_effort=high resume <id> -`로 이었더니 "This session was recorded with model `gpt-5.6-luna` but is resuming with `gpt-6-luna`" 경고(`item.completed`의 `error` 항목) 뒤에 같은 턴에서 암호를 답했고 종료 코드는 0이다. 세션 기록의 `turn_context`가 턴마다 모델과 effort를 적는다: luna/low → 6-luna/high → (플래그 없음) 6-luna/없음 → `-m gpt-5.6-terra` terra/없음 → (플래그 없음) **6-luna**/없음. `-m` 없이 이으면 그 세션의 모델이 아니라 설정의 모델로 돌고, effort도 이어지지 않는다
+- [x] Health check and web: `GET /api/health` returns `{"contract":43}` (200), and the server serves the web login screen. @Pancheble logged into the web with GitHub device authorization and saw the screen come up
+- [x] Runner and agents: from the install clone (`dev`), ran `omagari install`, gave `OMAGARI_SERVER` the server address, and started the runner. `omagari status` shows Claude Code and Codex online. Both agents answered a message sent from a web channel (`omagari runner log`), and the earlier conversation went into the next question's context. @Pancheble looked at the agent list on the web screen
+- [x] A child session's worktree shows up as work: the child sessions started after the runner came on (#253, #254) and this session's worktree showed up as work in the web member list (@Pancheble's screenshot, the hub confirmed). The agent mark on the work line wasn't there then and came in with #270 (591f62c)
+- [x] Session-start hook: when this session restarted, the hook output included `<omagari-inbox>` (six lines of news about resolved indirect conflicts) (this session saw it itself). The hub session's SessionStart hook got `<omagari-situation>`, and its pre-edit hook got news of a direct conflict, an indirect conflict, and "closed because the merge run verdict was pass" (the hub confirmed)
+- [x] Auto deploy: after #250 merged (cd14ac7), dev CI passed and Deploy ran (run 44305609539). At "decide whether to deploy", `DEPLOY=1` and `flyctl deploy` succeeded, and the new image went onto the same machine and volume (this session confirmed it from the run steps and `fly machine list`). Three more after that (922e1e4, 3e14908, 591f62c) all succeeded too (the hub)
+- [x] DB after restart: the 5 conversations in the channel "일반" (General) (2026-11-18 12:15~12:25 UTC) and the CLI login are still there after three auto deploys (the hub confirmed with `api.history` and `omagari status`). This session saw the member and agents still there in `omagari status`
+- Not seen: restoring from a volume snapshot (only snapshots piling up is turned on, we haven't tried restoring). The behavior where a build that fails the health check leaves the old build. The behavior where Deploy skips when you rerun an old CI run that isn't the tip of `dev` (#250's check, the build was the same). A server with several members joined
+- What this check decided: `FLY_API_TOKEN` isn't a repo secret but a secret in the GitHub Environment `dogfood`, which only `dev` can use (#250). The contract went from 42 to 43 at the first deploy, so we manually deployed once more to a server that didn't have auto deploy yet
 
-**도그푸딩 서버 첫 배포 손 점검 결과** (2026-11-18~19, #234. 서버는 Fly.io `omagari-dogfood`, 도쿄, 볼륨 `omagari_data`. @Pancheble이 계정, 결제, 비밀값, 첫 `fly deploy`를 직접 하고 이 세션이 옆에서 봤다. 판은 fee180c(손 배포), 이어 cd14ac7(자동 배포) 뒤 계약 43)
+**Repo move to an organization hand check results** (2026-11-19, #278. We moved `Pancheble/omagari` to the organization `omagari-dev`, and looked at the server following it (#279) and two workspaces on the dogfood server. @Pancheble did creating the organization, Transfer, OAuth approval, web actions, and starting the runner, and this session guided from beside them. The hub looked at the server DB read-only)
 
-- [x] 건강 확인과 웹: `GET /api/health`가 `{"contract":43}`(200)이고, 서버가 웹의 로그인 화면을 낸다. @Pancheble이 GitHub 기기 인증으로 웹에 로그인해 화면이 나오는 것을 봤다
-- [x] 러너와 에이전트: 설치 클론(`dev`)에서 `omagari install`, `OMAGARI_SERVER`를 서버 주소로 주고 러너를 켰다. `omagari status`에 Claude Code와 Codex가 온라인이다. 웹 채널에서 보낸 메시지에 두 에이전트가 답했고(`omagari runner log`), 앞 대화가 다음 질문의 맥락으로 들어갔다. 웹 화면의 에이전트 목록은 @Pancheble이 봤다
-- [x] 하위 세션의 워크트리가 작업으로 보임: 러너가 켜진 뒤 띄운 하위 세션(#253, #254)과 이 세션의 워크트리가 웹 멤버 목록에 작업으로 보였다(@Pancheble의 스크린샷, 허브가 확인). 작업 줄의 에이전트 표시는 그때 없었고 #270(591f62c)에서 들어갔다
-- [x] 세션 시작 훅: 이 세션이 다시 시작될 때 훅 출력에 `<omagari-inbox>`(풀린 간접 충돌 소식 여섯 줄)가 들어왔다(이 세션이 직접 봄). 허브 세션의 SessionStart 훅에는 `<omagari-situation>`이, 편집 전 훅에는 직접 충돌, 간접 충돌, "합쳐 돌려 본 판정이 통과라 닫혔다" 소식이 왔다(허브가 확인)
-- [x] 자동 배포: #250 머지(cd14ac7) 뒤 dev CI가 통과하고 Deploy가 돌았다(run 44305609539). "올릴지 정한다"에서 `DEPLOY=1`, `flyctl deploy` 성공, 같은 기계와 볼륨에 새 이미지가 올라갔다(이 세션이 run 단계와 `fly machine list`로 확인). 이후 세 번(922e1e4, 3e14908, 591f62c)도 모두 성공이었다(허브)
-- [x] 다시 띄운 뒤 DB: 채널 "일반"의 대화 5개(2026-11-18 12:15~12:25 UTC)와 CLI 로그인이 자동 배포 세 번 뒤에도 그대로다(허브가 `api.history`와 `omagari status`로 확인). 이 세션은 `omagari status`에서 멤버와 에이전트가 남은 것을 봤다
-- 못 본 것: 볼륨 스냅샷에서 되살리기(스냅샷이 쌓이는지만 켜져 있다, 되살리기는 해 보지 않았다). 건강 확인에 실패하는 판이 옛 판을 남기는 동작. `dev`의 끝이 아닌 옛 CI 실행을 다시 돌렸을 때 Deploy가 건너뛰는 동작(#250의 검사, 판이 같았다). 멤버 여럿이 붙은 서버
-- 이 점검에서 정한 것: `FLY_API_TOKEN`은 레포 시크릿이 아니라 `dev`에서만 쓸 수 있는 GitHub Environment `dogfood`의 시크릿이다(#250). 첫 배포 때 계약이 42였다가 43이 되어 자동 배포가 아직 없던 서버를 손으로 한 번 더 올렸다
+- [x] Backup before the move: volume snapshot `vs_l0oNVl4K2v2AUeG308O41bwN` (the hub)
+- [x] Organization OAuth approval: in the Omagari app's Organization access in GitHub settings, Grant on `omagari-dev`, and a green ✓ showed up (@Pancheble saw it). After the move, access was still there even after re-reading permissions every 10 minutes (the hub)
+- [x] The server followed: after deploying with `OMAGARI_REPO="omagari-dev,Pancheble/kagami"` (#280), the log said "Pancheble/omagari was moved on GitHub to omagari-dev/omagari and we followed". There's one `repo_moves` row in the DB, the repo list is `omagari-dev/omagari` and `Pancheble/kagami`, and the 28 posts and channels and 32 conversations under the new name were all still there (the hub)
+- [x] Picking a workspace: the workspace list at the top left of the web showed both `omagari-dev` and `Pancheble` (@Pancheble saw it, the hub confirmed with `api.me`)
+- [x] Adding a repo: in `omagari-dev`, "Add repo" added `omagari-sandbox` (private), and it went into the DB's repo and permission lists (the hub). There was a web bug where switching workspaces made the added repo vanish from the list (the web only read the workspace list at login), and #287 fixed it (#285)
+- [x] Runner: runners for the three folders `omagari-dev/omagari`, `omagari-dev/omagari-sandbox`, and `Pancheble/kagami` connected to the server from the same machine. The sandbox runner printed "Runner started: Pancheble's agent, omagari-dev/omagari-sandbox", and all three runners had a live connection to the server (this session confirmed it from the processes and connections). The runner of an install clone that still had the old remote (`Pancheble/omagari`) was still connected too
+- What we didn't see and what's left: you can't add the first repo of an account with no repos from the web (because the workspace list only shows accounts that have a repo you can see). So `Pancheble/kagami` was added through settings. How a personal-account workspace and a workspace with a single repo look was decided again in #286 (#289) and changed in #290
 
-**레포를 조직으로 옮긴 손 점검 결과** (2026-11-19, #278. `Pancheble/omagari`를 조직 `omagari-dev`로 옮기고, 서버가 따라가는 것(#279)과 워크스페이스 둘을 도그푸딩 서버에서 봤다. @Pancheble이 조직 만들기, Transfer, OAuth 승인, 웹 조작, 러너 켜기를 하고 이 세션이 옆에서 안내했다. 서버 DB는 허브가 읽기 전용으로 봤다)
+Sources: [Claude Code non-interactive run](https://code.claude.com/docs/en/headless), [Working with sessions](https://code.claude.com/docs/en/agent-sdk/sessions), [Using the Agent SDK with your plan](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan), [About /btw](https://blog.vincentqiao.com/en/posts/claude-code-btw/), [Codex non-interactive mode](https://learn.chatgpt.com/docs/non-interactive-mode)
 
-- [x] 옮기기 전 백업: 볼륨 스냅샷 `vs_l0oNVl4K2v2AUeG308O41bwN`(허브)
-- [x] 조직 OAuth 승인: GitHub 설정의 Omagari 앱 Organization access에서 `omagari-dev`에 Grant, 초록 ✓가 떴다(@Pancheble이 봄). 옮긴 뒤 10분마다 권한을 다시 읽어도 접근이 남았다(허브)
-- [x] 서버가 따라감: `OMAGARI_REPO="omagari-dev,Pancheble/kagami"`로 배포(#280) 뒤 로그 "Pancheble/omagari이 GitHub에서 omagari-dev/omagari로 옮겨져 따라갔다". DB에 `repo_moves` 한 줄, 레포 목록은 `omagari-dev/omagari`와 `Pancheble/kagami`, 새 이름 아래 포스트·채널 28개와 대화 32개가 그대로였다(허브)
-- [x] 워크스페이스 고르기: 웹 왼쪽 위 워크스페이스 목록에 `omagari-dev`와 `Pancheble` 둘이 나왔다(@Pancheble이 봄, 허브가 `api.me`로 확인)
-- [x] 레포 넣기: `omagari-dev`에서 "레포 넣기"로 `omagari-sandbox`(비공개)를 넣었고 DB의 레포와 권한 목록에 들어갔다(허브). 워크스페이스를 바꾸면 넣은 레포가 목록에서 사라지는 웹 버그가 있었고(웹이 워크스페이스 목록을 로그인할 때만 읽었다) #287에서 고쳤다(#285)
-- [x] 러너: 같은 기기에서 `omagari-dev/omagari`, `omagari-dev/omagari-sandbox`, `Pancheble/kagami` 세 폴더의 러너가 서버에 붙었다. sandbox 러너는 "러너가 켜졌다: Pancheble의 에이전트, omagari-dev/omagari-sandbox"를 냈고, 세 러너 모두 서버와 연결이 살아 있었다(이 세션이 프로세스와 연결로 확인). 옛 원격(`Pancheble/omagari`)을 가진 설치 클론의 러너도 그대로 붙어 있었다
-- 못 본 것과 남은 것: 레포가 하나도 없는 계정의 첫 레포는 웹에서 넣을 수 없다(워크스페이스 목록이 볼 수 있는 레포의 계정만 보여서). 그래서 `Pancheble/kagami`는 설정으로 넣었다. 개인 계정 워크스페이스와 레포 하나뿐인 워크스페이스의 모습은 #286에서 다시 정해(#289) #290에서 바꿨다
+The runner only needs to confirm behavior, and then we get to the screen fast. We can only measure "do people stay in the space" once we reach step 4.
 
+## 2. Components
 
-Sources: [Claude Code 비대화 실행](https://code.claude.com/docs/en/headless), [세션 다루기](https://code.claude.com/docs/en/agent-sdk/sessions), [플랜으로 Agent SDK 쓰기](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan), [/btw 설명](https://blog.vincentqiao.com/en/posts/claude-code-btw/), [Codex 비대화 모드](https://learn.chatgpt.com/docs/non-interactive-mode)
+| Piece         | Where it runs         | What it does                                                                                                                                    |
+| ------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Web app       | Browser               | The space's screen                                                                                                                              |
+| Server        | Omagari server        | Sync, records, rule calculation. No AI                                                                                                          |
+| Runner        | Each person's machine | Observation, running agent sessions, merge runs                                                                                                 |
+| GitHub app    | GitHub                | Reading PRs, comments, making and merging decision PRs. Stage 2 does it without an app, with the token of the member who wraps it up (ADR-0025) |
+| CLI and hooks | Each person's machine | How an agent uses Omagari                                                                                                                       |
 
-러너는 동작만 확인하고 빨리 화면까지 간다. "공간에 머무는가"는 4번까지 가야 잴 수 있다.
+Login is with a GitHub account. There's no separate invite screen. At login, push permission on that repo decides whether you're a member.
+
+## 3. Runner
 
-## 2. 구성 요소
+- **Observation**: it looks at the work folder's Git state and uploads the changed files, their content, and the definition lines to the server. The share level decides how much it uploads (section 11)
+- **Running sessions**: when an agent DM, an @call in a channel, or a request to join a debate comes in, it starts an agent session on the owner's machine without a screen and sends the answer back. DMs and @calls use the same session that continues for each channel and each agent, which gets that channel's conversation as data and answers while reading the repo. For the channel conversation, each turn only passes the messages since the last turn, and the first turn passes up to the latest 50. We don't put the work session's context in during stage 1. The only difference between them is the visibility of the Q&A, so the server only keeps a private or public mark for each Q&A. A debate forks the owner's work session read-only and starts that. If the machine is off, that agent shows as offline
+- **Model and effort**: the runner passes the model and effort picked in a DM to the executor. The runner asks the executor for the choices when it starts and tells the server, and it can change and pass them in a continued channel session too (ADR-0020)
+- **Merge run**: for a pair with a guessed indirect conflict, it merges them in a temporary worktree and runs the check command inside a sandbox (ADR-0033, ADR-0034, ADR-0035, ADR-0036)
+- The cost of running agents all comes out of the owner's subscription and usage
 
-| 요소 | 어디서 도나 | 하는 일 |
-| --- | --- | --- |
-| 웹 앱 | 브라우저 | 공간의 화면 |
-| 서버 | Omagari 서버 | 동기화, 기록, 규칙 계산. AI는 없다 |
-| 러너 | 각자 기기 | 관측, 에이전트 세션 실행, 합쳐 돌려 보기 |
-| GitHub 앱 | GitHub | PR 읽기, 댓글, 결정 PR 만들기와 머지. 2단계는 앱 없이 정리한 멤버의 토큰으로 한다(ADR-0025) |
-| CLI와 훅 | 각자 기기 | 에이전트가 Omagari를 쓰는 통로 |
+**Which folder the runner runs in**: you start the runner in a folder where you've downloaded the repo, and it registers that folder paired with the repo. A channel is connected to a repo, and the agent for DMs and @calls reads what's currently checked out in my folder for that repo. Stage 1 starts with one repo per workspace.
 
-로그인은 GitHub 계정으로 한다. 따로 초대 화면을 두지 않고, 로그인할 때 그 레포의 push 권한으로 멤버인지 정한다.
+## 4. Connecting agents
 
-## 3. 러너
+- **Files are the default**: decisions are markdown in the repo, so any agent reads them as usual
+- **Actions go through the CLI**: `omagari status` (see the situation), `omagari status set` (write the status line). The CLI wraps the Omagari API
+- **Timing goes through hooks**: at session start or right before an edit, it shows nearby work and related decisions. The runner receives the surrounding situation ahead of time, and a hook only puts something in when it differs from what it showed last time. It doesn't call the server on every edit or put in the same alert again. Waking up an idle session uses each vendor's own way
+- **API**: if it can send an HTTP request, it connects without a shell
+- **MCP is optional**: a thin wrapper for chat apps that can't send authenticated HTTP requests
 
-- **관측**: 작업 폴더의 Git 상태를 보고 바뀐 파일과 그 내용, 정의 줄을 서버에 올린다. 얼마나 올릴지는 공유 수준이 정한다(11장)
-- **세션 실행**: 에이전트 DM, 채널의 @호출, 토론 참여 요청이 오면 주인 기기에서 에이전트 세션을 화면 없이 띄워 답을 돌려보낸다. DM과 @호출은 채널과 에이전트마다 하나씩 이어 가는 같은 세션을 쓰고, 그 채널의 대화를 데이터로 받아 레포를 읽으며 답한다. 채널 대화는 매 턴에 지난 턴 이후의 메시지만 넘기고, 첫 턴은 최근 50개까지 넘긴다. 작업 세션의 맥락은 1단계에서 넣지 않는다. 둘의 차이는 문답의 공개 범위뿐이라 서버가 문답마다 비공개·공개 표시만 갖는다. 토론은 주인의 작업 세션을 읽기만 하고 갈라서 띄운다. 기기가 꺼져 있으면 그 에이전트는 오프라인으로 보인다
-- **모델과 effort**: DM에서 고른 모델과 effort를 러너가 실행기에 넘긴다. 고를 거리는 러너가 켤 때 실행기에 물어 서버에 알리고, 이어 가는 채널 세션에서도 바꿔 넘긴다(ADR-0020)
-- **합쳐 돌려 보기**: 간접 충돌(추정)이 걸린 쌍을 임시 워크트리에서 합치고, 샌드박스 안에서 검사 명령을 돌린다(ADR-0033, ADR-0034, ADR-0035, ADR-0036)
-- 에이전트 실행 비용은 모두 주인의 구독·사용량에서 나간다
+**Teammates who don't use Omagari**: decisions are repo files so they read them as is, opening a draft PR shares the plan, and they get conflict alerts and decision PRs on GitHub. What's missing is observing local work before a push and the agent joining a debate.
 
-**러너가 어느 폴더에서 도나**: 러너는 레포를 내려받은 폴더에서 켜고, 그 폴더를 레포와 짝지어 등록한다. 채널은 레포에 연결되고, DM과 @호출의 에이전트는 그 레포의 내 폴더에서 지금 체크아웃된 상태를 읽는다. 1단계는 워크스페이스에 레포 하나로 시작한다.
+### How agents get to know each other
 
-## 4. 에이전트 연결
+For agents to coordinate, they first have to know each other's situation. There's a route for each moment.
 
-- **파일이 기본**: 결정은 레포 안 마크다운이라 어떤 에이전트든 평소처럼 읽는다
-- **행동은 CLI**: `omagari status`(상황 보기), `omagari status set`(상태 한 줄 쓰기). CLI는 Omagari API를 감싼 것이다
-- **타이밍은 훅**: 세션 시작이나 편집 직전에 근처 작업과 관련 결정을 보여 준다. 러너가 주변 상황을 미리 받아 두고, 훅은 지난번에 보여 준 것과 달라졌을 때만 넣는다. 고칠 때마다 서버를 부르거나 같은 알림을 다시 넣지 않는다. 쉬는 세션 깨우기는 벤더별 방식을 쓴다
-- **API**: HTTP 요청만 보낼 수 있으면 셸 없이도 붙는다
-- **MCP는 선택**: 인증된 HTTP 요청을 못 보내는 채팅 앱용 얇은 래퍼
+| Moment                       | Mechanism                   | What it does                                                                                                                                                         |
+| ---------------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| When a session starts        | Session-start hook          | Puts in a one-time summary of who's doing what on the team right now                                                                                                 |
+| When planning                | Skill + `omagari status`    | Looks at nearby work before the plan, and declares any contract it will change. It's before any code is written, so it's the easiest to fix                          |
+| Right before editing a file  | Pre-edit hook               | Puts in only what relates to that file, and only when it differs from last time                                                                                      |
+| Every time the CLI is called | Piggyback on the response   | The `omagari` command's response also carries the unread inbox. It works with agents that have no hooks                                                              |
+| When curious                 | `omagari impact <symbol>`   | Directly looks up who uses that symbol and who's changing it                                                                                                         |
+| While working                | Push into a running session | Sends only urgent things, like a declared breaking change, right away. It uses each vendor's way, and if that doesn't work, it goes in the next hook or CLI response |
+| When asking the other side   | `omagari ask`               | My agent asks the other agent. The runner on the other machine answers, and a stand-in answers if it's off                                                           |
 
-**Omagari를 안 쓰는 팀원**: 결정은 레포 파일이라 그대로 읽고, 초안 PR을 열면 계획이 공유되고, 부딪힘 알림과 결정 PR은 GitHub에서 받는다. 빠지는 것은 푸시 전 로컬 작업의 관측과 에이전트의 토론 참여다.
+- **Split the inbox and the feed**: only questions sent to me, conflicts with my work, and urgent alerts go to the inbox and reach the agent. The rest of the news stays in the feed and only shows when you look it up (Room's way)
+- **Questions first, debate second**: if a conflict is suspected, the agent asks the other side first. If one question settles it, that's the end, and if it doesn't, it asks for a debate with an agenda and evidence attached
+- The hook names are Claude Code's. Codex can also put text in with session-start (SessionStart) and pre-edit (PreToolUse) hooks, and hooks only run once you trust them in `/hooks` ([Codex hooks](https://learn.chatgpt.com/docs/hooks)). Codex's pre-edit hook hangs on `apply_patch` and looks at nearby work for each file a patch changes (#16, ADR-0016)
+- **Routes in stage 1**: session-start hook, pre-edit hook, and `omagari status` (seeing the situation and writing the status line). The rest (declaring contracts, piggybacking on responses, `omagari impact`, pushing, `omagari ask`) go into stage 2 along with claims, the inbox, and definition lines
 
-### 에이전트가 서로를 아는 길
+**Claim**: when an agent starts work, it declares "I'm doing this here" with `omagari claim`, and lets go with `omagari release` when it's done. The unit and the line number shifting are exactly Room's way (ADR-0008).
 
-에이전트끼리 조율하려면 먼저 서로의 상황을 알아야 한다. 시점마다 길을 둔다.
+- The unit is a symbol, a line range, or a folder. A newly made file claims the whole file
+- Someone else's claim is shown shifted to the line numbers of my copy. If we can't read their content, we use their numbers as they are and mark it "approximate"
+- You set one even when nobody's nearby. That's so someone who arrives later, and people who use that contract, see it before the code changes (Room only sets one when someone's nearby)
+- It doesn't lock. It only informs and doesn't stop anyone else from editing. It doesn't reject overlapping claims either
+- A contract you'll change is declared attached to the claim. It goes straight into the inbox of whoever uses that contract
+- When claims overlap, it goes into both inboxes, and the pre-edit hook shows it
+- A claim from someone whose machine is off is marked as old
+- The status line is a description a person reads, and a claim is the range detection uses. The draft PR's plan stands in for teammates who don't use claims
 
-| 시점 | 장치 | 무엇을 하나 |
-| --- | --- | --- |
-| 세션을 시작할 때 | 세션 시작 훅 | 지금 팀에서 누가 무엇을 하는지 한 번 요약해 넣는다 |
-| 계획을 세울 때 | 스킬 + `omagari status` | 계획 전에 주변 작업을 보고, 바꿀 계약이 있으면 선언한다. 코드를 쓰기 전이라 고치기 가장 쉽다 |
-| 파일을 고치기 직전 | 편집 전 훅 | 그 파일과 관련된 것만, 지난번과 달라졌을 때만 넣는다 |
-| CLI를 부를 때마다 | 응답에 끼워 넣기 | `omagari` 명령의 응답에 안 읽은 편지함을 같이 싣는다. 훅이 없는 에이전트에서도 통한다 |
-| 궁금할 때 | `omagari impact <심볼>` | 그 심볼을 누가 쓰고 누가 고치는 중인지 직접 조회한다 |
-| 일하는 도중 | 실행 중인 세션에 밀어 넣기 | 깨지는 변경 선언처럼 급한 것만 바로 보낸다. 벤더별 방식을 쓰고, 안 되면 다음 훅이나 CLI 응답에 싣는다 |
-| 상대에게 물을 때 | `omagari ask` | 내 에이전트가 상대 에이전트에게 묻는다. 상대 기기의 러너가 답하고, 꺼져 있으면 대행이 답한다 |
+## 5. Seeing the current situation
 
-- **편지함과 피드를 나눈다**: 나에게 온 질문, 내 작업과의 부딪힘, 급한 알림만 편지함으로 가서 에이전트에게 들어간다. 나머지 소식은 피드에 남고 조회할 때만 보인다(Room의 방식)
-- **질문이 먼저, 토론은 그다음**: 부딪힘이 의심되면 에이전트가 먼저 상대에게 묻는다. 질문 한 번으로 풀리면 끝이고, 안 풀리면 안건과 근거를 붙여 토론을 요청한다
-- 훅의 이름은 Claude Code 기준이다. Codex도 세션 시작(SessionStart)과 편집 전(PreToolUse) 훅으로 글을 넣을 수 있고, 훅은 `/hooks`에서 신뢰해야 돈다([Codex hooks](https://learn.chatgpt.com/docs/hooks)). Codex의 편집 전 훅은 `apply_patch`에 걸고, 패치 하나가 고치는 파일마다 근처 작업을 본다(#16, ADR-0016)
-- **1단계에 넣는 길**: 세션 시작 훅, 편집 전 훅, `omagari status`(상황 보기와 상태 한 줄 쓰기). 나머지 길(계약 선언, 응답에 끼워 넣기, `omagari impact`, 밀어 넣기, `omagari ask`)은 선점, 편지함, 정의 줄과 함께 2단계에 넣는다
+This is what CSCW research calls workspace awareness. It shares in-progress changes so you notice conflicts before a commit.
 
-**선점(claim)**: 에이전트가 작업을 시작할 때 `omagari claim`으로 "여기 내가 한다"를 선언하고, 끝나면 `omagari release`로 푼다. 단위와 줄 번호 옮기기는 Room의 방식 그대로다(ADR-0008).
+- **Observation (automatic)**: the runner looks at the branch and the in-progress diff. By default it sends the content of changed files too. The share levels that send less content are in section 11
+- **Declaration (draft PR)**: when starting work, you write the scope and the contract you'll change in the draft PR. The plan stays on GitHub and Omagari only reads it. An agent looks at one skill and writes the plan of any workflow in a short format
+- **Showing it**: to people as a status line, to agents through the pre-edit hook. When one person runs several works, each work (branch) shows one line
 
-- 단위는 심볼, 줄 범위, 폴더다. 새로 만든 파일은 파일 전체를 잡는다
-- 남의 선점은 내 사본의 줄 번호로 옮겨 보여 준다. 상대의 내용을 읽을 수 없으면 상대의 번호를 그대로 쓰고 "대략"이라고 표시한다
-- 근처에 아무도 없어도 건다. 나중에 온 사람과 그 계약을 쓰는 사람이 코드가 바뀌기 전에 보게 하려는 것이다(Room은 근처에 누가 있을 때만 건다)
-- 잠그지 않는다. 알리기만 하고 다른 사람의 편집을 막지 않는다. 겹치는 선점도 거절하지 않는다
-- 바꿀 계약은 선점에 붙여 선언한다. 그 계약을 쓰는 사람의 편지함에 바로 들어간다
-- 선점끼리 겹치면 양쪽 편지함에 들어가고, 편집 전 훅이 보여 준다
-- 기기가 꺼진 사람의 선점은 오래된 것으로 표시한다
-- 상태 한 줄은 사람이 읽는 설명이고, 선점은 감지가 쓰는 범위다. 초안 PR의 계획은 선점을 안 쓰는 팀원의 것을 대신한다
+**The agent writes the status line**: the server only writes rules, so all it can make is "editing payment.ts and 3 others". Only the agent doing the job knows what it's doing. So a skill tells the agent to write a line with `omagari status set "..."` (read with `omagari status`). If nothing's written, we show the draft PR title or the file being edited instead.
 
-## 5. 지금 상황 보기
+- **When to write**: when starting work, when direction changes, when finishing. When finishing, write "끝: <summary>" (the CLI and skill still use the Korean prefix)
+- **What it shows**: picked in this order. Offline → the line the agent wrote → draft PR title → the file being edited → no line if nothing changed
+- **When it was written**: a note like "2 hours ago" goes next to the line the agent wrote
+- **When to clear it**: when that branch is merged, or when observed changes drop to 0 after being there, the line the agent wrote is cleared (ADR-0010)
+  The pre-edit hook goes the other way, telling my agent about someone else's status.
 
-CSCW 연구에서 작업 공간 인식이라고 부르는 것이다. 진행 중인 변경을 공유해서 충돌을 커밋 전에 알아채게 한다.
+## 6. Conflict detection
 
-- **관측(자동)**: 러너가 브랜치와 작업 중 diff를 본다. 기본으로는 바뀐 파일의 내용까지 보낸다. 내용을 덜 보내는 공유 수준은 11장에 있다
-- **선언(초안 PR)**: 작업을 시작할 때 초안 PR에 범위와 바꿀 계약을 적는다. 계획은 GitHub에 두고 Omagari는 읽기만 한다. 에이전트는 스킬 하나를 보고 어떤 워크플로의 계획이든 짧은 형식으로 적는다
-- **보여주기**: 사람에겐 상태 한 줄로, 에이전트에겐 편집 전 훅으로. 한 사람이 여러 작업을 돌리면 작업(브랜치)마다 한 줄씩 보인다
+Coordination theory sees coordination as "managing dependencies between activities" and splits dependencies into types. We organize what we detect by those types. All of it is calculated without a model, and none of it blocks work.
 
-**상태 한 줄은 에이전트가 쓴다**: 서버는 규칙만 쓰므로 "payment.ts 외 3개 수정 중"밖에 못 만든다. 무슨 일을 하는 중인지는 그 일을 하는 에이전트만 안다. 그래서 에이전트가 `omagari status set "..."`로 한 줄을 쓰게 스킬로 알려 준다(읽기는 `omagari status`). 쓴 게 없으면 초안 PR 제목이나 고치는 파일로 대신 보여 준다.
+| Dependency type   | Conflict                                                                 | How we detect it                                                                                                                                                                                                              | What happens                         |
+| ----------------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| Shared resource   | Direct conflict: the same spot in the same file is changed               | Two works changed the same file, and 3-way merging the two versions from the base commit makes lines clash (same as Room). If we can't read the other side's content, we only mark it "may clash"                             | Shown in the status line             |
+| Producer-consumer | Indirect conflict (guessed): someone else uses a definition that changed | We find the symbol whose definition line changed by name in the symbol index the runner builds with tree-sitter (same as Room. Same names can link wrongly). If there's an API spec, we use an existing compatibility checker | Alert only, to the people who use it |
+| Producer-consumer | **Indirect conflict (confirmed)**: breaks when merged                    | Merge the two people's work ahead of time and run build and tests. If there are contract tests, run those                                                                                                                     | **Debate opens automatically**       |
+| Producer-consumer | **Declared breaking change**                                             | Someone else's work uses a contract change written in the draft PR plan                                                                                                                                                       | **Debate opens automatically**       |
+| Task-subtask      | Duplicate work: two people build the same thing                          | A new definition with the same name shows up on different branches, or draft PR scopes overlap                                                                                                                                | Alert only, to both sides            |
 
-- **언제 쓰나**: 작업을 시작할 때, 방향이 바뀔 때, 끝낼 때. 끝낼 때는 "끝: <요약>"으로 쓴다
-- **무엇을 보이나**: 이 순서로 고른다. 오프라인 → 에이전트가 쓴 줄 → 초안 PR 제목 → 고치는 파일 → 바뀐 것이 없으면 줄 없음
-- **쓴 시각**: 에이전트가 쓴 줄 옆에 "2시간 전"처럼 붙인다
-- **언제 지우나**: 그 브랜치가 머지되거나, 관측된 변경이 있다가 0이 되면 에이전트가 쓴 줄을 지운다(ADR-0010)
- 편집 전 훅은 반대 방향으로, 남의 상태를 내 에이전트에게 알려 주는 길이다.
+- **Split guesses from confirmations**: symbol name matching is a guess and has false positives mixed in. The only things that open a debate are confirmed ones, like a merge run result or a declaration
+- **Scope of the merge run**: we don't run every pair, only pairs with a guessed indirect conflict, and it runs on its own once both works go quiet (ADR-0036). It merges unpushed work too. The runner that calculated the guess, in a temporary worktree, lays the other side's changed files from the server on top of the base commit, merges them with its own local work, and runs the check command (same as Room's merge preview). The check command is read from a file committed to the repo (ADR-0034) and only runs inside a sandbox (ADR-0033). It counts as confirmed when only the merged version breaks (ADR-0035). If the other side's share level isn't full, or a file was left out of observation, that part can't be merged, and the verdict marks the missing files. Pushed work is in the observation too, so it merges the same way
+- **We measure precision**: we record how many of the automatically opened debates were a real problem. If it's low, we narrow the conditions for opening one
 
-## 6. 부딪힘 감지
+## 7. Debate posts
 
-조율 이론은 조율을 "활동 사이의 의존성을 관리하는 일"로 보고 의존성을 유형으로 나눈다. 감지 대상을 그 유형으로 정리한다. 모두 모델 없이 계산하고, 작업을 막지 않는다.
+A model-free engine runs the process, and the owner agents of the clashing works (each on their own machine) do the judging.
 
-| 의존성 유형 | 부딪힘 | 감지 방식 | 처리 |
-| --- | --- | --- | --- |
-| 공유 자원 | 직접 충돌: 같은 파일의 같은 곳을 고침 | 두 작업이 같은 파일을 바꿨고, 기준 커밋에서 두 판을 3-way로 합치면 줄이 부딪힘(Room과 같은 방식). 상대의 내용을 읽을 수 없으면 "부딪힐 수 있음"으로만 표시 | 상태 한 줄에 표시 |
-| 생산자·소비자 | 간접 충돌(추정): 바뀐 정의를 다른 사람이 씀 | 정의 줄이 바뀐 심볼을, 러너가 tree-sitter로 만든 심볼 색인에서 이름으로 찾음(Room과 같은 방식. 이름이 같으면 잘못 연결될 수 있음). API 명세가 있으면 기존 호환성 검사기 사용 | 쓰는 사람에게 알림만 |
-| 생산자·소비자 | **간접 충돌(확인)**: 합치면 깨짐 | 두 사람의 작업을 미리 합쳐 빌드·테스트를 돌림. 계약 테스트가 있으면 그것을 돌림 | **토론 자동 소집** |
-| 생산자·소비자 | **선언된 깨지는 변경** | 초안 PR 계획에 적힌 계약 변경을 쓰는 다른 사람의 작업이 있음 | **토론 자동 소집** |
-| 과업·하위과업 | 중복 구현: 둘이 같은 것을 만듦 | 서로 다른 브랜치에 같은 이름의 새 정의가 생기거나 초안 PR의 범위가 겹침 | 양쪽에 알림만 |
-
-- **추정과 확인을 나눈다**: 심볼 이름 매칭은 추정이고 오탐이 섞인다. 토론을 여는 것은 합쳐서 돌려 본 결과나 선언처럼 확인된 것뿐이다
-- **합쳐 돌려 보기의 범위**: 모든 쌍을 돌리지 않고 간접 충돌(추정)이 걸린 쌍만, 두 작업이 잠잠해지면 저절로 돌린다(ADR-0036). 푸시하지 않은 작업도 합친다. 추정을 계산한 러너가 임시 워크트리에서 기준 커밋 위에 서버에 올라온 상대의 바뀐 파일을 얹고, 자기 로컬 작업과 합쳐 검사 명령을 돌린다(Room의 합쳐 보기와 같은 방식). 검사 명령은 레포에 커밋한 파일에서 읽고(ADR-0034), 샌드박스 안에서만 돌린다(ADR-0033). 합친 것만 깨질 때 확인이다(ADR-0035). 상대의 공유 수준이 full이 아니거나 관측에서 빠진 파일이 있으면 그 부분은 합치지 못하고, 판정에 빠진 파일을 표시한다. 푸시된 작업도 관측에 올라와 있어 같은 길로 합친다
-- **정밀도를 잰다**: 자동 소집된 토론 중 실제 문제였던 비율을 기록한다. 낮으면 소집 조건을 좁힌다
-
-## 7. 토론 포스트
-
-진행은 모델 없는 엔진이, 판단은 부딪힌 작업의 주인 에이전트들(각자 기기)이 한다.
-
-멀티에이전트 토론 연구에 따르면 에이전트끼리의 합의는 정답의 증거로 약하다. 서로 맞춰 주다 일찍 합의해 버리는 경향이 있기 때문이다. 토론이 도움이 되는 조건은 토론자들이 서로 다른 정보를 갖고 있고, 근거가 검증되고, 판정이 토론 밖에서 나올 때다.
-
-- **서로 다른 맥락**: 각 에이전트는 자기 주인의 작업과 대화 맥락을 대변한다. 남의 입장을 대신 요약하지 않는다
-- **블라인드 첫 라운드**: 첫 입장이 다 모일 때까지 서로의 발언을 가린다
-- **근거 표시**: 커밋·파일:줄·결정 기록·테스트 실행 같은 참조는 "검증됨", 자유 서술은 "미검증", 없는 참조는 "존재하지 않음"으로 표시한다
-- **끝내는 순서**
-  1. **실험**: 테스트로 가릴 수 있으면 실험 브랜치에서 돌려 그 결과로 끝낸다
-  2. **검증된 근거**: 검증된 근거가 한쪽에만 있으면 그쪽을 결론으로 제안한다
-  3. **사람**: 둘 다 안 되거나 취향·우선순위의 문제면 사람이 고른다. 고를 때는 각 입장의 주인을 가렸다가 고른 뒤 공개한다. 가리기는 Discord 스포일러식이다: 한눈에는 안 보이게 덮어 둘 뿐이고 보고 싶은 사람은 눌러서 볼 수 있다(2026-11-17 @Pancheble: "절대로 못보는게 아니게, 보고싶으면 보는건데 discord스포일러 처럼 그냥 눈에는 안보이게")
-- **결과는 제안이다**: 토론의 결론은 "제안된 결정"이 되어 8장의 흐름을 탄다
-- **주인이 오프라인이면**(ADR-0040): 기본은 기다린다. 있는 쪽의 첫 입장은 가려 둔 채 내고, 서버 API의 자리에 "러너 없음"(`away`)이 실린다. 러너가 붙으면 참여 요청을 보내 이어서 내고, 14일 안에 끝나지 않으면 "만료"로 끝난다. 포스트의 멤버 누구나 언제든 기다리는 자리에 대행을 부른다(`api.proxyDebate`). 대행은 부른 사람의 러너가 그 사람의 실행기와 사용량으로 띄우고, 부재자의 초안 PR, 공유 수준대로 서버에 올라온 관측, 결정만 보고 말한다(부재자의 작업 세션 대화는 그 사람 기기에 있어 볼 수 없다). 부른 사람의 러너가 꺼져 있으면 거절한다. 입장에는 "대행"과 부른 사람이 붙는다. 부재자의 러너가 붙으면 다음 라운드부터 진짜 에이전트가 이어받고, 대행의 입장을 바꾸면 사유를 적는다. 대행이 낀 결정은 부재자가 확인(동의)할 때까지 창이 닫혀도 머지하지 않는다
-- **자동 참여 스위치**: 토론 참여는 각 주인의 사용량을 쓴다. 사람마다 언제든 끄고 켤 수 있다
-- **실험의 범위**: 토론 인스턴스는 주인의 작업 트리를 읽기만 하고, 실험은 별도 워크트리의 실험 브랜치에서만 쓴다
-- 같은 엔진으로 **에이전트 간 그릴링**도 한다
-
-**맥락을 이어받는 법**: 토론 세션은 주인이 그 브랜치에서 쓰던 최근 세션을 갈라서 띄운다. 그게 안 되면 초안 PR의 계획, diff, 관련 결정만 갖고 참여하고, 맥락 없이 참여했다는 표시를 붙인다.
-
-**토론이 열리는 두 길**: 서버가 확인된 부딪힘을 감지해 여는 길과, 에이전트가 질문으로 풀리지 않은 문제에 안건과 근거를 붙여 요청하는 길이 있다. 안건이나 근거가 없는 요청은 표시만 하고 열지 않는다.
-
-**일찍 맞춰 주는 것을 막는 장치**
-
-- **입장을 바꾸면 사유를 적는다**: 사유 없이 입장이 바뀌면 표시된다. 상대가 강하게 말했다는 것은 사유가 아니고, 새 근거가 사유다
-- **이의에 심각도를 붙인다**: 치명적인 이의가 풀리지 않은 채 결론이 나면 제안된 결정에 그 이의가 함께 표시된다
-
-## 8. 결정
-
-결정 기록은 ADR 관행을 그대로 따른다.
-
-| 상태 | 뜻 | 다음 |
-| --- | --- | --- |
-| 제안됨 | 토론이나 대화에서 나온 결론. 결정 PR이 열려 있다 | 이의 없음 → 수락됨, 이의 → 다시 토론 |
-| 수락됨 | 결정 PR이 머지되어 레포에 있다 | 새 결정이 대체 → 대체됨, 더는 해당 없음 → 폐기됨 |
-| 대체됨 | 새 결정이 뒤집었다 | 새 결정을 가리키는 링크로 남는다 |
-| 폐기됨 | 대상이 사라졌다 | 기록으로 남는다 |
-
-- **형식**: 맥락, 결정, 결과, 그리고 결정자(관련된 사람)와 출처(토론 링크). 수락된 결정은 고치지 않고 새 결정으로 대체한다
-- **이의 창 = 결정 PR**: 제안된 결정은 레포의 `docs/decisions/`에 PR로 올라간다. 창이 닫힐 때까지 이의가 없으면 Omagari가 머지한다. 2단계는 정리한 멤버의 이름으로 열고 머지한다(ADR-0025). 이의는 PR 댓글이나 공간에서 낸다
-- **창의 길이**: 되돌리기 어려운 것(깨지는 계약 변경에서 나온 결정)은 기본 하루, 되돌리기 쉬운 것(컨벤션, 이름 규칙)은 바로 머지한다. 팀이 조절한다
-- **GitHub 규칙을 따른다**: 팀이 리뷰 필수로 설정했다면 그 규칙대로 사람의 승인을 기다린다. Omagari는 예외를 요구하지 않는다
-- **범위**: 기본은 팀 결정. 다른 팀 영역을 건드리면 관련 팀 공동 결정이다
-
-## 9. 남기는 것
-
-남기는 것은 결정뿐이다. 결정은 8장대로 기준 브랜치의 `docs/decisions/`에 들어가고, AGENTS.md가 그 폴더를 가리켜 어떤 에이전트든 읽는다.
-
-**사실 기억은 만들지 않는다**
-
-- 코드로 확인되는 사실은 저장해 둘 필요가 없다. DM과 @호출로 물으면 에이전트가 최신 저장소를 읽고 답한다. 저장해 둔 기억보다 정확하다
-- 코드에 없는 맥락(외부 제약, 예전에 실패한 시도)은 결정 기록으로 남긴다
-- 각자의 에이전트가 갖는 기억(Claude Code의 메모리, Copilot Memory 등)은 그대로 두고 건드리지 않는다
-
-## 10. 조각은 붙여 쓴다
-
-| 조각 | 먼저 쓰는 것 | Omagari가 만드는 것 |
-| --- | --- | --- |
-| 지금 상황 관측 | Room의 방식 참고(비상업 라이선스라 직접 붙이지는 않음) | 러너 |
-| 합쳐 돌려 보기 | 팀의 기존 테스트(검사 명령), 샌드박스 도구 | 두 작업을 합쳐 돌리도록 거는 연결 |
-| 계약 호환성 | 기존 호환성 검사기, 소비자 주도 계약 테스트 | 결과를 읽어 알림으로 바꾸는 연결 |
-| 결정 형식 | ADR | 결정 PR을 만드는 봇 |
-| 사실 기억 | 각자 에이전트의 기억을 그대로 둔다 | 만들지 않음 |
-| 워크플로 | 각자(Superpowers, gstack, Matt Pocock 스킬 등) | 초안 PR에 계획을 적는 스킬 하나 |
-| **공간** | - | **웹 앱 전체** |
-| **토론** | - | **규칙 기반 진행 엔진** |
-
-## 11. 보안과 공유 범위
-
-- **공유 수준**: 관측이 서버에 올리는 범위를 주인이 러너마다 고른다(Room의 세 수준, ADR-0007). 무엇이 나가는지 연결할 때 분명히 알린다
-
-  | 수준 | 서버에 올라가는 것 |
-  | --- | --- |
-  | full(기본) | 바뀐 파일의 내용 전체 |
-  | declared | 바뀐 파일의 경로는 모두, 내용은 선점한 경로 안의 것만 |
-  | intent | 상태 한 줄, 선점, 계획만. 파일 내용은 없다 |
-
-- **늘 빼는 것**: gitignore된 파일, 추적되더라도 `.env`와 `.env.*`(`.env.example`은 남긴다). 바이너리와 크기 상한을 넘는 파일은 경로만 보낸다
-- **서버가 코드를 들고 있다**: 채널의 멤버는 같은 레포의 협업자라 서로의 작업 중 코드를 본다. 서버가 뚫리면 그 코드가 새므로, 워크스페이스에는 그 레포의 협업자만 들어온다
-- **결정 기록 오염**: 결정 기록은 모든 에이전트가 읽으므로 한 번 오염되면 퍼진다. 그래서 결정은 PR을 거치고, 출처(토론 링크)를 붙이고, 에이전트에는 지시가 아닌 데이터로 감싸 전달한다
-- **에이전트 권한**: 실행은 각 주인 에이전트의 권한 설정 안에서 일어난다
-
-**러너의 안전장치**: 러너는 서버가 보낸 메시지로 주인 기기에서 에이전트를 띄운다. 서버가 뚫리면 모든 팀원의 기기에서 에이전트가 실행될 수 있으므로 다음을 지킨다.
-
-- 러너가 띄우는 세션은 기본이 읽기 전용이다. 쓰기는 실험용 워크트리 안에서만 한다
-- 러너는 정해진 종류의 요청(DM, 토론 차례)만 받고, 임의의 명령은 받지 않는다. 합쳐 돌려 보기는 요청으로 받지 않고 러너가 스스로 정한다(ADR-0033)
-- 남의 발언과 채널 대화는 지시가 아닌 데이터로 감싸 넣는다
-- 러너가 무엇을 실행했는지 주인이 기기에서 기록으로 본다
-- 푸시하지 않은 작업을 합쳐 돌려 보면 서버에서 받은 코드를 주인 기기에서 실행하게 된다. 푸시된 브랜치는 GitHub에서 받지만 이 코드는 서버를 거치므로, 서버가 뚫리면 테스트 실행이 곧 임의 코드 실행이 된다. 그래서 합쳐 돌려 보기는 샌드박스 안에서만 돌린다(ADR-0033)
-
-**실제 샌드박스 손 점검 결과** (`test/real-sandbox.ts`, 돌리는 법은 `docs/sandbox-check.md`). 2026-11-14, #138 세션이 주인 기기(macOS, darwin arm64, Node 24.19.0, `@anthropic-ai/sandbox-runtime` 0.0.81)에서 러너의 `checkWork`와 실제 `osSandbox`로 돌렸다. Linux는 못 돌렸다(이 기기는 macOS뿐이다)
-
-- [x] 도구: ripgrep 없이 `checkDependenciesAsync`가 통과했다. 0.0.81은 macOS에서 ripgrep을 요구하지 않는다(PR #141의 말과 같다)
-- [x] 바깥 네트워크가 막힌다(https, http 둘 다. 샌드박스 밖에서는 닿는 것을 먼저 확인했다)
-- [x] 임시 워크트리 밖에 쓰지 못한다(홈 폴더, 레포 폴더, 점검용 폴더). 임시 워크트리 안과 `HOME`에는 쓴다
-- [x] 홈 폴더를 읽지 못한다(`~/.ssh` 포함)
-- [x] 자기 기기의 포트를 열고 붙는다(127.0.0.1). 샌드박스 밖에서 떠 있는 127.0.0.1 서버에도 붙는다
-- [x] 토큰이 든 환경 변수(`GITHUB_TOKEN` 등)가 넘어오지 않는다
-- [x] Node가 홈 폴더 아래에 있어도(`~/.omagari-check-node/bin/node`에 Node를 복사해 그것으로 돌림. nvm 자체는 깔지 않았다) 검사 명령이 돌고 위 항목이 그대로다
-- [x] 의존성을 읽는다. `node_modules/.cache`나 이은 패키지 폴더 **안에 쓰기는 막힌다**(`Operation not permitted`). `node_modules` 밑에 새 폴더를 만드는 것은 된다. 캐시를 `node_modules/.cache`에 쓰는 도구는 거기서 실패한다
-- [x] #142가 남긴 것 1: 임시 워크트리 안의 `git add`, `write-tree`, `commit`, `status`가 된다(인덱스 쓰기에 지장 없음)
-- [x] #142가 남긴 것 2: 홈 아래의 임시 워크트리와 레포의 `objects`를 읽는다(`git log`, `cat-file`). 레포의 Git 폴더의 `config`(원격 URL)는 읽지 못한다
-- [ ] #142가 남긴 것 3: 이 레포의 `npm test`는 샌드박스 안에서 148개 중 **147개가 실패**한다(통과 1). 모두 유닉스 소켓 `listen EPERM`이다 → #145
-  - 고친 뒤(2026-11-15, #145 세션, 같은 기기·판, ADR-0037): 임시 워크트리와 임시 폴더 안에서 유닉스 소켓을 열고 붙는다. 샌드박스 밖에서 연 `/tmp`의 소켓과, 그것을 가리키는 링크에는 붙지 못한다. `TMPDIR`이 `/tmp/claude`인 채로는 여전히 153개 중 152개가 `EPERM`이다(#146). `TMPDIR`을 되돌린 실험에서는 153개 중 152개가 통과했고, 남은 하나(`merge-run.test.ts`)는 30초 상한에서 끊겼다(load average 약 29)
-- [ ] `TMPDIR`을 sandbox-runtime이 `/tmp/claude`로 덮는다 → #146
-- [ ] 러너의 현재 폴더가 레포가 아니면 임시 워크트리의 `.git/config`에 쓸 수 있고, 러너가 샌드박스 밖에서 부르는 `git`이 `core.fsmonitor`로 명령을 돌렸다(무해한 `touch`로 재현). 레포 폴더에서 띄우면 `.git/config`, `.git/hooks` 쓰기가 막힌다 → #144
-  - 고친 뒤(2026-11-14, #144 세션, 같은 기기·판, `--quick`): 러너의 현재 폴더가 레포일 때와 아닐 때 모두 "안 돌았다". 러너는 샌드박스가 쓸 수 없는 자기 Git 폴더로 임시 워크트리에 git을 부른다(ADR-0033). 샌드박스 안의 git은 돌림마다 새로 만드는 복사본을 쓰므로 `.git/config`, `.git/hooks`, `.git/HEAD`가 이제 레포 폴더에서 띄워도 쓸 수 있게 열리고, `add`·`commit`은 그대로 된다
-- 못 본 것: 진짜 nvm, Jest의 감시 도구(`--no-watchman`). Linux와 WSL2는 아래 블록
-
-**Linux와 WSL2 손 점검 결과** (`test/real-sandbox.ts`, GitHub Actions 버튼 `real-sandbox.yml`, 실행 [43781176425](https://github.com/Pancheble/omagari/actions/runs/43781176425)). 2026-11-16, #166 세션이 `docs/real-sandbox-results` 브랜치에서 눌렀다(로그에 결과를 싣는 두 줄을 더한 판. 같은 날 `dev`에서 돈 첫 실행 43780358075도 같은 결과였다). 도구는 모두 `@anthropic-ai/sandbox-runtime` 0.0.81, Node 24(setup-node가 고른 24.x), ripgrep은 apt판이다.
-
-| 기계 | 이미지 | bubblewrap | ripgrep | 결과 |
-| --- | --- | --- | --- | --- |
-| ubuntu-24.04 | `ubuntu-24.04` 20261111.127.1(사용자 네임스페이스 막기 풀고 돌림) | 0.9.0-1ubuntu0.3 | 14.1.0 | 도구 통과, `npm test`는 돎(154개 실패), 나머지는 명령이 못 돎 |
-| ubuntu-22.04 | `ubuntu-22.04` 20261111.360.2 | 0.6.1-1ubuntu0.3 | 13.0.0 | 도구 통과, `npm test`는 돎(154개 실패), 나머지는 명령이 못 돎 |
-| Windows 위의 WSL2 | `windows-2025-vs2026` 20261103.298.1 위의 WSL2 Ubuntu 24.04(사용자는 root, 레포는 `/root/omagari`) | 0.9.0-1ubuntu0.3 | 14.1.0 | 도구 통과, `npm test`는 돎(154개 실패), 나머지는 명령이 못 돎 |
-
-- [x] GitHub의 Windows 기계에서 WSL2가 켜진다. `Vampire/setup-wsl@v7.2.0`으로 Ubuntu 24.04를 깔고 `wsl.exe`로 apt, Node 24, `npm ci`, 점검까지 돌렸다(점검은 약 7분)
-- [x] 도구: `checkDependenciesAsync`가 세 기계 모두 통과했다(ripgrep 경로 `/usr/bin/rg`)
-- [ ] `npm test` 말고 나머지 항목은 세 기계 모두 **같은 오류로 실패**했다: `bash: line 21: …/node_modules/@anthropic-ai/sandbox-runtime/vendor/seccomp/x64/apply-seccomp: No such file or directory`. 도우미 파일은 호스트에 있다(macOS에서 `npm ci`로 정적 ELF를 확인했다). 샌드박스 안에서 그 경로가 보이지 않는 것으로 보인다. `node_modules`가 홈 폴더 아래(`/home/runner/...`, `/root/...`)에 있어 홈 읽기 막기에 가린 것일 수 있다. 근거는 아래 `npm test` 항목과의 차이뿐이었다 → #174에서 고쳤고 아래 "#174를 고친 뒤" 블록에서 확인했다
-  - 이 오류로 실패한 항목은 바깥 네트워크 막기, 쓰기 막기와 쓰기 허용, 홈 읽기 막기, 자기 기기의 포트, 유닉스 소켓 다섯 항목, 환경 변수, Node, 의존성 읽기, 임시 워크트리 안의 git, `objects`·`config` 읽기, 남은 프로세스(#150)다. 명령이 돌지 못했으니 이 실패들은 막기가 되는지 안 되는지를 말해 주지 않는다. 같은 까닭으로 "(관찰)" 줄의 "막힌다"도 의미가 없다
-  - **`npm test`는 돌았다**(세 기계 모두, TMPDIR을 되돌린 실험 줄도 같은 숫자): `tests 160`, `pass 5`, `fail 154`, `310 EPERM`, 판정 broken(Ubuntu 24.04 11초, 22.04 18초, WSL2 238초). `apply-seccomp`를 못 찾았다면 테스트 160개가 돌 수 없으므로, 이 항목은 위 오류와 다르다. Linux에서 유닉스 소켓을 막아 `EPERM`이 난 것으로 보이고 macOS의 #145와 같은 모습이지만, `EPERM`이 정말 소켓 때문인지는 이 로그만으로는 확인하지 못했다(ADR-0037, #172의 고침이 이 실행에 들어 있는지도 보지 않았다)
-  - 차이의 가능한 까닭(추측): 이 항목만 `checkWork({ folder: top })`로 `node_modules`(그 안의 `apply-seccomp`)를 품은 이 레포 폴더 자체를 돌린다. 나머지 항목은 홈 아래의 `.omagari-sandbox-check-*/repo`라는 다른 레포를 돌리고, 거기서는 홈 아래에 있는 이 레포의 `node_modules`가 가려질 수 있다. 진짜 러너도 사용자 레포와 다른 곳에 깔린 sandbox-runtime을 부르므로 실제 사용에서도 같은 일이 생길 수 있다
-  - WSL2의 Windows 드라이브 읽기 막기(#164)는 실패로 나왔고 같은 까닭이다. 이 항목은 아직 한 번도 제대로 못 봤다
-  - `fsmonitor`로 샌드박스 밖에서 명령이 도는지(벗어남)는 "안 돌았다"로 나왔으나, 샌드박스 안의 명령이 돌지 못했으니 이 결과도 믿을 수 없다
-  - Ubuntu 24.04에서 `kernel.apparmor_restrict_unprivileged_userns=0`을 둔 채 돌았다. 풀지 않았을 때의 모습은 보지 않았다
-- 못 본 것: 위 모든 막기(Linux와 WSL2에서), 커널 판, `npm test`의 `EPERM` 까닭, ADR-0037의 소켓 막기 결과. 아래 블록에서 일부를 봤다
-
-**#174를 고친 뒤** (같은 점검, 실행 [43787046653](https://github.com/Pancheble/omagari/actions/runs/43787046653), 2026-11-16, 브랜치 `claude/fix-seccomp-helper-path-372177`, sandbox-runtime 0.0.81). 세 기계의 이미지와 도구 판은 위 표와 같다.
-
-- 까닭: `apply-seccomp`는 샌드박스 **안에서** 불린다(`linux-sandbox-utils.js`의 `buildSandboxCommand`가 bubblewrap 안의 셸 첫 줄에 `applySeccompPrefix`를 넣는다). 경로는 sandbox-runtime 패키지 안의 `vendor/seccomp/<arch>`로, 러너를 깐 `node_modules`이고 홈 폴더 아래일 수 있다. 러너의 읽기 막기(`denyRead: [홈]`)가 그 폴더를 가렸다. 이 레포의 `npm test` 항목은 `node_modules`를 품은 폴더 자체가 읽기 허용인 임시 워크트리라 도우미가 보였다.
-- 고침: 러너가 도우미 폴더(`vendor/seccomp/<arch>`)를 읽기 허용 목록에 넣는다(`packages/runner/src/check.ts`의 `seccompHelper`). 도우미 폴더를 샌드박스 안에서 `ls`로 직접 본 것은 아니다. 고친 뒤 같은 실행의 로그에서 `apply-seccomp` 오류가 0번이고 항목들이 돈다는 것이 근거다.
-- 결과(세 기계가 같다): 바깥 네트워크 막힘, 워크트리 안 쓰기, `HOME` 쓰기, 자기 기기의 포트, 밖의 유닉스 소켓·링크·Docker 소켓 막힘, 환경 변수 거르기, Node, 의존성 읽기, 임시 워크트리 안의 git, `objects`는 읽고 Git 폴더의 `config`는 못 읽음, 남은 프로세스(#150) 항목이 **통과**했다. `fsmonitor` 관찰은 "안 돌았다".
-- 남은 실패(세 기계 같음, 이 이슈와 다른 문제로 보고 나눴다):
-  - 임시 워크트리 밖에 쓰지 못한다, 홈 폴더를 읽지 못한다(WSL2는 Windows 드라이브도): 명령이 0으로 끝나지 않았다. 밖에 파일이 실제로 생긴 줄은 없다. 점검 명령의 기대가 bubblewrap과 다른 것으로 보이나 **확인하지 않았다** → #176
-  - 유닉스 소켓을 워크트리와 임시 폴더 안에 열고 붙는다: `EPERM`(Linux는 소켓을 모두 막는다는 ADR-0037과 맞는다). 이 레포의 `npm test`는 여전히 판정 broken(11초, 18초, 약 3분). 까닭은 아직 읽지 못했다 → #177
-- 못 본 것: 홈 읽기 막기와 쓰기 막기가 Linux에서 정말 되는지(위 #176), Linux에서 소켓을 쓰는 테스트가 돌 수 있는지(#177), 커널 판, `kernel.apparmor_restrict_unprivileged_userns`를 풀지 않았을 때, WSL2의 드라이브 가리기. sandbox-runtime 0.0.83은 올리지 않았다(설치한 0.0.81과 0.0.83 패키지를 비교하니 파일이 많이 바뀌었으나 이 문제를 다루는지는 확인하지 못했고, 고침이 러너 쪽에서 되므로 근거 없이 올리지 않는다)
-
-**#176 홈 막기 점검의 기대를 Linux에 맞춘 뒤** (같은 점검, 실행 [43790979921](https://github.com/Pancheble/omagari/actions/runs/43790979921), 2026-11-16, 브랜치 `fix/linux-home-probe`, sandbox-runtime 0.0.81). 세 기계의 이미지와 도구 판은 위 표와 같다.
-
-- 가린 것: 막기는 **되고 있었고** 점검 명령의 기대가 Linux와 달랐다. 샌드박스 안에서 명령을 하나씩 따로 돌려 본 결과(실행 43790149734, 세 기계 같다):
-  - `ls -A 홈`: 종료 코드 0. 홈의 실제 내용이 아니라 다시 연 자리(점검용 폴더, 그 안의 도구 폴더)의 이름만 나온다. 홈이 빈 `tmpfs`로 덮이고 다시 연 폴더만 그 위에 걸리기 때문이다(`/proc/self/mountinfo`에 걸린 자리로 보았다).
-  - `cat 홈/.../canary/secret.txt`: `No such file or directory`, 종료 코드 1.
-  - 홈 아래에 쓰고 되읽기: 쓰기도 읽기도 종료 코드 0(`tmpfs`에 써진다). 같은 실행에서 샌드박스 밖에는 그 파일이 **생기지 않았다**.
-- 그래서 `! ls 홈`, `! (echo x > 홈 아래)`, `! ls /mnt/c`의 기대가 Linux에서는 틀렸다. 고침: 홈 읽기는 카나리(홈 바로 아래와 점검용 폴더 안)를 읽지 못하고 `ls -A 홈`에 카나리 이름이 없는지로, 쓰기는 밖에 파일이 실제로 생겼는지로, WSL2 드라이브는 `ls -A`가 오류이거나 비어 있는지로 본다. macOS는 기대가 그대로(`!`로 실패해야 함)다.
-- 결과(Ubuntu 24.04, 22.04, WSL2 모두): 임시 워크트리 밖에 쓰지 못한다(밖에 파일이 안 생김), 홈 폴더를 읽지 못한다, WSL2의 `/mnt/c`와 `/mnt/d`가 오류이거나 비어 있다, Git 폴더 `config`는 읽지 못한다 항목이 **통과**했다.
-- 못 본 것: 홈의 `~/.ssh` 같은 진짜 비밀 폴더(세 기계 모두 `~/.ssh`가 없었다. 카나리로만 봤다), `ls 홈`이 다시 연 폴더의 이름을 알려 주는 것(이름만 보이고 안은 열리지 않는다. 막기를 깨지 않는다고 보았으나 따로 시험하지 않았다), `/mnt/c`의 안쪽에 실제 파일이 있을 때의 모습(GitHub의 기계에서는 `C:`와 `D:`가 모두 비었는지 확인하지 못했다. 로그에는 "오류이거나 비어 있다"만 있다), macOS는 이 Mac에서 `--quick`으로 같은 점검을 돌려 고친 항목(쓰기, 쓴 파일이 밖에 생기는지, 홈 읽기 `~/.ssh` 포함)이 통과했다(`npm test` 항목은 돌리지 않았다), 유닉스 소켓과 `npm test`의 실패(#177)는 이 이슈 밖이다.
-
-**#177 소켓 항목을 가린 뒤** (같은 점검, 실행 [43793894717](https://github.com/Pancheble/omagari/actions/runs/43793894717), 2026-11-16, 브랜치 `test/linux-socket-expect`, sandbox-runtime 0.0.81). 세 기계의 이미지와 도구 판은 위 표와 같다.
-
-- 가린 것 ① `allowUnixSockets`: Linux에서 **무시된다.** 소스(`linux-sandbox-utils.js`의 `wrapCommandWithSandboxLinux`)는 소켓을 `allowAllUnixSockets`로만 가르고 seccomp 도우미를 씌우거나 말거나 하며, 주석에 "The allowUnixSockets configuration is not path-based on Linux"라고 적혀 있다. 실제로도 ADR-0037대로 허용 목록을 줬는데 임시 워크트리와 `HOME` 안의 `listen`이 세 기계 모두 `EPERM`이었다.
-- 가린 것 ② `npm test`의 `EPERM`: 세 기계 모두 `tests 160, pass 5, fail 154`, `EPERM` 310줄이다(진단 줄을 더한 실행 [43793288849](https://github.com/Pancheble/omagari/actions/runs/43793288849)에서 Ubuntu 24.04 10초, 22.04 11초, WSL2 116초). 호출별로 세니 `listen EPERM` 157줄이고, 나머지 `EPERM` 줄은 같은 오류를 다시 찍은 `code: 'EPERM'` 줄이다. `connect`나 다른 호출의 `EPERM`은 없다. 즉 **모두 소켓 만들기(`listen`)가 막힌 것이다.** 소켓이 아닌 `EPERM`은 없어 새 이슈는 만들지 않았다. 다만 `listen`의 대상이 유닉스 소켓인지는 줄에서 경로를 뽑아 보지 않았고, TCP `listen`은 점검 항목("자기 기기의 포트")이 통과해 열린다는 것으로 미루었다.
-- 판정은 이제 `broken`에 "이 기기(Linux)에서는 샌드박스가 유닉스 소켓을 막는다. … 합쳐서 깨졌는지 가릴 수 없다"가 붙는다(#172). 소켓을 쓰는 이 레포의 검사 명령은 Linux에서 `가릴 수 없음`이다.
-- 고침: 점검의 소켓 두 항목은 Linux에서 "`EPERM`으로 막힌다"를 기대한다. macOS의 기대는 그대로다. Linux에서 소켓이 열리는 일은 #167이 맡는다.
-- 결과(세 기계가 같다): 소켓 두 항목은 "막힌다"로 **통과**했다. 밖의 소켓, 링크, Docker 소켓 막힘도 통과했다(WSL2에는 Docker 소켓이 없다). 남은 실패는 `npm test` 항목 둘뿐이고(Ubuntu 24.04 10초, 22.04 19초, WSL2 151초), 판정 `broken`에 위 Linux 까닭이 붙는다. 이 항목은 Linux에서 통과할 수 없어 점검은 그대로 둔다(#167까지 `가릴 수 없음`이 맞는 모습)
-- 못 본 것: sandbox-runtime PR #797의 판에서 소켓이 열리는지(#167), `npm test`의 `listen` 157건이 모두 유닉스 소켓 경로인지.
-
-## 12. 검증과 지표
-
-- **머무는가**: 주간 활성 인원, 에이전트 DM 사용, 알림에서 대화가 시작된 비율
-- **빈도**: 주당 간접 충돌과 중복 구현의 수
-- **정밀도**: 자동 소집된 토론 중 실제 문제였던 비율
-- **기준선 대비**: 같은 부딪힘을 "두 사람에게 알림만" 보낸 경우와 토론을 연 경우의 결과 비교
-- **조율이 실제로 일어나는가**: 코드 의존성으로 조율이 필요했던 사람 쌍 중 공간에서 실제로 이야기한 비율(사회-기술 일치)
-- **결정이 읽히는가**: 결정함 열람률, 이의가 나온 비율
-- **결과**: 도입 전후의 계약 때문에 깨진 머지 수, 결정 번복 수
-
-## 13. 미정 사항
-
-- [ ] 초안 PR 계획 형식(범위·바꿀 계약을 어떻게 적을지)
-- [x] 에이전트가 상태 한 줄을 언제 갱신할지 → 시작할 때, 방향이 바뀔 때, 끝낼 때(5장, ADR-0010)
-- [x] 합쳐서 돌려 보기를 어디서 돌릴지(GitHub Actions, 러너) → 러너(ADR-0033)
-- [x] 서버에서 받은 푸시 전 코드를 러너에서 합쳐 돌릴 때의 안전장치 → 샌드박스 안에서만 돌린다(ADR-0033)
-- [x] 검사 명령을 두는 설정 파일의 이름과 꼴 → 레포 최상위의 `.omagari.json`, `{"check": "<검사 명령>", "setup": "<준비 명령>"}`(ADR-0034)
-- [ ] 관측에 서명해 서버가 내용을 바꿔치기하지 못하게 할지(ADR-0033)
-- [x] 직접 충돌의 3-way 합치기를 서버와 러너 중 어디서 계산할지 → 러너. 각 러너가 자기 작업을 기준으로 계산하고 서버는 한 쌍마다 묶어 알린다(ADR-0023)
-- [x] 대행이 볼 수 있는 기록의 범위(서버에 올라온 푸시 전 작업 내용을 포함할지) → 포함한다. 초안 PR, 공유 수준대로 서버에 올라온 관측 내용, 결정(ADR-0040)
-- [x] 이의 창의 기본 길이 → 하루. 정리한 사람이 "바로"나 "하루"를 고른다(ADR-0025)
-- [x] 자동 토론 참여 스위치의 기본값(켜짐, 꺼짐) → 켜짐. 묻기의 동의 스위치를 함께 쓴다(ADR-0024)
-- [x] 서버를 어디서 돌릴지(공용 서버 하나, 팀마다 직접) → 1단계는 우리가 띄우는 서버 하나. 팀마다 직접 띄우는 묶음은 다른 팀이 쓰겠다고 할 때 만든다(ADR-0012). 5단계 도그푸딩 서버는 Fly.io(ADR-0042)
-- [ ] push 권한이 없는 멤버의 자격. 지금은 push 권한이 있는 계정만 들어온다(ADR-0011). 5단계에서 보기(Read 권한만)와 기여(외부 기여자)로 나눠 도그푸딩 뒤에 정하기로 했다. 공개 레포의 Read 권한은 세상 모두라 오픈소스 문제와 함께다(ADR-0043)
-- [x] `omagari ask`의 비용에 받는 쪽이 동의하는 방식(2단계) → 받는 쪽 스위치, 기본 켜짐(ADR-0024)
-- [ ] 여러 레포에 걸친 결정을 어느 레포에 둘지. 방향은 워크스페이스가 고른 집 레포다(GitHub 조직 토론의 원천 레포처럼, ADR-0043). 레포 둘 이상으로 도그푸딩한 뒤 만든다
-- [ ] 결정이 나기 전에 관련 코드 PR이 먼저 머지됐을 때의 표시
-
-* [ ] 초안 PR은 커밋이 있어야 열린다. 작업 시작 때 무엇을 먼저 커밋할지
-* [x] 작업 세션을 읽기만 하고 갈라 띄우는 방식(토론이 씀)이 Codex에서도 되는지. 2026-11-17 손 점검(#203, codex-cli 0.167.1)에서 `codex exec fork`로 맥락이 들어왔고 원본 세션은 그대로였고 읽기 전용이 지켜졌다(1장). 러너에 붙였다(#232)
-* [ ] 토론이 주인의 작업 세션을 찾는 법의 손 점검. 러너(#195)는 Claude Code의 세션 기록이 `<설정 폴더>/projects/<작업 폴더의 글자 아닌 것을 -로 바꾼 이름>/<세션 id>.jsonl`에 있고 줄마다 `gitBranch`가 있다고 보고, 러너가 띄운 세션을 뺀 가장 최근 것을 `--resume <id> --fork-session`으로 갈라 띄운다. 이 경로와 꼴은 문서로 확인하지 못했다. Codex는 세션 기록 첫 줄의 `cwd`와 `git.branch`로 찾아 `codex exec fork`로 갈라 띄운다(1장, #232). 이 꼴도 문서로 확인하지 못했다
-
-- [x] Codex에서 구독 로그인으로 러너를 돌릴 수 있는지(Claude Code는 확인됨). 2026-11-11 손 점검에서 `codex exec`가 저장된 ChatGPT 로그인으로 돌고 세션 이어 가기와 읽기 전용이 됐다(1장 "실제 실행기 손 점검 결과"). 러너에 붙이는 것은 #16
-- [ ] 화면 없는 Codex 세션이 길어지면 자동 컴팩트가 일어나는가, 일어나면 무엇이 남는가. Claude Code는 확인했다(1장). Codex는 `node test/real-executors.ts codex`(긴 세션 포함)로 본다
-- [x] 채널 대화를 DM 세션에 얼마나 넘길지 → 지난 턴 이후의 메시지만, 첫 턴은 최근 50개까지(3장)
-- [ ] DM에서 내 작업 세션의 맥락까지 물을 수 있게 할지. 1단계에서는 넣지 않는다(실행 중인 세션 포크가 확인되지 않았다)
+Research on multi-agent debate says agreement between agents is weak evidence of a right answer, because they tend to go along with each other and agree early. A debate helps when the debaters have different information, the evidence is verified, and the verdict comes from outside the debate.
+
+- **Different contexts**: each agent speaks for its own owner's work and conversation context. It doesn't summarize someone else's stance for them
+- **Blind first round**: we hide everyone's statements from each other until all the first stances are in
+- **Marking evidence**: references like a commit, file:line, a decision record, or a test run are marked "verified", free-form text is "unverified", and a reference that doesn't exist is "doesn't exist"
+- **Order of ending**
+  1. **Experiment**: if tests can decide it, run them on an experiment branch and end with that result
+  2. **Verified evidence**: if verified evidence is only on one side, propose that side as the conclusion
+  3. **A person**: if neither works, or it's a matter of taste or priority, a person picks. When picking, we cover who owns each stance, and reveal it after they pick. Covering is Discord spoiler style: it's only hidden from a glance, and anyone who wants to look can press to see (2026-11-17 @Pancheble: "Not so they can never see it. If you want to look you can, it's just out of sight, like a Discord spoiler")
+- **The result is a proposal**: a debate's conclusion becomes a "proposed decision" and goes through the flow in section 8
+- **When the owner is offline** (ADR-0040): the default is to wait. The side that's there posts its first stance hidden, and the server API's slot carries "no runner" (`away`). When the runner connects, it sends a request to join and continues, and if it isn't done within 14 days, it ends as "expired". Any member of the post can call a stand-in into a waiting slot at any time (`api.proxyDebate`). A stand-in is started by the caller's runner, with the caller's executor and usage, and it speaks only from what it sees: the absent person's draft PR, the observation uploaded to the server at the share level, and decisions (the absent person's work session conversation is on their machine, so it can't see it). If the caller's runner is off, it refuses. The stance is marked "stand-in" with the caller. When the absent person's runner connects, a real agent takes over from the next round, and changing a stand-in's stance takes a reason. A decision that a stand-in was part of isn't merged even after the window closes, until the absent person confirms (agrees)
+- **Auto-join switch**: joining a debate uses each owner's usage. Each person can turn it off and on at any time
+- **Scope of experiments**: a debate instance only reads the owner's work tree, and experiments only write on an experiment branch in a separate worktree
+- The same engine also does **grilling between agents**
+
+**How context carries over**: a debate session forks the most recent session the owner used on that branch. If that doesn't work, it joins with only the draft PR's plan, the diff, and related decisions, and carries a mark saying it joined without context.
+
+**Two ways a debate opens**: the server detects a confirmed conflict and opens it, or an agent asks for one with an agenda and evidence for a problem that a question didn't settle. A request with no agenda or evidence is only marked and doesn't open.
+
+**Safeguards against agreeing too early**
+
+- **Changing a stance takes a reason**: a stance that changes with no reason gets marked. "The other side said it strongly" isn't a reason, and new evidence is
+- **Objections get a severity**: if a conclusion comes out with a critical objection unresolved, that objection is shown along with the proposed decision
+
+## 8. Decisions
+
+Decision records follow ADR practice as it is.
+
+| Status     | Meaning                                                             | Next                                                                  |
+| ---------- | ------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| Proposed   | A conclusion from a debate or conversation. The decision PR is open | No objection → Accepted, objection → debate again                     |
+| Accepted   | The decision PR is merged and it's in the repo                      | A new decision replaces it → Superseded, no longer applies → Rejected |
+| Superseded | A new decision overturned it                                        | It stays as a link pointing to the new decision                       |
+| Rejected   | What it was about is gone                                           | It stays as a record                                                  |
+
+- **Format**: context, decision, consequences, plus the deciders (the people involved) and the source (the debate link). An accepted decision isn't edited, it's replaced by a new decision
+- **Objection window = decision PR**: a proposed decision goes up as a PR to the repo's `docs/decisions/`. If nobody objects until the window closes, Omagari merges it. Stage 2 opens and merges it under the name of the member who wrapped it up (ADR-0025). You raise an objection in the PR comments or in the space
+- **Length of the window**: hard-to-undo things (decisions from a breaking contract change) default to one day, and easy-to-undo things (conventions, naming rules) merge right away. The team can adjust it
+- **Follow GitHub's rules**: if the team set required reviews, it waits for a person's approval by that rule. Omagari doesn't ask for exceptions
+- **Scope**: the default is a team decision. If it touches another team's area, it's a joint decision of the teams involved
+
+## 9. What we keep
+
+All we keep is decisions. Decisions go into `docs/decisions/` on the base branch as in section 8, and AGENTS.md points to that folder so any agent reads it.
+
+**We don't build a fact memory**
+
+- Facts you can check in code don't need to be stored. If you ask with a DM or an @call, the agent reads the latest repo and answers. It's more accurate than a stored memory
+- Context that isn't in the code (outside constraints, an attempt that failed before) is kept as a decision record
+- The memory each agent has (Claude Code's memory, Copilot Memory, etc.) is left alone and we don't touch it
+
+## 10. Stick the pieces together
+
+| Piece                           | What we use first                                                                  | What Omagari builds                                             |
+| ------------------------------- | ---------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| Observing the current situation | Refer to Room's way (it's a noncommercial license, so we don't attach it directly) | Runner                                                          |
+| Merge run                       | The team's existing tests (check command), sandbox tools                           | The connection that runs two works merged                       |
+| Contract compatibility          | Existing compatibility checkers, consumer-driven contract tests                    | The connection that reads the result and turns it into an alert |
+| Decision format                 | ADR                                                                                | The bot that makes decision PRs                                 |
+| Fact memory                     | Leave each agent's memory as it is                                                 | We don't build it                                               |
+| Workflow                        | Each person's own (Superpowers, gstack, Matt Pocock's skills, etc.)                | One skill that writes the plan in the draft PR                  |
+| **Space**                       | -                                                                                  | **The whole web app**                                           |
+| **Debate**                      | -                                                                                  | **A rule-based engine that runs the process**                   |
+
+## 11. Security and what's shared
+
+- **Share level**: the owner picks, for each runner, how much observation uploads to the server (Room's three levels, ADR-0007). We say clearly what leaves when you connect
+
+  | Level          | What goes up to the server                                        |
+  | -------------- | ----------------------------------------------------------------- |
+  | full (default) | The whole content of changed files                                |
+  | declared       | The paths of all changed files, content only inside claimed paths |
+  | intent         | Only the status line, claims, and plan. No file content           |
+
+- **Always left out**: gitignored files, and `.env` and `.env.*` even if tracked (`.env.example` stays). Binaries and files over the size limit send only the path
+- **The server holds code**: members of a channel are collaborators on the same repo, so they see each other's in-progress code. If the server gets broken into, that code leaks, so only collaborators on that repo join the workspace
+- **Decision record poisoning**: every agent reads decision records, so once one is poisoned it spreads. So decisions go through a PR, carry a source (the debate link), and get passed to agents wrapped as data, not instructions
+- **Agent permissions**: running happens inside each owner agent's permission settings
+
+**Runner safeguards**: the runner starts agents on the owner's machine from messages the server sends. If the server is broken into, agents could run on every teammate's machine, so we keep to the following.
+
+- Sessions the runner starts are read-only by default. It writes only inside an experiment worktree
+- The runner only takes set kinds of requests (DMs, debate turns), and doesn't take arbitrary commands. It doesn't take merge runs as requests either, the runner decides them itself (ADR-0033)
+- Other people's statements and the channel conversation go in wrapped as data, not instructions
+- The owner can see on their machine what the runner ran, as a record
+- Merge-running unpushed work means running code from the server on the owner's machine. Pushed branches come from GitHub, but this code goes through the server, so if the server is broken into, running tests turns into running arbitrary code. So merge runs only run inside a sandbox (ADR-0033)
+
+**Real sandbox hand check results** (`test/real-sandbox.ts`, how to run it is in `docs/sandbox-check.md`). 2026-11-14, the #138 session ran it with the runner's `checkWork` and the real `osSandbox` on the owner's machine (macOS, darwin arm64, Node 24.19.0, `@anthropic-ai/sandbox-runtime` 0.0.81). We couldn't run Linux (this machine is macOS only)
+
+- [x] Tools: `checkDependenciesAsync` passed without ripgrep. 0.0.81 doesn't need ripgrep on macOS (same as PR #141 said)
+- [x] Outside network is blocked (both https and http. We first confirmed it's reachable outside the sandbox)
+- [x] Can't write outside the temporary worktree (home folder, repo folder, check folder). It can write inside the temporary worktree and `HOME`
+- [x] Can't read the home folder (including `~/.ssh`)
+- [x] It opens and connects to ports on its own machine (127.0.0.1). It also connects to a 127.0.0.1 server running outside the sandbox
+- [x] Environment variables holding tokens (`GITHUB_TOKEN` etc.) don't come through
+- [x] Even with Node under the home folder (we copied Node to `~/.omagari-check-node/bin/node` and ran with that. We didn't install nvm itself), the check command runs and the items above stay the same
+- [x] It reads dependencies. **Writing inside** `node_modules/.cache` or a linked package folder **is blocked** (`Operation not permitted`). Making a new folder under `node_modules` works. A tool that writes its cache to `node_modules/.cache` fails there
+- [x] What #142 left, 1: `git add`, `write-tree`, `commit`, and `status` inside the temporary worktree work (writing the index is fine)
+- [x] What #142 left, 2: it reads the temporary worktree under home and the repo's `objects` (`git log`, `cat-file`). It can't read the `config` (remote URL) in the repo's Git folder
+- [ ] What #142 left, 3: this repo's `npm test` inside the sandbox **fails 147 of 148** (1 passes). All of them are Unix socket `listen EPERM` → #145
+  - After the fix (2026-11-15, #145 session, same machine and build, ADR-0037): it opens and connects to Unix sockets inside the temporary worktree and temporary folder. It can't connect to a socket in `/tmp` opened outside the sandbox, or to a link pointing at it. With `TMPDIR` still at `/tmp/claude`, it's still 152 of 153 with `EPERM` (#146). In the experiment with `TMPDIR` put back, 152 of 153 passed, and the remaining one (`merge-run.test.ts`) was cut off at the 30-second limit (load average about 29)
+- [ ] sandbox-runtime overrides `TMPDIR` to `/tmp/claude` → #146
+- [ ] When the runner's current folder isn't a repo, it could write to the temporary worktree's `.git/config`, and the `git` the runner calls outside the sandbox ran a command through `core.fsmonitor` (reproduced with a harmless `touch`). Started from the repo folder, writing `.git/config` and `.git/hooks` is blocked → #144
+  - After the fix (2026-11-14, #144 session, same machine and build, `--quick`): whether the runner's current folder is a repo or not, it "didn't run". The runner calls git on the temporary worktree with its own Git folder, which the sandbox can't write (ADR-0033). The git inside the sandbox uses a copy made fresh for each run, so `.git/config`, `.git/hooks`, and `.git/HEAD` are now writable even when started from the repo folder, and `add` and `commit` still work
+- Not seen: real nvm, Jest's watch tool (`--no-watchman`). Linux and WSL2 are in the block below
+
+**Linux and WSL2 hand check results** (`test/real-sandbox.ts`, the GitHub Actions button `real-sandbox.yml`, run [43781176425](https://github.com/Pancheble/omagari/actions/runs/43781176425)). 2026-11-16, the #166 session pressed it on the `docs/real-sandbox-results` branch (a build with two added lines that put results in the log. The first run on `dev` the same day, 43780358075, had the same results). The tool is `@anthropic-ai/sandbox-runtime` 0.0.81 on all of them, Node 24 (the 24.x that setup-node picked), and ripgrep is the apt build.
+
+| Machine         | Image                                                                                             | bubblewrap       | ripgrep | Result                                                                   |
+| --------------- | ------------------------------------------------------------------------------------------------- | ---------------- | ------- | ------------------------------------------------------------------------ |
+| ubuntu-24.04    | `ubuntu-24.04` 20261111.127.1 (ran with the user namespace restriction lifted)                    | 0.9.0-1ubuntu0.3 | 14.1.0  | Tools pass, `npm test` runs (154 failed), the rest can't run the command |
+| ubuntu-22.04    | `ubuntu-22.04` 20261111.360.2                                                                     | 0.6.1-1ubuntu0.3 | 13.0.0  | Tools pass, `npm test` runs (154 failed), the rest can't run the command |
+| WSL2 on Windows | WSL2 Ubuntu 24.04 on `windows-2025-vs2026` 20261103.298.1 (user is root, repo at `/root/omagari`) | 0.9.0-1ubuntu0.3 | 14.1.0  | Tools pass, `npm test` runs (154 failed), the rest can't run the command |
+
+- [x] WSL2 turns on on GitHub's Windows machine. We installed Ubuntu 24.04 with `Vampire/setup-wsl@v7.2.0` and ran apt, Node 24, `npm ci`, and the check through `wsl.exe` (the check takes about 7 minutes)
+- [x] Tools: `checkDependenciesAsync` passed on all three machines (ripgrep path `/usr/bin/rg`)
+- [ ] Apart from `npm test`, the other items **all failed with the same error** on all three machines: `bash: line 21: …/node_modules/@anthropic-ai/sandbox-runtime/vendor/seccomp/x64/apply-seccomp: No such file or directory`. The helper file is on the host (we confirmed a static ELF with `npm ci` on macOS). It seems that path isn't visible inside the sandbox. It may be hidden by the home-read block, because `node_modules` is under the home folder (`/home/runner/...`, `/root/...`). The only evidence was the difference from the `npm test` item below → fixed in #174 and confirmed in the "After fixing #174" block below
+  - The items that failed with this error are blocking the outside network, blocking and allowing writes, blocking home reads, ports on its own machine, five Unix socket items, environment variables, Node, reading dependencies, git inside the temporary worktree, reading `objects` and `config`, and leftover processes (#150). The command couldn't run, so these failures don't tell us whether the blocking works. For the same reason, "blocked" on the "(observation)" lines means nothing
+  - **`npm test` did run** (on all three machines, and the experiment line with TMPDIR put back had the same numbers): `tests 160`, `pass 5`, `fail 154`, `310 EPERM`, verdict broken (Ubuntu 24.04 11 seconds, 22.04 18 seconds, WSL2 238 seconds). If it couldn't find `apply-seccomp`, 160 tests couldn't run, so this item differs from the error above. It looks like `EPERM` from Linux blocking Unix sockets, and it looks like #145 on macOS, but this log alone can't confirm that the `EPERM` is really because of sockets (we also didn't look at whether the fix in ADR-0037 and #172 is in this run)
+  - Possible reason for the difference (a guess): only this item runs `checkWork({ folder: top })`, on this repo's own folder that holds `node_modules` (and `apply-seccomp` inside it). The other items run a different repo, `.omagari-sandbox-check-*/repo` under home, and there this repo's `node_modules` under home may get hidden. The real runner also calls a sandbox-runtime installed somewhere other than the user's repo, so the same thing could happen in real use
+  - WSL2's block on reading the Windows drive (#164) came out as a failure for the same reason. We've never properly seen this item yet
+  - Whether a command runs outside the sandbox through `fsmonitor` (an escape) came out as "didn't run", but a command inside the sandbox couldn't run, so this result can't be trusted either
+  - It ran on Ubuntu 24.04 with `kernel.apparmor_restrict_unprivileged_userns=0` set. We didn't look at how it behaves without lifting it
+- Not seen: all the blocks above (on Linux and WSL2), the kernel version, why `npm test` gets `EPERM`, the result of the socket block in ADR-0037. We saw some of it in the blocks below
+
+**After fixing #174** (the same check, run [43787046653](https://github.com/Pancheble/omagari/actions/runs/43787046653), 2026-11-16, branch `claude/fix-seccomp-helper-path-372177`, sandbox-runtime 0.0.81). The three machines' images and tool versions are the same as the table above.
+
+- Reason: `apply-seccomp` is called **inside** the sandbox (`buildSandboxCommand` in `linux-sandbox-utils.js` puts `applySeccompPrefix` on the first line of the shell inside bubblewrap). The path is `vendor/seccomp/<arch>` inside the sandbox-runtime package, which is the `node_modules` the runner was installed into and may be under the home folder. The runner's read block (`denyRead: [home]`) hid that folder. This repo's `npm test` item is a temporary worktree where the folder holding `node_modules` is itself readable, so the helper was visible.
+- Fix: the runner puts the helper folder (`vendor/seccomp/<arch>`) in the allow-read list (`seccompHelper` in `packages/runner/src/check.ts`). We didn't `ls` the helper folder directly inside the sandbox. The evidence is that after the fix, the same run's log has 0 `apply-seccomp` errors and the items run.
+- Result (same on the three machines): these **passed**: outside network blocked, writing inside the worktree, `HOME` writes, ports on its own machine, outside Unix sockets, links, and Docker sockets blocked, environment variable filtering, Node, reading dependencies, git inside the temporary worktree, `objects` readable and the Git folder's `config` not readable, and leftover processes (#150). The `fsmonitor` observation is "didn't run".
+- Remaining failures (same on the three machines, we split them off as problems different from this issue):
+  - Can't write outside the temporary worktree, can't read the home folder (and the Windows drive on WSL2): the command didn't end with 0. No line shows a file really being made outside. It looks like the check command's expectation differs from bubblewrap, but we **didn't confirm** it → #176
+  - Opening and connecting to Unix sockets inside the worktree and temporary folder: `EPERM` (matches ADR-0037, that Linux blocks all sockets). This repo's `npm test` still has verdict broken (11 seconds, 18 seconds, about 3 minutes). We haven't read the reason yet → #177
+- Not seen: whether the home-read block and write block really work on Linux (#176 above), whether tests that use sockets can run on Linux (#177), the kernel version, without lifting `kernel.apparmor_restrict_unprivileged_userns`, hiding the WSL2 drives. We didn't bump sandbox-runtime to 0.0.83 (comparing the installed 0.0.81 and 0.0.83 packages showed lots of changed files, but we couldn't confirm it addresses this problem, and the fix is on the runner's side, so we don't bump it without a reason)
+
+**After fitting the #176 home-block check's expectations to Linux** (the same check, run [43790979921](https://github.com/Pancheble/omagari/actions/runs/43790979921), 2026-11-16, branch `fix/linux-home-probe`, sandbox-runtime 0.0.81). The three machines' images and tool versions are the same as the table above.
+
+- What it hid: the block **was working**, and the check command's expectation differed from Linux. This is the result of running commands one at a time inside the sandbox (run 43790149734, same on the three machines):
+  - `ls -A home`: exit code 0. It lists only the names of the places that were opened again (the check folder, and the tool folder inside it), not home's real contents. That's because home is covered with an empty `tmpfs` and only the reopened folders hang on top of it (we saw the mounted places in `/proc/self/mountinfo`).
+  - `cat home/.../canary/secret.txt`: `No such file or directory`, exit code 1.
+  - Writing and reading back under home: both write and read exit with 0 (it writes to `tmpfs`). In the same run, that file was **not made** outside the sandbox.
+- So the expectations of `! ls home`, `! (echo x > under home)`, and `! ls /mnt/c` were wrong on Linux. The fix: reading home checks that the canaries (directly under home and inside the check folder) can't be read and that `ls -A home` doesn't have the canary name, writing checks whether a file really got made outside, and the WSL2 drive checks that `ls -A` is an error or empty. On macOS the expectation stays as it was (must fail with `!`).
+- Result (all of Ubuntu 24.04, 22.04, and WSL2): these **passed**: can't write outside the temporary worktree (no file made outside), can't read the home folder, WSL2's `/mnt/c` and `/mnt/d` are an error or empty, and can't read the Git folder's `config`.
+- Not seen: real secret folders like `~/.ssh` in home (none of the three machines had `~/.ssh`, we only looked with canaries), whether `ls home` tells you the names of the reopened folders (only the names show and the inside doesn't open. We think it doesn't break the block but didn't test it separately), what it looks like when there are real files inside `/mnt/c` (on GitHub's machines we couldn't confirm that both `C:` and `D:` are empty. The log only says "an error or empty"), on macOS, we ran the same check on this Mac with `--quick` and the fixed items (writing, whether the written file shows up outside, reading home including `~/.ssh`) passed (we didn't run the `npm test` item), and Unix sockets and the `npm test` failures (#177) are outside this issue.
+
+**After hiding the #177 socket items** (the same check, run [43793894717](https://github.com/Pancheble/omagari/actions/runs/43793894717), 2026-11-16, branch `test/linux-socket-expect`, sandbox-runtime 0.0.81). The three machines' images and tool versions are the same as the table above.
+
+- What it hid, 1: `allowUnixSockets` is **ignored** on Linux. The source (`wrapCommandWithSandboxLinux` in `linux-sandbox-utils.js`) splits sockets only by `allowAllUnixSockets` and puts the seccomp helper on or leaves it off, and the comment says "The allowUnixSockets configuration is not path-based on Linux". And in practice, we gave the allow list as in ADR-0037, but `listen` inside the temporary worktree and `HOME` was `EPERM` on all three machines.
+- What it hid, 2: the `EPERM` in `npm test`: all three machines show `tests 160, pass 5, fail 154`, and 310 lines of `EPERM` (in run [43793288849](https://github.com/Pancheble/omagari/actions/runs/43793288849), which added diagnostic lines, Ubuntu 24.04 took 10 seconds, 22.04 took 11 seconds, WSL2 took 116 seconds). Counted by call, it's 157 lines of `listen EPERM`, and the other `EPERM` lines are `code: 'EPERM'` lines that print the same error again. There's no `EPERM` from `connect` or any other call. So **all of it is creating sockets (`listen`) being blocked.** There's no `EPERM` that isn't about sockets, so we didn't make a new issue. But we didn't pull the path out of the lines to see whether the target of `listen` is a Unix socket, and we inferred that TCP `listen` opens from the check item ("ports on its own machine") passing.
+- The verdict now carries on `broken` "On this machine (Linux) the sandbox blocks Unix sockets. … we can't tell whether it broke from merging" (#172). This repo's check command, which uses sockets, is `cannot tell` on Linux.
+- Fix: the check's two socket items expect "blocked with `EPERM`" on Linux. The macOS expectation stays as it was. #167 handles sockets opening on Linux.
+- Result (same on the three machines): the two socket items **passed** as "blocked". Outside sockets, links, and the Docker socket being blocked also passed (WSL2 has no Docker socket). The only failures left are the two `npm test` items (Ubuntu 24.04 10 seconds, 22.04 19 seconds, WSL2 151 seconds), and the verdict `broken` carries the Linux reason above. This item can't pass on Linux, so we leave the check as it is (until #167, `cannot tell` is the right result)
+- Not seen: whether sockets open on the build of sandbox-runtime PR #797 (#167), whether all 157 `listen` calls in `npm test` are Unix socket paths.
+
+## 12. Verification and metrics
+
+- **Do people stay**: weekly active people, agent DM use, the share of alerts where a conversation started
+- **Frequency**: indirect conflicts and duplicate work per week
+- **Precision**: how many of the automatically opened debates were a real problem
+- **Against a baseline**: compare outcomes for the same conflict when we only send the two people an alert versus when we open a debate
+- **Does coordination really happen**: among pairs of people who needed to coordinate because of a code dependency, the share who actually talked in the space (socio-technical congruence)
+- **Do people read decisions**: how often the decision inbox is opened, the share that got objections
+- **Outcomes**: merges broken by contracts and decisions reversed, before and after adoption
+
+## 13. Open items
+
+- [ ] The draft PR plan format (how to write the scope and the contract to change)
+- [x] When the agent updates the status line → when it starts, when direction changes, when it finishes (section 5, ADR-0010)
+- [x] Where to run merge runs (GitHub Actions, runner) → runner (ADR-0033)
+- [x] Safeguards for merge-running pre-push code from the server on the runner → only run inside a sandbox (ADR-0033)
+- [x] The name and shape of the config file that holds the check command → `.omagari.json` at the repo's top level, `{"check": "<check command>", "setup": "<setup command>"}` (ADR-0034)
+- [ ] Whether to sign observations so the server can't swap the content (ADR-0033)
+- [x] Whether the server or the runner calculates the 3-way merge for direct conflicts → the runner. Each runner calculates from its own work, and the server bundles it per pair and tells them (ADR-0023)
+- [x] The range of records a stand-in can see (whether to include pre-push work content uploaded to the server) → include it. The draft PR, the observation content uploaded to the server at the share level, and decisions (ADR-0040)
+- [x] The default length of the objection window → one day. The person who wraps it up picks "right away" or "one day" (ADR-0025)
+- [x] The default of the auto debate-join switch (on or off) → on. It's used together with the consent switch for asking (ADR-0024)
+- [x] Where to run the server (one shared server, or each team on their own) → stage 1 is one server we run. We'll build the bundle for teams to run on their own when another team says they'll use it (ADR-0012). The stage 5 dogfood server is Fly.io (ADR-0042)
+- [ ] The standing of members without push permission. Right now only accounts with push permission join (ADR-0011). In stage 5, we decided to split it into viewing (Read permission only) and contributing (outside contributors) and decide after dogfooding. Read permission on a public repo is the whole world, so it comes together with the open source question (ADR-0043)
+- [x] How the receiving side consents to the cost of `omagari ask` (stage 2) → a switch on the receiving side, default on (ADR-0024)
+- [ ] Which repo a decision that spans several repos goes in. The direction is the home repo the workspace picks (like the source repo of a GitHub organization's discussions, ADR-0043). We'll build it after dogfooding with two or more repos
+- [ ] What to show when a related code PR merges before the decision is made
+
+* [ ] A draft PR can only be opened with a commit. What to commit first when starting work
+* [x] Whether forking a work session read-only (what debates use) also works on Codex. In the 2026-11-17 hand check (#203, codex-cli 0.167.1), the context came in with `codex exec fork`, the original session stayed as it was, and read-only held (section 1). We wired it into the runner (#232)
+* [ ] A hand check of how a debate finds the owner's work session. The runner (#195) assumes Claude Code's session records are at `<config folder>/projects/<the work folder's name with non-letters replaced by ->/<session id>.jsonl` with `gitBranch` on every line, and forks the most recent one that isn't a runner-started session with `--resume <id> --fork-session`. We couldn't confirm this path and shape from the docs. Codex finds it by `cwd` and `git.branch` on the first line of the session record and forks it with `codex exec fork` (section 1, #232). We couldn't confirm that shape from the docs either
+
+- [x] Whether the runner can run on Codex with a subscription login (confirmed for Claude Code). In the 2026-11-11 hand check, `codex exec` ran on the saved ChatGPT login, and session continuation and read-only worked (section 1, "Real executor hand check results"). Wiring it into the runner is #16
+- [ ] Whether auto-compact happens when a Codex session without a screen gets long, and what's left if it does. We confirmed Claude Code (section 1). We'll look at Codex with `node test/real-executors.ts codex` (including the long session)
+- [x] How much channel conversation to pass to a DM session → only messages since the last turn, and up to the latest 50 on the first turn (section 3)
+- [ ] Whether to let a DM ask about the context of my own work session. We leave it out of stage 1 (forking a running session hasn't been confirmed)
 
 ## Sources
 
 - [Crystal: Proactive Detection of Collaboration Conflicts](https://homes.cs.washington.edu/~mernst/pubs/vc-conflicts-fse2011.pdf)
-- [Palantír: 간접 충돌 인식](https://www.ase-conferences.org/olbib/p94-sarma.pdf)
+- [Palantír: Awareness of indirect conflicts](https://www.ase-conferences.org/olbib/p94-sarma.pdf)
 - [Gutwin & Greenberg, Workspace Awareness](https://dl.eusset.eu/handle/20.500.12015/3612)
 - [Malone & Crowston, The Interdisciplinary Study of Coordination](https://crowston.syr.edu/node/54)
 - [Cataldo & Herbsleb, Coordination Breakdowns](https://par.nsf.gov/servlets/purl/10038372)
-- [ADR 상태](https://faq.arc42.org/questions/C-9-3/)
+- [ADR status](https://faq.arc42.org/questions/C-9-3/)
 - [Debate or Vote](https://neurips.cc/virtual/2025/poster/116557)
 - [Khan et al., Debating with More Persuasive LLMs](https://arxiv.org/pdf/2402.06782)
-- [GitHub Copilot 에이전트 메모리](https://github.blog/2026-01-09-building-an-agentic-memory-system-for-github-copilot)
+- [GitHub Copilot agentic memory](https://github.blog/2026-01-09-building-an-agentic-memory-system-for-github-copilot)
 - [Evaluating AGENTS.md](https://iclr.cc/virtual/2026/10021142)
 - [Memory Poisoning Attack and Defense](https://arxiv.org/html/2601.05504v1)
-- [소비자 주도 계약 테스트](https://oneuptime.com/blog/post/2026-08-24-consumer-driven-contract-breaking-changes/view)
+- [Consumer-driven contract tests](https://oneuptime.com/blog/post/2026-08-24-consumer-driven-contract-breaking-changes/view)
 - [Room](https://github.com/rohanz/room)

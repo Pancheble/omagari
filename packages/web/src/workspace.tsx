@@ -995,6 +995,13 @@ export function Workspace({
         onCall={(executor, question) => ask(active.id, executor, question, "public")}
         onPost={post}
         onRetry={() => void load(active.id)}
+        onReact={async (message, emoji, on) => {
+          try {
+            receive((await call(server(session), api.react, { message, emoji, on })).message);
+          } catch (error) {
+            throw check(error);
+          }
+        }}
         onOlder={() => {
           if (view?.more && !view.older) void load(active.id, view.messages[0]?.id);
         }}

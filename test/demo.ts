@@ -249,7 +249,15 @@ await say(
   "환불할 때 결제 모델의 amount를 그대로 쓰나요? 부분 환불이면 깨질 것 같은데요.",
 );
 await say(world.owner, pay, "지금은 그대로 써요. 시그니처 바꾸면서 같이 보려고요.");
-await say(minsu.as, pay, "좋아요, 저는 웹훅 쪽만 볼게요.");
+const { message: webhookOnly } = await say(minsu.as, pay, "좋아요, 저는 웹훅 쪽만 볼게요.");
+// 반응(#293): 내가 단 것(눌린 알약)과 남이 단 것.
+for (const [as, emoji] of [
+  [seoyeon.as, "🎉"],
+  [world.owner, "🎉"],
+  [hajun.as, "🎉"],
+  [seoyeon.as, "👀"],
+] as const)
+  await call(as, api.react, { message: webhookOnly.id, emoji, on: true });
 
 // 부딪힘: 같은 줄(직접 충돌), 정의 줄을 바꾼 함수를 쓰는 곳(간접 충돌), 같은 이름의 새 정의(중복 구현), 선점에 붙인 계획(선언된 계약 변경).
 await own("src/config.ts", line3("owner"));

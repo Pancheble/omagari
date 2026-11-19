@@ -33,6 +33,7 @@ import { GifButton, MessageGif } from "./gif.tsx";
 import { giphyId, giphyUrl } from "./giphy.ts";
 import type { LiveState } from "./live.ts";
 import { Person } from "./profile-card.tsx";
+import { ReactButton, Reactions } from "./reactions.tsx";
 import { VerdictStrip } from "./verdict.tsx";
 import { Avatar, personName } from "./workspace.tsx";
 
@@ -128,6 +129,7 @@ export function Conversation({
   onRetry,
   onOlder,
   searchGifs,
+  onReact,
 }: {
   channel?: Channel;
   view?: View;
@@ -163,6 +165,8 @@ export function Conversation({
   onOlder: () => void;
   /** GIF 찾기(서버를 거친다). 서버에 GIPHY 키가 없으면 없고, 입력 칸에 GIF 버튼이 없다. */
   searchGifs?: (query: string) => Promise<Gif[]>;
+  /** 메시지(`message`, 번호)에 반응을 달거나(`on`) 뗀다. */
+  onReact: (message: number, emoji: string, on: boolean) => Promise<void>;
 }) {
   const [text, setText] = useState("");
   const [token, setToken] = useState<ExecutorId>();
@@ -219,6 +223,11 @@ export function Conversation({
       setFailure({ text: "GIF를 보내지 못했어요", gif: url });
     }
   };
+
+  const react = (message: number, emoji: string, on: boolean) =>
+    void onReact(message, emoji, on).catch(() =>
+      setFailure({ text: on ? "반응을 달지 못했어요" : "반응을 떼지 못했어요" }),
+    );
 
   return (
     <>
@@ -290,6 +299,8 @@ export function Conversation({
                     <Message
                       message={message}
                       grouped={grouped}
+                      me={me}
+                      onReact={(emoji, on) => react(message.id, emoji, on)}
                       state={
                         message.kind === "qa"
                           ? agentsOf(message.login)?.find(
@@ -493,18 +504,32 @@ function Message({
   message,
   grouped,
   state,
+  me,
+  onReact,
 }: {
   message: Exclude<ChannelMessage, { kind: "alert" | "decision" }>;
   grouped: boolean;
   state?: MemberView["agents"][number]["state"];
+  me: string;
+  onReact: (emoji: string, on: boolean) => void;
 }) {
   // GIPHY 주소 하나뿐인 글은 그림으로 보인다. 문답에 함께 쓴 글은 그대로다.
   const gif = message.kind === "text" ? giphyId(message.text) : undefined;
+  /** 동작 띠의 팔레트가 열려 있으면 마우스가 떠나도 띠를 둔다. */
+  const [picking, setPicking] = useState(false);
   return (
     <article
-      className={grouped ? "message grouped" : "message"}
+      className={`message${grouped ? " grouped" : ""}${picking ? " picking" : ""}`}
       data-qa={message.kind === "qa" ? message.qa.id : undefined}
     >
+      <div className="message-tools" role="toolbar" aria-label="메시지 동작">
+        <ReactButton
+          className="message-tool"
+          size={16}
+          onPick={(emoji) => onReact(emoji, true)}
+          onOpen={setPicking}
+        />
+      </div>
       {grouped ? (
         <time className="side-time" dateTime={message.at} title={fullTime(message.at)}>
           {timeOf(message.at)}
@@ -533,6 +558,7 @@ function Message({
         {message.text &&
           (gif ? <MessageGif id={gif} /> : <p className="message-text">{message.text}</p>)}
         {message.kind === "qa" && <QaLine message={message} state={state ?? "offline"} />}
+        <Reactions reactions={message.reactions} me={me} onReact={onReact} />
       </div>
     </article>
   );

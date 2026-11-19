@@ -199,6 +199,7 @@ export async function tempRepo(repo = REPO) {
 export function fakeGitHub() {
   /** push 권한과 Admin. `레포 로그인`이다. */
   const pushers = new Set<string>();
+  const gates = new Map<string, Promise<void>>();
   const admins = new Set<string>();
   /** 이 가짜에 있는 레포와 옮겨진 레포의 옛 이름(`move`). GitHub처럼 옛 이름은 새 레포로 넘어간다. */
   const known = new Set(REPOS);
@@ -293,6 +294,7 @@ export function fakeGitHub() {
       };
     },
     async canPush(token, asked) {
+      await gates.get(`${asked} ${tokens.get(token)}`);
       // GitHub처럼 옮겨진 레포의 옛 이름은 새 레포로 넘겨 준다.
       const repo = moves.get(asked) ?? asked;
       if (!known.has(repo)) return { push: false, name: asked };
@@ -506,6 +508,12 @@ export function fakeGitHub() {
             set.delete(key);
             set.add(key.replace(/ [^ ]+$/, ` ${to}`));
           }
+    },
+    /** `login`의 `repo` 권한 확인을 돌려받은 `release`를 부를 때까지 붙든다. 재확인이 중간에 멈춘 때를 만든다. */
+    hold(login: string, repo: string) {
+      const gate = Promise.withResolvers<void>();
+      gates.set(`${repo} ${login}`, gate.promise);
+      return () => gate.resolve();
     },
     grant: (login: string, repo = REPO) => pushers.add(`${repo} ${login}`),
     revoke: (login: string, repo = REPO) => pushers.delete(`${repo} ${login}`),

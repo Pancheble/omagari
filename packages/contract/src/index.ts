@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** 계약의 버전. 봉투마다 싣고, 다르면 받지 않는다. 계약을 깨는 변경마다 올린다. */
-export const CONTRACT_VERSION = 51;
+export const CONTRACT_VERSION = 52;
 
 /** 오류 형식. 러너와 서버 사이의 `error` 메시지와 HTTP 오류 본문(`{ error }`)이 같이 쓴다. */
 export const ContractError = z.strictObject({
@@ -945,6 +945,16 @@ export const Decision = z.strictObject({
 export type Decision = z.infer<typeof Decision>;
 
 /**
+ * 메시지에 달린 반응 하나(ADR-0044): 이모지와 그것을 단 멤버들. 멤버는 단 차례로, 반응은 처음 달린 차례로 온다.
+ * 이모지 하나에 멤버 하나는 한 번만 단다. 단 사람이 모두 떼면 그 반응은 없다.
+ */
+export const Reaction = z.strictObject({
+  emoji: z.string(),
+  members: z.array(z.strictObject({ login: z.string(), name: z.string() })).min(1),
+});
+export type Reaction = z.infer<typeof Reaction>;
+
+/**
  * 채널에 쌓인 것 하나. `id`는 워크스페이스 전체에서 늘어나기만 하는 번호라 채널 안의 순서이자,
  * 실시간 연결이 다시 붙을 때 이어 받을 자리(`webToServer.hello`의 `after`)다.
  * 사람이 쓴 글(`text`)과 공개된 문답(`qa`), Omagari가 올린 알림(`alert`)이 같은 번호 줄에 선다.
@@ -962,6 +972,8 @@ export const ChannelMessage = z.discriminatedUnion("kind", [
     at: z.string(),
     /** 포스트의 이슈에 GitHub에서 단 댓글이 들어온 것이다(ADR-0032). `login`은 GitHub 로그인이라 멤버가 아닐 수 있다. */
     github: z.literal(true).optional(),
+    /** 달린 반응(`api.react`). 반응이 바뀌면 같은 `id`의 것이 실시간 연결로 다시 온다. */
+    reactions: z.array(Reaction),
   }),
   /**
    * 공개된 문답: 채널에 올린 DM이나 `@호출`. 질문과 답이 늘 함께 있다. `login`과 `name`은 그 에이전트의 주인(올린 사람)이고,
@@ -977,6 +989,8 @@ export const ChannelMessage = z.discriminatedUnion("kind", [
     at: z.string(),
     text: z.string().optional(),
     qa: Qa,
+    /** 달린 반응. 글 메시지의 것과 같다. */
+    reactions: z.array(Reaction),
   }),
   /**
    * Omagari가 올린 알림. 쓴 사람이 없다. 알림이 고쳐지거나 풀리거나 포스트의 글 수가 바뀌면 같은 `id`의 것이 실시간 연결로 다시 온다.
@@ -2213,6 +2227,21 @@ export const api = {
     response: z.strictObject({ gifs: z.array(Gif) }),
   },
   /**
+   * 사람이 쓴 메시지(글이나 공개된 문답)에 반응을 달거나(`on: true`) 뗀다(ADR-0044). 이미 단 것을 다시 달거나 달지 않은 것을 떼도 오류가 아니다.
+   * 없거나 볼 수 없는 메시지면 `not_found`다(둘을 가리지 않는다). 알림 줄과 결정 줄에는 달지 못한다(`invalid_request`).
+   * 반응이 바뀐 메시지가 실시간 연결의 `message`로 그 메시지를 볼 수 있는 웹 모두에 다시 간다. 포스트의 반응은 GitHub 이슈로 옮기지 않는다.
+   */
+  react: {
+    method: "POST",
+    path: "/api/channels/react",
+    body: z.strictObject({
+      message: z.number().int(),
+      emoji: z.string().refine(isEmoji, { message: "반응은 이모지 하나다" }),
+      on: z.boolean(),
+    }),
+    response: z.strictObject({ message: ChannelMessage }),
+  },
+  /**
    * 지난 `days`일(오늘 포함) 날마다 들어온 멤버 수와 문답 수. 오래된 날부터 오고, 아무 일 없던 날은 0이다(ADR-0018).
    * 날은 `timeZone`(서울)의 자정으로 자른다. 들어온 멤버는 그날 웹을 열었거나 채널에서 읽고 쓴 멤버다.
    * 문답은 그날 서버가 받은 DM과 `@호출`이다. 수만 오고, 누가 무엇을 물었는지는 오지 않는다.
@@ -2283,7 +2312,7 @@ export const serverToWeb = {
   welcome: z.strictObject({ seq: z.number() }),
   /**
    * 채널에 새로 쌓인 것. welcome 바로 뒤에 `after` 뒤의 것을 번호 순서대로 보내고, 그 뒤로는 쌓이는 대로 보낸다.
-   * 공개된 문답에 답이 오면 같은 번호의 것을 다시 보낸다. 끊긴 사이에 답이 온 것도 welcome 뒤에 다시 보낸다.
+   * 공개된 문답에 답이 오면, 반응이 바뀌면 같은 번호의 것을 다시 보낸다. 끊긴 사이에 답이 오거나 반응이 바뀐 것도 welcome 뒤에 다시 보낸다.
    */
   message: ChannelMessage,
   /** 새 채널이 생겼거나 포럼이 고쳐졌다(같은 `id`면 바꾼다). 끊긴 사이의 것은 다시 보내지 않으니, 다시 붙으면 `api.channels`를 읽는다. */

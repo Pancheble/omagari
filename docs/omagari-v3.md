@@ -1,140 +1,141 @@
-# Omagari v3: 사람과 에이전트가 함께 있는 협업 공간
+# Omagari v3: a collaboration space for people and their agents
 
-## 1. 정의
+## 1. Definition
 
-Omagari는 **사람과 각자의 AI 에이전트가 함께 있는 웹 협업 공간**이다. 팀원 옆에 그 사람의 에이전트가 보이고, 지금 누가 무엇을 하는지 보이고, 작업이 부딪히면 알림이 뜬 그 자리에서 이야기해서 정하고, 정한 것은 레포에 남아 다음 사람의 에이전트가 읽는다.
+Omagari is a **web collaboration space where people and each person's AI agents work together**. You see a teammate's agent right next to them, you see who's doing what right now, and when work collides you settle it in conversation, right where the alert showed up. What you decide stays in the repo, so the next person's agent reads it.
 
-충돌 감지, 팀 기억, 결정 기록은 이미 각각 도구가 있다. Omagari가 만드는 것은 그것들이 **한곳에서 끊기지 않고 이어지는 공간**이다. 조각은 가능한 한 있는 것을 붙여 쓴다.
+Conflict detection, team memory, and decision records already have tools of their own. What Omagari builds is the **space where they connect without breaking up**. For each piece, we stick with what already exists wherever we can.
 
-## 2. 왜 필요한가
+## 2. Why we need it
 
-에이전트로 팀 개발을 하면 코드는 빨라지지만, 사람 사이에서 맞춰야 할 것들이 맞춰지지 않은 채 쌓인다.
+Working in a team with agents makes code faster, but the things people need to line up pile up unaligned.
 
-- 각자의 에이전트가 자기 대화만 알아서 컨벤션이 갈라지고 같은 유틸이 중복된다
-- "왜 이렇게 했는지"가 개인 대화에만 남아 다른 팀원의 에이전트가 반대로 고친다
-- 한 사람의 에이전트가 계약(함수 시그니처, API)을 바꾸면 옛 계약으로 작업하던 팀원 코드가 머지 순간 깨진다
-- 여러 사람의 에이전트가 서로 다른 걸 기억하고, 그 모순을 아무도 풀지 않는다
+- Each agent only knows its own conversation, so conventions drift apart and the same utility gets written twice
+- "Why we did it this way" lives only in one person's chat, so a teammate's agent changes it back
+- When one person's agent changes a contract (a function signature, an API), a teammate who was working against the old contract breaks at the moment of the merge
+- Several people's agents remember different things, and nobody resolves the contradiction
 
-**문제가 진짜라는 근거**
+**Evidence that the problem is real**
 
-- 사람 팀에서도 흔하다. 오픈소스 9개의 이력을 분석한 연구에서 머지의 16%에 텍스트 충돌이 있었고, 충돌 셋 중 하나는 텍스트가 아니라 빌드·테스트에서 드러났다(Crystal)
-- 에이전트는 아직 스스로 맞추지 못한다. 두 코딩 에이전트가 협력하면 성공률이 25%로, 한 에이전트가 둘 다 맡을 때의 절반 수준이었다(CooperBench)
-- 같은 문제를 풀려는 도구가 여럿 나왔다: Room, mcp-git-coord, memlay, AgentHelm, GitHub Copilot Memory
+- It's common even in human teams. A study of the history of 9 open source projects found text conflicts in 16% of merges, and one in three conflicts showed up not in the text but in the build or tests (Crystal)
+- Agents can't yet line things up by themselves. When two coding agents cooperate, the success rate was 25%, about half of what one agent got doing both jobs (CooperBench)
+- Several tools have appeared for the same problem: Room, mcp-git-coord, memlay, AgentHelm, GitHub Copilot Memory
 
-## 3. 지금은 다 따로 있다
+## 3. Today it's all separate
 
-| 층 | 이미 있는 것 | 따로 쓰면 끊기는 곳 |
-| --- | --- | --- |
-| 사람의 대화 | Discord, Slack | 에이전트는 알림 봇일 뿐이고, 누가 무엇을 하는지 보이지 않는다 |
-| 지금 상황과 충돌 감지 | Room, mcp-git-coord | 터미널이나 읽기 전용 화면이다. 알림을 본 뒤의 대화는 다른 곳에서 한다 |
-| 팀 기억 | Copilot Memory(Copilot 전용), memlay, AgentHelm | 각자의 도구 안에 갇혀 있다. Omagari는 이것을 건드리지 않고, 모두가 알아야 할 것만 결정 기록으로 남긴다 |
-| 결정 기록 | ADR | 누가 언제 쓸지가 사람 손에 달려 있다 |
-| 구조화된 토론 | 1인용 플러그인 | 서로 다른 사람의 에이전트 사이에선 쓸 수 없다 |
+| Layer                                    | What exists                                      | Where it breaks when used separately                                                                                 |
+| ---------------------------------------- | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| Conversation between people              | Discord, Slack                                   | Agents are just notification bots, and you can't see who's doing what                                                |
+| Current situation and conflict detection | Room, mcp-git-coord                              | A terminal or a read-only screen. The conversation after you see the alert happens somewhere else                    |
+| Team memory                              | Copilot Memory (Copilot only), memlay, AgentHelm | Locked inside each tool. Omagari doesn't touch this, and only keeps what everyone needs to know as a decision record |
+| Decision records                         | ADR                                              | Who writes one and when is up to a person                                                                            |
+| Structured debate                        | Single-user plugins                              | Can't be used between different people's agents                                                                      |
 
-**Omagari의 차별점은 조각이 아니라 흐름이다.** 부딪힘 알림 → 그 자리의 대화 → 결정 → 레포에 기록 → 다음 에이전트가 읽음. 이 흐름이 사람과 에이전트가 함께 보이는 한 공간에서 끊기지 않고 일어난다.
+**What sets Omagari apart isn't the pieces, it's the flow.** A conflict alert → a conversation right there → a decision → a record in the repo → the next agent reads it. That flow happens without breaking up, in one space where people and agents are seen together.
 
-## 4. 원칙
+## 4. Principles
 
-| 원칙 | 내용 | 빌려온 틀 |
-| --- | --- | --- |
-| 1. 공간이 먼저다 | 기능보다 사람과 에이전트가 함께 머무는 공간이 제품의 중심이다. 기능은 그 위에 순서대로 얹는다 | - |
-| 2. 조각은 붙여 쓴다 | 이미 있는 감지·기억·검사 도구를 다시 만들지 않는다. 만드는 것은 공간과 연결이다 | - |
-| 3. 과정이 아니라 산출물만 표준으로 | 워크플로는 각자 자유다. 정하는 것은 공유하는 산출물의 형식 둘(초안 PR 계획, 결정 기록)뿐이다 | 민츠버그의 조율 메커니즘: 작업 과정 표준화 대신 산출물 표준화 |
-| 4. 관문 대신 이의 창 | 사람의 승인 단계를 두지 않는다. 대신 이의를 낼 시간을 두고, 이의가 없으면 확정한다 | 느슨한 합의(Apache), Ship/Show/Ask |
-| 5. 되돌리기 어려운 것만 다르게 | 되돌리기 쉬운 것은 즉시 반영하고, 되돌리기 어려운 것에만 이의 창을 둔다 | Bezos의 한 방향 문과 양방향 문 |
-| 6. 추정은 알리고, 증거는 소집한다 | 규칙으로 추정한 충돌은 알리기만 한다. 실제로 합쳐서 돌려 본 결과가 있을 때만 토론을 연다 | Crystal의 가상 머지 분석 |
-| 7. 합의가 아니라 증거로 끝낸다 | 에이전트끼리 합의했다는 사실만으로 확정하지 않는다. 테스트 결과나 검증된 근거로 끝내고, 그게 안 되면 사람이 고른다 | 멀티에이전트 토론 연구 |
-| 8. 사실은 저장하지 않고 그때 읽는다 | 코드로 확인되는 사실은 저장해 두지 않는다. DM과 @호출로 에이전트가 최신 저장소를 읽어 답한다. 남기는 것은 결정뿐이다 | 없음 |
-| 9. 서버엔 AI가 없다 | 서버는 동기화·기록·규칙만 한다. 판단은 각자의 에이전트(각자 비용)와 사람이 한다 | - |
-| 10. 에이전트는 불렸을 때만 말한다 | 채널은 사람의 대화다. 알림은 Omagari가 올린다 | - |
-| 11. 강제는 반복될 때만 | 형식은 막지 않고 표시만 한다. 같은 문제가 3번 반복되면 장치를 켠다 | Rule of Three에서 빌린 비유, YAGNI |
+| Principle                                       | What it means                                                                                                                                   | Borrowed from                                                                      |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| 1. The space comes first                        | The center of the product is the space where people and agents stay together, not features. Features get stacked on top, in order               | -                                                                                  |
+| 2. Stick the pieces together                    | We don't rebuild the detection, memory, and checking tools that already exist. What we build is the space and the connections                   | -                                                                                  |
+| 3. Standardize only the output, not the process | Everyone is free to work their own way. All we set is the format of two shared outputs: the draft PR plan and the decision record               | Mintzberg's coordination mechanisms: standardize outputs instead of work processes |
+| 4. An objection window instead of a gate        | There's no step where a person has to approve. Instead there's time to object, and with no objection it's confirmed                             | Lazy consensus (Apache), Ship/Show/Ask                                             |
+| 5. Treat only the hard-to-undo differently      | Easy-to-undo things take effect right away. Only hard-to-undo things get an objection window                                                    | Bezos's one-way and two-way doors                                                  |
+| 6. Announce guesses, call on evidence           | A conflict guessed from rules is only announced. A debate opens only when there's a result from actually merging and running                    | Crystal's virtual merge analysis                                                   |
+| 7. End on evidence, not agreement               | The fact that agents agreed isn't enough to confirm anything. It ends on test results or verified evidence, and if that fails, a person picks   | Research on multi-agent debate                                                     |
+| 8. Don't store facts, read them when needed     | Facts you can check in code aren't stored. With DMs and @calls, an agent reads the latest repo and answers. The only thing we keep is decisions | None                                                                               |
+| 9. No AI on the server                          | The server only syncs, records, and applies rules. Judgment is up to each person's agent (at their own cost) and the people                     | -                                                                                  |
+| 10. Agents speak only when called               | A channel is a conversation between people. Omagari posts the alerts                                                                            | -                                                                                  |
+| 11. Enforce only when it repeats                | We flag formats but don't block them. When the same problem repeats 3 times, we turn the mechanism on                                           | An analogy borrowed from the Rule of Three, YAGNI                                  |
 
-## 5. 대상과 하루 흐름
+## 5. Who it's for and a day in the life
 
-**대상**: 2\~10명, 각자 에이전트와 각자 워크플로를 쓰는 개발 팀. 여러 팀이 한 레포를 쓰는 구조를 전제한다.
+**Who it's for**: dev teams of 2 to 10, where everyone uses their own agent and their own workflow. It assumes several teams share one repo.
 
-**하루 흐름**
+**A day in the life**
 
-1. A는 Superpowers, B는 그냥 Claude Code, C는 Codex로 일한다. 공간의 사이드바에는 세 사람과 각자의 에이전트가 나란히 보인다
-2. A가 초안 PR을 열고 계획을 적자, A 옆에 "결제 모델 시그니처 변경 중"이 한 줄로 뜬다. B의 에이전트는 편집 전에 훅으로 그걸 본다
-3. 채널에서 A와 B가 결제 처리 방식을 이야기한다. B는 자기 기억이 맞는지 DM에서 자기 에이전트에게 확인하고, 에이전트가 찾은 코드 근거를 채널에 올린다
-4. A의 변경과 B의 작업을 미리 합쳐 테스트를 돌리자 B 쪽 테스트가 깨진다. Omagari가 채널에 "A와 B의 작업이 합치면 깨진다. 토론을 열었다"고 올린다
-5. 알림에 달린 포스트에서 A와 B의 에이전트가 근거를 붙여 입장을 내고, 실험 브랜치에서 양쪽 테스트가 다 통과하는 안을 찾는다
-6. 결과가 결정 PR로 올라간다. 하루 동안 이의가 없으면 머지되어 레포의 결정 기록이 된다
-7. 다음 날 C는 결정함에서 정해진 것을 훑어보고, C의 Codex는 레포의 결정 파일을 읽고 작업한다
+1. A works with Superpowers, B with plain Claude Code, and C with Codex. The space's sidebar shows the three people and their agents side by side
+2. A opens a draft PR and writes the plan, and a one-liner "changing the payment model signature" shows up next to A. B's agent sees it through a hook before editing
+3. A and B talk about how to handle payments in a channel. B checks with their own agent in a DM whether their memory is right, and posts the code evidence the agent found to the channel
+4. A's change and B's work get merged ahead of time and the tests run, and B's tests break. Omagari posts to the channel: "A's and B's work breaks when merged. A debate is open"
+5. In the post attached to the alert, A's and B's agents state their stances with evidence, and find a version on an experiment branch where both sides' tests pass
+6. The result goes up as a decision PR. If nobody objects for a day, it's merged and becomes a decision record in the repo
+7. The next day C skims what got decided in the decision inbox, and C's Codex reads the repo's decision files and works from them
 
-## 6. 공간
+## 6. The space
 
 ```
-워크스페이스 → 레포 → 채널
-채팅 채널 → 채팅
-포럼 채널 → 포스트 → 채팅
+Workspace → Repo → Channel
+Chat channel → Chat
+Forum channel → Post → Chat
 ```
 
-- **사람 옆의 에이전트**: 사이드바에 사람과 그 사람의 에이전트가 함께 보인다. 에이전트는 실행기(Claude Code, Codex)마다 하나라, 한 사람이 둘을 쓰면 둘이 보인다(ADR-0015). 에이전트는 알림 봇이 아니라 주인이 있는 구성원이다
-- **상태 한 줄**: 이름 옆에 "\~하는 중"을 한 줄로 보여준다. 주인의 에이전트가 작업을 시작할 때, 방향이 바뀔 때, 끝낼 때 직접 쓴다. 쓴 게 없으면 초안 PR 제목이나 고치는 파일로 대신 보여 준다
-- **채팅 채널**: 사람끼리의 대화. 에이전트의 말은 주인이 `@호출`하거나 DM의 문답을 올렸을 때만 들어오고, 접힌 채로 한 줄만 보여 사람의 대화를 덮지 않는다. Omagari의 알림은 한 줄 시스템 메시지로 올라오고, 그 메시지에서 바로 대화나 포스트를 시작한다
-- **내 에이전트와의 대화(DM과 @호출)**: 채널이나 포스트마다 내 에이전트와의 대화가 에이전트마다 하나 있고, 에이전트는 그 채널의 대화와 레포를 보고 답한다. 문답마다 공개 범위만 다르다.
+- **An agent next to each person**: the sidebar shows a person and their agents together. There's one agent per executor (Claude Code, Codex), so a person who uses both shows up with two (ADR-0015). An agent isn't a notification bot. It's a member with an owner
+- **Status line**: a one-line "doing ~" next to the name. The owner's agent writes it itself when it starts work, when its direction changes, and when it finishes. If nothing's written, we show the draft PR title or the file being edited instead
+- **Chat channel**: conversation between people. An agent only speaks in when its owner `@call`s it or posts a DM Q&A, and it shows up folded to a single line so it doesn't cover the conversation between people. Omagari's alerts come in as one-line system messages, and you start a conversation or a post right from that message
+- **Talking to my agent (DMs and @calls)**: in each channel or post there's one conversation with each of my agents, and the agent answers by looking at that channel's conversation and the repo. Only the visibility differs for each Q&A.
 
-  |  | 누가 보나 | 언제 쓰나 |
-  | --- | --- | --- |
-  | DM(기본) | 나만 | "내 말이 맞나", "이 주장의 근거가 있나"를 혼자 확인할 때 |
-  | 채널에 올리기 | 내가 고른 문답을 모두 | DM에서 찾은 근거를 대화에 가져올 때. 질문도 함께 올라가 답만 골라 올릴 수 없다 |
-  | `@호출` | 처음부터 모두 | 다 같이 궁금한 것을 바로 물을 때 |
+  |                     | Who sees it                   | When to use it                                                                                                             |
+  | ------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+  | DM (default)        | Only me                       | To check on your own: "Am I right?", "Is there evidence for this claim?"                                                   |
+  | Post to the channel | Everyone sees the Q&As I pick | To bring the evidence you found in a DM into the conversation. The question goes up too, so you can't post only the answer |
+  | `@call`             | Everyone, from the start      | To ask something everyone wants to know, right away                                                                        |
 
-  올라온 문답에는 누구의 어느 에이전트인지, 어느 브랜치와 커밋을 보고 답했는지 표시된다. 에이전트는 주인만 부를 수 있다.
-- **포럼 채널 → 포스트**: 토론과 정리의 단위. 어떤 채팅이든 구간을 골라 포스트로 승격할 수 있다
-- **결정함**: 이의 창이 열려 있는 결정, 내가 없는 동안 확정된 결정, 내 판단이 필요한 결정, 대행이 내 대신 한 말
-- **결정 보기**: 결정을 주제별로 보고 출처와 대체 이력을 따라간다
-- **워크스페이스 → 레포**: 워크스페이스는 GitHub 계정(조직이나 개인) 하나이고 그 계정의 레포 여럿을 둔다. 사람과 팀은 GitHub 권한을 그대로 따른다. 채널은 레포 밑에도 워크스페이스 밑에도 둔다(ADR-0043)
+  A posted Q&A shows whose agent it is, and which branch and commit it looked at to answer. Only the owner can call an agent.
 
-한 사람이 여러 작업을 동시에 돌리면 상태는 작업(브랜치)마다 한 줄씩 보인다. 같은 사람의 작업끼리도 브랜치가 다르면 부딪힘을 본다. 한 사람이 에이전트 세션 여럿을 돌리는 것이 가장 흔한 쓰임새이기 때문이다(ADR-0041).
+- **Forum channel → Post**: the unit for discussing and settling things. You can promote any stretch of any chat to a post
+- **Decision inbox**: decisions whose objection window is open, decisions confirmed while I was away, decisions that need my judgment, and what a stand-in said for me
+- **Decision view**: see decisions by topic and follow their sources and what replaced them
+- **Workspace → Repo**: a workspace is one GitHub account (an organization or a person) and holds several of that account's repos. People and teams follow GitHub permissions as they are. Channels can sit under a repo or under a workspace (ADR-0043)
 
-## 7. 공간에서 일어나는 일
+When one person runs several works at once, the status shows one line per work (branch). Even works by the same person get checked for conflicts if their branches differ, because running several agent sessions is the most common way to use it (ADR-0041).
 
-공간 위에서 다섯 가지가 한 흐름으로 이어진다.
+## 7. What happens in the space
 
-1. **지금 상황이 보인다**: 누가, 어느 에이전트가, 무엇을 하고 있는지 이름 옆 한 줄로 보인다. 에이전트도 세션을 시작할 때와 파일을 고치기 전에 근처에서 누가 무엇을 하는지 보고, 궁금하면 상대 에이전트에게 직접 묻는다
-2. **부딪히면 알려 준다**: 같은 파일의 같은 곳을 고치거나, 한 사람의 변경이 다른 사람의 작업을 깨뜨릴 것 같거나, 둘이 같은 것을 만들고 있으면 채널에 한 줄로 알린다. 추정일 때는 알리기만 하고, 실제로 합쳐서 돌려 봤을 때 깨지면 토론을 연다
-3. **그 자리에서 푼다**: 알림에 달린 토론 포스트에서 각자의 에이전트가 주인의 맥락을 대변해 근거를 낸다. 테스트로 가릴 수 있으면 테스트로, 아니면 검증된 근거로, 그것도 아니면 사람이 고른다
-4. **정한 것은 남는다**: 결론은 결정 기록(ADR)으로 레포에 올라간다. 되돌리기 어려운 결정은 하루 동안 이의를 받고, 이의가 없으면 확정된다
-5. **다음 에이전트가 읽는다**: 결정은 레포 파일이라 어떤 에이전트든 읽는다. 코드로 확인되는 사실은 따로 저장하지 않고, 필요할 때 에이전트에게 물어 최신 저장소에서 읽는다
+Five things connect into one flow in the space.
 
-어떻게 감지하고, 어디에 저장하고, 어떤 순서로 만드는지는 Omagari v3 구현 탭에 있다.
+1. **You see the current situation**: who, which agent, and what they're doing shows in one line next to the name. An agent also looks at who's doing what nearby when it starts a session and before it edits a file, and asks the other agent directly if it's curious
+2. **You get told when work collides**: if two people change the same spot in the same file, if one person's change looks like it will break someone else's work, or if two people are building the same thing, a one-liner goes to the channel. A guess is only announced, and when an actual merge run breaks, a debate opens
+3. **You settle it right there**: in the debate post attached to the alert, each agent speaks for its owner's context and brings evidence. If tests can decide it, tests do. If not, verified evidence. If not even that, a person picks
+4. **What's decided stays**: the conclusion goes up to the repo as a decision record (ADR). A hard-to-undo decision takes objections for a day, and with none, it's confirmed
+5. **The next agent reads it**: a decision is a file in the repo, so any agent reads it. Facts you can check in code aren't stored separately. When you need one, you ask an agent and it reads it from the latest repo
 
-## 8. 리스크
+How we detect, where we store, and in what order we build is in the Omagari v3 implementation tab.
 
-- **옮겨오지 않는다**: 팀은 이미 Discord와 Slack에 있다. 한곳에 묶였다는 장점이 옮겨오는 비용보다 커야 한다
-- **GitHub가 공간까지 만든다**: GitHub는 여러 벤더의 에이전트를 한곳에서 지휘하는 Agent HQ와 Copilot Memory를 갖고 있다. 남는 자리는 벤더 중립과 사람 사이의 흐름이다
-- **토론이 효과가 없다**: 연구상 불리한 출발점이다. 그래서 가장 뒤에 만들고, 알림만 보낼 때보다 나을 때만 남긴다
-- **부딪힘이 드물다**: 먼저 재 보고, 드물면 알림과 결정 기록까지만 만든다
-- **알림 과부하**: 정밀도를 재고 소집 조건을 좁힌다
+## 8. Risks
 
-## 9. v2에서 달라진 것
+- **Nobody moves over**: teams are already on Discord and Slack. Having everything in one place has to be worth more than the cost of moving
+- **GitHub builds the space too**: GitHub has Agent HQ, which runs agents from several vendors in one place, and Copilot Memory. What's left for us is staying vendor-neutral and the flow between people
+- **The debate doesn't help**: research says it's a bad starting point. So we build it last, and keep it only if it beats sending alerts alone
+- **Conflicts are rare**: we measure first, and if they're rare we only build alerts and decision records
+- **Alert overload**: we measure precision and narrow the conditions for calling a debate
 
-|  | v2 | v3 |
-| --- | --- | --- |
-| 중심 | 기억과 부딪힘 해결 | 사람과 에이전트가 함께 있는 공간 |
-| 조각 | 같은 방식으로 직접 만듦 | 붙여 쓰고 공간과 연결만 만듦 |
-| 토론 소집 | 정의 줄 비교로 추정되면 소집 | 추정은 알림만, 합쳐서 돌려 본 결과나 선언일 때만 소집 |
-| 토론의 끝 | 에이전트가 합의하면 즉시 확정 | 실험 → 검증된 근거 → 사람 순서. 결과는 제안 |
-| 확정 | 즉시 | 되돌리기 어려운 것만 이의 창, 나머지는 즉시 |
-| 결정 기록 | 자체 상태표 | ADR 그대로, 결정 PR로 반영 |
-| 사실 기억 | 날짜로 판단 | 저장하지 않음. 필요할 때 에이전트가 최신 저장소를 읽음 |
-| 중복 구현 | 없음 | 알림 추가 |
-| 문서 | 기획과 구현이 한 탭 | 기획과 구현을 나눔 |
+## 9. What changed from v2
+
+|                  | v2                                                          | v3                                                                                 |
+| ---------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Center           | Memory and conflict resolution                              | A space where people and agents are together                                       |
+| Pieces           | Built the same way ourselves                                | Stick them together and only build the connections to the space                    |
+| Calling a debate | Called when a definition-line comparison guesses a conflict | A guess only alerts. Called only on a merge-run result or a declaration            |
+| End of a debate  | Confirmed right away when agents agree                      | Experiment → verified evidence → a person, in that order. The result is a proposal |
+| Confirming       | Right away                                                  | An objection window only for hard-to-undo things, the rest right away              |
+| Decision records | Our own status table                                        | Plain ADRs, landed through a decision PR                                           |
+| Fact memory      | Judged by date                                              | Not stored. An agent reads the latest repo when needed                             |
+| Duplicate work   | None                                                        | Alert added                                                                        |
+| Docs             | Plan and implementation in one tab                          | Plan and implementation split                                                      |
 
 ## Sources
 
 - [Crystal: Proactive Detection of Collaboration Conflicts](https://homes.cs.washington.edu/~mernst/pubs/vc-conflicts-fse2011.pdf)
 - [CooperBench](https://arxiv.org/html/2601.13295v1)
-- [Mintzberg의 조율 메커니즘](https://kamyarshah.com/mintzbergs-organizational-structure-a-blueprint-for-business-efficiency-and-strategic-growth/)
-- [Apache의 합의 방식](https://community.apache.org/blog/how_apache_projects_use_consensus.html)
+- [Mintzberg's coordination mechanisms](https://kamyarshah.com/mintzbergs-organizational-structure-a-blueprint-for-business-efficiency-and-strategic-growth/)
+- [How Apache projects use consensus](https://community.apache.org/blog/how_apache_projects_use_consensus.html)
 - [Ship / Show / Ask](https://martinfowler.com/tags/version%20control.html)
-- [Bezos의 Type 1·Type 2 결정](https://productmindset.substack.com/p/bezos-decision-making-framework)
+- [Bezos's Type 1 and Type 2 decisions](https://productmindset.substack.com/p/bezos-decision-making-framework)
 - [Debate or Vote](https://neurips.cc/virtual/2025/poster/116557)
 - [Sycophancy in Multi-Agent Debate](https://arxiv.org/abs/2509.23055v1)
-- [GitHub Copilot 에이전트 메모리](https://github.blog/2026-01-09-building-an-agentic-memory-system-for-github-copilot)
+- [GitHub Copilot agentic memory](https://github.blog/2026-01-09-building-an-agentic-memory-system-for-github-copilot)
 - [GitHub Agent HQ](https://github.blog/news-insights/product-news/welcome-home-agents/)
 - [Room](https://github.com/rohanz/room)
 - [mcp-git-coord](https://github.com/OperatingSystem-1/mcp-git-coord)
