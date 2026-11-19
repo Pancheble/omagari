@@ -3,8 +3,11 @@ app = "omagari-dogfood"
 primary_region = "nrt" # 도쿄
 
 [env]
-# 받을 GitHub 계정 목록(ADR-0043). Pancheble/omagari는 레포가 하나이던 판의 레포라 켤 때마다 넣고, 그 판의 DB를 이 레포로 옮긴다.
-OMAGARI_REPO = "Pancheble/omagari"
+# 받을 GitHub 계정 목록(ADR-0043). 조직 omagari-dev와 개인 계정 Pancheble, 워크스페이스 둘이다(#278).
+# 옮겨진 레포(Pancheble/omagari → omagari-dev/omagari)는 서버가 권한을 다시 읽을 때 따라가므로 계정만 적는다.
+# `omagari-dev/omagari`를 레포로 적으면 따라가기 전에 빈 레포로 먼저 생겨 옮기지 못한다.
+# Pancheble/kagami는 개인 계정 워크스페이스의 첫 레포다. 레포가 없는 계정의 워크스페이스는 웹에서 고를 수 없어 첫 레포는 설정으로 넣는다.
+OMAGARI_REPO = "omagari-dev,Pancheble/kagami"
 OMAGARI_URL = "https://omagari-dogfood.fly.dev"
 
 # SQLite가 사는 디스크. 날마다 스냅샷이 백업이다.

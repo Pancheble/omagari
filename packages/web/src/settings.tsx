@@ -21,7 +21,7 @@ type Reply = Awaited<ReturnType<typeof call<typeof api.settings>>>;
 type Page = "agent" | "alerts" | "labels";
 
 /** 검사 명령을 정하는 법, 샌드박스 도구를 까는 법(README "검사 명령"). */
-const CHECK_HELP = "https://github.com/Pancheble/omagari#검사-명령";
+const CHECK_HELP = "https://github.com/omagari-dev/omagari#검사-명령";
 
 /**
  * 설정 창(DESIGN.md "설정 창"). 왼쪽 목록에서 항목을 고르고 오른쪽에 그 내용을 보인다.

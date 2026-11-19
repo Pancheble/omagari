@@ -12,7 +12,7 @@
 
 보안 취약점을 찾았다면 공개 이슈나 PR 댓글로 올리지 말아 주세요. 아래 비공개 채널로 보내 주세요.
 
-- GitHub의 [비공개 취약점 신고](https://github.com/Pancheble/omagari/security/advisories/new)(Security → Report a vulnerability)
+- GitHub의 [비공개 취약점 신고](https://github.com/omagari-dev/omagari/security/advisories/new)(Security → Report a vulnerability)
 
 신고할 때 다음을 함께 적어 주시면 빨리 확인할 수 있습니다.
 
