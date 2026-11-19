@@ -24,3 +24,4 @@ PRD(#3)는 "훅과 스킬은 명령 하나로 깐다. 방법은 이슈에서 정
 - Codex(2026-11-11, 이슈 #16)는 `$CODEX_HOME`(기본 `~/.codex`)의 `hooks.json`에 두 훅을, `skills/omagari-status/`에 같은 스킬을 둔다. `hooks.json`은 Claude Code의 설정과 같은 꼴이라 같은 병합을 쓴다. matcher는 정규식이고, 편집 전 훅은 Codex의 파일 편집 도구 `apply_patch`에만 건다(`^apply_patch$`). 훅은 패치의 파일 머리 줄(`*** Add/Update/Delete File:`, `*** Move to:`)에서 고칠 파일을 모두 읽는다([Codex hooks](https://learn.chatgpt.com/docs/hooks)). 스킬 자리는 Codex의 skill-installer가 까는 `$CODEX_HOME/skills`를 따랐다. 문서의 사용자 자리 `~/.agents/skills`도 Codex가 읽는다([Codex skills](https://learn.chatgpt.com/docs/build-skills)).
 - Codex는 사용자가 `/hooks`에서 훅을 신뢰해야 돌린다. 신뢰는 훅의 해시에 걸려 Node나 레포를 옮겨 다시 깔면 다시 신뢰해야 한다. `omagari install`이 그렇게 알린다.
 - 미정: Codex의 PreToolUse 입력에는 `agent_id`가 없고 서브에이전트도 부모의 `session_id`로 온다. 서브에이전트가 먼저 본 근처 작업을 메인 대화가 본 것으로 적는다(Claude Code는 가린다).
+- 러너는 기기마다 백그라운드 프로세스 하나로 돌고, 훅은 서버가 받는 계정 밖의 레포에서 조용하다. `omagari install`은 `omagari setup`이 된다(ADR-0049).
