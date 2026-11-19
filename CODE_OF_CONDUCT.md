@@ -1,44 +1,44 @@
-# 행동 강령
+# Code of Conduct
 
-## 서약
+## Our pledge
 
-우리는 나이, 장애, 외모, 민족, 성별 정체성과 표현, 경험 수준, 교육, 국적, 인종, 종교, 성적 지향 등과 무관하게, 이 프로젝트와 커뮤니티에 참여하는 모든 사람이 괴롭힘 없는 경험을 누리도록 하겠다고 서약합니다.
+We pledge to make taking part in this project and community a harassment-free experience for everyone, regardless of age, disability, appearance, ethnicity, gender identity and expression, level of experience, education, nationality, race, religion, or sexual orientation.
 
-우리는 열린, 환영하는, 다양한, 포용적인, 건강한 커뮤니티를 만들고 지키는 데 힘쓰겠습니다.
+We'll work to build and keep an open, welcoming, diverse, inclusive, and healthy community.
 
-## 기준
+## Our standards
 
-긍정적인 환경에 기여하는 행동의 예:
+Examples of behavior that helps build a positive environment:
 
-- 다른 사람에게 공감하고 친절하게 대하기
-- 의견과 경험이 다를 때 존중하기
-- 건설적인 피드백을 주고 받아들이기
-- 실수에 책임지고, 영향을 받은 사람에게 사과하고, 배운 것을 나누기
-- 개인에게만이 아니라 커뮤니티 전체에 가장 좋은 것을 생각하기
+- Being kind and empathetic to others
+- Respecting different opinions and experiences
+- Giving and accepting constructive feedback
+- Owning mistakes, apologizing to the people affected, and sharing what you learned
+- Thinking about what's best for the whole community, not only for you
 
-허용되지 않는 행동의 예:
+Examples of unacceptable behavior:
 
-- 성적인 언어나 이미지, 성적인 관심이나 접근 시도
-- 트롤링, 모욕적이거나 비하하는 발언, 개인에 대한 공격이나 정치적 공격
-- 공개적이거나 사적인 괴롭힘
-- 명시적 허락 없이 다른 사람의 사적 정보(주소, 연락처 등)를 공개하는 것
-- 프로젝트에서 합리적으로 부적절하다고 볼 수 있는 기타 행동
+- Sexualized language or images, and sexual attention or advances
+- Trolling, insulting or derogatory comments, and personal or political attacks
+- Public or private harassment
+- Publishing others' private information (such as an address or contact details) without their explicit permission
+- Other conduct that could reasonably be considered inappropriate in this project
 
-## 적용 범위
+## Scope
 
-이 행동 강령은 이 프로젝트의 모든 공간(이슈, 풀 리퀘스트, 댓글, 커밋 메시지, 문서, 채널, 그리고 공개 공간에서 프로젝트를 대표하는 개인의 행동)에 적용됩니다.
+This Code of Conduct applies in all of this project's spaces: issues, pull requests, comments, commit messages, docs, channels, and when someone represents the project in a public space.
 
-## 집행
+## Enforcement
 
-행동 강령을 어기는 행동은 이 레포의 관리자 @Pancheble에게 알려 주세요. 공개하기 어려운 내용이면 GitHub의 [비공개 보안 신고](https://github.com/omagari-dev/omagari/security/advisories/new)로 보내 주세요. 모든 신고는 신속하고 공정하게 검토됩니다. 신고한 사람의 신원은 필요한 범위를 넘어 공개하지 않습니다.
+Report conduct that breaks this Code of Conduct to the repo's maintainer, @Pancheble. If it's hard to say in public, use GitHub's [private vulnerability reporting](https://github.com/omagari-dev/omagari/security/advisories/new). We review every report promptly and fairly. We don't share the reporter's identity beyond what's needed.
 
-관리자는 위반의 심각도에 따라 다음 조치를 취할 수 있습니다.
+The maintainer can take these steps, depending on how serious the violation is:
 
-1. **정정**: 위반 행동이 부적절하다는 것을 알리고 공개 사과를 요청합니다.
-2. **경고**: 행동에 따른 결과를 알리고, 계속되면 제재가 있을 수 있다고 경고합니다.
-3. **일시적 제재**: 일정 기간 프로젝트의 공간과 상호작용을 막습니다.
-4. **영구 제재**: 프로젝트의 공간에서 영구히 쫓아냅니다.
+1. **Correction**: tell the person the behavior was inappropriate and ask for a public apology.
+2. **Warning**: explain the consequences, and warn that continuing can lead to a ban.
+3. **Temporary ban**: block the person from the project's spaces and interaction for a set time.
+4. **Permanent ban**: remove the person from the project's spaces for good.
 
-## 출처
+## Attribution
 
-이 문서는 [Contributor Covenant 2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct/)(CC BY 4.0)의 구조와 집행 단계를 바탕으로 이 레포가 한국어로 새로 쓴 것입니다. 원문 문장을 그대로 옮긴 번역본이 아닙니다.
+This page follows the structure and enforcement steps of the [Contributor Covenant 2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct/) (CC BY 4.0). It's newly written for this repo, not a copy of the original text.

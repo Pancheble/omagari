@@ -1,27 +1,27 @@
-# 보안 정책
+# Security policy
 
-## 지원하는 판
+## Supported versions
 
-| 판 | 보안 수정 |
+| Version | Security fixes |
 |---|---|
-| 마지막 릴리즈(`main`) | 지원함 |
-| `dev` | 지원함(다음 릴리즈에 들어감) |
-| 그 밖의 과거 릴리즈 | 지원하지 않음 |
+| Latest release (`main`) | Supported |
+| `dev` | Supported (goes into the next release) |
+| Older releases | Not supported |
 
-## 취약점 신고
+## Reporting a vulnerability
 
-보안 취약점을 찾았다면 공개 이슈나 PR 댓글로 올리지 말아 주세요. 아래 비공개 채널로 보내 주세요.
+If you find a security vulnerability, don't open a public issue or comment on a PR. Send it through the private channel below.
 
-- GitHub의 [비공개 취약점 신고](https://github.com/omagari-dev/omagari/security/advisories/new)(Security → Report a vulnerability)
+- GitHub [private vulnerability reporting](https://github.com/omagari-dev/omagari/security/advisories/new) (Security → Report a vulnerability)
 
-신고할 때 다음을 함께 적어 주시면 빨리 확인할 수 있습니다.
+Please include these so we can confirm it faster:
 
-- 영향을 받는 부분(패키지, 파일, 엔드포인트 등)과 판(릴리즈 태그 또는 커밋)
-- 재현 절차나 개념 증명
-- 예상되는 영향
+- The affected part (package, file, endpoint) and version (release tag or commit)
+- Steps to reproduce, or a proof of concept
+- The impact you expect
 
-관리자 @Pancheble이 신고를 받아 확인합니다. 신고를 받은 뒤 가능한 한 빨리 처음 답을 드리고, 고친 뒤 공개할 때 신고자의 이름을 함께 밝힐지 물어보겠습니다.
+The maintainer @Pancheble receives and checks reports. We'll reply as soon as we can, and when we disclose after the fix, we'll ask whether you want to be named.
 
-## 공개 원칙
+## Disclosure
 
-취약점은 수정이 머지되고 필요한 릴리즈가 나간 뒤에 공개합니다. 수정이 늦어지면 신고자와 공개 시기를 함께 정합니다.
+We disclose a vulnerability after the fix is merged and any needed release is out. If the fix takes longer, we'll agree on a disclosure date with you.
