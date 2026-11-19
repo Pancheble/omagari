@@ -177,9 +177,14 @@ test("포럼은 레포로 거르고, 레포의 라벨 이름을 바꾸면 그 �
   await writer(desk.folder)("src/pay.ts", text(BASE.toSpliced(2, 1, "payment")));
   await writer(refund2)("src/pay.ts", text(BASE.toSpliced(2, 1, "refund")));
 
+  // 러너가 작업을 보는 데 늦으면 오래된 기준으로 잠깐 가짜 부딪힘(main과 refund)을 올리고, 그 알림은 풀려도 포스트로 남는다. 열린 알림의 포스트만 센다.
+  const open = async (as: As, repo: string) =>
+    (await call(on(as, repo), api.posts)).posts.filter(
+      (p) => p.message?.kind === "alert" && !p.message.alert.resolved,
+    );
   const postOf = (as: As, repo: string) =>
     eventually(async () => {
-      const { posts } = await call(on(as, repo), api.posts);
+      const posts = await open(as, repo);
       assert.equal(posts.length, 1);
       return posts[0] as (typeof posts)[number];
     });
@@ -210,7 +215,7 @@ test("포럼은 레포로 거르고, 레포의 라벨 이름을 바꾸면 그 �
   );
   // 이미 있던 포럼("참고")은 레포 조건이 없어 모든 레포의 포스트가 걸린다.
   const forumsOf = async (as: As, repo: string) =>
-    (await call(on(as, repo), api.posts)).posts.map((p) => [...p.forums].sort());
+    (await open(as, repo)).map((p) => [...p.forums].sort());
   const ids = (...forums: { id: string }[]) => forums.map((f) => f.id).sort();
   const reference = (await call(owner, api.channels)).channels.find((c) => c.name === "참고");
   assert.ok(reference);
