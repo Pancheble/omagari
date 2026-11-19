@@ -37,7 +37,8 @@ test("답장은 원래 메시지의 쓴 사람과 첫 줄을 달고 오고, 다�
     assert.ok(live.messages().some((m) => m.id === reply.id && m.kind === "text" && m.replyTo)),
   );
   const { messages } = await call(owner, api.history, { channel });
-  assert.deepEqual(messages.at(-1)?.kind === "text" && messages.at(-1)?.replyTo, expected);
+  const last = messages.at(-1);
+  assert.deepEqual(last?.kind === "text" && last.replyTo, expected);
   assert.equal(messages[0]?.kind === "text" && messages[0].replyTo, undefined);
 
   // 부르지 않게 끈 답장
@@ -79,7 +80,10 @@ test("답장 안에서 `@호출`하면 원래 메시지가 질문과 함께 데�
   assert.equal(message?.kind === "qa" && message.replyTo?.id, original.id);
   await eventually(() => assert.equal(fake.calls.length, 1));
   const [{ message: prompt }] = fake.calls;
-  assert.match(prompt, /<replying_to>\n<message from="owner \(owner\)"[^>]*>\n환불이 두 번 나갔어요\n<\/message>\n<\/replying_to>\n\n왜 그런지 봐 줘$/);
+  assert.match(
+    prompt,
+    /<replying_to>\n<message from="owner \(owner\)"[^>]*>\n환불이 두 번 나갔어요\n<\/message>\n<\/replying_to>\n\n왜 그런지 봐 줘$/,
+  );
 
   // DM에는 답장이 없다.
   await assert.rejects(

@@ -24,6 +24,18 @@ export const conversationKo: Words["conversation"] = {
   sendTo: (channel) => `# ${channel}에 메시지 보내기`,
   send: "보내기",
   messageActions: "메시지 동작",
+  reply: {
+    reply: "답장",
+    quote: "인용",
+    replyingTo: ["", "에게 답장"],
+    notify: (name) => `${name} 부르기`,
+    on: "켜짐",
+    off: "꺼짐",
+    stop: "답장 그만두기",
+    jump: "원래 메시지로 가기",
+    gone: "원래 메시지를 볼 수 없어요",
+    gif: "GIF",
+  },
   fromGithub: "이슈에 GitHub에서 단 댓글",
   loading: "메시지를 불러오는 중",
   call: {

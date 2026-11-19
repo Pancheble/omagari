@@ -124,7 +124,11 @@ test("포스트에 종류 라벨이 붙고, 논의 포스트 하나가 GitHub �
   );
 
   // 포스트의 답장은 댓글 머리에 원래 댓글의 링크와 첫 줄을 적는다. GitHub이 다시 메일을 보내지 않게 `@`는 없다(ADR-0047).
-  await call(world.owner, api.send, { channel: post.channel, text: "고마워요", replyTo: agreed.id });
+  await call(world.owner, api.send, {
+    channel: post.channel,
+    text: "고마워요",
+    replyTo: agreed.id,
+  });
   await eventually(() =>
     assert.equal(
       issue.comments.at(-1)?.body,

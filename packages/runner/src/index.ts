@@ -926,8 +926,15 @@ export async function startRunner(options: {
         );
       } else if (message.kind === "ask") {
         // The answer goes back on the connection the Q&A came from. If it dropped in between, the server has already returned a failure, and what's sent is dropped.
-        const { executor, channel, message: question, recent, replyTo, model, effort } =
-          message.payload;
+        const {
+          executor,
+          channel,
+          message: question,
+          recent,
+          replyTo,
+          model,
+          effort,
+        } = message.payload;
         const ask = { question, channel, recent, replyTo, model, effort };
         void reply(executor, `${executor} ${channel.id}`, ask).then(({ kind, payload }) =>
           current.send(encode(runnerToServer, kind, payload, message.id)),

@@ -3274,7 +3274,9 @@ export async function startServer(options: {
   const originalOf = (channel: string, replyTo: number | undefined) => {
     if (replyTo === undefined) return undefined;
     const row = db
-      .prepare(`${MESSAGES} WHERE m.id = ? AND m.channel = ? AND m.alert IS NULL AND m.decision IS NULL`)
+      .prepare(
+        `${MESSAGES} WHERE m.id = ? AND m.channel = ? AND m.alert IS NULL AND m.decision IS NULL`,
+      )
       .get(replyTo, channel) as MessageRow | undefined;
     if (!row)
       throw new ContractFailure({
@@ -3310,14 +3312,7 @@ export async function startServer(options: {
     if (visibility === "public") {
       db.prepare(
         "INSERT INTO messages (channel, login, qa, at, reply_to, notify) VALUES (?, ?, ?, ?, ?, ?)",
-      ).run(
-        channel,
-        agent,
-        id,
-        at,
-        replyTo ?? null,
-        replyTo === undefined ? null : Number(notify),
-      );
+      ).run(channel, agent, id, at, replyTo ?? null, replyTo === undefined ? null : Number(notify));
     }
     const frame = encode(serverToRunner, "ask", {
       executor,
@@ -5121,7 +5116,8 @@ export async function startServer(options: {
     const body = commentText(message);
     const original = row.original === null ? null : JSON.parse(row.original);
     if (body === undefined || !original) return body;
-    const link = original.comment === null ? issueUrl : `${issueUrl}#issuecomment-${original.comment}`;
+    const link =
+      original.comment === null ? issueUrl : `${issueUrl}#issuecomment-${original.comment}`;
     const line = firstLine(original.text ?? "").slice(0, POST_LINE);
     return [`> **${original.login}** · [original](${link})`, `> ${line}`, "", body].join("\n");
   };

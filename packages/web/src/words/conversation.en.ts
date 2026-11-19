@@ -22,6 +22,18 @@ export const conversationEn = {
   sendTo: (channel: string) => `Send a message to # ${channel}`,
   send: "Send",
   messageActions: "Message actions",
+  reply: {
+    reply: "Reply",
+    quote: "Quote",
+    replyingTo: ["Replying to ", ""] as [string, string],
+    notify: (name: string) => `Call ${name}`,
+    on: "On",
+    off: "Off",
+    stop: "Stop replying",
+    jump: "Go to the original message",
+    gone: "Can't see the original message",
+    gif: "GIF",
+  },
   fromGithub: "A comment left on the issue on GitHub",
   loading: "Loading messages",
   call: {
