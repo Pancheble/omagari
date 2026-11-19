@@ -1600,7 +1600,7 @@ When you call an AI and say something, it's kept under the name of whoever calle
 
 #### Reaction
 
-- When you hover a message (or reach it by keyboard), an action strip shows at the message's top right: `{colors.canvas}` background, 1px line, `{rounded.sm}`, a shadow, padding 2px. A 28px "Add reaction" (반응 달기) button (a 16px Lucide `smile-plus`). Pressing it opens the emoji palette below the button, and picking adds the reaction.
+- When you hover a message (or reach it by keyboard), an action strip shows at the message's top right: `{colors.canvas}` background, 1px line, `{rounded.sm}`, a shadow, padding 2px. 28px buttons with 16px Lucide icons, in this order: "Add reaction" (반응 달기, `smile-plus`), "Reply" (답장, `reply`), "Thread" (스레드, `messages-square`, channels only), and "Quote" (인용, `text-quote`) (see "Reply, thread, and quote"). Pressing "Add reaction" opens the emoji palette below the button, and picking adds the reaction.
 - **Reaction pill** (`{component.app-reaction}`): 4px below the message body, 4px apart. 24px tall, `{rounded.pill}`, 1px `{colors.hairline}`, padding 0 8px. A 14px emoji and the count (12px/600). A reaction you added has an accent border, a 6% accent background, and an accent count (`aria-pressed="true"`). Pressing it adds or removes yours. Hovering shows the names of the people who added it as a tooltip ("Minsu Park and Seoyeon Lee reacted with 🎉"). At the end of the pill row there's a 28px "Add reaction" button of the same height (a 14px `smile-plus`).
 - The emoji you can use are the whole palette. We don't fix it at eight like GitHub (same as Slack and Discord). Pills are in the order they were first added.
 - Reactions are stored on the server and shared in real time (contract, ADR-0044). Reactions on a post's messages aren't carried over to GitHub issue comments.
@@ -1618,6 +1618,49 @@ We use only GIPHY (ADR-0044). The Tenor API shut down on 2026-06-30.
 - **GIF in a message**: a message whose text is only one GIPHY address (`giphy.com/gifs/…`, `media*.giphy.com/media/…`) shows as a picture instead of the address. Up to 260px wide, the aspect ratio kept, `{rounded.md}`. A 11px/600 "GIF" strip at the bottom left (70% black background, white text). A pasted GIPHY address is the same. Other image addresses stay as links only (so the viewer's IP doesn't leak). The browser fetches the picture straight from GIPHY.
 - For people who turned on reduced motion (`prefers-reduced-motion`), it shows a still first frame and plays when pressed.
 - All ratings up to R show (2026-11-19 @Pancheble). There's no setting for it.
+
+#### Reply, thread, and quote
+
+2026-11-19 @Pancheble (#339): all three go in, as separate things. A reply answers one message and stays in the conversation (Discord). A thread is a side conversation under one message (Slack). A quote copies part of a message into yours (GitHub's `>`). Picked drafts: 113-A, 114-A, 115-B.
+
+| Where | Reply | Thread | Quote |
+| --- | --- | --- | --- |
+| Channel | yes | yes | yes |
+| Post | yes | no (a post is already one topic, and GitHub issue comments don't branch, like Discord's forum posts) | yes |
+| DM column (my agent) | no | no | yes, into the question |
+
+A Q&A message in a channel or post works like any other message. You can only reply to or quote a message in the same channel, post, or DM, so whoever sees the reply can also see the original.
+
+- **Starting it**: the hover action strip (see "Reaction"), keys with a message focused (R reply, T thread, Q quote; Slack also uses T), or, on narrow screens, the long-press menu. Selecting text inside one message pops a small floating button "Quote Q" (인용) right below the selection (`{component.app-popover}` look, 28px, a 14px `text-quote` and a 11px key cap). It quotes only the selection, like GitHub's R.
+- **Reply** (draft 113-A)
+  - In the composer: a 32px strip sits on top of the composer, joined to it (the composer's top corners go square). Parchment background, 13px secondary: "Replying to **Minsu Park**" (**박민수**에게 답장). On the right, an `@ On` (켜짐) toggle (12px/600 accent, `aria-pressed`) and a 24px close button "Stop replying" (답장 그만두기). The toggle is on by default and decides whether the original's author is called (Discord's `@ON`). Esc or close drops the reply but keeps the text.
+  - In the message: one 13px secondary line above the header. A 2px `{colors.hairline}` hook (6px corner) runs from above the avatar to the line, and the avatar moves down to sit beside the name. The line holds a 16px avatar, the name (600) and the original's first line with an ellipsis. A GIF shows "GIF", a Q&A shows its question. The line is a button "Go to the original message" (원래 메시지로 가기): it scrolls to the original and paints it with `{component.app-message-highlight}`, like "View" in "Post to channel".
+  - If the original can't be loaded, the line says only "Can't see the original message" (원래 메시지를 볼 수 없어요) in italics, with no avatar and no button. It's the same whether the original was deleted or the viewer can't see it (#239: what you can't see is the same as what doesn't exist).
+  - A reply message always carries a header, even within 5 minutes of the same person's last message.
+- **Thread** (draft 114-A, channels only)
+  - Under the original, a summary row 4px below the body (and below the reaction pills): up to three 20px square avatars of people who wrote in it, "**3 replies**" (답글 3개) (13px/600 accent), and "Last reply 3:14 PM" (마지막 답글 오후 3:14) (12px secondary). On hover, a canvas background and a 1px line. Pressing it opens the thread.
+  - The thread opens in the right column, in place of the member list or DM column. The header: "Thread" (스레드) (15px/600) with "# omagari" below it (12px secondary) and a close button. Then the original (28px avatar, 14px text), a divider with "3 replies", the replies in the same shape, and a composer at the bottom with the placeholder "Reply" (답글 쓰기).
+  - Below the thread composer's text, a checkbox "Also send to # omagari" (# omagari에도 보내기) (13px secondary). When on, the reply also goes to the channel. There it carries one 12px secondary line under the header: "Replied in a thread: **first line of the original…**" (스레드에 답글: …) (the original as an accent link that opens the thread). The checkbox remembers its last state per channel.
+  - A thread doesn't nest: you can't open a thread inside a thread. Replies inside a thread can still quote.
+- **Quote** (draft 115-B)
+  - Quoting puts these lines at the start of the composer, followed by a blank line and the cursor:
+    ```
+    > **minsu**
+    > Doesn't match the receipt
+    ```
+    The first line is the original author's GitHub login in bold. It's text you can edit or delete like any other text. A quote is a copy of the text at that moment, not a link, so it stays even if the original goes away.
+  - In a message, lines starting with `> ` show as a quote block: a 3px `{colors.hairline}` line on the left, 12px gap, the text in secondary color. If the first quoted line is only `**login**`, it shows as a 16px avatar and that member's name (12px/600 secondary). A login that isn't a member shows as the login.
+  - In the DM column, quoting a paragraph of an answer puts it at the start of the question ("explain this part").
+- **Who gets called** (delivery is browser notifications, #313): a reply calls the original's author unless the `@` toggle is off. A thread calls the original's author and everyone who wrote in it (like Slack). A quote calls nobody. Your own message never calls you.
+- **Posts and GitHub** (ADR-0047): a reply in a post becomes an issue comment that starts with
+  ```
+  > **minsu** · [original](link to the original comment)
+  > First line of the original
+
+  (your text)
+  ```
+  with no `@`, so GitHub doesn't send another email. A quote is already `>` text and goes as it is. A GitHub comment starting with `>` comes in as plain text, not as a reply, because GitHub doesn't say what it answers.
+- **Agents** (ADR-0047): agents don't reply or quote on their own (an answer is already tied to its question). When you `@call` inside a reply or with a quote, the original goes into the question. In a thread, the original and its replies go in, and the answer lands in that thread. Only what the caller can see in that place goes in.
 
 #### `@call` input
 

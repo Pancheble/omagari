@@ -152,6 +152,17 @@ A conversation that discusses and settles one topic. Like a channel, you write m
 A post whose importance is Discuss is one GitHub issue. Messages in the post map to issue comments, and issue comments map to messages in the post (ADR-0032, ADR-0039).
 _Avoid_: thread, topic
 
+**Reply** (답장):
+A message that answers one earlier message in the same channel, post, or DM. It shows a one-line pointer to the original above it and stays in the conversation (ADR-0047).
+_Avoid_: response (on its own)
+
+**Thread** (스레드):
+A side conversation under one channel message, opened in the right column. Only channels have threads. A post or an agent session is never called a thread (ADR-0047).
+_Avoid_: sub-channel, replies (for the whole thing)
+
+**Quote** (인용):
+Part of a message copied into a new one as `>` lines. It's text, not a link, so it stays even when the original goes away (ADR-0047).
+
 ## Conflicts and decisions
 
 **Conflict** (부딪힘):
