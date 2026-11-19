@@ -873,10 +873,15 @@ export async function startWorld(
     login,
     /** CLI가 세션을 남기는 폴더. */
     config: join(data, "config"),
-    /** 이 기기의 Claude Code 사용자 설정 폴더(`~/.claude` 자리). `omagari install`이 여기에 깐다. */
+    /** 이 기기의 Claude Code 사용자 설정 폴더(`~/.claude` 자리). `omagari setup`이 여기에 깐다. */
     claude: join(data, "claude"),
-    /** 이 기기의 Codex 사용자 설정 폴더(`~/.codex` 자리). `omagari install`이 여기에 깐다. */
+    /** 이 기기의 Codex 사용자 설정 폴더(`~/.codex` 자리). `omagari setup`이 여기에 깐다. */
     codex: join(data, "codex"),
+    /** 이 기기의 CLI가 owner로 로그인해 둔 채 `omagari setup`을 돌린다(로그인 흐름은 login.test가 본다). */
+    async setup(...args: string[]) {
+      await this.signInCli(owner);
+      return this.cli("setup", ...args);
+    },
     /** 이 기기의 CLI가 `as`로 로그인해 둔 것처럼 세션을 남긴다. CLI로 로그인하는 흐름은 login.test가 본다. */
     async signInCli(as: { session: string }) {
       await mkdir(join(data, "config", "omagari"), { recursive: true });
@@ -1034,6 +1039,18 @@ export async function startWorld(
     /** `omagari <args>`를 `cwd`에서 돌린다. */
     cliIn: (cwd: string, ...args: string[]) =>
       run(process.execPath, [CLI, ...args], { cwd, env: cliEnv() }),
+    /** `omagari <args>`를 OMAGARI_SERVER 없이 레포 폴더에서 돌린다. 저장된 서버 주소로만 서버를 찾는다. */
+    cliBare: (...args: string[]) =>
+      run(process.execPath, [CLI, ...args], {
+        cwd: repo.folder,
+        env: { ...cliEnv(), OMAGARI_SERVER: undefined },
+      }),
+    /** 끝나기 전에 출력을 봐야 하는 `omagari <args>`를 OMAGARI_SERVER 없이 띄운다(setup의 로그인). */
+    launchBare: (...args: string[]) =>
+      launch(process.execPath, [CLI, ...args], {
+        cwd: repo.folder,
+        env: { ...cliEnv(), OMAGARI_SERVER: undefined },
+      }),
     /** 끝나지 않는 `omagari <args>`(러너)를 `cwd`에서 띄운다. */
     launchCliIn: (cwd: string, ...args: string[]) =>
       launch(process.execPath, [CLI, ...args], { cwd, env: cliEnv() }),

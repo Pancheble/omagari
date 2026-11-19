@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
+import { createInterface } from "node:readline/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs, promisify } from "node:util";
 import {
@@ -42,7 +43,7 @@ import {
   ServerContractMismatch,
   startRunner,
 } from "@omagari/runner";
-import { install } from "./install.ts";
+import { install, uninstall } from "./install.ts";
 import { restart, UPDATED, type UpdateRecord, updateClone } from "./update.ts";
 
 /** First line of commands that show other people's text in quotes (status, impact). Same meaning as the hooks' notice. */
@@ -91,19 +92,24 @@ const USAGE = `Usage:
                                 Default 30 seconds, max 100. When time runs out it is "no answer", which is not an answer or an approval
   omagari metrics [--days <days>]
                                 Show, for each past day (default 14), the number of members who joined and the number of Q&As
-  omagari install               Install the session-start hook, pre-edit hook, and status line skill into this machine's agents (Claude Code, Codex)
-                                Existing settings are left alone, and running it again still installs only one
+  omagari setup [<server address>]
+                                Sign in with GitHub, save the server address, and install the session-start hook, pre-edit hook, and status line skill into this machine's agents (Claude Code, Codex)
+                                Asks for the address if none is saved. Running it again changes nothing; a new address switches to it
+  omagari uninstall [--sign-out]
+                                Remove the hooks and the status line skill. The saved session stays unless --sign-out
 
-Give the server with OMAGARI_SERVER (default http://127.0.0.1:3000).
+The server is OMAGARI_SERVER if set, else the address 'omagari setup' saved, else http://127.0.0.1:3000.
 Every command except starting the runner appends the news backed up in the current branch's Inbox to its response.`;
 
-const server = process.env.OMAGARI_SERVER ?? "http://127.0.0.1:3000";
+const configDir = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "omagari");
 // One session per server. The GitHub token is not here. Only the server holds it.
-const sessionsFile = join(
-  process.env.XDG_CONFIG_HOME || join(homedir(), ".config"),
-  "omagari",
-  "sessions.json",
-);
+const sessionsFile = join(configDir, "sessions.json");
+/** The address `omagari setup` saved. */
+const configFile = join(configDir, "config.json");
+const savedServer: string | undefined = JSON.parse(
+  await readFile(configFile, "utf8").catch(() => "{}"),
+).server;
+let server = process.env.OMAGARI_SERVER ?? savedServer ?? "http://127.0.0.1:3000";
 
 const [command, sub, ...rest] = process.argv.slice(2);
 try {
@@ -143,8 +149,14 @@ try {
       options: { days: { type: "string" } },
     });
     await metrics(values.days);
-  } else if (command === "install" && sub === undefined) {
-    for (const line of await install()) console.log(line);
+  } else if (command === "setup" && rest.length === 0 && !sub?.startsWith("--")) {
+    await setup(sub);
+  } else if (
+    command === "uninstall" &&
+    (sub === undefined || sub === "--sign-out") &&
+    rest.length === 0
+  ) {
+    await signOutAfter(sub === "--sign-out");
   } else {
     console.error(USAGE);
     process.exitCode = 1;
@@ -172,6 +184,39 @@ async function mailbox() {
   if (!notice) return;
   console.log(`\n${notice.text}`);
   await callRunner(process.cwd(), "delivered", { ids: notice.ids }).catch(() => {});
+}
+
+/** Saves the server address, signs in if this server has no session yet, installs the hooks, and says what's left. */
+async function setup(address: string | undefined) {
+  const chosen = address ?? process.env.OMAGARI_SERVER ?? savedServer ?? (await askAddress());
+  server = chosen.replace(/\/+$/, "");
+  if (!(await readSessions())[server]) await login();
+  await mkdir(configDir, { recursive: true, mode: 0o700 });
+  await writeFile(configFile, `${JSON.stringify({ server }, null, 2)}\n`);
+  for (const line of await install()) console.log(line);
+  console.log(
+    `\nServer: ${server}\nOne step is left: Open /hooks in Codex and trust the two Omagari hooks (Codex has no way to trust them in advance).`,
+  );
+}
+
+async function askAddress() {
+  const lines = createInterface({ input: process.stdin, output: process.stdout });
+  const answer = (await lines.question("Server address? ").catch(() => "")).trim();
+  lines.close();
+  if (!answer) throw new Error("No server address. Run: omagari setup https://<your-team-server>");
+  return answer;
+}
+
+/** Removes the hooks and skill. With `signOut`, also ends this server's session and forgets it. */
+async function signOutAfter(signOut: boolean) {
+  for (const line of await uninstall()) console.log(line);
+  if (!signOut) return;
+  const session = (await readSessions())[server];
+  if (!session) return console.log(`Not signed in to ${server}.`);
+  await call({ url: server, session }, api.logout).catch(() => {});
+  const { [server]: _, ...others } = await readSessions();
+  await writeFile(sessionsFile, JSON.stringify(others, null, 2), { mode: 0o600 });
+  console.log(`Signed out of ${server}.`);
 }
 
 async function readSessions(): Promise<Record<string, string>> {

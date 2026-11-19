@@ -72,10 +72,10 @@ export OMAGARI_SERVER=https://<your-team-server>   # also put this in your shell
 omagari --version
 ```
 
-Install the hooks into this machine's agents. Run it once per machine. For Codex, open `/hooks` in Codex and trust the two hooks, or they won't run.
+Sign in with GitHub, save the server address, and install the hooks into this machine's agents. Run it once per machine. For Codex, open `/hooks` in Codex and trust the two hooks, or they won't run.
 
 ```bash
-omagari install
+omagari setup https://<your-team-server>
 ```
 
 Start the runner in the folder where you cloned the workspace repo. The first time, it signs you in with GitHub. Keep it running, because the team only sees your work and your agent while it is.
@@ -109,7 +109,8 @@ The full idea is in [docs/omagari-v3.md](docs/omagari-v3.md). How it's built is 
 
 | Command | What it does |
 |---|---|
-| `omagari install` | Put the hooks and the status line skill into this machine's agents |
+| `omagari setup [<address>]` | Sign in, save the server address, and put the hooks and the status line skill into this machine's agents |
+| `omagari uninstall` | Remove the hooks and the skill (`--sign-out` also ends your session) |
 | `omagari runner` | Start the runner in a repo folder (`--share full\|declared\|intent` picks what you upload, `--merge-check on\|off`) |
 | `omagari runner check` | Run the check command once on your current work, in the sandbox |
 | `omagari runner ask <message>` / `runner log` | Ask this repo's runner session, or see what the runner ran |
