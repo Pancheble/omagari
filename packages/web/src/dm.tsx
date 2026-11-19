@@ -18,6 +18,7 @@ import { Composer, flash, fullTime, SkeletonRow, timeOf } from "./conversation.t
 import { t } from "./i18n.ts";
 import { Mark } from "./members.tsx";
 import { Person } from "./profile-card.tsx";
+import { quoteLines, SelectionQuote, withQuote } from "./reply.tsx";
 import { RightPanel } from "./workspace.tsx";
 
 type Agent = MemberView["agents"][number];
@@ -134,6 +135,18 @@ export function DmPanel({
   const [text, setText] = useState("");
   const [failure, setFailure] = useState<string>();
   const scroller = useRef<HTMLDivElement>(null);
+  const area = useRef<HTMLTextAreaElement>(null);
+  /** Quoting part of an answer puts it at the start of the question ("explain this part", DESIGN.md "Reply, thread, and quote"). */
+  const quote = (quoted: string) => {
+    const lines = quoteLines(quoted);
+    const next = withQuote(text, lines);
+    setText((now) => withQuote(now, lines).text);
+    document.getSelection()?.removeAllRanges();
+    requestAnimationFrame(() => {
+      area.current?.focus();
+      area.current?.setSelectionRange(next.caret, next.caret);
+    });
+  };
   const ask = async (executor: ExecutorId, question: string) => {
     setFailure(undefined);
     scroller.current?.scrollTo({ top: 0 }); // The list stacks in reverse, so 0 is the bottom
@@ -237,8 +250,10 @@ export function DmPanel({
           {failure}
         </div>
       )}
+      <SelectionQuote within=".dm-qa .answer" onQuote={quote} />
       {selected ? (
         <Composer
+          area={area}
           label={t.dm.askLabel(EXECUTOR_NAMES[selected.executor])}
           value={text}
           onChange={setText}

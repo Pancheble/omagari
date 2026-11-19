@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** Contract version. Sent in every envelope; a different one is rejected. Bump it on every breaking change. */
-export const CONTRACT_VERSION = 53;
+export const CONTRACT_VERSION = 54;
 
 /** Error shape. Shared by the runner/server `error` message and the HTTP error body (`{ error }`). */
 export const ContractError = z.strictObject({
@@ -183,6 +183,12 @@ export const ModelPick = z.strictObject({
   effort: z.string().optional(),
 });
 export type ModelPick = z.infer<typeof ModelPick>;
+
+/** Sent as a reply (ADR-0047): the original message's number, and whether to notify its author (default: notify). */
+export const Replying = z.strictObject({
+  replyTo: z.number().int().optional(),
+  notify: z.boolean().default(true),
+});
 
 /**
  * A person's connection state as other members see it. offline when no web window is open or they chose "appear offline".
@@ -965,6 +971,18 @@ export const Reaction = z.strictObject({
 export type Reaction = z.infer<typeof Reaction>;
 
 /**
+ * The original message a reply points to (ADR-0047). Only a message a person wrote (text or public Q&A) in the same channel or post.
+ * `original` is how the original message looks now: its author and first line (for a Q&A, the question's first line; `>` quote lines are skipped). null if it can't be read (deleted or not visible, same thing, #239).
+ * `notify` is whether to notify the original message's author (the sender can turn it off). #313 delivers the notification.
+ */
+export const ReplyTo = z.strictObject({
+  id: z.number(),
+  notify: z.boolean(),
+  original: z.strictObject({ login: z.string(), name: z.string(), line: z.string() }).nullable(),
+});
+export type ReplyTo = z.infer<typeof ReplyTo>;
+
+/**
  * One item stacked in a channel. `id` is a number that only grows across the whole workspace, so it is both the order within a channel and
  * the place to resume from when the live connection reconnects (`after` in `webToServer.hello`).
  * A message people wrote (`text`), a public Q&A (`qa`), and an alert Omagari posted (`alert`) sit on the same numbered line.
@@ -984,6 +1002,8 @@ export const ChannelMessage = z.discriminatedUnion("kind", [
     github: z.literal(true).optional(),
     /** Reactions added (`api.react`). When reactions change, the one with the same `id` arrives again on the live connection. */
     reactions: z.array(Reaction),
+    /** For a reply, its original message. Comments that came in from GitHub are never replies. */
+    replyTo: ReplyTo.optional(),
   }),
   /**
    * A public Q&A: a DM or `@mention` posted to the channel. The question and answer are always together. `login` and `name` are the owner (who posted it) of that agent,
@@ -1001,6 +1021,8 @@ export const ChannelMessage = z.discriminatedUnion("kind", [
     qa: Qa,
     /** Reactions added. Same as on a text message. */
     reactions: z.array(Reaction),
+    /** If the `@mention` was made inside a reply, the original message. It goes to the agent along with the question. */
+    replyTo: ReplyTo.optional(),
   }),
   /**
    * An alert Omagari posted. It has no author. When the alert is updated or resolved or the post's message count changes, the one with the same `id` arrives again on the live connection.
@@ -1273,6 +1295,8 @@ export const serverToRunner = {
     channel: Channel.omit({ kind: true }),
     message: z.string().min(1),
     recent: z.array(ChannelMessage).max(CHANNEL_CONTEXT),
+    /** If the `@mention` was made inside a reply, the original message (ADR-0047). The runner wraps it as data, not instructions, like channel conversation, and puts it before the question. */
+    replyTo: ChannelMessage.optional(),
     ...ModelPick.shape,
   }),
   /**
@@ -1849,6 +1873,7 @@ export const api = {
    * and for an `@mention` it also returns the Q&A posted in the channel (`message`) and goes to everyone through `message` on the realtime connection (sent again with the same number when the answer arrives).
    * If that agent's runner is off, it doesn't queue and is `runner_offline` right away. If the channel doesn't exist, `not_found`.
    * `model` and `effort` are the picks, and "default" if missing. The server passes them to the runner as is, and if they aren't among the choices, the runner fails the Q&A.
+   * `replyTo` is only for a public `@mention` and is refused like in `send`. The original message goes to the runner as a `> **login**` quote before the question (ADR-0047).
    */
   ask: {
     method: "POST",
@@ -1860,6 +1885,7 @@ export const api = {
       message: z.string().trim().min(1).max(MAX_MESSAGE_CHARS),
       visibility: Visibility.default("private"),
       ...ModelPick.shape,
+      ...Replying.shape,
     }),
     response: z.strictObject({ qa: Qa, message: ChannelMessage.optional() }),
   },
@@ -2230,6 +2256,8 @@ export const api = {
   /**
    * Writes text in a channel or post. `message` goes to every web client with a realtime connection (including the writer's).
    * You can't write in a forum (`invalid_request`). Same for DMs and `@mentions` (`api.ask`).
+   * If `replyTo` isn't a message a person wrote in this channel or post (one elsewhere, a missing one, an alert or decision line), it's `invalid_request`.
+   * A reply in a post puts the original message in the head of the GitHub issue comment (without `@`, ADR-0047).
    */
   send: {
     method: "POST",
@@ -2237,6 +2265,7 @@ export const api = {
     body: z.strictObject({
       channel: z.string(),
       text: z.string().trim().min(1).max(MAX_MESSAGE_CHARS),
+      ...Replying.shape,
     }),
     response: z.strictObject({ message: ChannelMessage }),
   },

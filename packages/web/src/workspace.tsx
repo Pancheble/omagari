@@ -66,7 +66,7 @@ import {
   RepoDialog,
   useCollapsed,
 } from "./channels.tsx";
-import { ChannelTitle, Conversation, type View } from "./conversation.tsx";
+import { ChannelTitle, Conversation, type ReplyBody, type View } from "./conversation.tsx";
 import { DEBATE_STRIP, DebateDialog, DebateLog, DebateStrip, ProxyDialog } from "./debate.tsx";
 import { DecisionDialog, type Fields } from "./decision.tsx";
 import { chosen, type Dm, DmPanel, type Picks } from "./dm.tsx";
@@ -536,6 +536,7 @@ export function Workspace({
     executor: ExecutorId,
     message: string,
     visibility: Visibility = "private",
+    reply?: ReplyBody,
   ) => {
     const agent = members
       ?.find((m) => m.login === me.login)
@@ -548,6 +549,7 @@ export function Workspace({
         message,
         visibility,
         ...chosen(agent?.choices, picks[executor]),
+        ...reply,
       });
       receiveQa(asked.qa);
       if (asked.message) receive(asked.message);
@@ -708,9 +710,9 @@ export function Workspace({
     if (active && !opened) void load(active.id);
   }, [active?.id, opened]);
 
-  const send = async (channel: string, text: string) => {
+  const send = async (channel: string, text: string, reply?: ReplyBody) => {
     try {
-      receive((await call(server(session), api.send, { channel, text })).message);
+      receive((await call(server(session), api.send, { channel, text, ...reply })).message);
     } catch (error) {
       throw check(error);
     }
@@ -996,9 +998,9 @@ export function Workspace({
         }
         attached={attached?.channel === active.id ? attached : undefined}
         onAttach={setAttached}
-        onSend={(text) => send(active.id, text)}
+        onSend={(text, reply) => send(active.id, text, reply)}
         searchGifs={me.gif ? searchGifs : undefined}
-        onCall={(executor, question) => ask(active.id, executor, question, "public")}
+        onCall={(executor, question, reply) => ask(active.id, executor, question, "public", reply)}
         onPost={post}
         onRetry={() => void load(active.id)}
         onReact={async (message, emoji, on) => {
@@ -1606,7 +1608,7 @@ export const Avatar = ({
   name: string;
   /** If given, uses that person's GitHub profile photo (carried by the member list). Without it or if it fails to load, initials. */
   login?: string;
-  size: 22 | 36 | 40 | 64 | 80;
+  size: 16 | 22 | 36 | 40 | 64 | 80;
   presence?: Presence;
 }) => {
   const src = use(FacesContext).get(login ?? "");

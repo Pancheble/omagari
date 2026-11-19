@@ -263,7 +263,11 @@ const MESSAGES = `SELECT m.id, m.channel, m.login, m.text, m.note, m.at, m.githu
   COALESCE(a.repo, (SELECT ch.repo FROM channels ch WHERE ch.id = m.channel)) AS repo,
   COALESCE(${ownerSql("a.repo")}, (SELECT ch.workspace FROM channels ch WHERE ch.id = m.channel)) AS workspace,
   (SELECT json_group_array(json_array(r.emoji, r.login, COALESCE(rp.name, r.login)) ORDER BY r.at, r.rowid)
-    FROM reactions r LEFT JOIN people rp ON rp.login = r.login WHERE r.message = m.id) AS reactions FROM messages m
+    FROM reactions r LEFT JOIN people rp ON rp.login = r.login WHERE r.message = m.id) AS reactions,
+  m.reply_to, m.notify, (SELECT json_object('login', o.login, 'name', COALESCE(op.name, o.login),
+    'text', COALESCE(oq.question, o.text), 'comment', o.comment) FROM messages o
+    LEFT JOIN people op ON op.login = o.login LEFT JOIN qas oq ON oq.id = o.qa
+    WHERE o.id = m.reply_to AND o.channel = m.channel) AS original FROM messages m
   LEFT JOIN people p ON p.login = m.login
   LEFT JOIN qas q ON q.id = m.qa
   LEFT JOIN alerts a ON a.id = m.alert
@@ -306,6 +310,11 @@ type MessageRow = {
   workspace: string | null;
   /** JSON array of reactions `[emoji, login, name]`, in the order they were added. */
   reactions: string;
+  /** For a reply: the original message's number and whether to notify its author (1, 0). */
+  reply_to: number | null;
+  notify: number | null;
+  /** JSON of the original message `{ login, name, text, comment }`. NULL if it can't be read. */
+  original: string | null;
 } & Pick<QaRow, "executor" | "question" | "answer" | "visibility">;
 
 /**
@@ -397,6 +406,28 @@ const reactionsOf = (json: string): Reaction[] => {
   return [...grouped].map(([emoji, members]) => ({ emoji, members }));
 };
 
+/** The original message's first line: the first line after skipping `>` quote lines and blank lines. If there's none, the first line. */
+const firstLine = (text: string) => {
+  const lines = text.split("\n").map((line) => line.trim());
+  return lines.find((line) => line !== "" && !line.startsWith(">")) ?? lines[0] ?? "";
+};
+
+const replyView = (row: MessageRow) => {
+  if (row.reply_to === null) return {};
+  const original = row.original === null ? null : JSON.parse(row.original);
+  return {
+    replyTo: {
+      id: row.reply_to,
+      notify: row.notify === 1,
+      original: original && {
+        login: original.login,
+        name: original.name,
+        line: firstLine(original.text ?? "").slice(0, POST_LINE),
+      },
+    },
+  };
+};
+
 const messageView = (row: MessageRow): ChannelMessage => {
   if (row.alert !== null) {
     return {
@@ -427,6 +458,7 @@ const messageView = (row: MessageRow): ChannelMessage => {
     name: row.name ?? row.login,
     at: new Date(row.at).toISOString(),
     reactions: reactionsOf(row.reactions),
+    ...replyView(row),
   };
   if (row.qa === null)
     return {
@@ -582,6 +614,10 @@ export async function startServer(options: {
   ) STRICT`);
   if (!db.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'reacted'").get())
     db.exec("ALTER TABLE messages ADD COLUMN reacted INTEGER");
+  // Replies (ADR-0047): `reply_to` is the original message's number in the same channel, `notify` is whether to notify its author (1, 0).
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'reply_to'").get())
+    db.exec(`ALTER TABLE messages ADD COLUMN reply_to INTEGER REFERENCES messages (id);
+      ALTER TABLE messages ADD COLUMN notify INTEGER`);
   // The post on an alert (Q&A Q3) is one line of a channel. So text, past conversation, DMs, `@mentions`, and posting to the channel run the same way as in a channel.
   // `alert` is the number of the message the alert stands on, and NULL for a chat channel. A post's `name` is a name a person can't write (it starts with a line break),
   // so it never collides with a chat channel's name. `postName` builds the name people read. The v0.1.0 table has no `alert`.
@@ -3264,9 +3300,34 @@ export async function startServer(options: {
     ].map(messageView);
   };
 
-  mount(app, api.ask, ({ agent, executor, channel, message, visibility, model, effort }, c) => {
+  /**
+   * A reply's original message (ADR-0047). Only a message a person wrote (text, public Q&A) in the same channel or post works.
+   * Something elsewhere, something missing, and alert or decision lines all get the same `invalid_request`, so it doesn't leak whether it exists (#239).
+   */
+  const originalOf = (channel: string, replyTo: number | undefined) => {
+    if (replyTo === undefined) return undefined;
+    const row = db
+      .prepare(
+        `${MESSAGES} WHERE m.id = ? AND m.channel = ? AND m.alert IS NULL AND m.decision IS NULL`,
+      )
+      .get(replyTo, channel) as MessageRow | undefined;
+    if (!row)
+      throw new ContractFailure({
+        code: "invalid_request",
+        message: "You can only reply to a message in the same channel or post",
+      });
+    return messageView(row);
+  };
+
+  mount(app, api.ask, (body, c) => {
+    const { agent, executor, channel, message, visibility, model, effort, notify } = body;
     mustOwn(agent, c.get("login") as string);
     mustWrite(channel, c);
+    const { replyTo } = body;
+    // Only a public `@mention` can be a reply. DMs have no replies.
+    if (replyTo !== undefined && visibility !== "public")
+      throw new ContractFailure({ code: "invalid_request", message: "DMs don't have replies" });
+    const original = originalOf(channel, replyTo);
     visit(agent, channelWorkspace(channel) ?? workspaceOf(c));
     // For posts and repo channels, that repo's runner answers; for workspace channels, the last runner attached in that workspace (ADR-0043).
     const socket = runnerOf(agent, executor, channelRepo(channel), channelWorkspace(channel));
@@ -3282,18 +3343,16 @@ export async function startServer(options: {
       .run(channel, agent, executor, message, at, visibility);
     const id = Number(lastInsertRowid);
     if (visibility === "public") {
-      db.prepare("INSERT INTO messages (channel, login, qa, at) VALUES (?, ?, ?, ?)").run(
-        channel,
-        agent,
-        id,
-        at,
-      );
+      db.prepare(
+        "INSERT INTO messages (channel, login, qa, at, reply_to, notify) VALUES (?, ?, ?, ?, ?, ?)",
+      ).run(channel, agent, id, at, replyTo ?? null, replyTo === undefined ? null : Number(notify));
     }
     const frame = encode(serverToRunner, "ask", {
       executor,
       channel: { id: channel, name },
       message,
       recent,
+      ...(original && { replyTo: original }),
       model,
       effort,
     });
@@ -4311,12 +4370,22 @@ export async function startServer(options: {
     return { messages: rows.reverse().map(messageView) };
   });
 
-  mount(app, api.send, ({ channel, text }, c) => {
+  mount(app, api.send, ({ channel, text, replyTo, notify }, c) => {
     mustWrite(channel, c);
     visit(c.get("login") as string, workspaceOf(c));
+    originalOf(channel, replyTo);
     const { lastInsertRowid } = db
-      .prepare("INSERT INTO messages (channel, login, text, at) VALUES (?, ?, ?, ?)")
-      .run(channel, c.get("login") as string, text, Date.now());
+      .prepare(
+        "INSERT INTO messages (channel, login, text, at, reply_to, notify) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        channel,
+        c.get("login") as string,
+        text,
+        Date.now(),
+        replyTo ?? null,
+        replyTo === undefined ? null : Number(notify),
+      );
     const message = shareRow(
       db.prepare(`${MESSAGES} WHERE m.id = ?`).get(lastInsertRowid) as MessageRow,
     );
@@ -5087,7 +5156,20 @@ export async function startServer(options: {
    * One article of a post as an issue comment. A person's text goes as is. For public Q&A, after the poster's text it adds the AI-written mark (DESIGN.md "AI-written text"), then
    * the question and the answer. If the Q&A hasn't been answered yet, there's nothing (it's posted when the answer comes). Unanswered Q&A that failed isn't posted.
    */
-  const commentBody = (message: ChannelMessage) => {
+  /**
+   * A post's text written as an issue comment. For a reply, the head carries the original message (ADR-0047): `> **login** · [original](comment link)` and
+   * `> first line`, then a blank line. If the original isn't a comment yet, it links the issue. It doesn't use `@`, so GitHub doesn't send mail again.
+   */
+  const commentBody = (message: ChannelMessage, row: MessageRow, issueUrl: string) => {
+    const body = commentText(message);
+    const original = row.original === null ? null : JSON.parse(row.original);
+    if (body === undefined || !original) return body;
+    const link =
+      original.comment === null ? issueUrl : `${issueUrl}#issuecomment-${original.comment}`;
+    const line = firstLine(original.text ?? "").slice(0, POST_LINE);
+    return [`> **${original.login}** · [original](${link})`, `> ${line}`, "", body].join("\n");
+  };
+  const commentText = (message: ChannelMessage) => {
     if (message.kind === "text") return message.text;
     if (message.kind !== "qa" || message.qa.answer.state !== "answered") return undefined;
     const { answer, executor, question } = message.qa;
@@ -5191,8 +5273,14 @@ export async function startServer(options: {
           `${MESSAGES} WHERE m.channel = ? AND m.comment IS NULL AND m.decision IS NULL ORDER BY m.id`,
         )
         .all(row.id) as MessageRow[];
-      for (const message of unsent.map(messageView)) {
-        const body = commentBody(message);
+      const issueUrl = (
+        db.prepare("SELECT issue_url FROM channels WHERE id = ?").get(row.id) as {
+          issue_url: string;
+        }
+      ).issue_url;
+      for (const sent of unsent) {
+        const message = messageView(sent);
+        const body = commentBody(message, sent, issueUrl);
         const writer = "login" in message ? tokenOf(message.login) : undefined;
         if (body === undefined || !writer) continue;
         const made = await github.comment(writer, repo, number, body).catch((e: Error) => e);
