@@ -40,6 +40,7 @@ export const profileKo: Words["profile"] = {
     answeringDots: "답하는 중…",
     works: (n) => (n === 0 ? "작업 없음" : `작업 ${n}개`),
     noStatusLine: "상태 한 줄 없음",
+    editing: (file, more) => `${file}${more > 0 ? ` 외 ${more}개` : ""} 고치는 중`,
     broken: "합치면 깨짐",
     draftPr: "초안 PR",
     asOf: (ago) => `${ago} 기준`,

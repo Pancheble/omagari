@@ -40,6 +40,8 @@ export const profileEn = {
     answeringDots: "Answering…",
     works: (n: number) => (n === 0 ? "No work" : `${n} ${n === 1 ? "work" : "works"}`),
     noStatusLine: "No status line",
+    editing: (file: string, more: number) =>
+      `Editing ${file}${more > 0 ? ` and ${more} more` : ""}`,
     broken: "Breaks when merged",
     draftPr: "Draft PR",
     asOf: (ago: string) => `As of ${ago}`,

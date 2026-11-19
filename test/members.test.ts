@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { api, call } from "@omagari/contract";
-import { eventually, fakeExecutor, place, startWorld, writer } from "./harness.ts";
+import { eventually, fakeExecutor, place, startWorld, textOf, writer } from "./harness.ts";
 
 /** 고를 거리를 알리지 않는 실행기(가짜)의 것. 고를 거리는 model.test가 본다. */
 const none = { models: [], efforts: [] };
@@ -35,8 +35,10 @@ test("멤버 목록에 사람마다 이름과 실행기마다의 에이전트, �
   // 작업 수가 아니라 두 작업의 줄이 다 올 때까지 기다린다.
   await eventually(async () =>
     assert.deepEqual(
-      (await aliceOf())?.works.map((work) => work.line?.text),
-      ["결제 붙이는 중", "Editing refund.ts"],
+      (await aliceOf())?.works.map(
+        (work) => work.line && ("text" in work.line ? work.line.text : work.line.file),
+      ),
+      ["결제 붙이는 중", "refund.ts"],
     ),
   );
 
@@ -80,7 +82,7 @@ test("멤버 목록에 사람마다 이름과 실행기마다의 에이전트, �
       {
         branch: "refund",
         executor: null, // 관측만 있고 훅도 status set도 보낸 적이 없다(ADR-0015)
-        line: { source: "files", text: "Editing refund.ts" },
+        line: { source: "files", file: "refund.ts", more: 0 },
         conflict: false,
         broken: false,
       },
@@ -97,10 +99,13 @@ test("멤버 목록에 사람마다 이름과 실행기마다의 에이전트, �
   assert.ok(Date.parse(offline?.offlineSince as string) >= stopped);
   assert.deepEqual(offline?.agents, [{ executor: "claude-code", state: "offline", choices: none }]);
   assert.deepEqual(
-    offline?.works.map((work) => [work.branch, work.line?.text]),
+    offline?.works.map((work) => [
+      work.branch,
+      work.line && ("text" in work.line ? work.line.text : work.line.file),
+    ]),
     [
       ["payment", "결제 붙이는 중"],
-      ["refund", "Editing refund.ts"],
+      ["refund", "refund.ts"],
     ],
   );
 
@@ -140,9 +145,11 @@ test("웹은 실시간 연결에서 멤버 목록을 바로 받고, 작업과 �
   await world.signInCli(world.owner);
   assert.match((await world.cli("status")).stdout, /owner · .*\n {2}no Work/);
   await writer(world.repo.folder)("payment.ts", "pay\n");
-  await eventually(() => assert.equal(owner()?.works[0]?.line?.text, "Editing payment.ts"));
+  await eventually(() =>
+    assert.deepEqual(owner()?.works[0]?.line, { source: "files", file: "payment.ts", more: 0 }),
+  );
   await call(world.owner, api.setStatus, { branch: "payment", text: "결제 붙이는 중" });
-  await eventually(() => assert.equal(owner()?.works[0]?.line?.text, "결제 붙이는 중"));
+  await eventually(() => assert.equal(textOf(owner()?.works[0]?.line), "결제 붙이는 중"));
 
   // 문답에 답하는 동안 답하는 중이다.
   const channel = await world.channel(world.owner);
