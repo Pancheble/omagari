@@ -4,11 +4,9 @@ import {
   type DebateOption,
   type DebateRequest,
   type DebateSeat,
-  EVIDENCE_MARKS,
   type Experiment,
   INBOX_MS,
   type Stance,
-  VERDICT_LABELS,
 } from "@omagari/contract";
 import {
   Bot,
@@ -28,13 +26,13 @@ import {
 } from "lucide-react";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { fullTime, timeOf } from "./conversation.tsx";
-import { josa } from "./decision.tsx";
 import { AiBadge } from "./dm.tsx";
+import { t } from "./i18n.ts";
 import { Person } from "./profile-card.tsx";
 import { took } from "./verdict.tsx";
 import { notRunWords } from "./verdict-words.ts";
 
-/** 토론 띠의 자리. 머리의 "토론 보기"가 여기로 초점을 옮긴다. */
+/** Anchor of the debate strip. "View debate" in the header moves focus here. */
 export const DEBATE_STRIP = "debate-strip";
 
 const DAY = 86_400_000;
@@ -42,15 +40,15 @@ const daysLeft = (at: string) =>
   Math.max(1, Math.ceil((Date.parse(at) + INBOX_MS - Date.now()) / DAY));
 const submitted = (debate: Debate) =>
   debate.seats.filter((seat) => seat.state === "submitted").length;
-/** 안에 대행이 낸 입장이 있으면 그 대행. */
+/** The stand-in, if the option has a stance from a stand-in. */
 const proxyOf = (option: DebateOption) => option.stances.find((stance) => stance.proxy)?.proxy;
 const VERDICT_ICONS = { pass: CircleCheck, broken: CircleX, not_run: CircleMinus };
 
 /**
- * 토론 띠(app-debate-strip, DESIGN.md "토론", 시안 57-A). 판정 띠와 같은 모양이고 그 아래 선다.
- * 기다리는 자리의 러너가 꺼져 있으면 "대행 부르기"가 늘 있다. 같은 사람의 두 작업이 낀 토론에는 없다(ADR-0041). 사람이 고르지 않고 정해졌으면 "결정 정리하기"가 띠에 있다.
+ * Debate strip (app-debate-strip, DESIGN.md "Debate", mockup 57-A). Same shape as the verdict strip and sits below it.
+ * "Call stand-in" is always there if the waiting slot's runner is off. Not shown for a debate with two tasks from the same person (ADR-0041). If it was settled without a person choosing, "Wrap up decision" is on the strip.
  */
-// ponytail: 계약에 실험이 도는 중이라는 상태가 없어 "실험을 돌리는 중"은 그리지 못한다. 러너가 알리면 띠에 더한다.
+// ponytail: the contract has no "experiment running" state, so "running an experiment" can't be drawn. Add it to the strip once the runner reports it.
 export function DebateStrip({
   debate,
   onProxy,
@@ -66,7 +64,7 @@ export function DebateStrip({
       ? debate.seats.findIndex((seat) => seat.away)
       : -1;
   const awaySeat = debate.seats[away];
-  const count = `입장 ${submitted(debate)}/2`;
+  const count = t.debate.stances(submitted(debate));
   const conclusion = debate.conclusion;
   const won = conclusion && debate.options[conclusion.option];
 
@@ -76,39 +74,39 @@ export function DebateStrip({
   let button: { text: string; primary?: boolean; act: () => void } | undefined;
   if (awaySeat) {
     Icon = Hourglass;
-    label = "기다리는 중";
-    text = `${debate.round === 1 ? `${awaySeat.name}의 에이전트가 아직 없어요` : count} · ${daysLeft(debate.at)}일 남음`;
-    button = { text: "대행 부르기", act: () => onProxy(away) };
+    label = t.debate.waiting;
+    text = `${debate.round === 1 ? t.debate.noAgent(awaySeat.name) : count} · ${t.debate.left(daysLeft(debate.at))}`;
+    button = { text: t.debate.callStandIn, act: () => onProxy(away) };
   } else if (debate.state === "open") {
     Icon = debate.round === 1 ? EyeOff : MessagesSquare;
-    label = `라운드 ${debate.round}/${debate.rounds}`;
-    text = `${debate.round === 1 ? "가린 첫 입장" : "반박"} · ${count}`;
+    label = t.debate.round(debate.round, debate.rounds);
+    text = `${debate.round === 1 ? t.debate.hiddenFirst : t.debate.rebuttal} · ${count}`;
   } else if (debate.state === "choosing") {
     Icon = Gavel;
-    label = "고를 차례";
-    text = "두 안 가운데 하나를 골라 주세요 · 주인은 덮여 있어요";
+    label = t.debate.yourTurn;
+    text = t.debate.chooseText;
   } else if (conclusion && won) {
     Icon = Check;
-    label = `안 ${conclusion.option + 1}로 정했어요`;
+    label = t.debate.chosenOption(conclusion.option + 1);
     text = debate.options.some(proxyOf)
-      ? "대행이 낀 토론이에요 · 주인이 돌아와 확인할 때까지 이의 창이 열려 있어요"
+      ? t.debate.hasStandIn
       : conclusion.by === "choice"
-        ? `${josa(conclusion.chooser?.name ?? "멤버", "이", "가")} 골랐어요 · 결정 초안을 쓸 수 있어요`
+        ? t.debate.chose(conclusion.chooser?.name ?? t.debate.member)
         : conclusion.by === "experiment"
-          ? "실험이 한 안만 통과했어요 · 사람이 고르지 않아도 돼요"
-          : `검증된 근거가 안 ${conclusion.option + 1}에만 있어요 · 사람이 고르지 않아도 돼요`;
-    // 사람이 골랐으면 결론 카드에 같은 버튼이 있다. 한 화면에 파란 버튼은 하나다.
+          ? t.debate.byExperiment
+          : t.debate.byEvidence(conclusion.option + 1);
+    // If a person chose, the conclusion card has the same button. Only one blue button per screen.
     if (conclusion.by !== "choice")
-      button = { text: "결정 정리하기", primary: true, act: onDecide };
+      button = { text: t.debate.writeUp, primary: true, act: onDecide };
   } else {
     Icon = CircleMinus;
-    label = "토론이 끝났어요";
+    label = t.debate.ended;
     text =
       debate.state === "expired"
         ? debate.options.length === 0 && submitted(debate) === 0
-          ? "14일이 지나도 낸 입장이 없어요"
-          : "14일 안에 라운드가 끝나지 않았어요"
-        : "두 자리 모두 입장을 내지 않았어요";
+          ? t.debate.noneIn14
+          : t.debate.notDoneIn14
+        : t.debate.noneGiven;
   }
   const quiet = debate.state === "ended" || debate.state === "expired";
 
@@ -121,15 +119,15 @@ export function DebateStrip({
     >
       <Icon size={16} aria-hidden />
       <p className="strip-text">
-        <strong>토론 · {label}</strong>
+        <strong>{t.debate.title(label)}</strong>
         <span
           className="round-dots"
           role="img"
-          aria-label={`라운드 ${debate.round}/${debate.rounds}`}
+          aria-label={t.debate.round(debate.round, debate.rounds)}
         >
           {Array.from({ length: debate.rounds }, (_, i) => (
             <span
-              // biome-ignore lint/suspicious/noArrayIndexKey: 점은 라운드 번호다
+              // biome-ignore lint/suspicious/noArrayIndexKey: dots are round numbers
               key={i}
               className={
                 i + 1 < debate.round ||
@@ -158,8 +156,8 @@ export function DebateStrip({
 }
 
 /**
- * 대화에 쌓이는 토론(DESIGN.md "토론"): 토론 요청 카드, 대행을 부른 줄, 안마다 입장 카드(시안 56-C), 빈 자리, 고르기(58-C)나 결론 카드.
- * 결론 전까지 안의 주인은 스포일러처럼 덮여 있고, 누른 사람의 화면에서만 열린다(시안 61).
+ * Debate that builds up in the conversation (DESIGN.md "Debate"): debate request card, stand-in call line, a stance card per option (mockup 56-C), empty slots, the pick (58-C) or conclusion card.
+ * Until the conclusion, the option's owner is covered like a spoiler and opens only on the screen of whoever clicked (mockup 61).
  */
 export function DebateLog({
   debate,
@@ -176,25 +174,22 @@ export function DebateLog({
 }) {
   const owns = (seat: DebateSeat) =>
     debate?.options.some((o) => o.owner?.login === seat.login && o.owner.branch === seat.branch);
-  // 공개 전에는 어느 자리가 안이 될지 모르므로 자리마다 빈 카드다. 공개 뒤에는 안이 없는 자리만 빈 카드다.
+  // Before reveal we don't know which slot becomes an option, so every slot is an empty card. After reveal, only slots without an option are empty cards.
   const ghosts = debate ? debate.seats.filter((seat) => !debate.revealed || !owns(seat)) : [];
   return (
-    <section className="debate-log" aria-label="토론">
+    <section className="debate-log" aria-label={t.debate.aria}>
       {request && <RequestCard request={request} onRetry={onRequest} />}
       {debate?.seats.map(
         (seat) =>
           seat.proxy && (
             <p key={seat.login + seat.branch} className="debate-line">
               <Bot size={16} aria-hidden />
-              <span>
-                <strong>{josa(seat.proxy.name, "이", "가")}</strong> {seat.name}의 대행을 불렀어요 ·{" "}
-                {seat.proxy.name}의 러너가 {seat.proxy.name}의 사용량으로 띄웠어요
-              </span>
+              <span>{t.debate.standInLine(seat.proxy.name, seat.name)}</span>
             </p>
           ),
       )}
       {debate?.options.map((option, i) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: 안의 번호가 곧 자리다
+        // biome-ignore lint/suspicious/noArrayIndexKey: the option number is the slot
         <OptionCard key={i} option={option} index={i} debate={debate} />
       ))}
       {ghosts.map((seat) => (
@@ -213,25 +208,22 @@ function RequestCard({ request, onRetry }: { request: DebateRequest; onRetry: ()
     <article className={request.opened ? "debate-card" : "debate-card warning"}>
       <p className="debate-card-head">
         <MessagesSquare size={16} aria-hidden />
-        <strong>{request.opened ? "토론 요청" : "토론 요청 · 열지 않았어요"}</strong>
+        <strong>{request.opened ? t.debate.request : t.debate.requestNotOpened}</strong>
         <time className="debate-meta" dateTime={request.at} title={fullTime(request.at)}>
           {request.name} · {timeOf(request.at)}
         </time>
       </p>
       <dl className="debate-request">
-        <dt>안건</dt>
-        <dd>{request.agenda || "(비어 있어요)"}</dd>
-        <dt>근거</dt>
-        <dd>{request.grounds || "(비어 있어요)"}</dd>
+        <dt>{t.debate.agenda}</dt>
+        <dd>{request.agenda || t.debate.empty}</dd>
+        <dt>{t.debate.grounds}</dt>
+        <dd>{request.grounds || t.debate.empty}</dd>
       </dl>
       {!request.opened && (
         <div className="debate-card-foot">
-          <p>
-            {request.agenda ? "근거가" : "안건이"} 비어 있어서 토론을 열지 않았어요.{" "}
-            {request.agenda ? "근거를" : "안건을"} 더해 다시 요청해 주세요.
-          </p>
+          <p>{request.agenda ? t.debate.missingGrounds : t.debate.missingAgenda}</p>
           <button type="button" className="button outline strip-button" onClick={onRetry}>
-            {request.agenda ? "근거" : "안건"} 더해 다시 요청
+            {request.agenda ? t.debate.addGrounds : t.debate.addAgenda}
           </button>
         </div>
       )}
@@ -239,15 +231,12 @@ function RequestCard({ request, onRetry }: { request: DebateRequest; onRetry: ()
   );
 }
 
-const GHOSTS = {
-  submitted: { Icon: EyeOff, text: "입장 하나 · 냈어요", sub: "둘 다 낼 때까지 가려 둬요" },
-  waiting: { Icon: Hourglass, text: "입장 하나 · 기다려요", sub: undefined },
-  off: { Icon: Power, text: "안 자리 하나 · 토론 참여를 껐어요", sub: undefined },
-  failed: { Icon: CircleX, text: "입장을 내지 못했어요", sub: undefined },
-} as const;
+const GHOST_ICONS = { submitted: EyeOff, waiting: Hourglass, off: Power, failed: CircleX } as const;
 
 function Ghost({ seat }: { seat: DebateSeat }) {
-  const { Icon, text, sub } = GHOSTS[seat.state];
+  const Icon = GHOST_ICONS[seat.state];
+  const text = t.debate.ghost[seat.state];
+  const sub = seat.state === "submitted" ? t.debate.ghost.submittedSub : undefined;
   return (
     <div className="debate-ghost">
       <Icon size={16} aria-hidden />
@@ -261,7 +250,7 @@ function Ghost({ seat }: { seat: DebateSeat }) {
   );
 }
 
-/** 입장 카드 하나. 머리의 주인은 결론 전까지 덮개 칩이고, 누르면 이 화면에서만 열린다. */
+/** One stance card. The owner in the header is a cover chip until the conclusion, and clicking opens it on this screen only. */
 function OptionCard({
   option,
   index,
@@ -279,18 +268,18 @@ function OptionCard({
   const earlier = option.stances.slice(0, -1);
   const model = [latest.model, latest.effort].filter(Boolean).join(" · ");
   return (
-    <article className="debate-card" aria-label={`안 ${index + 1}`}>
+    <article className="debate-card" aria-label={t.debate.option(index + 1)}>
       <div className="debate-card-head">
         <span className="debate-number" aria-hidden>
           {index + 1}
         </span>
-        <strong>안 {index + 1}</strong>
+        <strong>{t.debate.option(index + 1)}</strong>
         <AiBadge />
         {model && <span className="badge outline">{model}</span>}
-        {latest.context === "none" && <span className="badge outline">맥락 없이 참여</span>}
-        {chosen && <span className="badge chosen">정한 안</span>}
+        {latest.context === "none" && <span className="badge outline">{t.debate.noContext}</span>}
+        {chosen && <span className="badge chosen">{t.debate.chosen}</span>}
         <Owner option={option} index={index} open={debate.state === "concluded"} />
-        <span className="badge outline debate-round">라운드 {option.stances.length}</span>
+        <span className="badge outline debate-round">{t.debate.roundN(option.stances.length)}</span>
       </div>
       <StanceBody stance={latest} />
       {earlier.length > 0 && (
@@ -302,15 +291,14 @@ function OptionCard({
             aria-controls={pastId}
             onClick={() => setPast(!past)}
           >
-            라운드 {earlier.length === 1 ? "1" : `1–${earlier.length}`} 입장{" "}
-            {past ? "접기" : "보기"}
+            {t.debate.pastToggle(earlier.length === 1 ? "1" : `1–${earlier.length}`, past)}
           </button>
           {past && (
             <div id={pastId} className="debate-past">
               {earlier.map((stance, i) => (
-                // biome-ignore lint/suspicious/noArrayIndexKey: 라운드 순서다
+                // biome-ignore lint/suspicious/noArrayIndexKey: round order
                 <div key={i}>
-                  <p className="debate-past-round">라운드 {i + 1}</p>
+                  <p className="debate-past-round">{t.debate.roundN(i + 1)}</p>
                   <StanceBody stance={stance} />
                 </div>
               ))}
@@ -322,7 +310,7 @@ function OptionCard({
   );
 }
 
-/** 안의 주인. 덮였으면 폭이 늘 같은 칩이라 이름 길이도 대행 여부도 새지 않는다. */
+/** Owner of the option. When covered it is a fixed-width chip, so neither name length nor stand-in status leaks. */
 function Owner({ option, index, open }: { option: DebateOption; index: number; open: boolean }) {
   const [shown, setShown] = useState(false);
   const { owner } = option;
@@ -333,7 +321,7 @@ function Owner({ option, index, open }: { option: DebateOption; index: number; o
         type="button"
         className="spoiler"
         aria-pressed="false"
-        aria-label={`안 ${index + 1}의 주인 보기. 누르면 이 화면에서만 보여요`}
+        aria-label={t.debate.showOwner(index + 1)}
         onClick={() => setShown(true)}
       >
         <EyeOff size={12} aria-hidden />
@@ -344,17 +332,18 @@ function Owner({ option, index, open }: { option: DebateOption; index: number; o
     <span className="debate-owner" role={open ? undefined : "status"}>
       <span className="badge outline owner-name">
         {proxy ? (
-          `${owner.name} 대신 ${josa(proxy.name, "이", "가")} 띄운 에이전트`
+          t.debate.standInOwner(owner.name, proxy.name)
         ) : (
           <>
-            <Person login={owner.login}>{owner.name}</Person>의 에이전트
+            <Person login={owner.login}>{owner.name}</Person>
+            {t.debate.ownerAgent}
           </>
         )}
       </span>
       {proxy && (
         <span className="badge outline">
           <Bot size={12} aria-hidden />
-          대행
+          {t.debate.standIn}
         </span>
       )}
       <span className="debate-branch">{owner.branch}</span>
@@ -371,21 +360,21 @@ function StanceBody({ stance }: { stance: Stance }) {
           <p className="debate-changed">
             <RefreshCw size={16} aria-hidden />
             <span>
-              <strong>입장을 바꿨어요</strong> · 사유: {stance.changed.reason}
+              <strong>{t.debate.changedStance}</strong> · {t.debate.reason}: {stance.changed.reason}
             </span>
           </p>
         ) : (
           <p className="debate-changed warning">
             <TriangleAlert size={16} aria-hidden />
             <span>
-              <strong>사유 없이 바뀜</strong> 지난 라운드와 달라졌는데 사유를 적지 않았어요
+              <strong>{t.debate.noReason}</strong> {t.debate.noReasonText}
             </span>
           </p>
         ))}
       {stance.evidence.length > 0 && (
         <ul className="debate-evidence">
           {stance.evidence.map((evidence, i) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: 에이전트가 낸 순서다
+            // biome-ignore lint/suspicious/noArrayIndexKey: order given by the agent
             <li key={i}>
               <span
                 className={`badge ${evidence.mark === "missing" ? "warning" : "outline"} mark-${evidence.mark}`}
@@ -397,7 +386,7 @@ function StanceBody({ stance }: { stance: Stance }) {
                 ) : (
                   <CircleX size={12} aria-hidden />
                 )}
-                {EVIDENCE_MARKS[evidence.mark]}
+                {t.debate.evidence[evidence.mark]}
               </span>
               <span>{evidence.text}</span>
             </li>
@@ -409,23 +398,23 @@ function StanceBody({ stance }: { stance: Stance }) {
   );
 }
 
-/** 실험 줄. 판정 이름과 아이콘은 판정 띠의 것과 같다. 패치는 펼쳐 본다. */
-// ponytail: 계약의 실험에 검사 출력이 없어 깨짐에도 "출력 보기" 대신 패치만 보인다. 러너가 출력을 실으면 더한다.
+/** Experiment line. Verdict name and icon match the verdict strip. The patch expands to view. */
+// ponytail: the contract's experiment has no check output, so even on a failure only the patch shows instead of "View output". Add it once the runner includes output.
 function ExperimentLine({ experiment }: { experiment: Experiment }) {
   const [open, setOpen] = useState(false);
   const id = useId();
   const Icon = VERDICT_ICONS[experiment.verdict];
   const text =
     experiment.verdict === "not_run"
-      ? notRunWords(experiment.reason ?? "", "입장을 낸 쪽").text
-      : `${experiment.check ?? "검사 명령"} · ${took(experiment.ms)}`;
+      ? notRunWords(experiment.reason ?? "", t.debate.asker).text
+      : `${experiment.check ?? t.verdict.checkFallback} · ${took(experiment.ms)}`;
   return (
     <div>
       <p className={`debate-experiment ${experiment.verdict}`}>
         <FlaskConical size={12} aria-hidden />
-        <strong>실험</strong>
+        <strong>{t.debate.experiment}</strong>
         <Icon size={12} aria-hidden />
-        <span>{VERDICT_LABELS[experiment.verdict]}</span>
+        <span>{t.verdict.names[experiment.verdict]}</span>
         <span className="debate-meta">{text}</span>
         {experiment.patch && (
           <button
@@ -435,7 +424,7 @@ function ExperimentLine({ experiment }: { experiment: Experiment }) {
             aria-controls={id}
             onClick={() => setOpen(!open)}
           >
-            {open ? "패치 접기" : "패치 보기"}
+            {open ? t.debate.hidePatch : t.debate.showPatch}
           </button>
         )}
       </p>
@@ -448,19 +437,19 @@ function ExperimentLine({ experiment }: { experiment: Experiment }) {
   );
 }
 
-/** 마지막 입장의 한 줄 요약: "검증된 근거 2 · 실험 통과". */
+/** One-line summary of the last stance: "2 verified evidence · experiment passed". */
 const summary = (option: DebateOption) => {
   const last = option.stances.at(-1);
   const verified = last?.evidence.filter((e) => e.mark === "verified").length ?? 0;
   return [
-    `검증된 근거 ${verified}`,
-    last?.experiment && `실험 ${VERDICT_LABELS[last.experiment.verdict]}`,
+    t.debate.verifiedEvidence(verified),
+    last?.experiment && t.debate.experimentVerdict(t.verdict.names[last.experiment.verdict]),
   ]
     .filter(Boolean)
     .join(" · ");
 };
 
-/** 고르기(시안 58-C): 포스트의 멤버 누구나, 먼저 고른 것이 결론이다. */
+/** Pick (mockup 58-C): any member of the post; whoever picks first decides the conclusion. */
 function ChooseCard({
   debate,
   onChoose,
@@ -481,8 +470,8 @@ function ChooseCard({
     } catch (failure) {
       setError(
         failure instanceof ContractFailure && failure.code === "conflict"
-          ? "누군가 먼저 골랐어요"
-          : "고르지 못했어요. 잠시 뒤 다시 시도해 주세요.",
+          ? t.debate.alreadyPicked
+          : t.debate.pickFailed,
       );
     } finally {
       setBusy(false);
@@ -492,14 +481,14 @@ function ChooseCard({
     <fieldset className="debate-card debate-choose">
       <legend className="debate-card-head">
         <Gavel size={16} aria-hidden />
-        <strong>하나를 골라 주세요</strong>
+        <strong>{t.debate.pickOne}</strong>
       </legend>
       {debate.options.map((option, i) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: 안의 번호가 곧 자리다
+        // biome-ignore lint/suspicious/noArrayIndexKey: the option number is the slot
         <label key={i} className="debate-radio">
           <input type="radio" name={name} checked={picked === i} onChange={() => setPicked(i)} />
           <span>
-            <strong>안 {i + 1}</strong>
+            <strong>{t.debate.option(i + 1)}</strong>
             <span className="debate-radio-claim">{option.stances.at(-1)?.claim}</span>
             <span className="debate-meta">{summary(option)}</span>
           </span>
@@ -507,8 +496,7 @@ function ChooseCard({
       ))}
       <div className="debate-card-foot">
         <p className={error ? "help error" : "help"} aria-live="polite">
-          {error ??
-            "고르면 바꿀 수 없어요. 먼저 고른 안이 결정 초안이 되고, 반대는 결정 PR의 이의 창에서 낼 수 있어요."}
+          {error ?? t.debate.pickHelp}
         </p>
         <button
           type="button"
@@ -516,7 +504,7 @@ function ChooseCard({
           disabled={picked === undefined || busy}
           onClick={() => void choose()}
         >
-          {picked === undefined ? "정하기" : `안 ${picked + 1}로 정하기`}
+          {picked === undefined ? t.debate.decide : t.debate.decideOption(picked + 1)}
         </button>
       </div>
     </fieldset>
@@ -528,31 +516,29 @@ function ConclusionCard({ debate, onDecide }: { debate: Debate; onDecide: () => 
   if (!conclusion) return null;
   const n = conclusion.option + 1;
   const who = debate.options
-    .map((o, i) => o.owner && `안 ${i + 1}은 ${o.owner.name}의 에이전트(${o.owner.branch})`)
+    .map((o, i) => o.owner && t.debate.whoWrote(i + 1, o.owner.name, o.owner.branch))
     .filter(Boolean)
     .join(", ");
   return (
     <article className="debate-card">
       <p className="debate-card-head">
         <Check size={16} aria-hidden />
-        <strong>안 {n}로 정했어요</strong>
+        <strong>{t.debate.wentWith(n)}</strong>
         <time className="debate-meta" dateTime={conclusion.at} title={fullTime(conclusion.at)}>
-          {josa(conclusion.chooser?.name ?? "멤버", "이", "가")} 골랐어요 · {timeOf(conclusion.at)}
+          {t.debate.choseAt(conclusion.chooser?.name ?? t.debate.member, timeOf(conclusion.at))}
         </time>
       </p>
       <div className="debate-card-foot">
-        <p className="debate-meta">
-          {who}가 냈어요. 결정 정리하기를 누르면 내 에이전트가 안 {n}을 바탕으로 결정 초안을 써요.
-        </p>
+        <p className="debate-meta">{t.debate.conclusionNote(who, n)}</p>
         <button type="button" className="button primary" onClick={onDecide}>
-          결정 정리하기
+          {t.debate.writeUp}
         </button>
       </div>
     </article>
   );
 }
 
-/** 대행 부르기(시안 59-C): 부른 사람의 러너가 부른 사람의 사용량으로 띄운다. */
+/** Call stand-in (mockup 59-C): the caller's runner starts it, using the caller's usage. */
 export function ProxyDialog({
   seat,
   onProxy,
@@ -577,17 +563,17 @@ export function ProxyDialog({
       const code = failure instanceof ContractFailure ? failure.code : undefined;
       setError(
         code === "runner_offline"
-          ? "내 러너가 꺼져 있어 대행을 띄울 수 없어요. 러너를 켜고 다시 시도해 주세요."
+          ? t.debate.runnerOffline
           : code === "conflict"
-            ? "이미 입장을 냈거나 대행을 부를 수 없는 자리예요."
-            : "대행을 부르지 못했어요. 잠시 뒤 다시 시도해 주세요.",
+            ? t.debate.seatTaken
+            : t.debate.callFailed,
       );
     } finally {
       setBusy(false);
     }
   };
   return (
-    // biome-ignore lint/a11y/useKeyWithClickEvents: Esc는 dialog가 맡는다
+    // biome-ignore lint/a11y/useKeyWithClickEvents: Esc is handled by the dialog
     <dialog
       ref={dialog}
       className="dialog"
@@ -596,18 +582,12 @@ export function ProxyDialog({
       onClick={(event) => event.target === event.currentTarget && dialog.current?.close()}
     >
       <form onSubmit={submit}>
-        <h2 id={title}>{name}의 대행을 부를까요?</h2>
+        <h2 id={title}>{t.debate.callTitle(name)}</h2>
         <ul className="dialog-list">
-          <li>내 러너가 내 사용량으로 띄워요</li>
-          <li>
-            {name}의 초안 PR, 브랜치 diff, 관련 결정만 봐요 (작업 대화는 {name}의 기기에 있어 볼 수
-            없어요)
-          </li>
-          <li>대행이 낸 입장에는 "대행" 표시가 붙어요</li>
-          <li>
-            {name}의 에이전트가 돌아오면 이어받아요. 대행이 낀 결정은 {josa(name, "이", "가")}{" "}
-            확인할 때까지 이의 창이 열려 있어요
-          </li>
+          <li>{t.debate.callBullets.mine}</li>
+          <li>{t.debate.callBullets.sees(name)}</li>
+          <li>{t.debate.callBullets.mark}</li>
+          <li>{t.debate.callBullets.back(name)}</li>
         </ul>
         {error && (
           <p className="help error" role="alert">
@@ -616,10 +596,10 @@ export function ProxyDialog({
         )}
         <div className="dialog-actions">
           <button type="button" className="button quiet" onClick={() => dialog.current?.close()}>
-            취소
+            {t.debate.cancel}
           </button>
           <button type="submit" className="button primary" disabled={busy}>
-            대행 부르기
+            {t.debate.callStandIn}
           </button>
         </div>
       </form>
@@ -627,7 +607,7 @@ export function ProxyDialog({
   );
 }
 
-/** 토론 열기(시안 60-B): 안건과 근거가 모두 있어야 열 수 있다. 열지 못한 요청을 다시 낼 때는 지난 글을 채워 연다. */
+/** Open debate (mockup 60-B): needs both an agenda and evidence. When re-sending a request that failed to open, it opens prefilled with the earlier text. */
 export function DebateDialog({
   title: post,
   initial,
@@ -654,15 +634,15 @@ export function DebateDialog({
     } catch (failure) {
       setError(
         failure instanceof ContractFailure && failure.code === "conflict"
-          ? "이미 열린 토론이 있어요."
-          : "토론을 열지 못했어요. 잠시 뒤 다시 시도해 주세요.",
+          ? t.debate.alreadyOpen
+          : t.debate.openFailed,
       );
     } finally {
       setBusy(false);
     }
   };
   return (
-    // biome-ignore lint/a11y/useKeyWithClickEvents: Esc는 dialog가 맡는다
+    // biome-ignore lint/a11y/useKeyWithClickEvents: Esc is handled by the dialog
     <dialog
       ref={dialog}
       className="dialog debate-dialog"
@@ -671,35 +651,31 @@ export function DebateDialog({
       onClick={(event) => event.target === event.currentTarget && dialog.current?.close()}
     >
       <form onSubmit={submit}>
-        <h2 id={title}>토론 열기</h2>
-        <p className="dialog-lead">{post} · 부딪힌 두 작업의 에이전트가 안건을 두고 입장을 내요.</p>
+        <h2 id={title}>{t.debate.open}</h2>
+        <p className="dialog-lead">{t.debate.openLead(post)}</p>
         <div className="field">
-          <label htmlFor={`${title}-agenda`}>안건</label>
+          <label htmlFor={`${title}-agenda`}>{t.debate.agenda}</label>
           <input
             id={`${title}-agenda`}
             className="text-input"
             value={agenda}
-            placeholder="무엇을 두고 부딪혔는지 한 줄로 적어 주세요"
+            placeholder={t.debate.agendaHint}
             autoComplete="off"
             onChange={(event) => setAgenda(event.target.value)}
           />
         </div>
         <div className="field">
-          <label htmlFor={`${title}-grounds`}>근거</label>
+          <label htmlFor={`${title}-grounds`}>{t.debate.grounds}</label>
           <textarea
             id={`${title}-grounds`}
             className="text-input draft-area debate-grounds"
             value={grounds}
-            placeholder="커밋, 파일:줄, 결정 파일을 붙이면 검증돼요"
+            placeholder={t.debate.groundsHint}
             onChange={(event) => setGrounds(event.target.value)}
           />
         </div>
-        <p className="help debate-help">
-          안건이나 근거가 비어 있으면 토론은 열리지 않고, 요청만 포스트에 남아요.
-        </p>
-        <p className="help">
-          열면 부딪힌 두 주인의 에이전트가 각자 사용량으로 입장을 내요. 라운드는 3까지예요.
-        </p>
+        <p className="help debate-help">{t.debate.emptyNote}</p>
+        <p className="help">{t.debate.openNote}</p>
         {error && (
           <p className="help error" role="alert">
             {error}
@@ -707,14 +683,14 @@ export function DebateDialog({
         )}
         <div className="dialog-actions">
           <button type="button" className="button quiet" onClick={() => dialog.current?.close()}>
-            취소
+            {t.debate.cancel}
           </button>
           <button
             type="submit"
             className="button primary"
             disabled={busy || !agenda.trim() || !grounds.trim()}
           >
-            토론 열기
+            {t.debate.open}
           </button>
         </div>
       </form>
@@ -722,7 +698,7 @@ export function DebateDialog({
   );
 }
 
-/** 그려지면 바로 여는 대화 상자. 닫히면 부른 쪽이 `onClose`에서 치운다. */
+/** Dialog that opens as soon as it is drawn. When closed, the caller removes it in `onClose`. */
 function useModal() {
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => dialog.current?.showModal(), []);

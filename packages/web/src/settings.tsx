@@ -21,13 +21,13 @@ import { Avatar, personName } from "./workspace.tsx";
 type Reply = Awaited<ReturnType<typeof call<typeof api.settings>>>;
 type Page = "agent" | "language" | "alerts" | "labels";
 
-/** 검사 명령을 정하는 법, 샌드박스 도구를 까는 법(README "검사 명령"). */
+/** How to set the check command and install sandbox tools (README "Check command"). */
 const CHECK_HELP = "https://github.com/omagari-dev/omagari/blob/dev/docs/setup.md#check-command";
 
 /**
- * 설정 창(DESIGN.md "설정 창"). 왼쪽 목록에서 항목을 고르고 오른쪽에 그 내용을 보인다.
- * 열릴 때마다 서버의 설정을 새로 읽는다. 에이전트와 포럼 목록은 실시간으로 받는 멤버 목록과 채널을 쓴다.
- * Esc, 덮개 누르기, 닫기 버튼으로 닫힌다.
+ * Settings window (DESIGN.md "Settings window"). Pick an item in the left list and see its content on the right.
+ * Re-reads the server settings each time it opens. The agent and forum lists use the live member list and channels.
+ * Closes on Esc, an overlay click, or the close button.
  */
 export function Settings({
   me,
@@ -41,7 +41,7 @@ export function Settings({
   posts?: PostItem[];
   mine?: MemberView;
   session: string;
-  /** 세션이 끝났으면 로그인으로 돌린다. */
+  /** If the session ended, send the user back to login. */
   check: (error: unknown) => unknown;
   onClose: () => void;
 }) {
@@ -60,22 +60,22 @@ export function Settings({
       setFailed(true);
     });
   };
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 열릴 때 한 번 읽는다
+  // biome-ignore lint/correctness/useExhaustiveDependencies: read once when opened
   useEffect(() => {
     dialog.current?.showModal();
     load();
   }, []);
-  // 내 러너가 꺼지거나 켜지면(실시간 멤버 목록) 다시 읽는다. 합쳐 돌려 보기를 러너에서 끄고 다시 켠 것도 이렇게 보인다.
+  // Re-read when my runner turns off or on (live member list). This also shows when Merge run is turned off and on again in the runner.
   const online = mine?.agents.some((agent) => agent.state !== "offline");
   const seen = useRef(online);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 러너가 켜지고 꺼질 때만 읽는다
+  // biome-ignore lint/correctness/useExhaustiveDependencies: read only when the runner turns on or off
   useEffect(() => {
     if (seen.current === online) return;
     seen.current = online;
     load();
   }, [online]);
 
-  /** 먼저 화면을 바꾸고, 서버가 받지 않으면 되돌린다. */
+  /** Update the screen first, and revert if the server rejects it. */
   const save = async (next: Partial<Reply>, send: () => Promise<unknown>) => {
     const before = settings;
     setSettings((now) => now && { ...now, ...next });
@@ -125,7 +125,7 @@ export function Settings({
 
   let body: ReactNode;
   if (page === "labels") {
-    // 라벨은 설정 읽기와 따로 실시간으로 받는 목록을 쓴다.
+    // Labels use a live list, separate from the settings read.
     body = <LabelsPage posts={posts} session={session} check={check} />;
   } else if (page === "language") {
     // Comes with `api.me`, not the settings read, so it works even when that fails.
@@ -157,8 +157,8 @@ export function Settings({
   }
 
   return (
-    // 덮개를 누르면 닫힌다. 키보드로는 Esc가 닫는다(dialog가 해 준다).
-    // biome-ignore lint/a11y/useKeyWithClickEvents: Esc는 dialog가 맡는다
+    // Clicking the overlay closes it. With the keyboard, Esc closes it (the dialog handles that).
+    // biome-ignore lint/a11y/useKeyWithClickEvents: the dialog handles Esc
     <dialog
       ref={dialog}
       className="settings"
@@ -303,7 +303,7 @@ function AlertsPage({
   repo,
 }: {
   settings: Reply;
-  /** 실시간 멤버 목록으로 본 내 러너. 모르면 없다. */
+  /** My runner, seen from the live member list. None if unknown. */
   online?: boolean;
   workspace: string;
   repo: string;
@@ -332,7 +332,7 @@ const help = (text: string) => (
   </a>
 );
 
-/** 합쳐 돌려 보기(시안 30-C). 읽기만 한다. 켜고 끄는 것은 러너에서 한다(ADR-0034). */
+/** Merge run (mockup 30-C). Read-only. Turning it on or off is done in the runner (ADR-0034). */
 function MergeCheckGroup({ runner, check }: Reply["mergeCheck"]) {
   const words = t.settings.alerts;
   const off = <span className="settings-off">{t.settings.off}</span>;
@@ -444,7 +444,7 @@ function SwitchRow({
   );
 }
 
-/** GitHub처럼 고르는 라벨 색: 채도가 있는 색 가운데 하나를 뽑는다. */
+/** Label colors you pick like on GitHub: choose one of the saturated colors. */
 const randomColor = () =>
   Array.from(crypto.getRandomValues(new Uint8Array(3)), (n) =>
     (64 + (n % 160)).toString(16).padStart(2, "0"),
@@ -460,8 +460,8 @@ const EMPTY = (): Fields => ({
 });
 
 /**
- * 라벨(시안 51-D4): 왼쪽 라벨 목록(찾기 칸, `+`), 오른쪽에서 이름, 색, 설명, 중요도를 고친다.
- * 이름, 색, 설명은 GitHub 라벨도 같이 고쳐지고 중요도는 모두에게 같다(ADR-0039). `+`는 새 라벨을 만든다.
+ * Labels (mockup 51-D4): left label list (search box, `+`), and on the right edit name, color, description, importance.
+ * Name, color, and description also change the GitHub label, while importance is the same for everyone (ADR-0039). `+` creates a new label.
  */
 function LabelsPage({
   posts,
@@ -475,7 +475,7 @@ function LabelsPage({
   const labels = useLabels();
   const words = t.settings.labels;
   const [query, setQuery] = useState("");
-  /** 고른 라벨의 이름. 없으면 새 라벨이다. */
+  /** Name of the selected label. If none, it is a new label. */
   const [picked, setPicked] = useState<string | undefined>(labels[0]?.name);
   const label = labels.find((other) => other.name === picked);
   const [fields, setFields] = useState<Fields>(() => (label ? fieldsOf(label) : EMPTY()));
@@ -498,7 +498,7 @@ function LabelsPage({
   const dirty = label
     ? JSON.stringify(fieldsOf(label)) !== JSON.stringify(fields)
     : fields.name.trim() !== "";
-  /** 논의로 바꾸면 이슈가 열릴 열린 포스트 수. */
+  /** Number of open posts that would become issues when switched to Discuss. */
   const opening =
     label && label.importance === "reference" && fields.importance === "discuss"
       ? (posts ?? []).filter(
@@ -529,7 +529,7 @@ function LabelsPage({
           color,
           description: fields.description,
         });
-        // 새 라벨은 참고로 생긴다. 논의로 골랐으면 이어서 바꾼다.
+        // A new label starts as FYI. If Discuss was picked, switch to it afterward.
         if (fields.importance === "discuss")
           ({ label: saved } = await call(server(session), api.editLabel, {
             name: saved.name,

@@ -1,8 +1,8 @@
 import type { Reaction } from "@omagari/contract";
 import { SmilePlus } from "lucide-react";
 import { type CSSProperties, useEffect, useRef, useState } from "react";
-import { josa } from "./decision.tsx";
 import { EmojiPalette } from "./emoji.tsx";
+import { josa } from "./words/ko.ts";
 
 /** 넓은 화면에서 팔레트의 높이(찾기 줄, 목록, 분류 막대). 버튼 아래에 자리가 모자라면 위로 연다. */
 const PALETTE_HEIGHT = 420;

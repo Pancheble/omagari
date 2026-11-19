@@ -923,7 +923,7 @@ export function Workspace({
     <button
       type="button"
       className="header-button named debate-button"
-      aria-label={debate ? "토론 보기" : "토론 열기"}
+      aria-label={debate ? t.debate.view : t.debate.open}
       onClick={() => {
         if (!debate) return setDebating({ open: true });
         const strip = document.getElementById(DEBATE_STRIP);
@@ -932,7 +932,7 @@ export function Workspace({
       }}
     >
       <MessagesSquare size={18} aria-hidden />
-      <span>{debate ? "토론 보기" : "토론 열기"}</span>
+      <span>{debate ? t.debate.viewShort : t.debate.openShort}</span>
     </button>
   );
 
@@ -941,11 +941,11 @@ export function Workspace({
     <button
       type="button"
       className="header-button named debate-button"
-      aria-label="결정 정리하기"
+      aria-label={t.debate.writeUp}
       onClick={() => setDeciding({})}
     >
       <PenLine size={18} aria-hidden />
-      <span>결정 정리하기</span>
+      <span>{t.debate.writeUpShort}</span>
     </button>
   );
 

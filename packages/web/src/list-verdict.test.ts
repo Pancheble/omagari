@@ -15,7 +15,7 @@ const indirect = (extra: Record<string, unknown> = {}) =>
   }) as unknown as Alert;
 const run = (verdict: string, stale = false) => ({ verdict, stale });
 
-test("목록 판정", () => {
+test("list verdict", () => {
   assert.equal(listVerdict(indirect()), "estimate");
   assert.equal(listVerdict(indirect({ run: run("running") })), "running");
   assert.equal(listVerdict(indirect({ run: run("unclear") })), "unclear");

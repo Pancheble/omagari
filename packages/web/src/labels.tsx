@@ -2,7 +2,6 @@ import {
   type Channel,
   ContractFailure,
   type ForumFilter,
-  IMPORTANCE_LABELS,
   type Importance,
   type Label,
   MAX_CHANNEL_NAME_CHARS,
@@ -22,13 +21,13 @@ import { repoName } from "./api.ts";
 import { useMenu } from "./dm.tsx";
 import { t } from "./i18n.ts";
 
-/** 레포의 라벨 전부(ADR-0039). 앱 틀이 읽고 실시간으로 갈아 끼운다. 배지가 색을 찾으려고 읽는다. */
+/** All labels in the repo (ADR-0039). The app shell reads and live-swaps them. Badges read them to find a color. */
 export const LabelsContext = createContext<Label[]>([]);
 export const useLabels = () => useContext(LabelsContext);
 
 const IMPORTANCES: Importance[] = ["discuss", "reference"];
 
-/** 라벨의 색 점(GitHub 라벨 색). 모르는 라벨은 회색이다. */
+/** A label's color dot (GitHub label color). Unknown labels are gray. */
 export const LabelDot = ({ color, size = 8 }: { color?: string; size?: 8 | 10 | 20 }) => (
   <span
     className="label-dot"
@@ -37,7 +36,7 @@ export const LabelDot = ({ color, size = 8 }: { color?: string; size?: 8 | 10 | 
   />
 );
 
-/** 라벨 배지(app-label-badge): 8px 색 점과 이름. */
+/** Label badge (app-label-badge): an 8px color dot and the name. */
 export function LabelBadge({ name }: { name: string }) {
   const label = useLabels().find((other) => other.name === name);
   return (
@@ -48,20 +47,20 @@ export function LabelBadge({ name }: { name: string }) {
   );
 }
 
-/** 중요도 배지: 논의는 글자색 바탕(app-importance-discuss), 참고는 테두리. */
+/** Importance badge: Discuss is filled with the text color (app-importance-discuss), FYI is outlined. */
 export const ImportanceBadge = ({ importance }: { importance: Importance }) => (
   <span className={importance === "discuss" ? "badge discuss" : "badge outline"}>
     {t.importance[importance]}
   </span>
 );
 
-/** 찾는 말이 이름에 든 라벨. */
+/** Labels whose name contains the search text. */
 const matching = (labels: Label[], query: string) => {
   const needle = query.trim().toLowerCase();
   return labels.filter((label) => label.name.toLowerCase().includes(needle));
 };
 
-/** 체크 상자 모양(메뉴 줄 안). 실제 상태는 줄의 `aria-checked`가 말한다. */
+/** Checkbox shape (inside a menu row). The real state comes from the row's `aria-checked`. */
 const Box = ({ on }: { on: boolean }) => (
   <span className="check-box" data-on={on || undefined} aria-hidden>
     {on && <Check size={12} strokeWidth={3} />}
@@ -75,16 +74,16 @@ const SearchField = ({ value, onChange }: { value: string; onChange: (v: string)
       type="search"
       value={value}
       onChange={(event) => onChange(event.target.value)}
-      placeholder="라벨 찾기"
-      aria-label="라벨 찾기"
+      placeholder={t.forum.labelMenu.find}
+      aria-label={t.forum.labelMenu.find}
       autoComplete="off"
     />
   </div>
 );
 
 /**
- * 포스트 머리의 "라벨" 버튼과 창(시안 54-C). 체크하면 바로 붙고 떼진다(`onChange`가 서버에 보낸다).
- * 서버가 받지 않으면 창 아래에 알린다. 바뀐 라벨은 실시간 연결의 알림 줄로도 돌아온다.
+ * The "Label" button and popup in the post header (mockup 54-C). Checking applies it right away, unchecking removes it (`onChange` sends it to the server).
+ * If the server rejects it, an alert shows under the popup. A changed label also comes back as an alert line over the live connection.
  */
 export function PostLabels({
   labels: on,
@@ -109,13 +108,13 @@ export function PostLabels({
     }
   };
   return (
-    // biome-ignore lint/a11y/noStaticElementInteractions: 안에 든 메뉴와 버튼의 키를 한곳에서 받는다
+    // biome-ignore lint/a11y/noStaticElementInteractions: one place catches keys for the menu and buttons inside
     <div className="forum-menu-wrap" ref={wrap} onKeyDown={onKeyDown}>
       <button
         ref={button}
         type="button"
         className="header-button"
-        aria-label="라벨"
+        aria-label={t.forum.labelMenu.button}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menu : undefined}
@@ -124,7 +123,12 @@ export function PostLabels({
         <Tag size={18} aria-hidden />
       </button>
       {open && (
-        <div className="forum-menu pop right" id={menu} role="menu" aria-label="라벨">
+        <div
+          className="forum-menu pop right"
+          id={menu}
+          role="menu"
+          aria-label={t.forum.labelMenu.button}
+        >
           <SearchField value={query} onChange={setQuery} />
           {matching(labels, query).map((label) => (
             <button
@@ -139,13 +143,13 @@ export function PostLabels({
               <Box on={on.includes(label.name)} />
               <LabelDot color={label.color} size={10} />
               <span className="pop-name">{label.name}</span>
-              <span className="pop-aside">{IMPORTANCE_LABELS[label.importance]}</span>
+              <span className="pop-aside">{t.importance[label.importance]}</span>
             </button>
           ))}
           <p className={error ? "pop-note error" : "pop-note"} aria-live="polite">
             {error
-              ? "라벨을 바꾸지 못했어요. 잠시 뒤 다시 시도해 주세요."
-              : `${issue ? `이슈 #${issue}의 라벨도 같이 바뀌어요. ` : ""}논의 라벨이 하나라도 있으면 이 포스트는 논의예요.`}
+              ? t.forum.labelMenu.failed
+              : `${issue ? t.forum.labelMenu.issueToo(issue) : ""}${t.forum.labelMenu.note}`}
           </p>
         </div>
       )}
@@ -154,16 +158,16 @@ export function PostLabels({
 }
 
 /**
- * 고치는 중인 필터. 계약의 필터는 중요도 하나(묶음)이거나 라벨 목록이다. 라벨을 다 끄면 비어(`null`) 저장할 수 없다.
- * 시안 53-D는 묶음에 라벨을 더할 수 있지만 계약이 받지 않아, 묶음을 켜면 라벨은 따로 고르지 못한다(PR #194에 까닭).
+ * The filter being edited. A contract filter is either one importance (a bundle) or a label list. Turning every label off leaves it empty (`null`), which can't be saved.
+ * Mockup 53-D can add labels to a bundle, but the contract doesn't accept that, so with a bundle on, labels can't be picked separately (reason in PR #194).
  */
 export type Draft = ForumFilter | null;
 
-/** 묶음을 켜고 끈다. 다른 묶음이 켜 있으면 바꾼다. */
+/** Turns a bundle on or off. If another bundle is on, switches to this one. */
 const bundle = (draft: Draft, importance: Importance): Draft =>
   draft && "importance" in draft && draft.importance === importance ? null : { importance };
 
-/** 라벨을 켜고 끈다. 묶음이 켜 있으면 그대로 둔다. */
+/** Turns a label on or off. Leaves it as is if a bundle is on. */
 const toggleLabel = (draft: Draft, name: string): Draft => {
   if (draft && "importance" in draft) return draft;
   const now = draft?.labels ?? [];
@@ -171,19 +175,19 @@ const toggleLabel = (draft: Draft, name: string): Draft => {
   return next.length ? { labels: next } : null;
 };
 
-/** 라벨이 필터에서 켜졌나, 묶음 때문에 잠겼나. */
+/** Whether a label is on in the filter, or locked because of a bundle. */
 const labelState = (draft: Draft, label: Label) =>
   draft && "importance" in draft
     ? { on: draft.importance === label.importance, locked: true }
     : { on: draft?.labels.includes(label.name) ?? false, locked: false };
 
-/** 레포 조건을 바꾼다. 비면 모든 레포다(나중에 넣는 레포도 따라온다). 라벨을 고쳐도 레포 조건은 남는다. */
+/** Changes the repo condition. Empty means all repos (repos added later follow). Editing labels keeps the repo condition. */
 export const withRepos = (draft: ForumFilter, repos: string[]): ForumFilter => {
   const { repos: _, ...rest } = draft;
   return (repos.length ? { ...rest, repos } : rest) as ForumFilter;
 };
 
-/** 둘이 같은 필터인가. 라벨과 레포 순서는 따지지 않는다. */
+/** Whether the two are the same filter. Label and repo order don't matter. */
 export const sameFilter = (a: Draft | undefined, b: Draft | undefined) => {
   const key = (f: Draft | undefined) =>
     !f
@@ -192,26 +196,27 @@ export const sameFilter = (a: Draft | undefined, b: Draft | undefined) => {
   return key(a) === key(b);
 };
 
-/** 레포 칩의 값: "모두"나 레포 이름들. */
-const reposWord = (repos: string[]) => (repos.length ? repos.map(repoName).join(", ") : "모두");
+/** The repo chip's value: "All" or the repo names. */
+const reposWord = (repos: string[]) =>
+  repos.length ? repos.map(repoName).join(", ") : t.forum.filter.all;
 
 /**
- * 레포 조건이 패널 어디에 보일지(ADR-0043, 시안 101): 레포 하나면 그 레포, 아니면 "<계정> 전체"다.
- * 레포가 하나뿐인 계정에는 "전체"가 없어 그 레포에 보인다.
+ * Where the repo condition shows in the panel (ADR-0043, mockup 101): the repo if it's one, otherwise "All of <account>".
+ * An account with only one repo has no "All", so it shows under that repo.
  */
 export const placeNote = (picked: string[], account: string, repos: string[]) =>
   repos.length < 2
-    ? `레포가 하나뿐인 계정이라 ${repoName(repos[0] ?? account)}에 보여요.`
+    ? t.forum.filter.onlyRepo(repoName(repos[0] ?? account))
     : picked.length === 1
-      ? `레포가 하나라 ${repoName(picked[0] as string)}에 보여요.`
+      ? t.forum.filter.oneRepo(repoName(picked[0] as string))
       : picked.length === 0
-        ? `모든 레포라 ${account} 전체에 보여요.`
-        : `레포가 ${["", "", "둘", "셋", "넷"][picked.length] ?? `${picked.length}개`}라 ${account} 전체에 보여요.`;
+        ? t.forum.filter.everyRepo(account)
+        : t.forum.filter.someRepos(picked.length, account);
 
-/** 필터 칩에 쓰는 값: 색 점 셋까지와 "논의인 라벨 모두"나 라벨 이름. */
+/** The value for the filter chip: up to three color dots and "All Discuss labels" or the label name. */
 function FilterValue({ draft }: { draft: Draft }) {
   const labels = useLabels();
-  if (!draft) return <span>없음</span>;
+  if (!draft) return <span>{t.forum.filter.none}</span>;
   const picked =
     "importance" in draft
       ? labels.filter((label) => label.importance === draft.importance)
@@ -234,9 +239,9 @@ function FilterValue({ draft }: { draft: Draft }) {
       </span>
       <span>
         {"importance" in draft
-          ? `${IMPORTANCE_LABELS[draft.importance]}인 라벨 모두`
+          ? t.forum.filter.allOfImportance(t.importance[draft.importance])
           : names.length > 2
-            ? `${names.slice(0, 2).join(", ")} 외 ${names.length - 2}`
+            ? t.forum.filter.and(names.slice(0, 2).join(", "), names.length - 2)
             : names.join(", ")}
       </span>
     </>
@@ -244,9 +249,9 @@ function FilterValue({ draft }: { draft: Draft }) {
 }
 
 /**
- * 포럼의 필터 줄(시안 53-D): "상태"와 "라벨" 칩. 라벨 칩이 곧 포럼의 필터이고, 고치면 그 자리에서 목록이 바뀐다.
- * 저장된 필터와 달라지면 "되돌리기"와 "모두에게 저장"이 뜬다. 상태는 포럼의 필터가 아니라 이 화면에만 있다(계약에 없다).
- * `filter`가 없으면("다른 포스트") 라벨 칩이 없다.
+ * The forum's filter row (mockup 53-D): the "Status" and "Label" chips. The label chip is the forum's filter, and editing it changes the list in place.
+ * When it differs from the saved filter, "Revert" and "Save for everyone" appear. Status isn't a forum filter, it only exists on this screen (not in the contract).
+ * Without `filter` ("Other posts") there is no label chip.
  */
 export function FilterRow({
   states,
@@ -259,9 +264,9 @@ export function FilterRow({
   onDraft,
   onSave,
 }: {
-  /** 워크스페이스의 계정 이름 */
+  /** The workspace's account name */
   account: string;
-  /** 워크스페이스에서 내게 보이는 레포들. 레포 칩이 고른다. */
+  /** Repos in the workspace visible to me. The repo chip picks from them. */
   repos: string[];
   states: Set<"open" | "resolved">;
   counts: Record<"open" | "resolved", number>;
@@ -274,13 +279,13 @@ export function FilterRow({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
   const dirty = filter !== undefined && !sameFilter(draft, filter);
-  /** 고치는 중인 레포 조건. 라벨을 다 꺼 필터가 비었으면 포럼의 것이다. */
+  /** The repo condition being edited. If every label is off and the filter is empty, it's the forum's. */
   const picked = (draft ?? filter)?.repos ?? [];
   const reposChanged = reposWord(picked.toSorted()) !== reposWord((filter?.repos ?? []).toSorted());
   const pickRepos = (next: string[]) => draft && onDraft(withRepos(draft, next));
   const stateWords = (["open", "resolved"] as const)
     .filter((id) => states.has(id))
-    .map((id) => STATE_WORDS[id]);
+    .map((id) => stateWord(id));
   const save = async () => {
     if (!draft) return;
     setBusy(true);
@@ -296,8 +301,11 @@ export function FilterRow({
   };
   return (
     <fieldset className="forum-tags filter-row">
-      <legend className="sr-only">필터</legend>
-      <Chip name="상태" value={<span>{stateWords.join(", ") || "모두"}</span>}>
+      <legend className="sr-only">{t.forum.filter.legend}</legend>
+      <Chip
+        name={t.forum.filter.state}
+        value={<span>{stateWords.join(", ") || t.forum.filter.all}</span>}
+      >
         {(["open", "resolved"] as const).map((id) => (
           <button
             key={id}
@@ -313,19 +321,23 @@ export function FilterRow({
             }}
           >
             <Box on={states.has(id)} />
-            <span className="pop-name">{STATE_WORDS[id]}</span>
+            <span className="pop-name">{stateWord(id)}</span>
             <span className="pop-aside">{counts[id]}</span>
           </button>
         ))}
       </Chip>
       {filter && (
-        <Chip name="레포" value={<span>{reposWord(picked)}</span>} changed={reposChanged}>
+        <Chip
+          name={t.forum.filter.repo}
+          value={<span>{reposWord(picked)}</span>}
+          changed={reposChanged}
+        >
           <RepoOptions account={account} repos={repos} picked={picked} onPick={pickRepos} />
         </Chip>
       )}
       {filter && (
         <Chip
-          name="라벨"
+          name={t.forum.filter.label}
           value={<FilterValue draft={draft} />}
           changed={dirty && !reposChanged}
           wide
@@ -339,10 +351,10 @@ export function FilterRow({
       {dirty && (
         <span className="filter-dirty">
           <span className="filter-note" aria-live="polite">
-            {error ? "저장하지 못했어요" : "포럼의 필터와 달라요"}
+            {error ? t.forum.filter.saveFailed : t.forum.filter.differs}
           </span>
           <button type="button" className="button outline small" onClick={() => onDraft(undefined)}>
-            되돌리기
+            {t.forum.filter.revert}
           </button>
           <button
             type="button"
@@ -350,7 +362,7 @@ export function FilterRow({
             disabled={busy || !draft}
             onClick={() => void save()}
           >
-            모두에게 저장
+            {t.forum.filter.saveForAll}
           </button>
         </span>
       )}
@@ -358,9 +370,9 @@ export function FilterRow({
   );
 }
 
-const STATE_WORDS = { open: "열림", resolved: "풀림" } as const;
+const stateWord = (id: "open" | "resolved") => t.forum.filter[id];
 
-/** 레포 칩의 창: "모든 레포"와 레포마다 한 줄. "모든 레포"를 켜면 레포는 꺼진다. */
+/** The repo chip's popup: "All repos" and one row per repo. Turning on "All repos" turns the repos off. */
 function RepoOptions({
   account,
   repos,
@@ -383,7 +395,7 @@ function RepoOptions({
         onClick={() => onPick([])}
       >
         <Box on={picked.length === 0} />
-        <span className="pop-name">모든 레포</span>
+        <span className="pop-name">{t.forum.filter.allRepos}</span>
       </button>
       {repos.map((repo) => (
         <button
@@ -408,7 +420,7 @@ function RepoOptions({
   );
 }
 
-/** 필터 칩: 이름(보조 글씨), 값, 꺾쇠. 누르면 바로 아래에 창이 열린다. */
+/** Filter chip: name (secondary text), value, chevron. Clicking opens a popup right below. */
 function Chip({
   name,
   value,
@@ -425,7 +437,7 @@ function Chip({
   const { open, setOpen, wrap, button, onKeyDown } = useMenu();
   const menu = useId();
   return (
-    // biome-ignore lint/a11y/noStaticElementInteractions: 안에 든 메뉴와 버튼의 키를 한곳에서 받는다
+    // biome-ignore lint/a11y/noStaticElementInteractions: one place catches keys for the menu and buttons inside
     <div className="forum-menu-wrap" ref={wrap} onKeyDown={onKeyDown}>
       <button
         ref={button}
@@ -455,7 +467,7 @@ function Chip({
   );
 }
 
-/** 라벨 칩의 창: 찾기 칸, 묶음 두 줄, 라벨마다 한 줄. */
+/** The label chip's popup: a search box, two bundle rows, and one row per label. */
 function FilterPicker({ draft, onDraft }: { draft: Draft; onDraft: (draft: Draft) => void }) {
   const labels = useLabels();
   const [query, setQuery] = useState("");
@@ -477,8 +489,8 @@ function FilterPicker({ draft, onDraft }: { draft: Draft; onDraft: (draft: Draft
           >
             <Box on={on} />
             <span className="pop-name">
-              중요도가 {IMPORTANCE_LABELS[importance]}인 라벨 모두
-              {index === 0 && <small>라벨이 새로 생기거나 중요도가 바뀌면 따라와요</small>}
+              {t.forum.filter.allOfImportance(t.importance[importance])}
+              {index === 0 && <small>{t.forum.filter.bundleNote}</small>}
             </span>
           </button>
         );
@@ -501,28 +513,22 @@ function FilterPicker({ draft, onDraft }: { draft: Draft; onDraft: (draft: Draft
             <Box on={on} />
             <LabelDot color={label.color} size={10} />
             <span className="pop-name">{label.name}</span>
-            {locked && on && (
-              <span className="pop-aside">{IMPORTANCE_LABELS[label.importance]}</span>
-            )}
+            {locked && on && <span className="pop-aside">{t.importance[label.importance]}</span>}
           </button>
         );
       })}
-      <p className="pop-note">
-        {bundled
-          ? "묶음을 켜면 라벨을 따로 고를 수 없어요. 묶음을 끄고 라벨을 골라 주세요."
-          : "켠 라벨이 하나라도 붙은 포스트가 보여요"}
-      </p>
+      <p className="pop-note">{bundled ? t.forum.filter.bundledNote : t.forum.filter.anyLabel}</p>
     </>
   );
 }
 
-/** 만들 것의 종류. 카테고리의 `+`가 제 종류를 골라 둔 채로 연다(시안 88-A). */
+/** The kind of thing to create. The category's `+` opens with its own kind preselected (mockup 88-A). */
 export type CreateKind = "chat" | "forum";
 
 /**
- * "만들기" 대화 상자(시안 88-A, 52). 맨 위에서 종류(채팅 채널, 포럼)를 고른다. 채팅 채널은 이름만,
- * 포럼은 이름과 필터(묶음 두 줄과 라벨 칩)를 정하고 맞는 포스트를 미리 보인다.
- * `forum`을 주면 그 포럼을 고친다: 종류 고르기 없이 이름과 필터를 고치고 포럼을 지운다(시안에 없는 자리, PR #194에 까닭).
+ * The "Create" dialog (mockup 88-A, 52). At the top you pick the kind (chat channel, forum). A chat channel needs only a name,
+ * a forum needs a name and a filter (two bundle rows and the label chip), and previews the matching posts.
+ * With `forum`, it edits that forum: no kind picker, edit the name and filter, and delete the forum (not in the mockup, reason in PR #194).
  */
 export function ForumDialog({
   dialog,
@@ -539,15 +545,15 @@ export function ForumDialog({
 }: {
   dialog: RefObject<HTMLDialogElement | null>;
   forum?: Channel;
-  /** 미리 보기에 쓰는 포스트들과 그 제목 */
+  /** Posts used for the preview, and their titles */
   posts: { labels: string[]; importance: Importance; repo: string; title: string }[];
-  /** 워크스페이스의 계정 이름 */
+  /** The workspace's account name */
   account: string;
-  /** 워크스페이스에서 내게 보이는 레포들. 레포 칩이 고른다(시안 92-A). */
+  /** Repos in the workspace visible to me. The repo chip picks from them (mockup 92-A). */
   repos: string[];
-  /** 새로 만들 때 처음 골라 둔 레포 칩: 지금 보는 곳(시안 101). 비면 "모든 레포"다. */
+  /** The repo chip preselected when creating: where you are now (mockup 101). If empty, "All repos". */
   start?: string[];
-  /** 만들 때 고른 종류. `onKind`가 있으면 종류 고르기가 선다. */
+  /** The kind picked when creating. If `onKind` is given, the kind picker shows. */
   kind?: CreateKind;
   onKind?: (kind: CreateKind) => void;
   onCreateChat?: (name: string) => Promise<void>;
@@ -557,7 +563,7 @@ export function ForumDialog({
   const labels = useLabels();
   const [name, setName] = useState(forum?.name ?? "");
   const [draft, setDraft] = useState<Draft>(forum?.filter ?? null);
-  /** 레포 조건. 비면 "모든 레포"다. 새로 만들 때는 지금 보는 곳이다. */
+  /** Repo condition. Empty means "All repos". When creating, it's where you are now. */
   const [picked, setPicked] = useState<string[]>(forum?.filter?.repos ?? start);
   const full = draft && withRepos(draft, picked);
   const [error, setError] = useState<string>();
@@ -577,8 +583,10 @@ export function ForumDialog({
     } catch (failure) {
       setError(
         failure instanceof ContractFailure && failure.code === "conflict"
-          ? "같은 이름의 채널이나 포럼이 이미 있어요. 다른 이름을 써 주세요."
-          : `${chat ? "채널을 만들지" : "포럼을 저장하지"} 못했어요. 잠시 뒤 다시 시도해 주세요.`,
+          ? t.forum.create.taken
+          : chat
+            ? t.forum.create.chatFailed
+            : t.forum.create.forumFailed,
       );
     } finally {
       setBusy(false);
@@ -592,7 +600,7 @@ export function ForumDialog({
   const bundled = draft !== null && "importance" in draft;
 
   return (
-    // biome-ignore lint/a11y/useKeyWithClickEvents: Esc는 dialog가 맡는다
+    // biome-ignore lint/a11y/useKeyWithClickEvents: Esc is handled by the dialog
     <dialog
       ref={dialog}
       className="dialog forum-dialog"
@@ -607,11 +615,17 @@ export function ForumDialog({
       onClick={(event) => event.target === event.currentTarget && dialog.current?.close()}
     >
       <form onSubmit={submit}>
-        <h2 id={heading}>{forum ? "포럼 고치기" : onKind ? "만들기" : "포럼 만들기"}</h2>
+        <h2 id={heading}>
+          {forum
+            ? t.forum.create.edit
+            : onKind
+              ? t.forum.create.create
+              : t.forum.create.createForum}
+        </h2>
         {onKind && (
           <fieldset className="kind-pick">
-            <legend>종류</legend>
-            {KINDS.map(({ value, Icon, name: title, note }) => (
+            <legend>{t.forum.create.kind}</legend>
+            {KINDS.map(({ value, Icon, key }) => (
               <label key={value} className="kind-card">
                 <input
                   type="radio"
@@ -623,19 +637,15 @@ export function ForumDialog({
                   }}
                 />
                 <Icon size={18} aria-hidden />
-                <strong>{title}</strong>
-                <small>{note}</small>
+                <strong>{t.forum.create[`${key}Name`]}</strong>
+                <small>{t.forum.create[`${key}Note`]}</small>
               </label>
             ))}
           </fieldset>
         )}
-        {!chat && (
-          <p className="dialog-lead">
-            포럼은 라벨로 거른 보기예요. 필터는 만든 뒤에도 포럼의 필터 줄에서 고쳐요.
-          </p>
-        )}
+        {!chat && <p className="dialog-lead">{t.forum.create.lead}</p>}
         <div className="field">
-          <label htmlFor={input}>이름</label>
+          <label htmlFor={input}>{t.forum.create.name}</label>
           <input
             id={input}
             className="text-input"
@@ -651,13 +661,13 @@ export function ForumDialog({
           />
           {chat && (
             <p id={help} className={error ? "help error" : "help"} aria-live="polite">
-              {error ?? "멤버 모두가 읽고 쓰는 채팅 채널이에요."}
+              {error ?? t.forum.create.chatHelp}
             </p>
           )}
         </div>
         {!chat && (
           <fieldset className="field forum-dialog-repos">
-            <legend>레포</legend>
+            <legend>{t.forum.create.repo}</legend>
             <div className="dialog-chips">
               <button
                 type="button"
@@ -666,7 +676,7 @@ export function ForumDialog({
                 onClick={() => setPicked([])}
               >
                 {picked.length === 0 && <Check size={14} aria-hidden />}
-                모든 레포
+                {t.forum.filter.allRepos}
               </button>
               {repos.map((repo) => {
                 const on = picked.includes(repo);
@@ -696,7 +706,7 @@ export function ForumDialog({
         {!chat && (
           <>
             <fieldset className="field forum-dialog-filter">
-              <legend>필터</legend>
+              <legend>{t.forum.create.filter}</legend>
               {IMPORTANCES.map((importance, index) => (
                 <label key={importance} className="bundle-check">
                   <input
@@ -705,8 +715,8 @@ export function ForumDialog({
                     onChange={() => setDraft(bundle(draft, importance))}
                   />
                   <span>
-                    중요도가 {IMPORTANCE_LABELS[importance]}인 라벨 모두
-                    {index === 0 && <small>라벨이 새로 생기거나 중요도가 바뀌면 따라와요</small>}
+                    {t.forum.filter.allOfImportance(t.importance[importance])}
+                    {index === 0 && <small>{t.forum.filter.bundleNote}</small>}
                   </span>
                 </label>
               ))}
@@ -729,21 +739,19 @@ export function ForumDialog({
                 })}
               </div>
               <p className="help">
-                {draft
-                  ? `켠 라벨이 하나라도 붙은 포스트가 보여요. 지금 ${matched.length}개가 보여요.`
-                  : "묶음이나 라벨을 하나 이상 켜 주세요."}
+                {draft ? t.forum.create.shows(matched.length) : t.forum.create.pickOne}
               </p>
             </fieldset>
             {matched.length > 0 && (
               <div className="forum-preview">
-                <p>이렇게 보여요</p>
+                <p>{t.forum.create.preview}</p>
                 <ul>
                   {matched.slice(0, 3).map((post, index) => (
-                    // biome-ignore lint/suspicious/noArrayIndexKey: 제목이 겹칠 수 있다
+                    // biome-ignore lint/suspicious/noArrayIndexKey: titles can repeat
                     <li key={index}>{post.title}</li>
                   ))}
                 </ul>
-                {matched.length > 3 && <p>외 {matched.length - 3}개</p>}
+                {matched.length > 3 && <p>{t.forum.create.more(matched.length - 3)}</p>}
               </div>
             )}
           </>
@@ -761,18 +769,18 @@ export function ForumDialog({
               disabled={busy}
               onClick={() => (deleting ? void run(onDelete) : setDeleting(true))}
             >
-              {deleting ? "한 번 더 누르면 지워요" : "포럼 지우기"}
+              {deleting ? t.forum.create.deleteAgain : t.forum.create.delete}
             </button>
           )}
           <button type="button" className="button quiet" onClick={() => dialog.current?.close()}>
-            취소
+            {t.forum.create.cancel}
           </button>
           <button
             type="submit"
             className="button primary"
             disabled={busy || !name.trim() || (!chat && !draft)}
           >
-            {forum ? "저장" : "만들기"}
+            {forum ? t.forum.create.save : t.forum.create.create}
           </button>
         </div>
       </form>
@@ -781,6 +789,6 @@ export function ForumDialog({
 }
 
 const KINDS = [
-  { value: "chat", Icon: Hash, name: "채팅 채널", note: "멤버가 메시지를 주고받아요" },
-  { value: "forum", Icon: MessagesSquare, name: "포럼", note: "라벨로 거른 포스트를 모아 봐요" },
+  { value: "chat", Icon: Hash, key: "chat" },
+  { value: "forum", Icon: MessagesSquare, key: "forum" },
 ] as const;

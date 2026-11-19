@@ -1,7 +1,6 @@
 import {
   ALERT_LABELS,
   type Alert,
-  ago,
   type Channel,
   type ChannelMessage,
   type ForumFilter,
@@ -25,17 +24,18 @@ import {
 import { Fragment, useEffect, useId, useMemo, useReducer, useState } from "react";
 import { fullTime, timeOf } from "./conversation.tsx";
 import { useMenu } from "./dm.tsx";
+import { ago, t } from "./i18n.ts";
 import { type Draft, FilterRow, ImportanceBadge, LabelBadge } from "./labels.tsx";
-import { LIST_VERDICT_LABELS, type ListVerdict, listVerdict } from "./list-verdict.ts";
+import { type ListVerdict, listVerdict } from "./list-verdict.ts";
 import { Person } from "./profile-card.tsx";
 import { Avatar } from "./workspace.tsx";
 
 export type AlertMessage = Extract<ChannelMessage, { kind: "alert" }>;
-/** 포럼의 포스트 하나: 요약과 첫 글인 알림. `edited`는 알림이 고쳐지는 것을 이 화면이 본 시각이다. */
-// ponytail: 계약에 알림을 고친 시각이 없어, 연결된 동안 본 것만 "…에 고침"이 붙는다. 계약이 시각을 주면 그것을 쓴다.
+/** One post in the forum: a summary plus its first message, the alert. `edited` is when this screen saw the alert being edited. */
+// ponytail: the contract has no edited time for alerts, so only edits seen while connected get "edited …". Use the contract time once it has one.
 export type PostItem = Post & { message: AlertMessage; edited?: string };
 
-/** 알림 메시지에서 포스트를 만든다. 실시간 연결로 온 알림 줄이 곧 그 포스트의 바뀐 요약이다. */
+/** Builds a post from an alert message. The alert line that arrives over the live connection is the post's new summary. */
 export const postOf = (message: AlertMessage, edited?: string): PostItem => ({
   ...message.post,
   alert: message.id,
@@ -43,37 +43,44 @@ export const postOf = (message: AlertMessage, edited?: string): PostItem => ({
   edited,
 });
 
-/** `api.posts`의 줄들을 포스트로. 알림이 아닌 줄은 오지 않지만 타입을 좁힌다. */
+/** Turns `api.posts` rows into posts. Non-alert rows never arrive, but this narrows the type. */
 export const postsOf = (list: (Post & { message: ChannelMessage })[]) =>
   list.flatMap(({ message }) => (message.kind === "alert" ? [postOf(message)] : []));
 
-/** 고쳐졌는지: 풀린 시각만 달라진 것은 고친 것이 아니다. */
+/** Whether it was edited: a changed resolved time alone does not count as an edit. */
 export const changed = (a: Alert, b: Alert) =>
   JSON.stringify({ ...a, resolved: null }) !== JSON.stringify({ ...b, resolved: null });
 
+/** The stored (GitHub) label names of the alert kinds. Not screen text: that is `t.alertKinds`. */
 export const KINDS = ALERT_LABELS;
 
 const base = (path: string) => path.split("/").at(-1) ?? path;
 
-/** 부딪힌 파일이나 심볼. 알림에 적힌 첫 번째다. */
+/** The conflicting file or symbol: the first one named in the alert. */
 const subject = (alert: Alert) =>
   alert.kind === "direct" ? alert.files[0] && base(alert.files[0].path) : alert.symbols[0]?.name;
 
 /**
- * 포스트의 제목: 이슈 제목(ADR-0032). 이슈를 아직 열지 못했으면 알림의 파일이나 심볼("refund.ts")에서 짓는다.
- * 번호("#44")는 따로 그린다(`IssueNumber`). 사람은 제목에 넣지 않고 카드의 사람 줄에 따로 보인다(DESIGN.md 시안 27-B).
+ * Post title: the issue title (ADR-0032). If the issue is not open yet, build it from the alert's file or symbol ("refund.ts").
+ * The number ("#44") is drawn separately (`IssueNumber`). People stay out of the title and show on the card's people line (DESIGN.md mockup 27-B).
  */
 export const postTitle = ({ issue, message: { alert } }: PostItem) =>
   issue?.title ?? subject(alert) ?? alert.works[0].branch;
 
-/** 포스트가 풀렸나: 알림이 풀렸거나, 사람이 GitHub에서 이슈를 닫았다(ADR-0032). */
+/** Whether the post is resolved: the alert is resolved, or someone closed the issue on GitHub (ADR-0032). */
 export const settled = (post: PostItem) =>
   post.message.alert.resolved !== null || post.issue?.open === false;
 
-/** "다른 포스트": 어느 포럼에도 맞지 않는 포스트를 보는 자리(시안 55-D). 채널이 아니라 채널 패널이 만든다. */
-export const OTHER: Channel = { id: "other", name: "다른 포스트", kind: "forum" };
+/** "Other posts": where posts that fit no forum are shown (mockup 55-D). The channel panel makes it, not a channel. */
+export const OTHER: Channel = {
+  id: "other",
+  get name() {
+    return t.forum.other;
+  },
+  kind: "forum",
+};
 
-/** 이슈 번호 "#44". GitHub의 이슈로 가는 링크다. 이슈가 없으면 그리지 않는다. */
+/** Issue number "#44". A link to the GitHub issue. Not drawn when there is no issue. */
 export const IssueNumber = ({ post, link = true }: { post: PostItem; link?: boolean }) =>
   post.issue &&
   (link ? (
@@ -82,7 +89,7 @@ export const IssueNumber = ({ post, link = true }: { post: PostItem; link?: bool
       href={post.issue.url}
       target="_blank"
       rel="noreferrer"
-      title="GitHub에서 이슈 보기"
+      title={t.forum.viewIssue}
     >
       #{post.issue.number}
     </a>
@@ -90,7 +97,7 @@ export const IssueNumber = ({ post, link = true }: { post: PostItem; link?: bool
     <span className="issue-number">#{post.issue.number}</span>
   ));
 
-/** 찾기 칸이 훑는 글: 사람, 브랜치, 파일, 심볼. */
+/** Text the search box scans: people, branches, files, symbols. */
 const haystack = (post: PostItem) => {
   const { alert } = post.message;
   const names = alert.works.flatMap((w) => [w.login, w.name, w.branch]);
@@ -101,7 +108,7 @@ const haystack = (post: PostItem) => {
   return [postTitle(post), ...post.labels, ...names, ...things].join("\n").toLowerCase();
 };
 
-/** 종류 배지: 직접 충돌은 주황, 나머지는 테두리, 간접 충돌은 "· 추정"이 붙는다. */
+/** Kind badge: direct conflict is orange, the rest are outlined, and indirect conflict gets "· estimated". */
 export const KindBadge = ({
   kind,
   confirmed,
@@ -112,8 +119,8 @@ export const KindBadge = ({
   plain?: boolean;
 }) => (
   <span className={kind === "direct" || confirmed ? "badge warning" : "badge outline"}>
-    {KINDS[kind]}
-    {kind === "indirect" && !plain && (confirmed ? " · 확인됨" : " · 추정")}
+    {t.alertKinds[kind]}
+    {kind === "indirect" && !plain && ` · ${confirmed ? t.forum.confirmed : t.forum.estimate}`}
   </span>
 );
 
@@ -126,7 +133,7 @@ const VERDICT_ICONS = {
   direct: CircleX,
 } as const satisfies Record<ListVerdict, unknown>;
 
-/** 제목 앞 판정 아이콘(16px). 깨짐과 직접 충돌만 경고색이다. */
+/** Verdict icon before the title (16px). Only broken and direct conflict use the warning color. */
 const VerdictIcon = ({ verdict }: { verdict: ListVerdict }) => {
   const Icon = VERDICT_ICONS[verdict];
   return (
@@ -135,12 +142,12 @@ const VerdictIcon = ({ verdict }: { verdict: ListVerdict }) => {
       data-verdict={verdict}
       size={16}
       role="img"
-      aria-label={LIST_VERDICT_LABELS[verdict]}
+      aria-label={t.verdict.list[verdict]}
     />
   );
 };
 
-/** 이 기기에 기억하는 고른 값. 저장소를 막아 둔 브라우저에서는 이 탭에서만 남는다. */
+/** The picked value remembered on this device. In a browser that blocks storage, it lasts only in this tab. */
 function useSaved<T extends string>(key: string, options: readonly T[]) {
   const [value, set] = useState<T>(() => {
     try {
@@ -161,15 +168,9 @@ function useSaved<T extends string>(key: string, options: readonly T[]) {
   ] as const;
 }
 
-const SORTS = [
-  ["activity", "최근 활동"],
-  ["posted", "올라온 시각"],
-] as const;
-const VIEWS = [
-  ["list", "목록"],
-  ["card", "카드"],
-] as const;
-/** 포럼 머리 띠의 왼쪽: 20px 포럼 아이콘, 이름, 보조 글. "다른 포스트"는 받은 편지함 아이콘이다. */
+const SORTS = ["activity", "posted"] as const;
+const VIEWS = ["list", "card"] as const;
+/** Left side of the forum header: 20px forum icon, name, and helper text. "Other posts" uses an inbox icon. */
 export const ForumTitle = ({ forum, solo = false }: { forum: Channel; solo?: boolean }) => {
   const Icon = forum.id === OTHER.id ? Inbox : MessagesSquare;
   return (
@@ -179,22 +180,18 @@ export const ForumTitle = ({ forum, solo = false }: { forum: Channel; solo?: boo
         <span>{forum.name}</span>
       </h2>
       <span className="channel-members forum-lead">
-        {forum.id === OTHER.id
-          ? "어느 포럼에도 맞지 않는 포스트예요"
-          : solo
-            ? "Omagari가 내 브랜치끼리 부딪힌 것을 포스트로 올려요"
-            : "Omagari가 알림을 포스트로 올려요"}
+        {forum.id === OTHER.id ? t.forum.leadOther : solo ? t.forum.leadSolo : t.forum.lead}
       </span>
     </div>
   );
 };
 
 /**
- * 포럼(DESIGN.md "부딪힘 포럼"): 찾기 칸, "정렬과 보기" 메뉴와 필터 줄, 포스트 목록이나 카드. 입력 칸은 없다.
- * 포럼은 라벨로 거른 보기다(ADR-0039). 필터 줄에서 고친 필터는 저장하기 전까지 나만 그렇게 본다(시안 53-D).
- * `forum`이 "다른 포스트"면 어느 포럼에도 맞지 않는 포스트를 보이고 라벨 필터가 없다.
- * 포스트 줄은 `#포럼/알림 번호`로 가는 링크라 옆 칸으로 열리고 뒤로 가기가 닫는다.
- * 찾기는 사람, 브랜치, 파일, 심볼, 라벨을 훑는다. 상태(열림, 풀림)는 이 화면에만 있고 처음엔 열림이다.
+ * Forum (DESIGN.md "Conflict forum"): search box, "Sort and view" menu and filter row, post list or cards. No input box.
+ * A forum is a view filtered by labels (ADR-0039). A filter edited in the filter row is seen only by me until saved (mockup 53-D).
+ * If `forum` is "Other posts", it shows posts that fit no forum and has no label filter.
+ * A post row links to `#forum/alert number`, so it opens in a side panel and Back closes it.
+ * Search scans people, branches, files, symbols, and labels. Status (open, resolved) lives only on this screen and starts as open.
  */
 export function Forum({
   forum,
@@ -208,42 +205,36 @@ export function Forum({
   onSaveFilter,
 }: {
   forum: Channel;
-  /** 멤버가 나 하나다(시안 100-A). 사람 줄에 사람 대신 부딪힌 내 브랜치 둘을 쓴다. */
+  /** I am the only member (mockup 100-A). The people line shows my two conflicting branches instead of people. */
   solo: boolean;
-  /** 워크스페이스의 계정 이름 */
+  /** The workspace account name */
   account: string;
-  /** 워크스페이스에서 내게 보이는 레포들. 필터 줄의 레포 칩이 고른다. */
+  /** The repos in the workspace that I can see. The repo chips in the filter row pick them. */
   repos: string[];
-  /** 내 GitHub 아이디. 사람 줄에서 내 이름 대신 "나"를 쓴다. */
+  /** My GitHub ID. The people line shows "me" instead of my name. */
   me: string;
-  /** 포스트 전부. 필터로 고르는 것은 이 화면이 한다. */
+  /** All posts. This screen does the filtering. */
   posts?: PostItem[];
   selected?: number;
   unread: (post: PostItem) => boolean;
   onSaveFilter: (filter: ForumFilter) => Promise<void>;
 }) {
   const [query, setQuery] = useState("");
-  const [sort, setSort] = useSaved(
-    "omagari.forum-sort",
-    SORTS.map(([id]) => id),
-  );
-  const [view, setView] = useSaved(
-    "omagari.forum-view",
-    VIEWS.map(([id]) => id),
-  );
+  const [sort, setSort] = useSaved("omagari.forum-sort", SORTS);
+  const [view, setView] = useSaved("omagari.forum-view", VIEWS);
   const [states, setStates] = useState<Set<"open" | "resolved">>(new Set(["open"]));
-  /** 고치는 중인 필터. 없으면 포럼에 저장된 것이다. */
+  /** The filter being edited. If none, the one saved on the forum. */
   const [draft, setDraft] = useState<Draft>();
   const filter = forum.id === OTHER.id ? undefined : forum.filter;
   const [, tick] = useReducer((n: number) => n + 1, 0);
   useEffect(() => {
-    const timer = setInterval(tick, 60_000); // "3분 전"이 흐르게
+    const timer = setInterval(tick, 60_000); // lets "3m ago" tick
     return () => clearInterval(timer);
   }, []);
   const search = useId();
 
   const current = draft === undefined ? filter : draft;
-  /** 포럼의 필터에 맞는 포스트. 상태와 찾는 말로 거르기 전이다. */
+  /** Posts that match the forum's filter, before filtering by status and search text. */
   const inForum = useMemo(
     () =>
       posts?.filter((post) =>
@@ -276,8 +267,8 @@ export function Forum({
           type="search"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="포스트 찾기 (사람, 파일, 함수)"
-          aria-label="포스트 찾기"
+          placeholder={t.forum.searchHint}
+          aria-label={t.forum.search}
           autoComplete="off"
         />
       </div>
@@ -298,18 +289,12 @@ export function Forum({
       </div>
       {inForum === undefined ? (
         <div className="empty" role="status" aria-busy="true">
-          <p>포스트를 불러오는 중…</p>
+          <p>{t.forum.loading}</p>
         </div>
       ) : shown.length === 0 ? (
         <div className="empty">
-          <h2>
-            {inForum.length === 0 ? "이 포럼에 맞는 포스트가 없어요" : "맞는 포스트가 없어요"}
-          </h2>
-          <p>
-            {inForum.length === 0
-              ? "작업이 부딪히면 Omagari가 포스트로 올리고, 필터에 맞으면 여기 보여요."
-              : "찾는 말이나 필터를 바꿔 보세요."}
-          </p>
+          <h2>{inForum.length === 0 ? t.forum.emptyForum : t.forum.emptySearch}</h2>
+          <p>{inForum.length === 0 ? t.forum.emptyForumHint : t.forum.emptySearchHint}</p>
         </div>
       ) : (
         <ul className={view === "card" ? "forum-list cards" : "forum-list"}>
@@ -331,7 +316,7 @@ export function Forum({
   );
 }
 
-/** "정렬과 보기" 메뉴: 정렬(최근 활동, 올라온 시각)과 보기(목록, 카드). 고른 것은 이 기기에 남는다. */
+/** "Sort and view" menu: sort (recent activity, posted time) and view (list, cards). The choice stays on this device. */
 function ViewMenu<S extends string, V extends string>({
   sort,
   view,
@@ -372,7 +357,7 @@ function ViewMenu<S extends string, V extends string>({
     </>
   );
   return (
-    // biome-ignore lint/a11y/noStaticElementInteractions: 안에 든 메뉴와 버튼의 키를 한곳에서 받는다
+    // biome-ignore lint/a11y/noStaticElementInteractions: one place handles keys for the menu and buttons inside
     <div className="forum-menu-wrap" ref={wrap} onKeyDown={onKeyDown}>
       <button
         ref={button}
@@ -384,14 +369,24 @@ function ViewMenu<S extends string, V extends string>({
         onClick={() => setOpen(!open)}
       >
         <ArrowUpDown size={14} aria-hidden />
-        정렬과 보기
+        {t.forum.sortAndView}
         <ChevronDown size={12} aria-hidden />
       </button>
       {open && (
-        <div className="forum-menu" id={menu} role="menu" aria-label="정렬과 보기">
-          {group("정렬", SORTS, sort, onSort as (id: never) => void)}
+        <div className="forum-menu" id={menu} role="menu" aria-label={t.forum.sortAndView}>
+          {group(
+            t.forum.sort,
+            SORTS.map((id) => [id, t.forum.sorts[id]] as const),
+            sort,
+            onSort as (id: never) => void,
+          )}
           <hr />
-          {group("보기", VIEWS, view, onView as (id: never) => void)}
+          {group(
+            t.forum.view,
+            VIEWS.map((id) => [id, t.forum.views[id]] as const),
+            view,
+            onView as (id: never) => void,
+          )}
         </div>
       )}
     </div>
@@ -399,8 +394,8 @@ function ViewMenu<S extends string, V extends string>({
 }
 
 /**
- * 포스트 한 장(목록 보기와 카드 보기의 네 줄): 제목, 종류 배지, 마지막 글 한 줄, 사람 줄과 글 수와 시각.
- * 새 글이 있으면 제목이 굵고 점이 붙는다. 풀린 포스트는 흐리고 "풀렸어요" 배지가 앞선다.
+ * One post card (four lines in list and card views): title, kind badge, last message line, people line with message count and time.
+ * With new messages the title is bold and has a dot. Resolved posts are dimmed and lead with a "Resolved" badge.
  */
 function PostRow({
   forum,
@@ -410,7 +405,7 @@ function PostRow({
   me,
   solo,
 }: {
-  /** 지금 보는 포럼. 같은 포스트가 여러 포럼에 보여도 지금 포럼에서 연다. */
+  /** The forum being viewed. Even if a post shows in several forums, it opens in this one. */
   forum: string;
   post: PostItem;
   selected: boolean;
@@ -430,17 +425,17 @@ function PostRow({
       data-resolved={resolved || undefined}
     >
       <span className="forum-post-title">
-        {resolved && <span className="badge outline">풀렸어요</span>}
+        {resolved && <span className="badge outline">{t.forum.resolved}</span>}
         {verdict && <VerdictIcon verdict={verdict} />}
         <strong className="forum-post-name">{postTitle(post)}</strong>
         <IssueNumber post={post} link={false} />
-        {unread && <span className="unread-dot" role="img" aria-label="새 글" />}
+        {unread && <span className="unread-dot" role="img" aria-label={t.forum.newPost} />}
       </span>
       <span className="forum-post-tags">
         <KindBadge kind={alert.kind} plain />
         {verdict && verdict !== "direct" && (
           <span className={verdict === "broken" ? "badge warning" : "badge outline"}>
-            {LIST_VERDICT_LABELS[verdict]}
+            {t.verdict.list[verdict]}
           </span>
         )}
         {post.labels
@@ -461,12 +456,12 @@ function PostRow({
             {post.last.line}
           </>
         ) : (
-          "아직 글이 없어요"
+          t.forum.noMessages
         )}
       </span>
       <span className="forum-post-meta">
         {solo ? (
-          // 혼자면 부딪힌 것은 내 브랜치끼리다(시안 100-A).
+          // Alone, the conflict is between my own branches (mockup 100-A).
           <span className="forum-post-branches">
             {alert.works.map((work) => work.branch).join(" ↔ ")}
           </span>
@@ -482,7 +477,7 @@ function PostRow({
                 <Fragment key={work.login}>
                   {i > 0 && " · "}
                   <Person login={work.login} inLink>
-                    {work.login === me ? "나" : work.name}
+                    {work.login === me ? t.forum.me : work.name}
                   </Person>
                 </Fragment>
               ))}
@@ -491,7 +486,7 @@ function PostRow({
         )}
         <span aria-hidden>·</span>
         <MessageCircle size={16} aria-hidden />
-        <span className="sr-only">글 </span>
+        <span className="sr-only">{t.forum.messages} </span>
         {post.count}
         <time dateTime={post.activity} title={fullTime(post.activity)}>
           · {ago(post.activity)}
@@ -501,29 +496,29 @@ function PostRow({
   );
 }
 
-/** 줄 범위: 12–18. 한 줄이면 그 줄만. */
+/** Line range: 12–18. A single line shows just that line. */
 const ranges = (lines: { from: number; to: number }[]) =>
   lines.map(({ from, to }) => (from === to ? `${from}` : `${from}–${to}`)).join(", ");
 
-/** 알림이 가리키는 곳 한 줄씩: 직접 충돌은 파일과 부딪힌 줄, 나머지는 심볼과 그 곳. */
+/** One line per place the alert points to: direct conflict shows the file and conflicting lines, the rest show the symbol and where. */
 function where(alert: Alert) {
   const rows =
     alert.kind === "direct"
       ? alert.files.map((file) =>
           "lines" in file
-            ? `${file.path}${file.lines[0].length ? ` · 줄 ${ranges(file.lines[0])}` : ""}`
-            : `${file.path} · 부딪힐 수 있음`,
+            ? `${file.path}${file.lines[0].length ? (/[–,]/.test(ranges(file.lines[0])) ? t.forum.lines : t.forum.line)(ranges(file.lines[0])) : ""}`
+            : `${file.path} · ${t.forum.mayCollide}`,
         )
       : alert.symbols.map((symbol) => {
           const place = symbol.places[0][0] ?? symbol.places[1][0];
           return place ? `${symbol.name} · ${place.path}:${place.line}` : symbol.name;
         });
-  return alert.more > 0 ? [...rows, `…외 ${alert.more}곳`] : rows;
+  return alert.more > 0 ? [...rows, t.forum.moreSpots(alert.more)] : rows;
 }
 
 /**
- * 포스트의 첫 글: Omagari의 알림(DESIGN.md "포스트"). 메시지 모양에 아바타 대신 Omagari 표시를 달고,
- * 본문은 알림 카드다: 종류 배지, 두 사람과 브랜치, 파일과 줄 범위. 고쳐졌으면 시각 옆에 "…에 고침"이 붙는다.
+ * First message of a post: the Omagari alert (DESIGN.md "Post"). A message shape with an Omagari mark instead of an avatar,
+ * and the body is an alert card: kind badge, two people and branches, file and line range. If edited, "edited …" follows the time.
  */
 export function AlertLine({ message, edited }: { message: AlertMessage; edited?: string }) {
   const { alert } = message;
@@ -541,14 +536,14 @@ export function AlertLine({ message, edited }: { message: AlertMessage; edited?:
           </time>
           {edited && (
             <time dateTime={edited} title={fullTime(edited)}>
-              {timeOf(edited)}에 고침
+              {t.forum.editedAt(timeOf(edited))}
             </time>
           )}
         </p>
         <div className="alert-card">
           <p className="alert-kind">
             <KindBadge kind={alert.kind} confirmed={alert.kind === "indirect" && alert.confirmed} />
-            {alert.resolved && <span className="badge outline">풀렸어요</span>}
+            {alert.resolved && <span className="badge outline">{t.forum.resolved}</span>}
             {message.post.labels
               .filter((label) => label !== KINDS[alert.kind])
               .map((label) => (

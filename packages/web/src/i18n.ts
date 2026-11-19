@@ -39,3 +39,20 @@ export const useLanguage = () =>
     },
     () => language,
   );
+
+const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
+  ["day", 24 * 60],
+  ["hour", 60],
+  ["minute", 1],
+];
+
+/** "3 minutes ago" / "3분 전": how long ago `iso` was, in the current language. */
+export function ago(iso: string) {
+  const minutes = Math.floor((Date.now() - Date.parse(iso)) / 60_000);
+  if (minutes < 1) return t.justNow;
+  const [unit, size] = UNITS.find(([, size]) => minutes >= size) ?? UNITS[2] ?? ["minute", 1];
+  return new Intl.RelativeTimeFormat(language, { numeric: "always" }).format(
+    -Math.floor(minutes / size),
+    unit,
+  );
+}
