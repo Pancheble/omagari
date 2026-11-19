@@ -2831,13 +2831,14 @@ export async function startServer(options: {
     if (access.unknown.length > 0 && access.push.length === 0) {
       throw new ContractFailure({
         code: "internal",
-        message: `GitHub에서 ${access.unknown.join(", ")}의 push 권한을 확인하지 못했다. 잠시 뒤 다시 하라`,
+        message: "GitHub에서 push 권한을 확인하지 못했다. 잠시 뒤 다시 하라",
       });
     }
     if (access.push.length === 0) {
       throw new ContractFailure({
         code: "forbidden",
-        message: `${login}는 ${allRepos().join(", ") || "워크스페이스의 어느 레포"}에 push 권한이 없어 이 워크스페이스에 들어올 수 없다`,
+        // 서버의 레포 이름은 싣지 않는다. 들어오지 못한 사람에게 비공개 레포의 이름이 새지 않는다.
+        message: `${login}는 이 서버의 워크스페이스 레포 어디에도 push 권한이 없어 들어올 수 없다`,
       });
     }
     const session = randomBytes(32).toString("hex");
@@ -2961,13 +2962,18 @@ export async function startServer(options: {
     const found = db.prepare("SELECT name FROM repos WHERE name = ?").get(repo) as
       | { name: string }
       | undefined;
-    if (!found) throw new ContractFailure({ code: "not_found", message: `없는 레포다: ${repo}` });
+    // 보이지 않는 레포는 없는 레포와 같게 답한다. 다른 워크스페이스에 어떤 레포가 있는지 새지 않는다.
+    if (!found || !sees(login, found.name))
+      throw new ContractFailure({ code: "not_found", message: `없는 레포다: ${repo}` });
     await mustAdmin(login, callerToken(c), found.name);
     // 그 레포의 것은 지우지 않는다. 다시 넣으면 돌아온다.
     db.prepare("DELETE FROM repos WHERE name = ?").run(found.name);
     db.prepare("DELETE FROM access WHERE repo = ?").run(found.name);
     for (const [socket, runner] of runners)
       if (runner.repo === found.name)
+        refuse(socket, { code: "forbidden", message: `${found.name}가 워크스페이스에서 빠졌다` });
+    for (const [socket, watcher] of watchers)
+      if (watcher.repo === found.name)
         refuse(socket, { code: "forbidden", message: `${found.name}가 워크스페이스에서 빠졌다` });
     shareSituation();
     return { repos: reposOf(login) };
@@ -4382,10 +4388,8 @@ export async function startServer(options: {
               socket,
               {
                 code: "forbidden",
-                message:
-                  inWorkspace.length === 0
-                    ? `이 폴더는 ${workspace.join(", ")}의 폴더가 아니다(GitHub 원격: ${repos.join(", ")}). 워크스페이스에 넣으려면 그 레포의 Admin이 넣는다`
-                    : `${login}는 ${inWorkspace.join(", ")}에 push 권한이 없다`,
+                // 없는 레포와 권한 없는 레포를 같게 답한다. 서버의 레포 이름도, 남의 레포가 들어 있는지도 새지 않는다.
+                message: `이 폴더는 ${login}에게 보이는 워크스페이스 레포의 폴더가 아니다(GitHub 원격: ${repos.join(", ")}). 워크스페이스에 없으면 그 레포의 Admin이 넣고, 있으면 push 권한이 있어야 한다`,
               },
               message.id,
             );
@@ -4512,12 +4516,7 @@ export async function startServer(options: {
             return fail("invalid_request", "자기 에이전트에게는 묻지 않는다");
           // 묻기는 레포 안의 것이다. 받는 쪽도 그 레포의 러너가 답한다.
           if (!db.prepare(`SELECT 1 FROM ${MEMBERS} WHERE login = ?`).get(runner.repo, to))
-            return fail(
-              "not_found",
-              reposOf(to).length === 0
-                ? `워크스페이스의 멤버가 아니다: ${to}`
-                : `${runner.repo}의 멤버가 아니다: ${to}`,
-            );
+            return fail("not_found", `${runner.repo}의 멤버가 아니다: ${to}`);
           if (
             executor &&
             !db.prepare("SELECT 1 FROM agents WHERE login = ? AND executor = ?").get(to, executor)
@@ -4711,28 +4710,45 @@ export async function startServer(options: {
         login: string;
         github_token: string;
       }[];
-      // GitHub에서 바꾼 이름과 프로필 사진을 따라간다. 사람마다 한 번만 읽고, 못 읽으면 지난 것을 둔다.
+      // GitHub에서 바꾼 이름과 프로필 사진을 따라간다. 토큰마다 읽고, 못 읽으면 지난 것을 둔다.
+      // 토큰의 GitHub 이름이 세션의 것과 다르면 그 세션을 끝낸다. 옛 이름을 새로 가진 다른 사람이 그 줄과 권한을 이어받지 않는다.
       let renamed = false;
-      for (const [login, token] of new Map(rows.map((row) => [row.login, row.github_token]))) {
-        const user = await github.user(token).catch(() => undefined);
+      const ended = new Set<string>();
+      const people = new Set<string>();
+      for (const row of rows) {
+        const user = await github.user(row.github_token).catch(() => undefined);
         if (stopped) return;
-        if (user?.login !== login) continue;
+        if (user && user.login !== row.login) {
+          ended.add(row.hash);
+          endSession(row.hash, {
+            code: "unauthorized",
+            message: `GitHub 이름이 ${row.login}에서 ${user.login}로 바뀌었다. 다시 로그인하라`,
+          });
+        }
+        if (user?.login !== row.login || people.has(row.login)) continue;
+        people.add(row.login);
         renamed ||=
           db
             .prepare(
               "UPDATE people SET name = ?, avatar = ? WHERE login = ? AND (name != ? OR avatar IS NOT ?)",
             )
-            .run(user.name ?? login, user.avatar, login, user.name ?? login, user.avatar).changes >
-          0;
+            .run(
+              user.name ?? row.login,
+              user.avatar,
+              row.login,
+              user.name ?? row.login,
+              user.avatar,
+            ).changes > 0;
       }
       if (renamed) shareMembers();
       for (const row of rows) {
+        if (ended.has(row.hash)) continue;
         const access = await readAccess(row.login, row.github_token);
         if (stopped) return;
         if (access.push.length > 0 || access.unknown.length > 0) continue;
         endSession(row.hash, {
           code: "forbidden",
-          message: `${row.login}는 이제 ${allRepos().join(", ")}에 push 권한이 없어 워크스페이스에서 빠졌다`,
+          message: `${row.login}는 이제 워크스페이스 레포 어디에도 push 권한이 없어 빠졌다`,
         });
       }
       for (const [socket, runner] of runners)

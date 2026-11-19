@@ -113,7 +113,7 @@ test("받는 쪽이 스위치를 끄면 바로 받지 않는다가 오고 러너
   // 멤버가 아니거나 자기 자신이면 묻지 못한다.
   const stranger = await omagari(world, "ask", "nobody", "누구세요?");
   assert.equal(stranger.code, 1);
-  assert.match(stranger.stderr, /묻지 못했다: 워크스페이스의 멤버가 아니다: nobody/);
+  assert.match(stranger.stderr, /묻지 못했다: \S+의 멤버가 아니다: nobody/);
   const self = await omagari(world, "ask", "owner", "나?");
   assert.equal(self.code, 1);
   assert.match(self.stderr, /자기 에이전트에게는 묻지 않는다/);

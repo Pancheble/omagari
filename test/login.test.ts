@@ -32,7 +32,7 @@ test("push 권한이 없는 계정은 워크스페이스의 어떤 것도 읽지
 
   await assert.rejects(world.login("stranger"), {
     code: "forbidden",
-    message: new RegExp(`stranger는 ${REPO}에 push 권한이 없어`),
+    message: /stranger는 이 서버의 워크스페이스 레포 어디에도 push 권한이 없어/,
   });
   await assert.rejects(call(world.server, api.members), { code: "unauthorized" });
   await assert.rejects(
@@ -100,7 +100,7 @@ test("push 권한을 잃은 멤버는 다음 재확인 뒤 워크스페이스에
   const reason = await world.runner.ended;
   assert.ok(reason instanceof ContractFailure);
   assert.equal(reason.code, "forbidden");
-  assert.equal(reason.message, `owner는 이제 ${REPO}에 push 권한이 없어 워크스페이스에서 빠졌다`);
+  assert.equal(reason.message, "owner는 이제 워크스페이스 레포 어디에도 push 권한이 없어 빠졌다");
 });
 
 test("레포 폴더에서 명령 하나로 로그인하고 러너를 켠다. 러너 쪽에는 GitHub 토큰이 남지 않는다", async (t) => {
@@ -165,7 +165,7 @@ test("워크스페이스의 레포가 아닌 폴더에서는 이유를 말하고
   world.github.approve(code, "alice");
   const result = await runner.exited;
   assert.equal(result.code, 1);
-  assert.match(result.stderr, new RegExp(`이 폴더는 ${REPO}의 폴더가 아니다`));
+  assert.match(result.stderr, /이 폴더는 alice에게 보이는 워크스페이스 레포의 폴더가 아니다/);
   assert.equal((await world.agents(world.owner)).alice, "offline");
 });
 
