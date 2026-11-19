@@ -66,6 +66,7 @@ import {
   type Qa,
   type Question,
   REPO_HEADER,
+  type Reaction,
   type ReplyOf,
   RUNNER_SOCKET,
   RunVerdict,
@@ -248,7 +249,9 @@ const MESSAGES = `SELECT m.id, m.channel, m.login, m.text, m.note, m.at, m.githu
   CASE WHEN c.id IS NULL THEN NULL ELSE ${FORUMS} END AS forums,
   CASE WHEN d.id IS NULL THEN NULL ELSE ${DECISION} END AS decision,
   COALESCE(a.repo, (SELECT ch.repo FROM channels ch WHERE ch.id = m.channel)) AS repo,
-  COALESCE(${ownerSql("a.repo")}, (SELECT ch.workspace FROM channels ch WHERE ch.id = m.channel)) AS workspace FROM messages m
+  COALESCE(${ownerSql("a.repo")}, (SELECT ch.workspace FROM channels ch WHERE ch.id = m.channel)) AS workspace,
+  (SELECT json_group_array(json_array(r.emoji, r.login, COALESCE(rp.name, r.login)) ORDER BY r.at, r.rowid)
+    FROM reactions r LEFT JOIN people rp ON rp.login = r.login WHERE r.message = m.id) AS reactions FROM messages m
   LEFT JOIN people p ON p.login = m.login
   LEFT JOIN qas q ON q.id = m.qa
   LEFT JOIN alerts a ON a.id = m.alert
@@ -289,6 +292,8 @@ type MessageRow = {
   repo: string | null;
   /** 이 줄이 선 워크스페이스. 알림 줄의 자리(`ALERTS`)의 것도 그 알림의 레포가 정한다. */
   workspace: string | null;
+  /** 달린 반응 `[이모지, 로그인, 이름]`의 JSON 배열, 단 차례. */
+  reactions: string;
 } & Pick<QaRow, "executor" | "question" | "answer" | "visibility">;
 
 /**
@@ -372,6 +377,14 @@ const postSummary = (row: MessageRow): Omit<Post, "alert"> => {
   };
 };
 
+/** 반응 줄을 이모지마다 묶는다. 이모지는 처음 달린 차례로 선다. */
+const reactionsOf = (json: string): Reaction[] => {
+  const grouped = new Map<string, Reaction["members"]>();
+  for (const [emoji, login, name] of JSON.parse(json) as [string, string, string][])
+    grouped.set(emoji, [...(grouped.get(emoji) ?? []), { login, name }]);
+  return [...grouped].map(([emoji, members]) => ({ emoji, members }));
+};
+
 const messageView = (row: MessageRow): ChannelMessage => {
   if (row.alert !== null) {
     return {
@@ -401,6 +414,7 @@ const messageView = (row: MessageRow): ChannelMessage => {
     login: row.login,
     name: row.name ?? row.login,
     at: new Date(row.at).toISOString(),
+    reactions: reactionsOf(row.reactions),
   };
   if (row.qa === null)
     return {
@@ -543,6 +557,17 @@ export async function startServer(options: {
   if (!db.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'note'").get())
     db.exec("ALTER TABLE messages ADD COLUMN note TEXT");
   db.exec("CREATE INDEX IF NOT EXISTS messages_by_channel ON messages (channel, id)");
+  // 메시지의 반응(ADR-0044): (메시지, 이모지, 멤버)마다 한 줄. `at`은 단 시각(ms)이다.
+  // 메시지의 `reacted`는 반응이 마지막으로 바뀐 시각(ms)이다. 다시 붙은 웹에 끊긴 사이에 바뀐 것을 다시 보내려고 둔다(떼면 줄이 없어지므로).
+  db.exec(`CREATE TABLE IF NOT EXISTS reactions (
+    message INTEGER NOT NULL REFERENCES messages (id),
+    emoji TEXT NOT NULL,
+    login TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    PRIMARY KEY (message, emoji, login)
+  ) STRICT`);
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'reacted'").get())
+    db.exec("ALTER TABLE messages ADD COLUMN reacted INTEGER");
   // 알림에 달린 포스트(문답 Q3)는 채널의 한 줄이다. 그래서 글, 지난 대화, DM, `@호출`, 채널에 올리기가 채널과 같은 길로 돈다.
   // `alert`는 알림이 선 메시지의 번호이고, 채팅 채널이면 NULL이다. 포스트의 `name`은 사람이 지을 수 없는 이름(줄바꿈으로 시작)이라
   // 채팅 채널의 이름과 겹치지 않는다. 사람이 읽는 이름은 `postName`이 짓는다. v0.1.0의 표에는 `alert`가 없다.
@@ -4194,6 +4219,45 @@ export async function startServer(options: {
     return { message };
   });
 
+  mount(app, api.react, ({ message, emoji, on }, c) => {
+    const login = c.get("login") as string;
+    // 볼 수 없는 메시지는 없는 메시지와 같게 답한다(#239). 채널을 볼 수 있는지는 `mustExist`가 가린다.
+    const row = db.prepare(`${MESSAGES} WHERE m.id = ?`).get(message) as MessageRow | undefined;
+    const missing = () =>
+      new ContractFailure({ code: "not_found", message: `없는 메시지다: ${message}` });
+    // 알림 줄의 자리(`ALERTS`)는 레포마다의 줄이 섞여 있으니 줄의 레포도 본다.
+    if (!row || (row.repo !== null && !sees(login, row.repo))) throw missing();
+    try {
+      mustExist(row.channel, c);
+    } catch {
+      throw missing();
+    }
+    if (row.alert !== null || row.decision !== null) {
+      throw new ContractFailure({
+        code: "invalid_request",
+        message: "알림 줄과 결정 줄에는 반응을 달 수 없다",
+      });
+    }
+    const now = Date.now();
+    db.exec("BEGIN");
+    if (on)
+      db.prepare(
+        "INSERT OR IGNORE INTO reactions (message, emoji, login, at) VALUES (?, ?, ?, ?)",
+      ).run(message, emoji, login, now);
+    else
+      db.prepare("DELETE FROM reactions WHERE message = ? AND emoji = ? AND login = ?").run(
+        message,
+        emoji,
+        login,
+      );
+    db.prepare("UPDATE messages SET reacted = ? WHERE id = ?").run(now, message);
+    db.exec("COMMIT");
+    visit(login, workspaceOf(c));
+    return {
+      message: shareRow(db.prepare(`${MESSAGES} WHERE m.id = ?`).get(message) as MessageRow),
+    };
+  });
+
   mount(app, api.metrics, ({ days }, c) => {
     // 지표는 부른 워크스페이스의 것만이다(ADR-0043).
     const workspace = workspaceOf(c);
@@ -4355,11 +4419,17 @@ export async function startServer(options: {
           const missed = db
             .prepare(
               `${MESSAGES} WHERE m.id > ? OR q.settled >= (SELECT at FROM messages WHERE id = ?)
-               OR a.updated >= (SELECT at FROM messages WHERE id = ?)
+               OR a.updated >= (SELECT at FROM messages WHERE id = ?) OR m.reacted >= (SELECT at FROM messages WHERE id = ?)
                OR (c.id IS NOT NULL AND EXISTS (SELECT 1 FROM messages WHERE channel = c.id AND id > ?))
                ORDER BY m.id`,
             )
-            .all(payload.after, payload.after, payload.after, payload.after) as MessageRow[];
+            .all(
+              payload.after,
+              payload.after,
+              payload.after,
+              payload.after,
+              payload.after,
+            ) as MessageRow[];
           for (const row of missed)
             if (row.workspace === workspace && (row.repo === null || sees(login, row.repo)))
               socket.send(encode(serverToWeb, "message", messageView(row)));

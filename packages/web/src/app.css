@@ -1309,6 +1309,117 @@ svg.lucide {
   visibility: visible;
 }
 
+/*
+ * 반응(DESIGN.md "반응"): 메시지에 올리거나 키보드로 오면 오른쪽 위에 동작 띠가 뜨고, 본문 아래에 반응 알약(app-reaction)이 붙는다.
+ * 띠는 숨겨도 Tab으로 닿게 opacity로 감춘다.
+ */
+.message {
+  position: relative;
+}
+
+.message-tools {
+  position: absolute;
+  top: -14px;
+  right: 20px;
+  z-index: 1;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--rounded-sm);
+  background: var(--canvas);
+  box-shadow: var(--floating);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.message:hover .message-tools,
+.message:focus-within .message-tools,
+.message.picking .message-tools {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.message-tool {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.message-tool:hover,
+.message-tool[aria-expanded="true"] {
+  background: var(--selected);
+  color: var(--ink);
+}
+
+.reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.reaction {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--pill);
+  background: var(--canvas);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.reaction:hover {
+  background: var(--hover);
+}
+
+.reaction-emoji {
+  font-family: var(--emoji);
+  font-size: 14px;
+}
+
+.reaction[aria-pressed="true"] {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 6%, var(--canvas));
+  color: var(--primary);
+}
+
+.reaction-add {
+  justify-content: center;
+  width: 28px;
+  padding: 0;
+  color: var(--text-secondary);
+}
+
+.reaction-anchor {
+  display: contents;
+}
+
+/* 팔레트는 화면에 고정해 연다(자리는 스크립트가 버튼에 맞춘다). 좁은 화면에서는 .emoji-palette의 시트 그대로다. */
+.reaction-pop {
+  position: fixed;
+  z-index: 3;
+}
+
+@media (min-width: 834px) {
+  .reaction-pop .emoji-palette {
+    position: static;
+  }
+}
+
 /* 날짜가 바뀌는 곳: 가운데 글과 양옆 선 */
 .day {
   display: flex;

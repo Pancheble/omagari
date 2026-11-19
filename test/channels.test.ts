@@ -59,6 +59,7 @@ test("채널에 쓴 메시지를 다른 멤버가 새로 고침 없이 받는다
     name: "owner",
     text: "환불은 어디서 해요?",
     at: message.at,
+    reactions: [],
   });
   await eventually(() => assert.deepEqual(watching.messages(), [message]));
 
