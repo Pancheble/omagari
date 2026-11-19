@@ -23,6 +23,8 @@
 // - 사람 이름은 "이름 (로그인)"이고, 나·박민수·이서연만 프로필 사진(그린 그림)이 있다(#288).
 // - DEMO_AS=minsu: 브라우저 로그인을 Admin이 아닌 박민수로 한다(omagari-test에서는 space에만, other-team의 code에 push 권한). 레포 넣기·빼기가 없다.
 //   other의 채널 주소(콘솔에 찍는다)로 가면 "이 레포는 볼 수 없어요"가 보인다. other-team에는 박민수 혼자라 혼자일 때(시안 100-A)가 보인다.
+// - GIPHY_API_KEY=<키>: 진짜 GIPHY로 GIF를 켠다(ADR-0044). 주지 않으면 입력 칸에 GIF 버튼이 없다.
+//   DEMO_GIPHY=fake: 키 없이 GIF 칸을 본다. 찾는 말과 상관없이 GIPHY의 공개 GIF 여덟 개를 낸다(그림은 GIPHY에서 받는다).
 // - 끝내면(Ctrl+C) 임시 레포와 DB를 지운다. 이름이 *.test.ts가 아니라 npm test와 CI는 돌리지 않는다.
 // - 포스트마다 가짜 GitHub 이슈가 열리고 글이 댓글로 간다. 포스트 "박민수 · 최하준"에는 GitHub에서 단 댓글과 바꾼 제목·라벨이 들어온다.
 // - GitHub 머지를 막아 둔 채로 끝난다("머지 막힘"을 보이려고). 그 뒤로 Omagari가 하는 머지는 모두 막힌다.
@@ -44,6 +46,7 @@ import {
   serverToRunner,
 } from "@omagari/contract";
 import { claudeCode, codex, codexReady, type Executor } from "@omagari/runner";
+import { realGiphy } from "@omagari/server";
 import {
   eventually,
   fakeExecutor,
@@ -56,6 +59,26 @@ import {
 } from "./harness.ts";
 
 type As = { url: string; session: string; login: string };
+
+/** `DEMO_GIPHY=fake`의 GIF. giphy.com에서 "celebrate"로 찾은 공개 GIF다(2026-11-19). 크기는 칸 비율만 맞춘다. */
+const DEMO_GIFS = (
+  [
+    ["s2qXK8wAvkHTO", "party birthday", 112],
+    ["c1AfqKTvATepFDTpnY", "celebrate birthday", 200],
+    ["BlVnrxJgTGsUw", "dancing happy", 150],
+    ["1PMVNNKVIL8Ig", "80s excited", 160],
+    ["geslvCFM31sFW", "dancing", 110],
+    ["Na33dsU2umStO", "happy excited", 180],
+    ["lsJCkIKV6AT28", "celebrate", 140],
+    ["ePaw7nwYmSI1t389Sy", "confetti", 200],
+  ] as const
+).map(([id, title, height]) => ({
+  id,
+  title,
+  url: `https://media.giphy.com/media/${id}/200w.gif`,
+  width: 200,
+  height,
+}));
 
 /** 미리 넣는 질문(문답이나 남의 질문)에 낼 답. 질문 글이 들어 있으면 이 답이다. */
 const CANNED: [string, string][] = [
@@ -127,6 +150,11 @@ const world = await startWorld({
   quietMs: FOREVER,
   // 워크스페이스 둘: REPO의 계정과 REPO3의 계정(ADR-0043).
   accept: [REPO, REPO3],
+  giphy: process.env.GIPHY_API_KEY
+    ? realGiphy(process.env.GIPHY_API_KEY)
+    : process.env.DEMO_GIPHY === "fake"
+      ? { search: async () => DEMO_GIFS }
+      : undefined,
 });
 const fake = world.github;
 const NAMES = {

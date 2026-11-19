@@ -5,6 +5,7 @@ import {
   type Decision,
   EXECUTOR_NAMES,
   type ExecutorId,
+  type Gif,
   MAX_MESSAGE_CHARS,
   type MemberView,
   type Qa,
@@ -28,6 +29,8 @@ import { DecisionLine, DecisionStrip } from "./decision.tsx";
 import { QaLine } from "./dm.tsx";
 import { useEmojiInput } from "./emoji-input.tsx";
 import { AlertLine } from "./forum.tsx";
+import { GifButton, MessageGif } from "./gif.tsx";
+import { giphyId, giphyUrl } from "./giphy.ts";
 import type { LiveState } from "./live.ts";
 import { Person } from "./profile-card.tsx";
 import { ReactButton, Reactions } from "./reactions.tsx";
@@ -125,6 +128,7 @@ export function Conversation({
   onPost,
   onRetry,
   onOlder,
+  searchGifs,
   onReact,
 }: {
   channel?: Channel;
@@ -159,12 +163,15 @@ export function Conversation({
   onPost: (qa: Qa, text: string) => Promise<void>;
   onRetry: () => void;
   onOlder: () => void;
+  /** GIF 찾기(서버를 거친다). 서버에 GIPHY 키가 없으면 없고, 입력 칸에 GIF 버튼이 없다. */
+  searchGifs?: (query: string) => Promise<Gif[]>;
   /** 메시지(`message`, 번호)에 반응을 달거나(`on`) 뗀다. */
   onReact: (message: number, emoji: string, on: boolean) => Promise<void>;
 }) {
   const [text, setText] = useState("");
   const [token, setToken] = useState<ExecutorId>();
-  const [failure, setFailure] = useState<string>();
+  /** 보내지 못한 것. GIF면 "다시 시도"가 그 GIF를 다시 보낸다. */
+  const [failure, setFailure] = useState<{ text: string; gif?: string }>();
   const scroller = useRef<HTMLDivElement>(null);
   const agentsOf = (login: string) => members?.find((member) => member.login === login)?.agents;
   /** 방금 올린 문답. 그 메시지가 그려지면 스크롤하고 칠한다. */
@@ -191,24 +198,35 @@ export function Conversation({
       } else await (called ? onCall(called, message) : onSend(message));
     } catch (error) {
       const offline = error instanceof ContractFailure && error.code === "runner_offline";
-      setFailure(
-        qa
+      setFailure({
+        text: qa
           ? "채널에 올리지 못했어요"
           : !called
             ? "메시지를 보내지 못했어요"
             : offline
               ? `${EXECUTOR_NAMES[called]} 러너가 꺼져 있어 지금은 물을 수 없어요`
               : "질문을 보내지 못했어요",
-      );
+      });
       setText((now) => now || message);
       setToken((now) => now ?? called);
       if (qa) onAttach((now) => now ?? qa);
     }
   };
 
+  /** 고른 GIF를 GIPHY 주소 한 줄로 바로 보낸다. 입력 칸에 쓰던 글은 그대로 둔다(DESIGN.md "GIF"). */
+  const sendGif = async (url: string) => {
+    setFailure(undefined);
+    scroller.current?.scrollTo({ top: 0 });
+    try {
+      await onSend(url);
+    } catch {
+      setFailure({ text: "GIF를 보내지 못했어요", gif: url });
+    }
+  };
+
   const react = (message: number, emoji: string, on: boolean) =>
     void onReact(message, emoji, on).catch(() =>
-      setFailure(on ? "반응을 달지 못했어요" : "반응을 떼지 못했어요"),
+      setFailure({ text: on ? "반응을 달지 못했어요" : "반응을 떼지 못했어요" }),
     );
 
   return (
@@ -220,8 +238,12 @@ export function Conversation({
       )}
       {failure && (
         <div className="banner error" role="alert">
-          {failure}
-          <button type="button" className="banner-action" onClick={() => void send()}>
+          {failure.text}
+          <button
+            type="button"
+            className="banner-action"
+            onClick={() => void (failure.gif ? sendGif(failure.gif) : send())}
+          >
             다시 시도
           </button>
         </div>
@@ -307,6 +329,9 @@ export function Conversation({
           attached={attached}
           onDetach={() => onAttach(undefined)}
           onSubmit={() => void send()}
+          gifs={
+            searchGifs && { search: searchGifs, onPick: (gif) => void sendGif(giphyUrl(gif.id)) }
+          }
         />
       )}
     </>
@@ -329,6 +354,7 @@ export function Composer({
   tools,
   sendable,
   emoji,
+  gifs,
 }: {
   label: string;
   value: string;
@@ -348,6 +374,8 @@ export function Composer({
   sendable?: boolean;
   /** 이모지 버튼과 `:` 자동 완성을 둔다(채널과 포스트의 입력 칸. DM 칸에는 두지 않는다). */
   emoji?: boolean;
+  /** GIF 버튼(이모지 버튼 앞). 서버에 GIPHY 키가 있을 때 채널과 포스트의 입력 칸에만 둔다. */
+  gifs?: ComposerGifs;
 }) {
   const own = useRef<HTMLTextAreaElement>(null);
   const area = given ?? own;
@@ -436,6 +464,13 @@ export function Composer({
         aria-label={label}
       />
       {tools && <div className="composer-tools">{tools}</div>}
+      {gifs && (
+        <GifButton
+          search={gifs.search}
+          onPick={gifs.onPick}
+          onClosed={() => area.current?.focus()}
+        />
+      )}
       {picker.button}
       <button
         type="submit"
@@ -448,6 +483,11 @@ export function Composer({
     </form>
   );
 }
+
+export type ComposerGifs = {
+  search: (query: string) => Promise<Gif[]>;
+  onPick: (gif: Gif) => void;
+};
 
 /** 입력 칸 높이를 글에 맞춘다. 최대 높이는 CSS가 막는다. */
 function fitHeight(element: HTMLTextAreaElement) {
@@ -473,6 +513,8 @@ function Message({
   me: string;
   onReact: (emoji: string, on: boolean) => void;
 }) {
+  // GIPHY 주소 하나뿐인 글은 그림으로 보인다. 문답에 함께 쓴 글은 그대로다.
+  const gif = message.kind === "text" ? giphyId(message.text) : undefined;
   /** 동작 띠의 팔레트가 열려 있으면 마우스가 떠나도 띠를 둔다. */
   const [picking, setPicking] = useState(false);
   return (
@@ -513,7 +555,8 @@ function Message({
             )}
           </p>
         )}
-        {message.text && <p className="message-text">{message.text}</p>}
+        {message.text &&
+          (gif ? <MessageGif id={gif} /> : <p className="message-text">{message.text}</p>)}
         {message.kind === "qa" && <QaLine message={message} state={state ?? "offline"} />}
         <Reactions reactions={message.reactions} me={me} onReact={onReact} />
       </div>
