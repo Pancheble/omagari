@@ -30,6 +30,7 @@ import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { fullTime, timeOf } from "./conversation.tsx";
 import { josa } from "./decision.tsx";
 import { AiBadge } from "./dm.tsx";
+import { Person } from "./profile-card.tsx";
 import { took } from "./verdict.tsx";
 import { notRunWords } from "./verdict-words.ts";
 
@@ -342,9 +343,13 @@ function Owner({ option, index, open }: { option: DebateOption; index: number; o
   return (
     <span className="debate-owner" role={open ? undefined : "status"}>
       <span className="badge outline owner-name">
-        {proxy
-          ? `${owner.name} 대신 ${josa(proxy.name, "이", "가")} 띄운 에이전트`
-          : `${owner.name}의 에이전트`}
+        {proxy ? (
+          `${owner.name} 대신 ${josa(proxy.name, "이", "가")} 띄운 에이전트`
+        ) : (
+          <>
+            <Person login={owner.login}>{owner.name}</Person>의 에이전트
+          </>
+        )}
       </span>
       {proxy && (
         <span className="badge outline">

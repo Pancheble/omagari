@@ -22,11 +22,12 @@ import {
   MessagesSquare,
   Search,
 } from "lucide-react";
-import { useEffect, useId, useMemo, useReducer, useState } from "react";
+import { Fragment, useEffect, useId, useMemo, useReducer, useState } from "react";
 import { fullTime, timeOf } from "./conversation.tsx";
 import { useMenu } from "./dm.tsx";
 import { type Draft, FilterRow, ImportanceBadge, LabelBadge } from "./labels.tsx";
 import { LIST_VERDICT_LABELS, type ListVerdict, listVerdict } from "./list-verdict.ts";
+import { Person } from "./profile-card.tsx";
 import { Avatar } from "./workspace.tsx";
 
 export type AlertMessage = Extract<ChannelMessage, { kind: "alert" }>;
@@ -451,7 +452,13 @@ function PostRow({
       <span className="forum-post-last">
         {post.last ? (
           <>
-            <strong className="forum-post-who">{post.last.name}:</strong> {post.last.line}
+            <strong className="forum-post-who">
+              <Person login={post.last.login} inLink>
+                {post.last.name}
+              </Person>
+              :
+            </strong>{" "}
+            {post.last.line}
           </>
         ) : (
           "아직 글이 없어요"
@@ -466,10 +473,19 @@ function PostRow({
         ) : (
           <span className="forum-post-people">
             {alert.works.map((work) => (
-              <Avatar key={work.login} name={work.name} login={work.login} size={22} />
+              <Person key={work.login} login={work.login} inLink>
+                <Avatar name={work.name} login={work.login} size={22} />
+              </Person>
             ))}
             <span className="forum-post-names">
-              {alert.works.map((work) => (work.login === me ? "나" : work.name)).join(" · ")}
+              {alert.works.map((work, i) => (
+                <Fragment key={work.login}>
+                  {i > 0 && " · "}
+                  <Person login={work.login} inLink>
+                    {work.login === me ? "나" : work.name}
+                  </Person>
+                </Fragment>
+              ))}
             </span>
           </span>
         )}

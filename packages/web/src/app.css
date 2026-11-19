@@ -601,6 +601,18 @@ svg.lucide {
   height: 40px;
 }
 
+.avatar-64 {
+  width: 64px;
+  height: 64px;
+  font-size: 24px;
+}
+
+.avatar-80 {
+  width: 80px;
+  height: 80px;
+  font-size: 30px;
+}
+
 /*
  * 접속 점(DESIGN.md "접속 점"): 아바타 36px에는 12px, 40px에는 13px. 모양으로도 가른다.
  * 둘레 2.5px 고리는 아바타를 점보다 크게 도려내 놓인 바탕이 보이게 한다. 바탕이 바뀌어도(올렸을 때) 고리가 맞는다.
@@ -664,6 +676,19 @@ svg.lucide {
 
 .avatar-40 + .dot {
   --dot: 13px;
+}
+
+/* 프로필 카드와 전체 보기: 접속 점 18px, 둘레 3px 고리. */
+.with-dot .avatar-64 {
+  mask: radial-gradient(circle at 56px 56px, transparent 12px, #000 12.5px);
+}
+
+.with-dot .avatar-80 {
+  mask: radial-gradient(circle at 72px 72px, transparent 12px, #000 12.5px);
+}
+
+:is(.avatar-64, .avatar-80) + .dot {
+  --dot: 18px;
 }
 
 .menu {
@@ -5398,4 +5423,186 @@ a.menu-item {
   margin-top: 0;
   overflow: visible;
   white-space: normal;
+}
+
+/* 사람을 누르면 프로필 카드가 뜬다(DESIGN.md "사람 아바타와 이름"). 올리면 밑줄이다. */
+.person {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+
+.person:hover {
+  text-decoration: underline;
+}
+
+.person:has(.avatar):hover {
+  text-decoration: none;
+}
+
+button.person {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 프로필 카드(app-profile-card): 누른 자리 옆에 뜨는 320px 카드. 833px 이하는 아래 시트다. */
+.profile-card {
+  --mark-ring: var(--canvas);
+  position: fixed;
+  inset: auto;
+  top: var(--y);
+  left: var(--x);
+  width: 320px;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  border: 1px solid var(--hairline);
+  border-radius: var(--rounded-md);
+  background: var(--canvas);
+  box-shadow: var(--floating);
+  color: var(--ink);
+}
+
+.profile-card::backdrop {
+  background: transparent;
+}
+
+.profile-card-body {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+@media (max-width: 833px) {
+  .profile-card {
+    inset: auto 0 0;
+    width: 100%;
+    max-height: 85dvh;
+    overflow-y: auto;
+    border-width: 1px 0 0;
+    border-radius: var(--rounded-lg) var(--rounded-lg) 0 0;
+  }
+
+  .profile-card::backdrop {
+    background: var(--overlay);
+  }
+}
+
+.profile-id {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.profile-who {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding-top: 4px;
+}
+
+.profile-who h3 {
+  overflow-wrap: anywhere;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.profile-view .profile-who h3 {
+  font-size: 20px;
+}
+
+.profile-login {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.profile-login:hover {
+  text-decoration: underline;
+}
+
+.profile-presence {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.profile-presence .dot {
+  --dot: 8px;
+}
+
+[data-offline] .avatar {
+  opacity: 0.5;
+}
+
+.profile-message {
+  padding: 8px 10px;
+  border-radius: var(--rounded-md);
+  background: var(--selected);
+  font-size: 14px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.profile-heading {
+  margin-bottom: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.profile-works {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.profile-works > li + li {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--divider);
+}
+
+.profile-more {
+  margin-top: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--primary);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.profile-more:hover {
+  text-decoration: underline;
+}
+
+.profile-none {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.profile-full {
+  width: 100%;
+}
+
+/* 프로필 전체 보기: 오른쪽 칸 안의 한 목록. 칸 바탕은 파치먼트다. */
+.profile-view {
+  --mark-ring: var(--parchment);
+  display: grid;
+  gap: 16px;
+  padding: 4px 10px 16px;
 }

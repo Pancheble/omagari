@@ -16,6 +16,7 @@ import { server } from "./api.ts";
 import { timeOf } from "./conversation.tsx";
 import { chosen, type Picks } from "./dm.tsx";
 import { Mark } from "./members.tsx";
+import { Person } from "./profile-card.tsx";
 import { Avatar } from "./workspace.tsx";
 
 type Message = Extract<ChannelMessage, { kind: "decision" }>;
@@ -542,8 +543,10 @@ export function DecisionDialog({
               <strong>결정자</strong>
               {[me, ...speakers.filter((s) => s.login !== me.login)].map((s) => (
                 <span key={s.login} className="decider">
-                  <Avatar name={s.name} login={s.login} size={36} />
-                  {s.name}
+                  <Person login={s.login} className="decider-person">
+                    <Avatar name={s.name} login={s.login} size={36} />
+                    {s.name}
+                  </Person>
                 </span>
               ))}
             </p>

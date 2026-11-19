@@ -1,8 +1,8 @@
 import { ago, EXECUTOR_NAMES, type ExecutorId, type MemberView } from "@omagari/contract";
-import { ChevronRight, Clock } from "lucide-react";
-import { type ComponentProps, useEffect, useId, useReducer, useState } from "react";
-import { idleAgents } from "./idle-agents.ts";
+import { Clock } from "lucide-react";
+import { type ComponentProps, use, useEffect, useReducer } from "react";
 import { StatusText } from "./profile.tsx";
+import { PeopleContext } from "./profile-card.tsx";
 import { Avatar, PRESENCE_WORDS, personName } from "./workspace.tsx";
 
 /** 에이전트 표시에 쓰는 실행기 약자(DESIGN.md 에이전트 표시). */
@@ -18,17 +18,17 @@ const offline = (member: Member) => member.presence === "offline";
 
 /**
  * 멤버 목록: "온라인 — N", "오프라인 — N"으로 묶은 사람 행. 자리 비움과 방해 금지는 온라인에 든다.
- * 행은 접힌 것이 기본이고, 펼치면 작업마다 한 덩어리다.
+ * 행은 펼치지 않고 누르면 프로필 카드가 뜬다(DESIGN.md "멤버 목록").
  */
 export function MemberList({
   me,
   members,
-  direct,
+  cardOf,
 }: {
   me: string;
   members: Member[];
-  /** 직접 충돌이 걸린 작업("로그인/브랜치"). 작업 줄에 배지가 붙는다. */
-  direct?: Set<string>;
+  /** 프로필 카드가 열려 있는 사람(그 행이 칠해진다) */
+  cardOf?: string;
 }) {
   useMinuteTick();
   const groups = [
@@ -48,7 +48,7 @@ export function MemberList({
                 key={member.login}
                 member={member}
                 me={member.login === me}
-                direct={direct}
+                selected={member.login === cardOf}
               />
             ))}
           </ul>
@@ -77,9 +77,8 @@ export const MemberSkeleton = () => (
   </div>
 );
 
-function MemberRow({ member, me, direct }: { member: Member; me: boolean; direct?: Set<string> }) {
-  const [open, setOpen] = useState(false);
-  const works = useId();
+function MemberRow({ member, me, selected }: { member: Member; me: boolean; selected: boolean }) {
+  const { open } = use(PeopleContext);
   const count = member.works.length;
   const away = offline(member);
   // 둘째 줄: 상태 메시지 · 작업 N개. 상태 메시지가 없으면 그 자리에 접속 상태(온라인 말고)를 보조 글씨로 쓰고,
@@ -95,65 +94,47 @@ function MemberRow({ member, me, direct }: { member: Member; me: boolean; direct
   const rest = [!status && word, ...answering, count > 0 ? `작업 ${count}개` : "작업 없음"]
     .filter(Boolean)
     .join(" · ");
-  const idle = idleAgents(member);
-  // 작업이 없어도 에이전트가 있으면 펼친다(작업 없는 에이전트는 펼친 행에서 작업 뒤에 한 줄씩 선다).
-  const expandable = count > 0 || idle.length > 0;
-  const head = (
-    <>
-      <Avatar name={member.name} login={member.login} size={40} presence={member.presence} />
-      <span className="member-names">
-        <strong>
-          <span className="member-name">{personName(member.name, member.login)}</span>
-          {me && <span className="me">나</span>}
-        </strong>
-        <span className="member-status">
-          {status && (
-            <span className="status-message">
-              <StatusText {...member} />
-            </span>
-          )}
-          <span className="status-rest">{status ? `\u00a0· ${rest}` : rest}</span>
-        </span>
-      </span>
-      {expandable && <ChevronRight size={14} className="chevron" aria-hidden />}
-    </>
-  );
   return (
-    <li className="member" data-open={open || undefined} data-offline={away || undefined}>
-      {expandable ? (
-        <button
-          type="button"
-          className="member-row"
-          aria-expanded={open}
-          aria-controls={open ? works : undefined}
-          onClick={() => setOpen(!open)}
-        >
-          {head}
-        </button>
-      ) : (
-        <div className="member-row">{head}</div>
-      )}
-      {open && (
-        <ul className="works" id={works}>
-          {member.works.map((work) => (
-            <WorkItem
-              key={work.branch}
-              member={member}
-              work={work}
-              conflict={direct?.has(`${member.login}/${work.branch}`)}
-            />
-          ))}
-          {idle.map((agent) => (
-            <IdleAgent key={agent.executor} member={member} agent={agent} />
-          ))}
-        </ul>
-      )}
+    <li className="member" data-open={selected || undefined} data-offline={away || undefined}>
+      {/* 행은 펼치지 않고 프로필 카드를 행 왼쪽에 연다. 작업과 에이전트는 카드와 전체 보기에 있다. */}
+      <button
+        type="button"
+        className="member-row"
+        aria-haspopup="dialog"
+        onClick={(event) =>
+          open({ login: member.login, anchor: event.currentTarget, side: "left" })
+        }
+      >
+        <Avatar name={member.name} login={member.login} size={40} presence={member.presence} />
+        <span className="member-names">
+          <strong>
+            <span className="member-name">{personName(member.name, member.login)}</span>
+            {me && <span className="me">나</span>}
+          </strong>
+          <span className="member-status">
+            {status && (
+              <span className="status-message">
+                <StatusText {...member} />
+              </span>
+            )}
+            <span className="status-rest">{status ? `\u00a0· ${rest}` : rest}</span>
+          </span>
+        </span>
+      </button>
     </li>
   );
 }
 
 /** 작업 하나: 에이전트 표시, 상태 한 줄(ADR-0010이 고른 것), 브랜치와 쓴 시각, 오프라인이면 "N시간 전 기준". */
-function WorkItem({ member, work, conflict }: { member: Member; work: Work; conflict?: boolean }) {
+export function WorkItem({
+  member,
+  work,
+  conflict,
+}: {
+  member: Member;
+  work: Work;
+  conflict?: boolean;
+}) {
   const agent = member.agents.find((candidate) => candidate.executor === work.executor);
   const { line } = work;
   return (
@@ -185,7 +166,7 @@ function WorkItem({ member, work, conflict }: { member: Member; work: Work; conf
 }
 
 /** 작업 없는 에이전트 한 줄: 표시, "지은의 Claude Code", 상태 글씨(DM 칸의 에이전트 메뉴와 같은 말). */
-function IdleAgent({ member, agent }: { member: Member; agent: Agent }) {
+export function IdleAgent({ member, agent }: { member: Member; agent: Agent }) {
   const busy = agent.state === "answering";
   return (
     <li className="work idle-agent">

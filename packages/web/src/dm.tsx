@@ -16,6 +16,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Composer, flash, fullTime, SkeletonRow, timeOf } from "./conversation.tsx";
 import { Mark } from "./members.tsx";
+import { Person } from "./profile-card.tsx";
 import { RightPanel } from "./workspace.tsx";
 
 type Agent = MemberView["agents"][number];
@@ -605,7 +606,7 @@ function QaCard({
             {posted.name}의 {EXECUTOR_NAMES[qa.executor]}
           </strong>
           <span className="qa-owner-meta">
-            {subject(posted.name)} 올림 ·{" "}
+            <Person login={posted.login}>{subject(posted.name)}</Person> 올림 ·{" "}
             <time dateTime={posted.at} title={fullTime(posted.at)}>
               {timeOf(posted.at)}
             </time>
