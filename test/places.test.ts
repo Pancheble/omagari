@@ -10,7 +10,7 @@ const A = "omagari-test";
 const B = "other-team";
 const NOTES = `${B}/notes`;
 
-test("이름 줄은 계정의 종류와 아바타를 받고, 다른 계정 묶음의 레포 넣기와 빼기는 그 계정으로 부르며, 개인 레포도 넣어야만 들어오고, 멤버 수로 혼자인지 안다", async (t) => {
+test("이름 줄은 계정의 종류와 아바타를 받고, 다른 계정 묶음의 레포 넣기와 빼기는 그 계정으로 부르며, 개인 레포도 넣어야만 들어오고, 멤버 수로 혼자인지 알고, 사람 이름과 사진은 GitHub을 따라간다", async (t) => {
   const world = await startWorld({ accept: [REPO, REPO3], recheckMs: 50 });
   t.after(world.stop);
   const { owner, github } = world;
@@ -60,6 +60,16 @@ test("이름 줄은 계정의 종류와 아바타를 받고, 다른 계정 묶�
     (await call(owner, api.members)).members.map((m) => m.login),
     ["owner"],
   );
+  // 사람의 이름과 프로필 사진은 GitHub에서 바꾸면 10분마다의 다시 읽기에서 따라온다(여기서는 50ms).
+  github.names.set("carol", "캐롤");
+  github.avatars.set("carol", "https://avatars.example/carol.png");
+  await eventually(async () => {
+    const carolView = (await call(inB, api.members)).members.find((m) => m.login === "carol");
+    assert.deepEqual(
+      [carolView?.name, carolView?.avatar],
+      ["캐롤", "https://avatars.example/carol.png"],
+    );
+  });
   // 들어가지 않은 계정으로는 레포 넣기 목록을 읽지 못한다.
   const carol = await world.login("carol");
   await assert.rejects(call({ ...carol, workspace: A }, api.adminRepos), refused("not_found"));

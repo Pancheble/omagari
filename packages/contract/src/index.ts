@@ -229,6 +229,8 @@ export const MemberView = z.strictObject({
   login: z.string(),
   /** GitHub 프로필의 이름. 비워 두었으면 `login`과 같다. */
   name: z.string(),
+  /** GitHub 프로필 사진 주소. 로그인할 때와 10분마다 다시 읽는다. 없으면 null이고 웹은 이니셜을 쓴다. */
+  avatar: z.string().nullable(),
   presence: Presence,
   /** 사람이 쓴 상태 메시지. 쓴 그대로이고(HTML이 들어 있어도 바꾸지 않는다) 접속 상태와 상관없이 보인다. 없으면 null. */
   message: z.string().nullable(),
@@ -1675,8 +1677,10 @@ export const api = {
     path: "/api/me",
     response: z.strictObject({
       login: z.string(),
-      /** GitHub 프로필의 이름. 비워 두었으면 `login`과 같다. 로그인할 때 읽는다. */
+      /** GitHub 프로필의 이름. 비워 두었으면 `login`과 같다. 로그인할 때와 10분마다 다시 읽는다. */
       name: z.string(),
+      /** GitHub 프로필 사진 주소. 없으면 null이다. */
+      avatar: z.string().nullable(),
       /** `REPO_HEADER` 없이 부르면 쓰는 레포 `owner/name`: `repos`의 첫째다(ADR-0043). */
       repo: z.string(),
       /** 이 멤버가 push 권한이 있어 보이는 워크스페이스의 레포들, 넣은 순서. 로그인할 때와 10분마다 다시 읽는다. */

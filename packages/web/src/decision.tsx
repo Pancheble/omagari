@@ -542,7 +542,7 @@ export function DecisionDialog({
               <strong>결정자</strong>
               {[me, ...speakers.filter((s) => s.login !== me.login)].map((s) => (
                 <span key={s.login} className="decider">
-                  <Avatar name={s.name} size={36} />
+                  <Avatar name={s.name} login={s.login} size={36} />
                   {s.name}
                 </span>
               ))}

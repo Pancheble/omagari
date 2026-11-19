@@ -246,6 +246,8 @@ export function fakeGitHub() {
   const devices = new Map<string, { userCode: string; login?: string }>();
   const tokens = new Map<string, string>();
   const names = new Map<string, string>();
+  /** 사람의 GitHub 프로필 사진 주소. 적은 사람만 있다. */
+  const avatars = new Map<string, string>();
   const github: GitHub = {
     async startDevice() {
       const deviceCode = crypto.randomUUID();
@@ -270,7 +272,7 @@ export function fakeGitHub() {
     async user(token) {
       const login = tokens.get(token);
       if (!login) throw new Error("모르는 토큰이다");
-      return { login, name: names.get(login) ?? null };
+      return { login, name: names.get(login) ?? null, avatar: avatars.get(login) ?? null };
     },
     async canPush(token, asked) {
       // GitHub처럼 옮겨진 레포의 옛 이름은 새 레포로 넘겨 준다.
@@ -445,6 +447,7 @@ export function fakeGitHub() {
     github,
     tokens,
     names,
+    avatars,
     /** 사람이 브라우저에서 `userCode`를 넣고 `login` 계정으로 승인했다. */
     approve(userCode: string, login: string) {
       const device = [...devices.values()].find((d) => d.userCode === userCode);

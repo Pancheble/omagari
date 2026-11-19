@@ -466,7 +466,7 @@ function PostRow({
         ) : (
           <span className="forum-post-people">
             {alert.works.map((work) => (
-              <Avatar key={work.login} name={work.name} size={22} />
+              <Avatar key={work.login} name={work.name} login={work.login} size={22} />
             ))}
             <span className="forum-post-names">
               {alert.works.map((work) => (work.login === me ? "나" : work.name)).join(" · ")}

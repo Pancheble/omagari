@@ -17,8 +17,8 @@ export type GitHub = {
   pollDevice(
     deviceCode: string,
   ): Promise<{ token: string } | { pending: true; intervalMs?: number } | { error: string }>;
-  /** 토큰 주인의 GitHub 로그인과 프로필 이름. 이름을 비워 두었으면 `name`이 null이다. */
-  user(token: string): Promise<{ login: string; name: string | null }>;
+  /** 토큰 주인의 GitHub 로그인, 프로필 이름, 프로필 사진 주소. 이름을 비워 두었으면 `name`이 null이다. */
+  user(token: string): Promise<{ login: string; name: string | null; avatar: string | null }>;
   /**
    * 토큰 주인이 `owner/name`에 push할 수 있나와 GitHub이 지금 그 레포를 부르는 이름(`name`).
    * 레포가 옮겨지거나 이름이 바뀌었으면 GitHub이 옛 이름을 새 레포로 넘겨 주어 `name`이 새 이름이다(ADR-0043).
@@ -234,8 +234,12 @@ export function realGitHub(clientId: string): GitHub {
     async user(token) {
       const response = await get("/user", token);
       if (!response.ok) throw new Error(`GitHub /user: HTTP ${response.status}`);
-      const { login, name } = await response.json();
-      return { login, name: name || null };
+      const { login, name, avatar_url } = await response.json();
+      return {
+        login,
+        name: name || null,
+        avatar: typeof avatar_url === "string" ? avatar_url : null,
+      };
     },
     async canPush(token, repo) {
       const found = await permission(token, repo, "push");

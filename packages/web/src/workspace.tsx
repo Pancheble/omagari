@@ -35,8 +35,10 @@ import {
 } from "lucide-react";
 import {
   type ComponentProps,
+  createContext,
   type PointerEvent,
   type ReactNode,
+  use,
   useEffect,
   useId,
   useRef,
@@ -994,372 +996,388 @@ export function Workspace({
       title: postTitle(item),
     }));
 
+  /** 멤버들의 프로필 사진. 사람 아바타가 로그인으로 찾는다. */
+  const faces = new Map(
+    (members ?? []).flatMap((member) => (member.avatar ? [[member.login, member.avatar]] : [])),
+  );
+  if (me.avatar && !faces.has(me.login)) faces.set(me.login, me.avatar);
+
   return (
-    <LabelsContext value={labels}>
-      <div
-        className={["app", shown && "with-panel", asidePost && "with-post", shut && "folded"]
-          .filter(Boolean)
-          .join(" ")}
-      >
-        {/* 접힌 동안 창 왼쪽 가장자리(창 안쪽 여백 8px). 마우스가 머물면 꺼내 본다. */}
-        {shut && <div className="peek-edge" onPointerEnter={hoverIn} onPointerLeave={hoverOut} />}
-        <aside
-          ref={side}
-          id={sideId}
-          className={peeking ? "side-panel peek" : "side-panel"}
-          aria-label="채널 패널"
-          inert={shut && !peeking}
-          onPointerEnter={() => peeking && clearTimeout(peekTimer.current)}
-          onPointerLeave={hoverOut}
+    <FacesContext value={faces}>
+      <LabelsContext value={labels}>
+        <div
+          className={["app", shown && "with-panel", asidePost && "with-post", shut && "folded"]
+            .filter(Boolean)
+            .join(" ")}
         >
-          {panel(
-            peeking ? closePeek : undefined,
-            <button
-              ref={foldButton}
-              type="button"
-              className="fold-button"
-              aria-label={folded ? "채널 패널 펼쳐 두기" : "채널 패널 닫기"}
-              data-tip={`${folded ? "채널 패널 펼쳐 두기" : "채널 패널 닫기"} ${FOLD_KEY}`}
-              aria-keyshortcuts={MAC ? "Meta+\\" : "Control+\\"}
-              aria-expanded={!folded}
-              aria-controls={sideId}
-              onClick={toggleFold}
-            >
-              {folded ? (
-                <PanelLeftOpen size={18} aria-hidden />
-              ) : (
-                <PanelLeftClose size={18} aria-hidden />
-              )}
-            </button>,
-          )}
-        </aside>
-        <main className="conversation">
-          <header className="channel-header">
-            <button
-              type="button"
-              className="header-button drawer-button"
-              aria-label="채널 패널 열기"
-              onClick={() => drawer.current?.showModal()}
-            >
-              <Menu size={18} aria-hidden />
-            </button>
-            {shut && (
+          {/* 접힌 동안 창 왼쪽 가장자리(창 안쪽 여백 8px). 마우스가 머물면 꺼내 본다. */}
+          {shut && <div className="peek-edge" onPointerEnter={hoverIn} onPointerLeave={hoverOut} />}
+          <aside
+            ref={side}
+            id={sideId}
+            className={peeking ? "side-panel peek" : "side-panel"}
+            aria-label="채널 패널"
+            inert={shut && !peeking}
+            onPointerEnter={() => peeking && clearTimeout(peekTimer.current)}
+            onPointerLeave={hoverOut}
+          >
+            {panel(
+              peeking ? closePeek : undefined,
               <button
-                ref={unfoldButton}
+                ref={foldButton}
                 type="button"
-                className="header-button"
-                aria-label="채널 패널 열기"
-                data-tip={`채널 패널 열기 ${FOLD_KEY}`}
+                className="fold-button"
+                aria-label={folded ? "채널 패널 펼쳐 두기" : "채널 패널 닫기"}
+                data-tip={`${folded ? "채널 패널 펼쳐 두기" : "채널 패널 닫기"} ${FOLD_KEY}`}
                 aria-keyshortcuts={MAC ? "Meta+\\" : "Control+\\"}
-                aria-expanded={false}
+                aria-expanded={!folded}
                 aria-controls={sideId}
                 onClick={toggleFold}
-                onPointerEnter={hoverIn}
-                onPointerLeave={hoverOut}
               >
-                <PanelLeftOpen size={18} aria-hidden />
-              </button>
+                {folded ? (
+                  <PanelLeftOpen size={18} aria-hidden />
+                ) : (
+                  <PanelLeftClose size={18} aria-hidden />
+                )}
+              </button>,
             )}
-            {missing ? (
-              <div className="channel-title">
-                <h2>
-                  <Lock className="channel-mark" size={20} aria-hidden />
-                  <span>찾을 수 없음</span>
-                </h2>
-              </div>
-            ) : big && openPost && current ? (
-              <div className="post-title">
-                <a className="header-button" href={`#${current.id}`} aria-label="포럼으로 돌아가기">
-                  <ChevronLeft size={18} aria-hidden />
-                </a>
-                <a className="post-crumb" href={`#${current.id}`}>
-                  {current.name} ›
-                </a>
-                <h2>{postTitle(openPost)}</h2>
-                <IssueNumber post={openPost} />
-              </div>
-            ) : forum && current ? (
-              <ForumTitle forum={current} solo={solo} />
-            ) : (
-              current && (
-                <ChannelTitle channel={current} members={solo ? undefined : members?.length} />
-              )
-            )}
-            {/* 오른쪽 칸을 여는 버튼들. 평소에는 아이콘만, 연 버튼만 이름이 붙는다. */}
-            <div className="header-actions" hidden={missing}>
-              {big && labelButton}
-              {big && debateButton}
-              {big && decide}
-              {forum && !big && current && current.id !== OTHER.id && (
-                <button
-                  type="button"
-                  className="header-button"
-                  aria-label="포럼 고치기"
-                  onClick={() => forumEditor.current?.showModal()}
-                >
-                  <Settings2 size={18} aria-hidden />
-                </button>
-              )}
-              {big && openPost && current && (
-                <a
-                  className="header-button"
-                  href={`#${current.id}/${openPost.alert}`}
-                  aria-label="옆 칸으로"
-                >
-                  <Minimize2 size={18} aria-hidden />
-                </a>
-              )}
-              {active && (
-                <button
-                  ref={agentButton}
-                  type="button"
-                  className="header-button"
-                  aria-label="내 에이전트"
-                  aria-expanded={shown === "agent"}
-                  aria-controls={shown === "agent" ? rightId : undefined}
-                  onClick={() => toggleRight("agent")}
-                >
-                  <MessageSquare size={18} aria-hidden />
-                  {shown === "agent" && <span>내 에이전트</span>}
-                </button>
-              )}
-              {/* 혼자면 멤버 목록이 뜻이 없어 버튼을 두지 않는다(시안 100-A). */}
-              {!solo && (
-                <button
-                  ref={membersButton}
-                  type="button"
-                  className="header-button"
-                  aria-label="멤버 목록"
-                  aria-expanded={shown === "members"}
-                  aria-controls={shown === "members" ? rightId : undefined}
-                  onClick={() => toggleRight("members")}
-                >
-                  <Users size={18} aria-hidden />
-                  {shown === "members" && <span>멤버 목록</span>}
-                </button>
-              )}
-            </div>
-          </header>
-          {missing ? (
-            <div className="empty">
-              <h2>이 레포는 볼 수 없어요</h2>
-              <p>
-                push 권한이 있는 사람만 이 레포의 채널과 포스트를 봐요. GitHub에서 권한을 받으면
-                10분 안에 패널에 생겨요.
-              </p>
-              {/* 레포 이름은 쓰지 않는다. 레포가 하나뿐인 계정이면 "전체"가 없어 그 레포로 간다(시안 93-C, 101). */}
+          </aside>
+          <main className="conversation">
+            <header className="channel-header">
               <button
                 type="button"
-                className="button outline"
-                onClick={() => {
-                  setPicked(repos.length > 1 ? ALL : repos[0]);
-                  location.hash = "";
-                }}
+                className="header-button drawer-button"
+                aria-label="채널 패널 열기"
+                onClick={() => drawer.current?.showModal()}
               >
-                {repos.length > 1
-                  ? `${space.name} 전체로 가기`
-                  : `${repoName(repos[0] ?? "")}로 가기`}
+                <Menu size={18} aria-hidden />
               </button>
-            </div>
-          ) : inPlace?.length === 0 && !found ? (
-            <div className="empty">
-              <h2>아직 채널이 없어요</h2>
-              <p>채널을 만들어 멤버들과 이야기를 시작해 보세요.</p>
-              <button type="button" className="button primary" onClick={() => openCreator("chat")}>
-                채널 만들기
-              </button>
-            </div>
-          ) : forum && !big ? (
-            <Forum
-              key={current.id}
-              forum={current}
-              posts={posts}
-              selected={openPost?.alert}
-              unread={unread}
-              me={me.login}
-              solo={solo}
-              account={space.name}
-              repos={repos}
-              onSaveFilter={(filter) => updateForum(current, current.name, filter)}
-            />
-          ) : (
-            conversation(`${postChannel?.name}에 메시지 보내기`)
-          )}
-        </main>
-        {!missing && asidePost && openPost && postChannel && (
-          <RightPanel
-            id={rightId}
-            title={postChannel.name}
-            sheet={!wide}
-            full
-            onClose={() => {
-              location.hash = current?.id ?? "";
-            }}
-            head={
-              <div className="post-head">
-                <h2>{postChannel.name}</h2>
-                <IssueNumber post={openPost} />
-                {labelButton}
-                {debateButton}
-                {decide}
-                {wide && (
+              {shut && (
+                <button
+                  ref={unfoldButton}
+                  type="button"
+                  className="header-button"
+                  aria-label="채널 패널 열기"
+                  data-tip={`채널 패널 열기 ${FOLD_KEY}`}
+                  aria-keyshortcuts={MAC ? "Meta+\\" : "Control+\\"}
+                  aria-expanded={false}
+                  aria-controls={sideId}
+                  onClick={toggleFold}
+                  onPointerEnter={hoverIn}
+                  onPointerLeave={hoverOut}
+                >
+                  <PanelLeftOpen size={18} aria-hidden />
+                </button>
+              )}
+              {missing ? (
+                <div className="channel-title">
+                  <h2>
+                    <Lock className="channel-mark" size={20} aria-hidden />
+                    <span>찾을 수 없음</span>
+                  </h2>
+                </div>
+              ) : big && openPost && current ? (
+                <div className="post-title">
                   <a
                     className="header-button"
-                    href={`#${current?.id}/${openPost.alert}/big`}
-                    aria-label="크게 보기"
+                    href={`#${current.id}`}
+                    aria-label="포럼으로 돌아가기"
                   >
-                    <Maximize2 size={18} aria-hidden />
+                    <ChevronLeft size={18} aria-hidden />
+                  </a>
+                  <a className="post-crumb" href={`#${current.id}`}>
+                    {current.name} ›
+                  </a>
+                  <h2>{postTitle(openPost)}</h2>
+                  <IssueNumber post={openPost} />
+                </div>
+              ) : forum && current ? (
+                <ForumTitle forum={current} solo={solo} />
+              ) : (
+                current && (
+                  <ChannelTitle channel={current} members={solo ? undefined : members?.length} />
+                )
+              )}
+              {/* 오른쪽 칸을 여는 버튼들. 평소에는 아이콘만, 연 버튼만 이름이 붙는다. */}
+              <div className="header-actions" hidden={missing}>
+                {big && labelButton}
+                {big && debateButton}
+                {big && decide}
+                {forum && !big && current && current.id !== OTHER.id && (
+                  <button
+                    type="button"
+                    className="header-button"
+                    aria-label="포럼 고치기"
+                    onClick={() => forumEditor.current?.showModal()}
+                  >
+                    <Settings2 size={18} aria-hidden />
+                  </button>
+                )}
+                {big && openPost && current && (
+                  <a
+                    className="header-button"
+                    href={`#${current.id}/${openPost.alert}`}
+                    aria-label="옆 칸으로"
+                  >
+                    <Minimize2 size={18} aria-hidden />
                   </a>
                 )}
+                {active && (
+                  <button
+                    ref={agentButton}
+                    type="button"
+                    className="header-button"
+                    aria-label="내 에이전트"
+                    aria-expanded={shown === "agent"}
+                    aria-controls={shown === "agent" ? rightId : undefined}
+                    onClick={() => toggleRight("agent")}
+                  >
+                    <MessageSquare size={18} aria-hidden />
+                    {shown === "agent" && <span>내 에이전트</span>}
+                  </button>
+                )}
+                {/* 혼자면 멤버 목록이 뜻이 없어 버튼을 두지 않는다(시안 100-A). */}
+                {!solo && (
+                  <button
+                    ref={membersButton}
+                    type="button"
+                    className="header-button"
+                    aria-label="멤버 목록"
+                    aria-expanded={shown === "members"}
+                    aria-controls={shown === "members" ? rightId : undefined}
+                    onClick={() => toggleRight("members")}
+                  >
+                    <Users size={18} aria-hidden />
+                    {shown === "members" && <span>멤버 목록</span>}
+                  </button>
+                )}
               </div>
-            }
-          >
-            {conversation("이 포스트에 메시지 보내기")}
-          </RightPanel>
-        )}
-        {shown === "agent" && active && (
-          <DmPanel
-            key={active.id}
-            id={rightId}
-            sheet={!wide}
-            channel={active}
-            post={big}
-            agents={members?.find((member) => member.login === me.login)?.agents ?? []}
-            dm={dms[active.id]}
-            messages={views[active.id]?.messages}
-            picks={picks}
-            attached={attached?.id}
-            onPick={(executor, pick) => {
-              const next = { ...picks, [executor]: pick };
-              setPicks(next);
-              savePicks(me.login, next);
-            }}
-            onAsk={(executor, question) => ask(active.id, executor, question)}
-            onAttach={attach}
-            onReload={() => void loadDm(active.id)}
-            onClose={closeRight}
-          />
-        )}
-        {shown === "members" && !solo && (
-          <RightPanel id={rightId} title="멤버 목록" sheet={!wide} onClose={closeRight}>
-            {live === "reconnecting" && members && (
-              <p className="banner info" role="status">
-                서버에 다시 붙는 중…
-              </p>
-            )}
-            {members ? (
-              <MemberList me={me.login} members={members} direct={direct} />
+            </header>
+            {missing ? (
+              <div className="empty">
+                <h2>이 레포는 볼 수 없어요</h2>
+                <p>
+                  push 권한이 있는 사람만 이 레포의 채널과 포스트를 봐요. GitHub에서 권한을 받으면
+                  10분 안에 패널에 생겨요.
+                </p>
+                {/* 레포 이름은 쓰지 않는다. 레포가 하나뿐인 계정이면 "전체"가 없어 그 레포로 간다(시안 93-C, 101). */}
+                <button
+                  type="button"
+                  className="button outline"
+                  onClick={() => {
+                    setPicked(repos.length > 1 ? ALL : repos[0]);
+                    location.hash = "";
+                  }}
+                >
+                  {repos.length > 1
+                    ? `${space.name} 전체로 가기`
+                    : `${repoName(repos[0] ?? "")}로 가기`}
+                </button>
+              </div>
+            ) : inPlace?.length === 0 && !found ? (
+              <div className="empty">
+                <h2>아직 채널이 없어요</h2>
+                <p>채널을 만들어 멤버들과 이야기를 시작해 보세요.</p>
+                <button
+                  type="button"
+                  className="button primary"
+                  onClick={() => openCreator("chat")}
+                >
+                  채널 만들기
+                </button>
+              </div>
+            ) : forum && !big ? (
+              <Forum
+                key={current.id}
+                forum={current}
+                posts={posts}
+                selected={openPost?.alert}
+                unread={unread}
+                me={me.login}
+                solo={solo}
+                account={space.name}
+                repos={repos}
+                onSaveFilter={(filter) => updateForum(current, current.name, filter)}
+              />
             ) : (
-              <MemberSkeleton />
+              conversation(`${postChannel?.name}에 메시지 보내기`)
             )}
-          </RightPanel>
-        )}
-        {/* 덮개를 누르면 닫힌다. 키보드로는 Esc가 닫는다(dialog가 해 준다). */}
-        {/* biome-ignore lint/a11y/useKeyWithClickEvents: Esc는 dialog가 맡는다 */}
-        <dialog
-          ref={drawer}
-          className="drawer"
-          aria-label="채널 패널"
-          onClick={(event) => event.target === event.currentTarget && drawer.current?.close()}
-        >
-          <div className="side-panel">{panel(() => drawer.current?.close())}</div>
-        </dialog>
-        <RepoDialog
-          dialog={repoDialog}
-          account={workspaces.find((other) => other.id === adding) ?? space}
-          repos={admins[adding]}
-          onAdd={addRepo}
-        />
-        <ForumDialog
-          // 곳을 바꾸면 새로 그려 레포 칩이 지금 보는 곳으로 골라진 채로 열린다.
-          key={here}
-          dialog={creator}
-          posts={previews}
-          account={space.name}
-          repos={repos}
-          start={here === ALL || repos.length < 2 ? [] : [here]}
-          kind={createKind}
-          onKind={setCreateKind}
-          onCreateChat={create}
-          onSave={createForum}
-        />
-        {forum && current && current.id !== OTHER.id && (
+          </main>
+          {!missing && asidePost && openPost && postChannel && (
+            <RightPanel
+              id={rightId}
+              title={postChannel.name}
+              sheet={!wide}
+              full
+              onClose={() => {
+                location.hash = current?.id ?? "";
+              }}
+              head={
+                <div className="post-head">
+                  <h2>{postChannel.name}</h2>
+                  <IssueNumber post={openPost} />
+                  {labelButton}
+                  {debateButton}
+                  {decide}
+                  {wide && (
+                    <a
+                      className="header-button"
+                      href={`#${current?.id}/${openPost.alert}/big`}
+                      aria-label="크게 보기"
+                    >
+                      <Maximize2 size={18} aria-hidden />
+                    </a>
+                  )}
+                </div>
+              }
+            >
+              {conversation("이 포스트에 메시지 보내기")}
+            </RightPanel>
+          )}
+          {shown === "agent" && active && (
+            <DmPanel
+              key={active.id}
+              id={rightId}
+              sheet={!wide}
+              channel={active}
+              post={big}
+              agents={members?.find((member) => member.login === me.login)?.agents ?? []}
+              dm={dms[active.id]}
+              messages={views[active.id]?.messages}
+              picks={picks}
+              attached={attached?.id}
+              onPick={(executor, pick) => {
+                const next = { ...picks, [executor]: pick };
+                setPicks(next);
+                savePicks(me.login, next);
+              }}
+              onAsk={(executor, question) => ask(active.id, executor, question)}
+              onAttach={attach}
+              onReload={() => void loadDm(active.id)}
+              onClose={closeRight}
+            />
+          )}
+          {shown === "members" && !solo && (
+            <RightPanel id={rightId} title="멤버 목록" sheet={!wide} onClose={closeRight}>
+              {live === "reconnecting" && members && (
+                <p className="banner info" role="status">
+                  서버에 다시 붙는 중…
+                </p>
+              )}
+              {members ? (
+                <MemberList me={me.login} members={members} direct={direct} />
+              ) : (
+                <MemberSkeleton />
+              )}
+            </RightPanel>
+          )}
+          {/* 덮개를 누르면 닫힌다. 키보드로는 Esc가 닫는다(dialog가 해 준다). */}
+          {/* biome-ignore lint/a11y/useKeyWithClickEvents: Esc는 dialog가 맡는다 */}
+          <dialog
+            ref={drawer}
+            className="drawer"
+            aria-label="채널 패널"
+            onClick={(event) => event.target === event.currentTarget && drawer.current?.close()}
+          >
+            <div className="side-panel">{panel(() => drawer.current?.close())}</div>
+          </dialog>
+          <RepoDialog
+            dialog={repoDialog}
+            account={workspaces.find((other) => other.id === adding) ?? space}
+            repos={admins[adding]}
+            onAdd={addRepo}
+          />
           <ForumDialog
-            key={`${current.id}:${current.name}:${JSON.stringify(current.filter)}`}
-            dialog={forumEditor}
-            forum={current}
+            // 곳을 바꾸면 새로 그려 레포 칩이 지금 보는 곳으로 골라진 채로 열린다.
+            key={here}
+            dialog={creator}
             posts={previews}
             account={space.name}
             repos={repos}
-            onSave={(name, filter) => updateForum(current, name, filter)}
-            onDelete={() => deleteForum(current)}
+            start={here === ALL || repos.length < 2 ? [] : [here]}
+            kind={createKind}
+            onKind={setCreateKind}
+            onCreateChat={create}
+            onSave={createForum}
           />
-        )}
-        {deciding && postChannel && (
-          <DecisionDialog
-            // 열 때마다 새로: 초안을 쓰게 하고 칸을 비운다.
-            key={deciding.revising?.id ?? "new"}
-            post={postChannel.id}
-            title={postChannel.name}
-            repo={openPost?.repo ?? me.repo}
-            me={me}
-            agents={members?.find((member) => member.login === me.login)?.agents ?? []}
-            picks={picks}
-            speakers={speakersOf(views[postChannel.id]?.messages)}
-            incoming={incoming}
-            revising={deciding.revising}
-            initial={deciding.revising && submitted.current[deciding.revising.id]}
-            session={session}
-            check={check}
-            onDone={(decision, fields) => {
-              submitted.current[decision.id] = fields;
-              upsertDecision(decision);
-            }}
-            onClose={() => setDeciding(undefined)}
-          />
-        )}
-        {debating && openPost && postChannel && "open" in debating && (
-          <DebateDialog
-            title={postChannel.name}
-            initial={debated?.request?.opened === false ? debated.request : undefined}
-            onRequest={(agenda, grounds) =>
-              debateCall(() =>
-                call(server(session), api.requestDebate, {
-                  post: openPost.channel,
-                  agenda,
-                  grounds,
-                }),
-              )
-            }
-            onClose={() => setDebating(undefined)}
-          />
-        )}
-        {debating && openPost && debate && "seat" in debating && debate.seats[debating.seat] && (
-          <ProxyDialog
-            seat={debate.seats[debating.seat]}
-            onProxy={() =>
-              debateCall(() =>
-                call(server(session), api.proxyDebate, {
-                  post: openPost.channel,
-                  seat: debating.seat,
-                }),
-              )
-            }
-            onClose={() => setDebating(undefined)}
-          />
-        )}
-        {settings && (
-          <Settings
-            me={me}
-            posts={posts}
-            mine={members?.find((member) => member.login === me.login)}
-            session={session}
-            check={check}
-            onClose={() => setSettings(false)}
-          />
-        )}
-      </div>
-    </LabelsContext>
+          {forum && current && current.id !== OTHER.id && (
+            <ForumDialog
+              key={`${current.id}:${current.name}:${JSON.stringify(current.filter)}`}
+              dialog={forumEditor}
+              forum={current}
+              posts={previews}
+              account={space.name}
+              repos={repos}
+              onSave={(name, filter) => updateForum(current, name, filter)}
+              onDelete={() => deleteForum(current)}
+            />
+          )}
+          {deciding && postChannel && (
+            <DecisionDialog
+              // 열 때마다 새로: 초안을 쓰게 하고 칸을 비운다.
+              key={deciding.revising?.id ?? "new"}
+              post={postChannel.id}
+              title={postChannel.name}
+              repo={openPost?.repo ?? me.repo}
+              me={me}
+              agents={members?.find((member) => member.login === me.login)?.agents ?? []}
+              picks={picks}
+              speakers={speakersOf(views[postChannel.id]?.messages)}
+              incoming={incoming}
+              revising={deciding.revising}
+              initial={deciding.revising && submitted.current[deciding.revising.id]}
+              session={session}
+              check={check}
+              onDone={(decision, fields) => {
+                submitted.current[decision.id] = fields;
+                upsertDecision(decision);
+              }}
+              onClose={() => setDeciding(undefined)}
+            />
+          )}
+          {debating && openPost && postChannel && "open" in debating && (
+            <DebateDialog
+              title={postChannel.name}
+              initial={debated?.request?.opened === false ? debated.request : undefined}
+              onRequest={(agenda, grounds) =>
+                debateCall(() =>
+                  call(server(session), api.requestDebate, {
+                    post: openPost.channel,
+                    agenda,
+                    grounds,
+                  }),
+                )
+              }
+              onClose={() => setDebating(undefined)}
+            />
+          )}
+          {debating && openPost && debate && "seat" in debating && debate.seats[debating.seat] && (
+            <ProxyDialog
+              seat={debate.seats[debating.seat]}
+              onProxy={() =>
+                debateCall(() =>
+                  call(server(session), api.proxyDebate, {
+                    post: openPost.channel,
+                    seat: debating.seat,
+                  }),
+                )
+              }
+              onClose={() => setDebating(undefined)}
+            />
+          )}
+          {settings && (
+            <Settings
+              me={me}
+              posts={posts}
+              mine={members?.find((member) => member.login === me.login)}
+              session={session}
+              check={check}
+              onClose={() => setSettings(false)}
+            />
+          )}
+        </div>
+      </LabelsContext>
+    </FacesContext>
   );
 }
 
@@ -1478,6 +1496,13 @@ function ChannelPanel({
   );
 }
 
+/** 사람마다(로그인) GitHub 프로필 사진 주소. 앱 틀이 멤버 목록으로 채운다. */
+export const FacesContext = createContext<Map<string, string>>(new Map());
+
+/** 사람 이름(#288): "GitHub 이름 (로그인)". GitHub 이름이 없거나 로그인과 같으면 로그인만 쓴다. */
+export const personName = (name: string, login: string) =>
+  name && name !== login ? `${name} (${login})` : login;
+
 /** 접속 상태를 읽는 말. 접속 점의 이름이고, 상태 메시지가 없는 멤버 행의 둘째 줄이다. */
 export const PRESENCE_WORDS = {
   online: "온라인",
@@ -1492,16 +1517,25 @@ export const PRESENCE_WORDS = {
  */
 export const Avatar = ({
   name,
+  login,
   size,
   presence,
 }: {
   name: string;
+  /** 주면 그 사람의 GitHub 프로필 사진을 쓴다(멤버 목록이 실어 온 것). 없거나 받지 못하면 이니셜이다. */
+  login?: string;
   size: 22 | 36 | 40;
   presence?: Presence;
 }) => {
+  const src = use(FacesContext).get(login ?? "");
+  const [failed, setFailed] = useState<string>();
   const face = (
     <span className={`avatar avatar-${size}`} aria-hidden>
-      {Array.from(name)[0]?.toUpperCase()}
+      {src && failed !== src ? (
+        <img src={src} alt="" onError={() => setFailed(src)} />
+      ) : (
+        Array.from(name)[0]?.toUpperCase()
+      )}
     </span>
   );
   if (!presence) return face;
