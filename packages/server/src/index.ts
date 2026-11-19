@@ -254,7 +254,9 @@ const POST_IMPORTANCE = `CASE WHEN EXISTS (SELECT 1 FROM json_each(c.labels) j
   JOIN labels l ON l.repo = c.repo AND l.name = j.value AND l.importance = 'discuss') THEN 'discuss' ELSE 'reference' END`;
 
 /** The original message (of a reply or a thread) in the same channel as JSON `{ login, name, text, comment }`, or NULL. */
-const ORIGINAL = (column: string) => `(SELECT json_object('login', o.login, 'name', COALESCE(op.name, o.login),
+const ORIGINAL = (
+  column: string,
+) => `(SELECT json_object('login', o.login, 'name', COALESCE(op.name, o.login),
     'text', COALESCE(oq.question, o.text), 'comment', o.comment) FROM messages o
     LEFT JOIN people op ON op.login = o.login LEFT JOIN qas oq ON oq.id = o.qa
     WHERE o.id = ${column} AND o.channel = m.channel)`;
@@ -450,9 +452,11 @@ const replyView = (row: MessageRow) => ({
   }),
   ...(row.also_in_channel === 1 && { alsoInChannel: true as const }),
   ...(row.thread !== null && {
-    thread: (({ count, last, writers }) => ({ count, writers, last: new Date(last).toISOString() }))(
-      JSON.parse(row.thread),
-    ),
+    thread: (({ count, last, writers }) => ({
+      count,
+      writers,
+      last: new Date(last).toISOString(),
+    }))(JSON.parse(row.thread)),
   }),
 });
 

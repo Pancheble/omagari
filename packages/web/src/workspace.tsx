@@ -323,7 +323,7 @@ export function Workspace({
     return () => document.removeEventListener("keydown", onKey);
   });
   /** The open right column: member list, my agent (DM), or full profile view. Only one opens at a time. */
-  const [right, setRight] = useState<"members" | "agent" | "profile">();
+  const [right, setRight] = useState<"members" | "agent" | "profile" | "thread">();
   /** The open profile card, and the person (login) open in the full view */
   const [card, setCard] = useState<Opened>();
   const [profile, setProfile] = useState<string>();
@@ -482,8 +482,61 @@ export function Workspace({
   const upsertDecision = (decision: Decision) =>
     setDecisions((list) => [...list.filter((other) => other.id !== decision.id), decision]);
 
+  /** The thread open in the right column (draft 114-A): its channel, original, and the original with its replies. */
+  const [thread, setThread] = useState<{ channel: string; id: number; view: View }>();
+  /** "Also send to # channel" per channel, last state. Kept on this device. */
+  const [alsoSend, setAlsoSend] = useState<Record<string, boolean>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("omagari.also-send") ?? "{}");
+    } catch {
+      return {};
+    }
+  });
+  const rememberAlsoSend = (channel: string, on: boolean) => {
+    const next = { ...alsoSend, [channel]: on };
+    setAlsoSend(next);
+    try {
+      localStorage.setItem("omagari.also-send", JSON.stringify(next));
+    } catch {}
+  };
+  /** Opens the thread under message `id` in the open channel and reads it. Threads are only in chat channels, not posts. */
+  const openThread = async (channel: string, id: number) => {
+    const known = (views[channel]?.messages ?? []).filter(
+      (m) => m.id === id || ("threadOf" in m && m.threadOf?.id === id),
+    );
+    // What's already loaded shows at once; the read fills in older replies.
+    setThread({
+      channel,
+      id,
+      view: { status: known.length > 0 ? "ready" : "loading", messages: known, more: false },
+    });
+    setRight("thread");
+    // ponytail: reads the first page only (50). A longer thread shows its latest 50; page it like the channel if threads get that long.
+    try {
+      const { messages } = await call(server(session), api.history, { channel, thread: id });
+      setThread((now) =>
+        now?.id === id
+          ? {
+              ...now,
+              view: { status: "ready", messages: merge(now.view.messages, messages), more: false },
+            }
+          : now,
+      );
+    } catch (error) {
+      check(error);
+      setThread((now) =>
+        now?.id === id ? { ...now, view: { status: "error", messages: [], more: false } } : now,
+      );
+    }
+  };
+
   /** If the channel is already loaded, put it into the conversation. For a channel never opened, drop it and read past messages when it opens. */
   const receive = (message: ChannelMessage) => {
+    setThread((now) =>
+      now && (message.id === now.id || ("threadOf" in message && message.threadOf?.id === now.id))
+        ? { ...now, view: { ...now.view, messages: merge(now.view.messages, [message]) } }
+        : now,
+    );
     if (message.kind === "decision") upsertDecision(message.decision);
     // An alert is a Post in the forum list. If it was fixed, the fix time is added, and when a new message lands the summary (`post`) arrives changed.
     if (message.kind === "alert")
@@ -1002,6 +1055,7 @@ export function Workspace({
         searchGifs={me.gif ? searchGifs : undefined}
         onCall={(executor, question, reply) => ask(active.id, executor, question, "public", reply)}
         onPost={post}
+        onThread={openPost ? undefined : (id) => void openThread(active.id, id)}
         onRetry={() => void load(active.id)}
         onReact={async (message, emoji, on) => {
           try {
@@ -1296,6 +1350,54 @@ export function Workspace({
                 onReload={() => void loadDm(active.id)}
                 onClose={closeRight}
               />
+            )}
+            {shown === "thread" && active && thread?.channel === active.id && (
+              <RightPanel
+                id={rightId}
+                title={t.conversation.thread.thread}
+                sheet={!wide}
+                onClose={closeRight}
+                head={
+                  <div className="thread-head">
+                    <h2>{t.conversation.thread.thread}</h2>
+                    <p># {active.name}</p>
+                  </div>
+                }
+              >
+                <div className="thread">
+                  <Conversation
+                    key={`thread-${thread.id}`}
+                    channel={active}
+                    view={thread.view}
+                    live={live}
+                    members={members}
+                    me={me.login}
+                    onAttach={() => {}}
+                    onSend={(text, reply) => send(active.id, text, reply)}
+                    searchGifs={me.gif ? searchGifs : undefined}
+                    onCall={(executor, question, reply) =>
+                      ask(active.id, executor, question, "public", reply)
+                    }
+                    onPost={post}
+                    onRetry={() => void openThread(active.id, thread.id)}
+                    onReact={async (message, emoji, on) => {
+                      try {
+                        receive(
+                          (await call(server(session), api.react, { message, emoji, on })).message,
+                        );
+                      } catch (error) {
+                        throw check(error);
+                      }
+                    }}
+                    onOlder={() => {}}
+                    thread={{
+                      id: thread.id,
+                      alsoSend: !!alsoSend[active.id],
+                      onAlsoSend: (on) => rememberAlsoSend(active.id, on),
+                    }}
+                  />
+                </div>
+              </RightPanel>
             )}
             {shown === "members" && !solo && (
               <RightPanel
@@ -1608,7 +1710,7 @@ export const Avatar = ({
   name: string;
   /** If given, uses that person's GitHub profile photo (carried by the member list). Without it or if it fails to load, initials. */
   login?: string;
-  size: 16 | 22 | 36 | 40 | 64 | 80;
+  size: 16 | 20 | 22 | 28 | 36 | 40 | 64 | 80;
   presence?: Presence;
 }) => {
   const src = use(FacesContext).get(login ?? "");

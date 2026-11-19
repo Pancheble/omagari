@@ -392,13 +392,13 @@ test("알림이 오면 포스트가 생기고 첫 글이 알림이다. 포럼에
   assert.equal(fake.calls.length, 0);
 
   // 포스트에 쓴 글은 다른 멤버에게 실시간으로 가고 지난 대화로 다시 읽힌다. 알림 줄의 글 수가 따라 바뀐다.
-  const { message: inPost } = await call(world.owner, api.send, {
+  const { message: postText } = await call(world.owner, api.send, {
     channel: post,
     text: "이 줄은 제가 고칠게요",
   });
   // A post has no threads (ADR-0047).
   await assert.rejects(
-    call(alice, api.send, { channel: post, text: "Thread", threadOf: inPost.id }),
+    call(alice, api.send, { channel: post, text: "Thread", threadOf: postText.id }),
     { code: "invalid_request" } satisfies Partial<ContractFailure>,
   );
   await eventually(() =>
