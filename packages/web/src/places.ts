@@ -1,11 +1,11 @@
 import type { Channel } from "@omagari/contract";
 
-/** "<계정> 전체"(시안 101-2). 레포가 아닌 곳이라 레포 이름과 겹치지 않는 빈 글로 둔다. */
+/** "All of <account>" (mockup 101-2). It isn't a repo, so it's an empty string that can't collide with a repo name. */
 export const ALL = "";
 
 /**
- * 채널이 패널의 어느 곳에 서나(DESIGN.md "워크스페이스와 레포", ADR-0043). 레포 채팅 채널과 레포 하나만 보는 포럼은 그 레포이고,
- * 워크스페이스 채널과 모든 레포나 레포 둘 이상을 보는 포럼은 "전체"다. 레포가 하나뿐인 계정에는 "전체"가 없어 모두 그 레포에 선다.
+ * Where in the panel a channel sits (DESIGN.md "Workspace and repo", ADR-0043). A repo chat channel and a forum that watches one repo are in that repo,
+ * and a workspace channel and a forum that watches all repos or two or more repos are in "All". An account with a single repo has no "All", so everything sits in that repo.
  */
 export function placeOf(channel: Channel, repos: string[]) {
   if (repos.length < 2) return repos[0] ?? ALL;
@@ -18,7 +18,7 @@ export function placeOf(channel: Channel, repos: string[]) {
   return repo && repos.includes(repo) ? repo : ALL;
 }
 
-/** 고른 곳이 아직 있으면 그곳, 없으면(레포를 뺐다, 처음이다) 첫 레포다. 레포가 둘 이상이면 "전체"도 고를 수 있다. */
+/** The picked place if it still exists, otherwise (a repo was removed, or first visit) the first repo. With two or more repos, "All" can be picked too. */
 export const placeIn = (repos: string[], wanted: string | undefined) =>
   wanted !== undefined && (repos.includes(wanted) || (wanted === ALL && repos.length > 1))
     ? wanted

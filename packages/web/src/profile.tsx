@@ -8,41 +8,31 @@ import { ChevronRight, SmilePlus, X } from "lucide-react";
 import { type KeyboardEvent, type RefObject, useEffect, useId, useRef, useState } from "react";
 import type { Me } from "./api.ts";
 import { EmojiPalette, loadEmoji } from "./emoji.tsx";
+import { t } from "./i18n.ts";
 import { Avatar, Dot, personName } from "./workspace.tsx";
 
 type SetPresence = (presence: ChosenPresence, duration?: PresenceDuration) => Promise<void>;
 type SetMessage = (message: string, emoji: string | null) => Promise<void>;
 
-/** 나에게 보이는 내 접속 상태의 이름. 창을 연 채 오프라인이면 "오프라인으로 보이기"를 고른 것이다. */
-const MINE = {
-  online: "온라인",
-  away: "자리 비움",
-  dnd: "방해 금지",
-  invisible: "오프라인으로 보이기",
-} as const satisfies Record<ChosenPresence, string>;
 const chosenOf = (mine?: MemberView): ChosenPresence | undefined =>
   mine && (mine.presence === "offline" ? "invisible" : mine.presence);
 const dotOf = (presence: ChosenPresence) => (presence === "invisible" ? "offline" : presence);
 
-/** 시간을 정해 거는 접속 상태. 각자 오른쪽 꺾쇠로 시간 메뉴를 연다. */
+/** Presence you set for a set time. Each opens its duration menu with the right chevron. */
 const TIMED = [
   { presence: "away", note: undefined },
-  { presence: "dnd", note: "알림을 받지 않아요" },
-  { presence: "invisible", note: "다른 사람에게 오프라인으로 보여요" },
+  { presence: "dnd", note: "dndNote" },
+  { presence: "invisible", note: "invisibleNote" },
 ] as const;
-const DURATIONS: [PresenceDuration | undefined, string][] = [
-  ["15m", "15분 동안"],
-  ["1h", "1시간 동안"],
-  ["8h", "8시간 동안"],
-  ["24h", "24시간 동안"],
-  ["3d", "3일 동안"],
-  [undefined, "직접 바꿀 때까지"],
-];
+const DURATIONS = ["15m", "1h", "8h", "24h", "3d", undefined] as const satisfies (
+  | PresenceDuration
+  | undefined
+)[];
 
-/** 서버가 접는 대로 접는다: 줄바꿈과 겹친 공백은 공백 하나, 앞뒤 공백은 뗀다. */
+/** Collapse it the way the server does: line breaks and repeated spaces become one space, and leading and trailing spaces go. */
 const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
 
-/** 상태 메시지: 이모지 한 칸을 글 앞에 한 칸 띄어 쓴다. 이모지만 있으면 이모지만 보인다. */
+/** Status message: the one emoji goes before the text with a space between. With only an emoji, only the emoji shows. */
 export const StatusText = ({ emoji, message }: Pick<MemberView, "emoji" | "message">) => (
   <>
     {emoji && <span className="emoji">{emoji}</span>}
@@ -54,8 +44,8 @@ const hasStatus = (member?: MemberView): member is MemberView =>
   member !== undefined && (member.emoji !== null || member.message !== null);
 
 /**
- * 채널 패널 맨 아래의 프로필 패널(DESIGN.md "프로필 패널과 상태 메뉴"). 패널 전체가 버튼 하나이고, 누르면 바로 위에 상태 메뉴가 열린다.
- * 아바타의 접속 점과 이름, 그 아래 상태 메시지(없으면 접속 상태)를 보인다. `mine`은 멤버 목록의 내 행이다.
+ * The profile panel at the bottom of the channel panel (DESIGN.md "Profile panel and status menu"). The whole panel is one button, and pressing it opens the status menu right above.
+ * It shows the avatar's presence dot and name, and below that the status message (or the presence if there is none). `mine` is my row in the member list.
  */
 export function ProfilePanel({
   me,
@@ -68,7 +58,7 @@ export function ProfilePanel({
 }: {
   me: Me;
   mine?: MemberView;
-  /** 멤버가 나 하나다(시안 100-A). 접속 점과 접속 상태 글을 빼고 GitHub 아이디를 쓴다. */
+  /** I'm the only member (mockup 100-A). Leaves out the presence dot and presence text and shows the GitHub login. */
   solo?: boolean;
   onLogout: () => void;
   onSettings: () => void;
@@ -81,7 +71,7 @@ export function ProfilePanel({
   const menu = useId();
   const chosen = chosenOf(mine);
 
-  // 메뉴 바깥을 누르면 닫힌다.
+  // Pressing outside the menu closes it.
   useEffect(() => {
     if (!open) return;
     const outside = (event: PointerEvent) => {
@@ -95,7 +85,7 @@ export function ProfilePanel({
     setOpen(false);
     button.current?.focus();
   };
-  // Esc는 메뉴만 닫는다. 서랍 안에서 열었어도 서랍은 그대로 둔다. 안쪽(시간 메뉴, 이모지)이 먼저 받아 닫으면 여기까지 오지 않는다.
+  // Esc closes only the menu. Even if it was opened inside a drawer, the drawer stays. If something inside (the duration menu, emoji) handles it first, it doesn't reach here.
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key !== "Escape" || !open) return;
     event.preventDefault();
@@ -104,7 +94,7 @@ export function ProfilePanel({
   };
 
   return (
-    // biome-ignore lint/a11y/noStaticElementInteractions: 안에 든 메뉴와 버튼의 Esc를 한곳에서 받는다
+    // biome-ignore lint/a11y/noStaticElementInteractions: catches Esc from the menu and buttons inside in one place
     <div className="profile" ref={wrap} onKeyDown={onKeyDown}>
       <button
         ref={button}
@@ -123,11 +113,15 @@ export function ProfilePanel({
         <span className="names">
           <strong>{personName(me.name, me.login)}</strong>
           <span>
-            {hasStatus(mine) ? <StatusText {...mine} /> : chosen && !solo ? MINE[chosen] : null}
+            {hasStatus(mine) ? (
+              <StatusText {...mine} />
+            ) : chosen && !solo ? (
+              t.profile.presence[chosen]
+            ) : null}
           </span>
         </span>
       </button>
-      {/* 메뉴는 버튼 뒤에 둔다. 위에 떠 보여도 Tab은 버튼에서 메뉴로 간다. */}
+      {/* The menu goes after the button. Even though it floats above, Tab goes from the button to the menu. */}
       {open && (
         <StatusMenu
           id={menu}
@@ -148,8 +142,8 @@ export function ProfilePanel({
 }
 
 /**
- * 상태 메뉴. 위에서부터 나, 상태 메시지 칸, 온라인, 시간을 정해 거는 셋, 설정과 로그아웃이다.
- * 상태 메시지(글과 이모지 한 칸)는 Enter, 칸을 떠날 때, 메뉴가 닫힐 때 저장한다. 칸에서 Esc를 누르면 쓰던 것을 버리고 닫는다.
+ * The status menu. From the top: me, the status message field, Online, the three set-for-a-time ones, then Settings and Log out.
+ * The status message (text and one emoji) is saved on Enter, when you leave the field, and when the menu closes. Esc in the field throws away what you typed and closes.
  */
 function StatusMenu({
   id,
@@ -181,12 +175,12 @@ function StatusMenu({
   const paletteRef = useRef<HTMLDivElement>(null);
   const editor = useRef<HTMLDivElement>(null);
   const flyoutRef = useRef<HTMLDivElement>(null);
-  /** 키보드로 시간 메뉴를 열었으면 그 첫 줄로 간다. 마우스로 열면 초점을 옮기지 않는다(쓰던 칸을 빼앗지 않는다). */
+  /** If the duration menu was opened by keyboard, focus goes to its first row. Opened by mouse, focus doesn't move (it doesn't steal the field you were typing in). */
   const focusFlyout = useRef(false);
   const help = useId();
   const over = Array.from(normalize(draft)).length > MAX_STATUS_MESSAGE_CHARS;
 
-  /** 마지막으로 저장한(보낸) 상태 메시지. 같은 것은 다시 보내지 않는다. */
+  /** The last status message saved (sent). The same one isn't sent again. */
   const saved = useRef({ message: mine?.message ?? "", emoji: mine?.emoji ?? null });
   const save = async (text: string, picked: string | null) => {
     const message = normalize(text);
@@ -198,21 +192,21 @@ function StatusMenu({
       await onMessage(message, picked);
     } catch {
       saved.current = { message: "", emoji: null };
-      setFailure("상태 메시지를 저장하지 못했어요");
+      setFailure(t.profile.menu.saveFailed);
     }
   };
-  // 바깥을 눌러 닫혀도 쓰던 것을 저장한다. 칸에서 Esc로 닫으면 버린다.
+  // Even if pressing outside closes it, what you typed is saved. Closing with Esc in the field throws it away.
   const latest = useRef({ save, draft, emoji, cancelled: false });
   latest.current = { ...latest.current, save, draft, emoji };
   useEffect(() => {
-    void loadEmoji(); // 팔레트를 열기 전에 데이터를 받아 둔다
+    void loadEmoji(); // Fetch the data before the palette opens
     return () => {
       const { save, draft, emoji, cancelled } = latest.current;
       if (!cancelled) void save(draft, emoji).catch(() => {});
     };
   }, []);
 
-  // 팔레트 바깥(이모지 버튼 말고)을 누르면 팔레트만 닫힌다.
+  // Pressing outside the palette (other than the emoji button) closes only the palette.
   useEffect(() => {
     if (!palette) return;
     const outside = (event: PointerEvent) => {
@@ -236,11 +230,11 @@ function StatusMenu({
       await onPresence(presence, duration);
       onDone();
     } catch {
-      setFailure("접속 상태를 바꾸지 못했어요");
+      setFailure(t.profile.menu.presenceFailed);
     }
   };
 
-  /** 팔레트에서 고르거나 지우면 이모지 칸이 바뀌고(글에 이어 붙지 않는다) 팔레트가 닫혀 글 칸으로 돌아간다. */
+  /** Picking or clearing in the palette changes the emoji slot (it isn't appended to the text), closes the palette, and returns to the text field. */
   const choose = (picked: string | null) => {
     setEmoji(picked);
     setPalette(false);
@@ -254,11 +248,11 @@ function StatusMenu({
       void save(draft, emoji);
       onDone();
     } else if (event.key === "Escape") {
-      latest.current.cancelled = true; // 메뉴를 닫는 것은 프로필 패널이 한다
+      latest.current.cancelled = true; // The profile panel closes the menu
     }
   };
 
-  /** 시간 메뉴(WAI-ARIA menu): 위아래 화살표로 옮기고, Esc나 왼쪽 화살표로 닫고 연 줄로 돌아간다. */
+  /** Duration menu (WAI-ARIA menu): up and down arrows move, Esc or the left arrow closes it and goes back to the row that opened it. */
   const onFlyoutKey = (event: KeyboardEvent, row: HTMLElement | null) => {
     const items = [
       ...(flyoutRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? []),
@@ -284,8 +278,8 @@ function StatusMenu({
           <strong>{personName(me.name, me.login)}</strong>
         </div>
       </div>
-      {/* 상태 메시지 칸. 칸과 이모지 고르기 사이를 오갈 때는 저장하지 않고, 그 바깥으로 나가면 저장한다. */}
-      {/* biome-ignore lint/a11y/noStaticElementInteractions: 안에 든 칸과 버튼의 blur를 한곳에서 받는다 */}
+      {/* The status message field. Moving between the field and the emoji picker doesn't save; going outside both does. */}
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: catches blur from the field and buttons inside in one place */}
       <div
         className="status-editor"
         ref={editor}
@@ -298,7 +292,7 @@ function StatusMenu({
             ref={emojiButton}
             type="button"
             className="emoji-button"
-            aria-label={emoji ? `상태 이모지 ${emoji} 바꾸기` : "상태 이모지 고르기"}
+            aria-label={emoji ? t.profile.menu.changeEmoji(emoji) : t.profile.menu.pickEmoji}
             aria-haspopup="dialog"
             aria-expanded={palette}
             onClick={() => setPalette(!palette)}
@@ -308,10 +302,10 @@ function StatusMenu({
           <input
             ref={input}
             className="status-input"
-            aria-label="상태 메시지"
+            aria-label={t.profile.menu.status}
             aria-invalid={over || undefined}
             aria-describedby={over ? help : undefined}
-            placeholder="상태 메시지"
+            placeholder={t.profile.menu.status}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={onFieldKey}
@@ -320,7 +314,7 @@ function StatusMenu({
             <button
               type="button"
               className="clear-button"
-              aria-label="상태 메시지 지우기"
+              aria-label={t.profile.menu.clearStatus}
               onClick={() => {
                 setDraft("");
                 setEmoji(null);
@@ -347,7 +341,7 @@ function StatusMenu({
         )}
         {over && (
           <p id={help} className="help error">
-            상태 메시지는 {MAX_STATUS_MESSAGE_CHARS}자까지 쓸 수 있어요
+            {t.profile.menu.tooLong(MAX_STATUS_MESSAGE_CHARS)}
           </p>
         )}
         {failure && (
@@ -365,8 +359,8 @@ function StatusMenu({
         onClick={() => void pick("online")}
       >
         <Dot presence="online" aria-hidden />
-        <span className="item-label">{MINE.online}</span>
-        {chosen === "online" && <span className="sr-only">(지금 상태)</span>}
+        <span className="item-label">{t.profile.presence.online}</span>
+        {chosen === "online" && <span className="sr-only">{t.profile.menu.current}</span>}
       </button>
       <hr />
       {TIMED.map(({ presence, note }) => (
@@ -393,16 +387,16 @@ function StatusMenu({
         onPointerEnter={() => setFlyout(undefined)}
         onClick={onSettings}
       >
-        설정
+        {t.profile.menu.settings}
       </button>
       <button type="button" className="menu-item danger" onClick={onLogout}>
-        로그아웃
+        {t.profile.menu.logout}
       </button>
     </div>
   );
 }
 
-/** 시간을 정해 거는 접속 상태 한 줄과 그 시간 메뉴. 마우스를 올리거나, 누르거나, 오른쪽 화살표로 연다. */
+/** One set-for-a-time presence row and its duration menu. Opens on hover, press, or the right arrow. */
 function TimedItem({
   presence,
   note,
@@ -414,7 +408,7 @@ function TimedItem({
   onPick,
 }: {
   presence: Exclude<ChosenPresence, "online">;
-  note?: string;
+  note?: "dndNote" | "invisibleNote";
   current: boolean;
   open: boolean;
   onOpen: (byKey: boolean) => void;
@@ -437,7 +431,7 @@ function TimedItem({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? flyout : undefined}
-        onClick={(event) => onOpen(event.detail === 0)} // detail 0: Enter나 Space로 눌렀다
+        onClick={(event) => onOpen(event.detail === 0)} // detail 0: pressed with Enter or Space
         onKeyDown={(event) => {
           if (event.key !== "ArrowRight") return;
           event.preventDefault();
@@ -446,10 +440,10 @@ function TimedItem({
       >
         <Dot presence={dotOf(presence)} aria-hidden />
         <span className="item-label">
-          {MINE[presence]}
-          {note && <span className="menu-note">{note}</span>}
+          {t.profile.presence[presence]}
+          {note && <span className="menu-note">{t.profile.menu[note]}</span>}
         </span>
-        {current && <span className="sr-only">(지금 상태)</span>}
+        {current && <span className="sr-only">{t.profile.menu.current}</span>}
         <ChevronRight size={16} className="item-chevron" aria-hidden />
       </button>
       {open && (
@@ -458,19 +452,19 @@ function TimedItem({
           id={flyout}
           className="menu flyout"
           role="menu"
-          aria-label={`${MINE[presence]} 시간`}
+          aria-label={t.profile.menu.durationMenu(t.profile.presence[presence])}
           onKeyDown={(event) => onFlyoutKey(event, row.current)}
         >
-          {DURATIONS.map(([duration, label]) => (
+          {DURATIONS.map((duration) => (
             <button
-              key={label}
+              key={duration ?? "forever"}
               type="button"
               role="menuitem"
               className="menu-item"
               tabIndex={-1}
               onClick={() => onPick(duration)}
             >
-              {label}
+              {t.profile.menu.durations[duration ?? "forever"]}
             </button>
           ))}
         </div>

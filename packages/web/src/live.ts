@@ -9,18 +9,18 @@ import {
 import { useEffect, useEffectEvent, useState } from "react";
 
 export type LiveEvent = Message<typeof serverToWeb>;
-/** 처음 붙는 중, 붙음, 끊겨서 다시 붙는 중. */
+/** Connecting for the first time, connected, or dropped and reconnecting. */
 export type LiveState = "connecting" | "open" | "reconnecting";
 
 /**
- * 서버의 실시간 연결(ADR-0014: 웹은 받는 것만 WebSocket으로 받는다). 끊기면 1초에서 10초까지 늘려 가며 다시 붙고,
- * 마지막으로 받은 메시지 번호를 hello의 `after`로 실어 끊긴 사이의 메시지를 이어 받는다.
- * 세션이 끝나 서버가 거절하면(`unauthorized`) 다시 붙지 않고 `onSignedOut`을 부른다.
+ * The live connection to the server (ADR-0014: the web only receives over WebSocket). When it drops, it reconnects with a delay growing from 1 to 10 seconds,
+ * and sends the last message number it received as hello's `after` to pick up the messages it missed.
+ * If the session has ended and the server refuses (`unauthorized`), it doesn't reconnect and calls `onSignedOut`.
  */
-// ponytail: 계약 버전이 달라 거절되면(배포 뒤 낡은 화면) 다시 붙기를 되풀이한다. 그런 일이 잦으면 "새로 고침" 띠를 낸다.
+// ponytail: if refused because the contract version differs (a stale screen after a deploy), it keeps reconnecting. If that happens often, show a "Refresh" banner.
 export function useLive(
   session: string,
-  /** 받을 워크스페이스. 연결은 한 워크스페이스의 것만 받는다. */
+  /** The workspace to receive. A connection receives only one workspace's messages. */
   workspace: string,
   onEvent: (event: LiveEvent) => void,
   onSignedOut: () => void,
@@ -31,7 +31,7 @@ export function useLive(
 
   useEffect(() => {
     let socket: WebSocket | undefined;
-    /** 이어 받을 자리. 처음 붙을 때 welcome의 번호이고, 메시지를 받을 때마다 그 번호로 나아간다. */
+    /** Where to resume from. At first connection it's the number in welcome, and it advances to each message number received. */
     let cursor: number | undefined;
     let delay = 1000;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -46,7 +46,7 @@ export function useLive(
         current.send(encode(webToServer, "hello", { session, after: cursor, workspace }));
       current.onmessage = ({ data }) => {
         const decoded = decode(serverToWeb, data);
-        if ("error" in decoded) return; // 계약과 다른 것은 버린다
+        if ("error" in decoded) return; // Anything that doesn't match the contract is dropped
         const event = decoded.message;
         if (event.kind === "error") {
           if (event.payload.code !== "unauthorized") return;
@@ -54,7 +54,7 @@ export function useLive(
           return signOut();
         }
         if (event.kind === "welcome") {
-          // 다시 붙을 때는 welcome 뒤에 오는 끊긴 사이의 메시지가 자리를 옮긴다. 그 전에 또 끊겨도 잃지 않는다.
+          // On reconnect, the messages missed while dropped (after welcome) move the position. If it drops again before then, nothing is lost.
           cursor ??= event.payload.seq;
           delay = 1000;
           setState("open");
@@ -73,7 +73,7 @@ export function useLive(
     return () => {
       stopped = true;
       clearTimeout(timer);
-      // 붙는 중에 닫으면 브라우저가 경고를 남긴다(개발 모드의 StrictMode가 늘 그렇게 한다). 붙은 뒤에 닫는다.
+      // Closing while connecting makes the browser log a warning (StrictMode in development always does this). Close after it connects.
       if (socket?.readyState === WebSocket.CONNECTING) socket.onopen = () => socket?.close();
       else socket?.close();
     };
