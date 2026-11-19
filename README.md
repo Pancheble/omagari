@@ -97,7 +97,8 @@ omagari --version
 서버도 `main`으로 띄우고(도그푸딩 서버는 `dev`를 따라 Fly.io에 저절로 올라간다. 아래 "Fly.io에 올리기"), 업데이트도 멤버와 같다(`git pull`, `npm ci`, 다시 띄우기). 켜질 때 `Omagari 서버 v0.1.0 (contract 9): ...`처럼 버전을 로그에 남긴다.
 
 ```bash
-OMAGARI_REPO=<owner/name> GITHUB_CLIENT_ID=<기기 인증을 켠 GitHub 앱> HOST=0.0.0.0 npm run server
+cp .env.example .env     # OMAGARI_REPO, GITHUB_CLIENT_ID를 채운다(.env는 커밋하지 않는다)
+HOST=0.0.0.0 npm run server
 ```
 
 `OMAGARI_REPO`는 받을 GitHub 계정 목록이다(ADR-0043). 쉼표로 나눠 여럿 적고, 계정(`owner`)이나 레포(`owner/name`)로 적는다.
@@ -115,17 +116,18 @@ OMAGARI_REPO=<owner/name> GITHUB_CLIENT_ID=<기기 인증을 켠 GitHub 앱> HOS
 
 ### Fly.io에 올리기
 
-도그푸딩 서버는 Fly.io(도쿄 `nrt`)의 작은 기계 하나다(ADR-0042). 설정은 `fly.toml`, 이미지는 `Dockerfile`에 있다. 처음 한 번 사람이 한다.
+Fly.io(도쿄 `nrt`)의 작은 기계 하나에 서버를 올린다. 레포의 도그푸딩 서버가 이렇게 돈다(ADR-0042). 설정은 `fly.toml`, 이미지는 `Dockerfile`에 있다. 앱 이름과 받을 계정 목록은 레포에 없고 `.env`에 적는다(`cp .env.example .env`로 시작). 처음 한 번 사람이 한다.
 
 ```bash
-fly apps create omagari-dogfood            # fly.toml의 app 이름과 맞춘다(이미 쓰인 이름이면 둘 다 바꾼다)
-fly volumes create omagari_data --region nrt --size 1
-fly secrets set GITHUB_CLIENT_ID=<기기 인증을 켠 GitHub 앱>
-fly deploy
+set -a; . ./.env; set +a                    # FLY_APP, OMAGARI_REPO를 셸로 읽는다
+fly apps create "$FLY_APP"
+fly volumes create omagari_data --region nrt --size 1 -a "$FLY_APP"
+fly secrets set GITHUB_CLIENT_ID=<기기 인증을 켠 GitHub 앱> -a "$FLY_APP"
+fly deploy -a "$FLY_APP" -e OMAGARI_REPO="$OMAGARI_REPO"
 ```
 
-- 비밀값은 `fly secrets`로만 넣는다. 레포에는 두지 않는다. `OMAGARI_REPO`(받을 계정 목록)와 `OMAGARI_URL`은 비밀이 아니라 `fly.toml`의 `[env]`에 있다.
+- 비밀값은 `fly secrets`로만 넣는다. 레포에는 두지 않는다. `OMAGARI_REPO`(받을 계정 목록)는 비밀이 아니라 배포할 때 `-e`로 준다. 앱 이름과 함께 `fly.toml`에 두지 않은 까닭은 누가 올려도 같은 값만 `fly.toml`에 두려는 것이다(`app`은 toml이 환경변수를 못 읽어 `-a`로 준다). `OMAGARI_URL`은 Fly에서는 `https://<앱 이름>.fly.dev`로 서버가 정한다.
 - DB는 볼륨(`/data/omagari.db`)에 있어 새 판으로 바꿔도 남는다. 백업은 볼륨의 날마다 스냅샷이다(`fly volumes snapshots list`로 본다. 기본 5일 보관).
 - 건강 확인(`/api/health`)을 통과한 판만 갈아 끼운다. 못 통과하면 옛 판이 남는다.
-- 자동 배포: `.github/workflows/deploy.yml`이 `dev`의 CI가 통과하면 `fly deploy`를 돈다. `dev`에서만 쓸 수 있는 GitHub Environment `dogfood`(Settings → Environments, 배포 브랜치를 `dev`로 제한)의 비밀값에 `FLY_API_TOKEN`(`fly tokens create deploy`)을 넣어야 켜지고, 없으면 배포 단계를 건너뛴다. CI가 돈 커밋이 지금 `dev`의 끝이 아니면(옛 실행을 다시 돌린 경우) 올리지 않는다.
+- 자동 배포: `.github/workflows/deploy.yml`이 `dev`의 CI가 통과하면 `fly deploy`를 돈다. `dev`에서만 쓸 수 있는 GitHub Environment `dogfood`(Settings → Environments, 배포 브랜치를 `dev`로 제한)에 비밀값 `FLY_API_TOKEN`(`fly tokens create deploy`)과 변수 `FLY_APP`, `OMAGARI_REPO`를 넣어야 켜지고, 하나라도 없으면 배포 단계를 건너뛴다. CI가 돈 커밋이 지금 `dev`의 끝이 아니면(옛 실행을 다시 돌린 경우) 올리지 않는다.
 - 이 기기에서 이미지를 확인하려면: `docker build -t omagari .` 뒤 `docker run -p 8080:8080 -v omagari-data:/data -e OMAGARI_REPO=<owner/name> -e GITHUB_CLIENT_ID=<앱> omagari`.

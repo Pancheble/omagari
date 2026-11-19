@@ -1,14 +1,10 @@
-# 도그푸딩 서버(ADR-0042). 올리는 법은 README의 "Fly.io에 올리기".
-app = "omagari-dogfood"
+# Fly.io 서버(도그푸딩 서버, ADR-0042).
+# `app`(Fly 앱 이름)은 일부러 적지 않았다. 올리는 사람이 .env의 FLY_APP으로 준다: `fly deploy -a "$FLY_APP"`. 올리는 법은 README의 "Fly.io에 올리기".
 primary_region = "nrt" # 도쿄
 
 [env]
-# 받을 GitHub 계정 목록(ADR-0043). 조직 omagari-dev와 개인 계정 Pancheble, 워크스페이스 둘이다(#278).
-# 옮겨진 레포(Pancheble/omagari → omagari-dev/omagari)는 서버가 권한을 다시 읽을 때 따라가므로 계정만 적는다.
-# `omagari-dev/omagari`를 레포로 적으면 따라가기 전에 빈 레포로 먼저 생겨 옮기지 못한다.
-# Pancheble/kagami는 개인 계정 워크스페이스의 첫 레포다. 레포가 없는 계정의 워크스페이스는 웹에서 고를 수 없어 첫 레포는 설정으로 넣는다.
-OMAGARI_REPO = "omagari-dev,Pancheble/kagami"
-OMAGARI_URL = "https://omagari-dogfood.fly.dev"
+# 받을 GitHub 계정 목록(OMAGARI_REPO)도 적지 않는다. 배포할 때 `-e OMAGARI_REPO=...`로 준다(.env.example). 주소(OMAGARI_URL)는 Fly에서는 https://<앱 이름>.fly.dev로 서버가 정한다.
+# 여기에는 누가 올려도 같은 값만 둔다.
 
 # SQLite가 사는 디스크. 날마다 스냅샷이 백업이다.
 [mounts]
