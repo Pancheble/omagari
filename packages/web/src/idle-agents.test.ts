@@ -5,7 +5,7 @@ import { idleAgents } from "./idle-agents.ts";
 const agent = (executor: "claude-code" | "codex", state = "online") => ({ executor, state });
 const work = (executor: "claude-code" | "codex" | null) => ({ executor, branch: "b" });
 
-test("작업 없는 에이전트만 고르고, 작업 줄에 보이는 에이전트는 뺀다", () => {
+test("picks only Agents with no work and leaves out Agents already shown on a work line", () => {
   const member = {
     agents: [agent("claude-code"), agent("codex", "offline")],
     works: [work("claude-code")],

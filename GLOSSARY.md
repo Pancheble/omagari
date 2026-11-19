@@ -33,7 +33,7 @@ _Avoid_: fork (a fork is only one way to make a runner session)
 A runner session kept going for each channel and each agent. The DMs and @calls one agent gets in that channel share it.
 
 **Runner** (러너):
-The Omagari program that runs on the owner's machine. It is paired with one work folder, watches it, and starts runner sessions on that machine with the executors it has.
+The Omagari program that runs on the owner's machine. It is paired with one repo's work folder, watches it, and starts runner sessions on that machine with the executors it has. One background process per machine runs a runner for each shared repo that agents open there (ADR-0049).
 _Avoid_: daemon, agent
 
 **Offline** (오프라인):
@@ -75,6 +75,10 @@ _Avoid_: sync, surveillance
 **Share level** (공유 수준):
 How much an observation sends to the server. It is one of full (the full content of changed files), declared (all paths, content only for claimed paths), or intent (only the status line and claims).
 _Avoid_: visibility (visibility is a word for Q&A)
+
+**Repo sharing** (레포 공유):
+A member's yes, once per repo, to let their runner observe that repo. It's stored on the server, so it follows the member to other machines. Until then the runner doesn't observe, and the session-start hook says how to share (ADR-0049).
+_Avoid_: share level (that's how much is sent), opt-in
 
 **Base commit** (기준 커밋):
 The commit an observation compares a work's changes against. It is where that branch split from the default branch.

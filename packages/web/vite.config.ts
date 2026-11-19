@@ -1,7 +1,7 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
-// 개발할 때는 Vite가 화면을 내고, /api는 따로 띄운 서버(`npm run server`)로 넘긴다.
+// In development, Vite serves the screen and forwards /api to the separately started server (`npm run server`).
 export default defineConfig({
   plugins: [react()],
   server: {

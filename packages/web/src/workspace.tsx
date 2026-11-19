@@ -118,7 +118,7 @@ function useMedia(query: string) {
  * Merge by number. The same message arriving twice, from past conversation and live, stays as one, and the later one replaces the earlier.
  * But a Q&A that has an answer is never reverted to a late "waiting for the answer".
  */
-/** 포스트에서 말한 멤버들(글과 올린 문답을 쓴 사람). 결정자 후보로 보인다. */
+/** Members who spoke in a Post (people who wrote messages or posted Q&As). Shown as Decision-maker candidates. */
 const speakersOf = (messages: ChannelMessage[] = []) => [
   ...new Map(
     messages.flatMap((m) =>
@@ -198,9 +198,9 @@ export function Workspace({
   const space = workspaces.find((other) => other.id === workspace) ?? (workspaces[0] as Space);
   /** The repos of this workspace that are visible to me. The app changes it when repos are added or removed. */
   const repos = space.repos;
-  /** 레포마다의 라벨(ADR-0039, ADR-0043). 붙을 때 읽고, 실시간 연결의 `labels`(첫 레포의 것)로 갈아 끼운다. */
+  /** Labels per repo (ADR-0039, ADR-0043). Read on connect and replaced by the live connection's `labels` (the first repo's). */
   const [labelsByRepo, setLabelsByRepo] = useState<Record<string, Label[]>>({});
-  /** 포럼의 필터가 고르는 라벨: 레포들의 라벨을 이름으로 합친 것. */
+  /** The labels the forum filter chooses from: the repos' labels merged by name. */
   const labels = [
     ...new Map(
       Object.values(labelsByRepo)
@@ -238,19 +238,19 @@ export function Workspace({
   const [collapsed, toggleCollapsed] = useCollapsed("omagari.channels-collapsed");
   const [members, setMembers] = useState<MemberView[]>();
   const [settings, setSettings] = useState(false);
-  /** 정리한 결정 전부. 결정 상태 띠가 읽는다. 처음에 읽고, 결정 줄이 올 때와 내가 바꿀 때 갈아 끼운다. */
+  /** All written-up Decisions. The decision status strip reads it. Read at first, and replaced when a decision line arrives and when I change one. */
   const [decisions, setDecisions] = useState<Decision[]>([]);
-  /** 결정 정리하기 대화 상자: 열려 있으면 값이 있고, 고치는 중이면 그 결정이 든다. */
+  /** The write-up dialog: has a value while open, and holds that Decision while editing. */
   const [deciding, setDeciding] = useState<{ revising?: Decision }>();
-  /** 포스트(채널 id)마다의 토론과 토론 요청. 붙을 때 `api.posts`로 읽고, 바뀌면 실시간 연결로 온다. */
+  /** Debates and Debate requests per Post (channel id). Read with `api.posts` on connect, and changes arrive over the live connection. */
   const [debates, setDebates] = useState<
     Record<string, { debate: Debate | null; request: DebateRequest | null }>
   >({});
-  /** 열린 대화 상자: 토론 열기(다시 요청이면 지난 요청을 채운다)나, 대행을 부를 자리. */
+  /** The open dialog: opening a Debate (a re-request fills in the last request) or calling a stand-in. */
   const [debating, setDebating] = useState<{ open: true } | { seat: number }>();
-  /** 실시간 연결로 온 가장 최근 결정 초안. 대화 상자가 자기 것인지 가려 받는다. */
+  /** The most recent Decision draft that came over the live connection. The dialog picks out whether it's its own. */
   const [incoming, setIncoming] = useState<Draft>();
-  /** 이 브라우저에서 결정 PR로 올린 마지막 네 칸. 결정의 본문은 계약에 없어서, 고쳐 올릴 때 이것으로 칸을 채운다. */
+  /** The last four fields sent as a decision PR from this browser. The contract has no Decision body, so this fills in the fields when editing and resending. */
   const submitted = useRef<Record<number, Fields>>({});
   const wide = useMedia(WIDE);
 
@@ -393,7 +393,7 @@ export function Workspace({
     location.hash = remembered(lastKey(workspace, place)) ?? "";
   };
   const forum = current?.kind === "forum";
-  /** 포럼 포스트 전부. 포럼을 처음 읽을 때까지는 없다. */
+  /** All forum Posts. There are none until the forum is first read. */
   const [posts, setPosts] = useState<PostItem[]>();
   const openPost = forum ? posts?.find((item) => item.alert === Number(hashPost)) : undefined;
   const big = openPost !== undefined && hashSize === "big";
@@ -405,7 +405,7 @@ export function Workspace({
     (!!hashChannel && channels !== undefined && !found) ||
     (forum && !!hashPost && posts !== undefined && !openPost);
   const asidePost = openPost !== undefined && !big;
-  /** 포스트는 채널처럼 동작한다: 글, 지난 대화, DM, `@호출`이 포스트의 채널로 간다. 이름은 제목이다. */
+  /** A Post acts like a channel: messages, past conversation, DMs, and `@call` go to the Post's channel. Its name is the title. */
   const postChannel: Channel | undefined = openPost && {
     id: openPost.channel,
     name: postTitle(openPost),
@@ -413,7 +413,7 @@ export function Workspace({
   };
   /** The channel that the conversation and DM go to: the open post, else the picked channel. A forum itself has no conversation. */
   const active = postChannel ?? (forum ? undefined : current);
-  /** 포스트마다 마지막으로 읽은 글 수. 이 기기에 남는다. */
+  /** The number of messages last read per Post. Kept on this device. */
   const [seen, setSeen] = useState<Record<string, number>>(() => {
     try {
       return JSON.parse(localStorage.getItem("omagari.post-seen") ?? "{}");
@@ -423,19 +423,19 @@ export function Workspace({
   });
   const unread = (item: PostItem) => item.count > (seen[item.channel] ?? 0);
   /**
-   * 내가 관련된 포스트(시안 55-D): 내 작업이 걸린 알림이거나 내가 글을 쓴 포스트. 결정자는 그 포스트에서 말한 멤버라 이것으로 든다.
-   * 내가 쓴 글은 마지막 글과 이 화면에서 읽은 대화로만 안다.
+   * Posts I'm involved in (mockup 55-D): alerts that involve my work, or Posts where I wrote a message. A Decision-maker is a member who spoke in that Post, so this includes them.
+   * My messages are known only from the last message and the conversation read on this screen.
    */
-  // ponytail: 계약에 포스트에서 말한 사람이 없어, 안 읽은 포스트에 오래전에 쓴 글은 모른다. 놓치는 일이 잦으면 Post에 말한 사람을 싣는다.
+  // ponytail: the contract has no list of who spoke in a Post, so a message I wrote long ago in an unread Post isn't known. If that gets missed often, put the speakers on Post.
   const mine = (item: PostItem) =>
     item.message.alert.works.some((work) => work.login === me.login) ||
     item.last?.login === me.login ||
     !!views[item.channel]?.messages.some(
       (m) => (m.kind === "text" || m.kind === "qa") && m.login === me.login,
     );
-  // 열려 있는 포스트는 새 글이 와도 읽은 것으로 둔다.
+  // An open Post counts as read even when new messages arrive.
   const openCount = openPost?.count;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 열린 포스트의 글 수가 바뀔 때마다 읽은 자리를 옮긴다
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the read position moves whenever the open Post's message count changes
   useEffect(() => {
     if (!postChannel || openCount === undefined || seen[postChannel.id] === openCount) return;
     const next = { ...seen, [postChannel.id]: openCount };
@@ -445,9 +445,9 @@ export function Workspace({
     } catch {}
   }, [postChannel?.id, openCount]);
   const [forumCollapsed, toggleForumCollapsed] = useCollapsed("omagari.forum-collapsed");
-  /** 포럼 id마다 선 곳 */
+  /** Where each forum id sits */
   const forumPlace = new Map(channels?.map((channel) => [channel.id, placeOf(channel, repos)]));
-  /** 그곳에 새 글이 있나: 그곳 포럼에 달린 내 열린 포스트에 안 읽은 글이 있다(패널의 가지와 같은 것). */
+  /** Is there anything new there: one of my open Posts in that forum has unread messages (same as the panel's branch). */
   const fresh = (place: string) =>
     !!posts?.some(
       (item) =>
@@ -485,7 +485,7 @@ export function Workspace({
   /** If the channel is already loaded, put it into the conversation. For a channel never opened, drop it and read past messages when it opens. */
   const receive = (message: ChannelMessage) => {
     if (message.kind === "decision") upsertDecision(message.decision);
-    // 알림은 포럼 목록의 포스트다. 고쳐졌으면 고친 시각을 붙이고, 새 글이 서면 요약(`post`)이 바뀌어 온다.
+    // An alert is a Post in the forum list. If it was fixed, the fix time is added, and when a new message lands the summary (`post`) arrives changed.
     if (message.kind === "alert")
       setPosts((list) => {
         const known = list?.find((item) => item.alert === message.id);
@@ -612,10 +612,10 @@ export function Workspace({
   );
 
   /**
-   * 레포마다인 것(포스트, 라벨, 결정)을 레포마다 읽어 합친다(ADR-0043). 실시간 연결은 워크스페이스의 알림 줄을 다 받지만,
-   * 라벨은 첫 레포의 것만 오므로 다른 레포의 라벨은 다시 붙을 때 읽는다.
+   * Things that are per repo (Posts, labels, Decisions) are read per repo and merged (ADR-0043). The live connection receives all of the workspace's alert lines,
+   * but only the first repo's labels come with it, so other repos' labels are read when reconnecting.
    */
-  // ponytail: 레포마다 한 번씩 부른다. 레포가 많아지면 계약에 여러 레포를 한 번에 읽는 길을 더한다.
+  // ponytail: one call per repo. With many repos, add a way to read several repos at once to the contract.
   const loadRepos = (list: string[]) => {
     const each = <T,>(read: (repo: string) => Promise<T>) =>
       Promise.all(list.map(read)).catch((error) => {
@@ -732,7 +732,7 @@ export function Workspace({
     location.hash = channel.id;
   };
 
-  /** 포스트의 라벨을 바꾼다. 바뀐 요약은 답으로 바로 넣고, 실시간 연결의 알림 줄로도 온다. */
+  /** Changes a Post's labels. The changed summary is put in right from the reply, and also arrives as an alert line on the live connection. */
   const setPostLabels = async (item: PostItem, next: string[]) => {
     try {
       const { post: summary } = await call(server(session), api.setPostLabels, {
@@ -859,7 +859,7 @@ export function Workspace({
   /** What stands in the right column now. If there is a side-column post it is that, and the forum list has no DM. */
   const shown = asidePost ? "post" : right === "agent" && !active ? undefined : right;
 
-  /** 직접 충돌이 걸린 작업("로그인/브랜치"): 풀리지 않은 직접 충돌 알림의 두 작업. 멤버 목록의 작업 줄에 배지가 붙는다. */
+  /** Works caught in a direct conflict ("login/branch"): the two works of an unresolved direct-conflict alert. A badge goes on their work line in the member list. */
   const direct = new Set(
     posts?.flatMap(({ message: { alert } }) =>
       alert.kind === "direct" && !alert.resolved
@@ -868,7 +868,7 @@ export function Workspace({
     ),
   );
 
-  /** 열린 포스트의 결정: 가장 나중에 정리한 것. */
+  /** The open Post's Decision: the one written up last. */
   const decision = openPost
     ? decisions.filter((other) => other.post === openPost.channel).sort((a, b) => b.id - a.id)[0]
     : undefined;
@@ -887,7 +887,7 @@ export function Workspace({
     onDiscard: () => answer(() => call(server(session), api.discardDecision, { id: decision.id })),
   };
 
-  /** 포스트 머리의 "라벨" 버튼(시안 54-C). */
+  /** The "Labels" button in the Post head (mockup 54-C). */
   const labelButton = openPost && (
     <LabelsContext value={labelsByRepo[openPost.repo] ?? []}>
       <PostLabels
@@ -898,10 +898,10 @@ export function Workspace({
     </LabelsContext>
   );
 
-  /** 열린 포스트의 토론. */
+  /** The open Post's Debate. */
   const debated = openPost ? debates[openPost.channel] : undefined;
   const debate = debated?.debate ?? null;
-  /** 토론 API를 부르고 돌아온 토론으로 바꾼다. 실시간 연결로도 오지만 먼저 그린다. */
+  /** Calls the Debate API and swaps in the Debate that comes back. It also arrives over the live connection, but this draws it first. */
   const debateCall = async (
     act: () => Promise<{ debate: Debate | null; request?: DebateRequest }>,
   ) => {
@@ -920,7 +920,7 @@ export function Workspace({
       throw check(error);
     }
   };
-  /** 토론 열기 / 토론 보기(시안 60-B). 열린 토론이 있으면 토론 띠로 간다. */
+  /** Open a Debate / View the Debate (mockup 60-B). If a Debate is open, go to the Debate strip. */
   const debateButton = openPost && (
     <button
       type="button"
@@ -938,7 +938,7 @@ export function Workspace({
     </button>
   );
 
-  /** 결정 정리하기 버튼: 열린 포스트의 머리 띠에 두고 이름이 늘 보인다. */
+  /** The write-up button: placed in the open Post's head strip, with its name always visible. */
   const decide = openPost && (
     <button
       type="button"
@@ -951,7 +951,7 @@ export function Workspace({
     </button>
   );
 
-  /** 고른 대화(채널, 또는 열린 포스트)를 그린다. 포스트는 지난 대화 앞에 첫 글인 알림이 붙는다. */
+  /** Draws the picked conversation (a channel, or the open Post). A Post has its alert as the first message before the past conversation. */
   const conversation = (label: string) => {
     if (!active) return null;
     const view = views[active.id];
@@ -1017,7 +1017,7 @@ export function Workspace({
     );
   };
 
-  /** 포럼 대화 상자의 미리 보기: 열린 포스트와 제목. */
+  /** The preview in the forum dialog: the open Post and its title. */
   const previews = (posts ?? [])
     .filter((item) => !settled(item))
     .map((item) => ({
@@ -1369,7 +1369,7 @@ export function Workspace({
             )}
             {deciding && postChannel && (
               <DecisionDialog
-                // 열 때마다 새로: 초안을 쓰게 하고 칸을 비운다.
+                // New each time it opens: let it write a draft and empty the fields.
                 key={deciding.revising?.id ?? "new"}
                 post={postChannel.id}
                 title={postChannel.name}

@@ -1354,8 +1354,8 @@ export async function startServer(options: {
     { hash: string; login: string; repo: string; workspace: string }
   >();
   /**
-   * 웹 연결로 보내도 되는지. 열려 있고, 그 연결이 고른 레포(와 그 워크스페이스)가 아직 그 사람에게 보여야 한다.
-   * push 권한을 다시 읽는 사이에 권한을 잃은 연결이 닫히기 전에도 받지 않게, 웹으로 가는 모든 보내기가 이것을 지난다.
+   * 웹 연결과 러너 연결로 보내도 되는지. 열려 있고, 그 연결이 고른(러너는 이어진) 레포가 아직 그 사람에게 보여야 한다.
+   * push 권한을 다시 읽는 사이에 권한을 잃은 연결이 닫히기 전에도 받지 않게, 웹과 러너로 가는 모든 보내기가 이것을 지난다.
    */
   const open = (socket: WSContext, watcher: { login: string; repo: string }) =>
     socket.readyState === 1 && sees(watcher.login, watcher.repo); // OPEN
@@ -2150,7 +2150,7 @@ export async function startServer(options: {
         runner.repo === repo &&
         runner.login === login &&
         (!to || socket === to) &&
-        socket.readyState === 1
+        open(socket, runner)
       )
         socket.send(frame);
   };
@@ -2225,7 +2225,7 @@ export async function startServer(options: {
   /** 편지함이 달라진 러너에 그 멤버의 편지함을 보낸다. `to`(막 붙은 러너)에는 같아도 보낸다. */
   const shareInbox = (to?: WSContext) => {
     for (const [socket, { login, repo }] of runners) {
-      if (socket.readyState !== 1) continue; // OPEN
+      if (!open(socket, { login, repo })) continue;
       const items = inboxOf(repo, login);
       const json = JSON.stringify(items);
       if (socket !== to && sentInbox.get(socket) === json) continue;
@@ -2734,11 +2734,7 @@ export async function startServer(options: {
       sent.set(repo, json);
       const frame = encode(serverToRunner, "situation", { works, claims });
       for (const [socket, runner] of runners)
-        if (
-          runner.repo === repo &&
-          socket.readyState === 1 && // OPEN
-          (changed || socket === to)
-        )
+        if (runner.repo === repo && open(socket, runner) && (changed || socket === to))
           socket.send(frame);
     }
   };
