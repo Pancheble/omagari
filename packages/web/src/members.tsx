@@ -3,7 +3,7 @@ import { ChevronRight, Clock } from "lucide-react";
 import { type ComponentProps, useEffect, useId, useReducer, useState } from "react";
 import { idleAgents } from "./idle-agents.ts";
 import { StatusText } from "./profile.tsx";
-import { Avatar, PRESENCE_WORDS } from "./workspace.tsx";
+import { Avatar, PRESENCE_WORDS, personName } from "./workspace.tsx";
 
 /** 에이전트 표시에 쓰는 실행기 약자(DESIGN.md 에이전트 표시). */
 const MARKS = { "claude-code": "CC", codex: "CX" } as const satisfies Record<ExecutorId, string>;
@@ -100,10 +100,10 @@ function MemberRow({ member, me, direct }: { member: Member; me: boolean; direct
   const expandable = count > 0 || idle.length > 0;
   const head = (
     <>
-      <Avatar name={member.name} size={40} presence={member.presence} />
+      <Avatar name={member.name} login={member.login} size={40} presence={member.presence} />
       <span className="member-names">
         <strong>
-          <span className="member-name">{member.name}</span>
+          <span className="member-name">{personName(member.name, member.login)}</span>
           {me && <span className="me">나</span>}
         </strong>
         <span className="member-status">

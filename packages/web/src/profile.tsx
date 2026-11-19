@@ -8,7 +8,7 @@ import { ChevronRight, SmilePlus, X } from "lucide-react";
 import { type KeyboardEvent, type RefObject, useEffect, useId, useRef, useState } from "react";
 import type { Me } from "./api.ts";
 import { EmojiPalette, loadEmoji } from "./emoji.tsx";
-import { Avatar, Dot } from "./workspace.tsx";
+import { Avatar, Dot, personName } from "./workspace.tsx";
 
 type SetPresence = (presence: ChosenPresence, duration?: PresenceDuration) => Promise<void>;
 type SetMessage = (message: string, emoji: string | null) => Promise<void>;
@@ -60,6 +60,7 @@ const hasStatus = (member?: MemberView): member is MemberView =>
 export function ProfilePanel({
   me,
   mine,
+  solo = false,
   onLogout,
   onSettings,
   onPresence,
@@ -67,6 +68,8 @@ export function ProfilePanel({
 }: {
   me: Me;
   mine?: MemberView;
+  /** 멤버가 나 하나다(시안 100-A). 접속 점과 접속 상태 글을 빼고 GitHub 아이디를 쓴다. */
+  solo?: boolean;
   onLogout: () => void;
   onSettings: () => void;
   onPresence: SetPresence;
@@ -111,11 +114,16 @@ export function ProfilePanel({
         aria-controls={open ? menu : undefined}
         onClick={() => setOpen(!open)}
       >
-        <Avatar name={me.name} size={36} presence={mine?.presence} />
+        <Avatar
+          name={me.name}
+          login={me.login}
+          size={36}
+          presence={solo ? undefined : mine?.presence}
+        />
         <span className="names">
-          <strong>{me.name}</strong>
+          <strong>{personName(me.name, me.login)}</strong>
           <span>
-            {hasStatus(mine) ? <StatusText {...mine} /> : chosen ? MINE[chosen] : me.login}
+            {hasStatus(mine) ? <StatusText {...mine} /> : chosen && !solo ? MINE[chosen] : null}
           </span>
         </span>
       </button>
@@ -271,10 +279,9 @@ function StatusMenu({
   return (
     <div className="menu status-menu" id={id}>
       <div className="menu-head">
-        <Avatar name={me.name} size={40} presence={mine?.presence} />
+        <Avatar name={me.name} login={me.login} size={40} presence={mine?.presence} />
         <div className="names">
-          <strong>{me.name}</strong>
-          <span>{me.login}</span>
+          <strong>{personName(me.name, me.login)}</strong>
         </div>
       </div>
       {/* 상태 메시지 칸. 칸과 이모지 고르기 사이를 오갈 때는 저장하지 않고, 그 바깥으로 나가면 저장한다. */}

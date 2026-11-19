@@ -36,6 +36,7 @@ test("Admin만 같은 계정의 레포를 넣고 빼며, 러너는 원격으로 
   assert.deepEqual(await call(alice, api.me), {
     login: "alice",
     name: "alice",
+    avatar: null,
     repo: REPO2,
     repos: [REPO2],
   });
@@ -166,6 +167,7 @@ test("레포가 하나이던 판의 DB로 켜도 있던 것이 그 레포에 그
   assert.deepEqual(await call(alice, api.me), {
     login: "alice",
     name: "앨리스",
+    avatar: null,
     repo: REPO,
     repos: [REPO],
   });

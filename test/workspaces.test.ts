@@ -34,8 +34,8 @@ test("계정 둘의 레포를 한 서버에 띄우면 워크스페이스가 둘�
   const names = (as: As) => call(as, api.workspaces);
   assert.deepEqual(await names(owner), {
     workspaces: [
-      { id: A, name: A, repos: [REPO] },
-      { id: B, name: B, repos: [REPO3] },
+      { id: A, name: A, kind: "organization", avatar: null, repos: [REPO] },
+      { id: B, name: B, kind: "organization", avatar: null, repos: [REPO3] },
     ],
   });
   assert.deepEqual(
@@ -325,7 +325,7 @@ test("워크스페이스가 하나이던 판(계약 46)의 DB로 켜도 있던 �
   // 그 판의 alice 세션은 다시 로그인하지 않아도 옛 워크스페이스의 멤버다.
   const alice = { url: world.server.url, session: "old-alice-session" };
   assert.deepEqual(await call(alice, api.workspaces), {
-    workspaces: [{ id: A, name: A, repos: [REPO] }],
+    workspaces: [{ id: A, name: A, kind: "organization", avatar: null, repos: [REPO] }],
   });
 
   // 있던 채팅 채널과 그 글, 포럼, 방문, 문답, 판정 수가 옛 워크스페이스에 그대로 있다.

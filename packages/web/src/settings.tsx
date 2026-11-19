@@ -15,7 +15,7 @@ import { type Me, server } from "./api.ts";
 import { type PostItem, settled } from "./forum.tsx";
 import { ImportanceBadge, LabelDot, useLabels } from "./labels.tsx";
 import { Mark } from "./members.tsx";
-import { Avatar } from "./workspace.tsx";
+import { Avatar, personName } from "./workspace.tsx";
 
 type Reply = Awaited<ReturnType<typeof call<typeof api.settings>>>;
 type Page = "agent" | "alerts" | "labels";
@@ -149,10 +149,9 @@ export function Settings({
     >
       <nav className="settings-nav" aria-label="설정 항목">
         <div className="settings-me">
-          <Avatar name={me.name} size={36} />
+          <Avatar name={me.name} login={me.login} size={36} />
           <span className="names">
-            <strong>{me.name}</strong>
-            <span>{me.login}</span>
+            <strong>{personName(me.name, me.login)}</strong>
           </span>
         </div>
         <h3>나</h3>
