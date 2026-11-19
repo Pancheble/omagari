@@ -109,7 +109,10 @@ test("포스트에 종류 라벨이 붙고, 논의 포스트 하나가 GitHub �
     channel: post.channel,
     text: "제가 결제 쪽을 먼저 머지할게요",
   });
-  await call(alice, api.send, { channel: post.channel, text: "좋아요, 환불은 그 뒤에" });
+  const { message: agreed } = await call(alice, api.send, {
+    channel: post.channel,
+    text: "좋아요, 환불은 그 뒤에",
+  });
   await eventually(() =>
     assert.deepEqual(
       issue.comments.map(({ login, body }) => [login, body]),
@@ -117,6 +120,24 @@ test("포스트에 종류 라벨이 붙고, 논의 포스트 하나가 GitHub �
         ["owner", "제가 결제 쪽을 먼저 머지할게요"],
         ["alice", "좋아요, 환불은 그 뒤에"],
       ],
+    ),
+  );
+
+  // 포스트의 답장은 댓글 머리에 원래 댓글의 링크와 첫 줄을 적는다. GitHub이 다시 메일을 보내지 않게 `@`는 없다(ADR-0047).
+  await call(world.owner, api.send, {
+    channel: post.channel,
+    text: "고마워요",
+    replyTo: agreed.id,
+  });
+  await eventually(() =>
+    assert.equal(
+      issue.comments.at(-1)?.body,
+      [
+        `> **alice** · [original](${post.issue?.url}#issuecomment-${issue.comments[1]?.id})`,
+        "> 좋아요, 환불은 그 뒤에",
+        "",
+        "고마워요",
+      ].join("\n"),
     ),
   );
 
@@ -162,7 +183,7 @@ test("포스트에 종류 라벨이 붙고, 논의 포스트 하나가 GitHub �
   });
   // 들어온 댓글은 다시 올리지 않고, 올린 글은 두 번 올리지 않는다.
   await new Promise((resolve) => setTimeout(resolve, 300));
-  assert.equal(issue.comments.length, 4);
+  assert.equal(issue.comments.length, 5);
 
   // 알림이 풀리면(계획을 거두면) Omagari가 이슈를 닫는다.
   assert.equal((await world.cli("release")).code, 0);

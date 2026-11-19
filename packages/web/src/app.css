@@ -1359,6 +1359,197 @@ svg.lucide {
   color: var(--ink);
 }
 
+/*
+ * Reply and quote (DESIGN.md "Reply, thread, and quote", drafts 113-A, 115-B).
+ * The reply line sits above the header. A 2px hook rises from above the avatar and bends into it, and the avatar moves down beside the name.
+ */
+.message:focus-visible {
+  outline: 2px solid var(--primary-focus);
+  outline-offset: -2px;
+}
+
+.avatar-16 {
+  width: 16px;
+  height: 16px;
+  font-size: 9px;
+}
+
+.reply-line {
+  position: relative;
+  grid-column: 2;
+  min-width: 0;
+  margin-bottom: 2px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.reply-line::before {
+  position: absolute;
+  top: 10px;
+  left: -30px;
+  width: 24px;
+  height: 12px;
+  border-top: 2px solid var(--hairline);
+  border-left: 2px solid var(--hairline);
+  border-top-left-radius: 6px;
+  content: "";
+}
+
+.reply-jump {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.reply-jump strong {
+  flex: none;
+  font-weight: 600;
+}
+
+.reply-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reply-jump:hover .reply-text {
+  color: var(--ink);
+}
+
+/* The "Replying to" strip joined on top of the composer. The composer's top corners go square. */
+.reply-strip {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  margin: 4px 20px 0;
+  padding: 0 4px 0 16px;
+  border: 1px solid var(--hairline);
+  border-bottom: 0;
+  border-radius: var(--rounded-lg) var(--rounded-lg) 0 0;
+  background: var(--parchment);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.reply-strip + .composer {
+  margin-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.reply-strip-who {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reply-strip-who strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.reply-notify {
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--rounded-xs);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.reply-notify[aria-pressed="true"] {
+  color: var(--primary);
+}
+
+.reply-stop {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--rounded-xs);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.reply-notify:hover,
+.reply-stop:hover {
+  background: var(--hover);
+}
+
+/* `> ` lines in a message: a 3px line on the left, 12px gap, secondary text. A first line of only `**login**` shows that member's avatar and name. */
+.quote {
+  margin: 2px 0;
+  padding-left: 12px;
+  border-left: 3px solid var(--hairline);
+  color: var(--text-secondary);
+}
+
+.quote-who {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: normal;
+}
+
+/* The "Quote Q" button right below a text selection (app-popover look) */
+.selection-quote {
+  position: fixed;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--rounded-sm);
+  background: var(--canvas);
+  box-shadow: var(--floating);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.selection-quote kbd {
+  padding: 0 4px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--rounded-xs);
+  color: var(--text-secondary);
+  font: 600 11px / 16px var(--font);
+}
+
+/* The long-press menu on narrow screens */
+.message-menu {
+  top: 4px;
+  right: 12px;
+  bottom: auto;
+  left: auto;
+  z-index: 2;
+  min-width: 180px;
+}
+
+.message-menu .menu-item {
+  justify-content: flex-start;
+  gap: 10px;
+  height: 44px;
+}
+
 .reactions {
   display: flex;
   flex-wrap: wrap;
@@ -2981,7 +3172,8 @@ button.dm-head:active {
   }
 
   .conversation > .banner,
-  .composer {
+  .composer,
+  .reply-strip {
     margin-inline: 8px;
   }
 

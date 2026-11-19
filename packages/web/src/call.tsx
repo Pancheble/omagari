@@ -1,6 +1,14 @@
 import { EXECUTOR_NAMES, type ExecutorId, type MemberView, type Qa } from "@omagari/contract";
 import { X } from "lucide-react";
-import { type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
+import {
+  type KeyboardEvent,
+  type ReactNode,
+  type RefObject,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
 import { Composer, type ComposerGifs } from "./conversation.tsx";
 import { t } from "./i18n.ts";
 import { Mark } from "./members.tsx";
@@ -30,6 +38,9 @@ export function CallComposer({
   onDetach,
   onSubmit,
   gifs,
+  area: given,
+  reply,
+  onEscape,
 }: {
   label: string;
   /** All of your Agents, including ones that are off. */
@@ -46,8 +57,15 @@ export function CallComposer({
   onDetach: () => void;
   onSubmit: () => void;
   gifs?: ComposerGifs;
+  /** Pass this when the caller sets the caret too (quoting). */
+  area?: RefObject<HTMLTextAreaElement | null>;
+  /** The "Replying to" strip, joined on top of the composer. */
+  reply?: ReactNode;
+  /** Esc with no menu open (drops the reply, keeps the text). */
+  onEscape?: () => void;
 }) {
-  const area = useRef<HTMLTextAreaElement>(null);
+  const own = useRef<HTMLTextAreaElement>(null);
+  const area = given ?? own;
   const list = useId();
   const title = useId();
   const connected = agents.filter((agent) => agent.state !== "offline");
@@ -117,6 +135,11 @@ export function CallComposer({
       else onDetach();
       return;
     }
+    if ((!open || !trigger) && event.key === "Escape" && onEscape) {
+      event.preventDefault();
+      onEscape();
+      return;
+    }
     if (!open || !trigger) return;
     if (event.key === "Escape") {
       event.preventDefault();
@@ -178,83 +201,86 @@ export function CallComposer({
     ));
 
   return (
-    <Composer
-      label={
-        attached
-          ? t.conversation.call.addNote
-          : name
-            ? t.conversation.call.askEveryone(name)
-            : label
-      }
-      sendable={!!attached}
-      value={value}
-      onChange={(text) => {
-        onChange(text);
-        if (area.current) sync(area.current);
-      }}
-      onSubmit={onSubmit}
-      area={area}
-      emoji
-      gifs={gifs}
-      menu={menu}
-      before={
-        attached ? (
-          <div className="qa-attachment">
-            <Mark
-              agent={
-                agents.find((agent) => agent.executor === attached.executor) ?? {
-                  executor: attached.executor,
-                  state: "offline",
+    <>
+      {reply}
+      <Composer
+        label={
+          attached
+            ? t.conversation.call.addNote
+            : name
+              ? t.conversation.call.askEveryone(name)
+              : label
+        }
+        sendable={!!attached}
+        value={value}
+        onChange={(text) => {
+          onChange(text);
+          if (area.current) sync(area.current);
+        }}
+        onSubmit={onSubmit}
+        area={area}
+        emoji
+        gifs={gifs}
+        menu={menu}
+        before={
+          attached ? (
+            <div className="qa-attachment">
+              <Mark
+                agent={
+                  agents.find((agent) => agent.executor === attached.executor) ?? {
+                    executor: attached.executor,
+                    state: "offline",
+                  }
                 }
-              }
-              aria-hidden
-            />
-            <strong className="qa-attachment-owner">
-              {t.conversation.call.attachedOwner(owner, EXECUTOR_NAMES[attached.executor])}
-            </strong>
-            <span className="qa-attachment-question">{attached.question}</span>
-            <button
-              type="button"
-              className="call-token-remove qa-attachment-remove"
-              aria-label={t.conversation.call.removeAttached}
-              onClick={() => {
-                onDetach();
-                area.current?.focus();
-              }}
-            >
-              <X size={16} aria-hidden />
-            </button>
-          </div>
-        ) : (
-          token && (
-            <span className="call-token">
-              <Mark agent={called ?? { executor: token, state: "offline" }} aria-hidden />
-              {name}
+                aria-hidden
+              />
+              <strong className="qa-attachment-owner">
+                {t.conversation.call.attachedOwner(owner, EXECUTOR_NAMES[attached.executor])}
+              </strong>
+              <span className="qa-attachment-question">{attached.question}</span>
               <button
                 type="button"
-                className="call-token-remove"
-                aria-label={t.conversation.call.cancelCall(name ?? "")}
+                className="call-token-remove qa-attachment-remove"
+                aria-label={t.conversation.call.removeAttached}
                 onClick={() => {
-                  onToken(undefined);
+                  onDetach();
                   area.current?.focus();
                 }}
               >
-                <X size={14} aria-hidden />
+                <X size={16} aria-hidden />
               </button>
-            </span>
+            </div>
+          ) : (
+            token && (
+              <span className="call-token">
+                <Mark agent={called ?? { executor: token, state: "offline" }} aria-hidden />
+                {name}
+                <button
+                  type="button"
+                  className="call-token-remove"
+                  aria-label={t.conversation.call.cancelCall(name ?? "")}
+                  onClick={() => {
+                    onToken(undefined);
+                    area.current?.focus();
+                  }}
+                >
+                  <X size={14} aria-hidden />
+                </button>
+              </span>
+            )
           )
-        )
-      }
-      textarea={{
-        role: "combobox",
-        "aria-expanded": open,
-        "aria-controls": open && connected.length > 0 ? list : undefined,
-        "aria-autocomplete": "list",
-        "aria-activedescendant": open && current ? `${list}-${current.executor}` : undefined,
-        onKeyDown,
-        onSelect: (event) => sync(event.currentTarget),
-        onBlur: () => setTrigger(undefined),
-      }}
-    />
+        }
+        textarea={{
+          role: "combobox",
+          "aria-expanded": open,
+          "aria-controls": open && connected.length > 0 ? list : undefined,
+          "aria-autocomplete": "list",
+          "aria-activedescendant": open && current ? `${list}-${current.executor}` : undefined,
+          onKeyDown,
+          onSelect: (event) => sync(event.currentTarget),
+          onBlur: () => setTrigger(undefined),
+        }}
+      />
+    </>
   );
 }

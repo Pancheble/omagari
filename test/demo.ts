@@ -243,7 +243,7 @@ await eventually(async () =>
 const pay = await world.channel(world.owner, "결제");
 await world.channel(world.owner, "일반");
 const say = (as: As, channel: string, text: string) => call(as, api.send, { channel, text });
-await say(
+const { message: refundQuestion } = await say(
   minsu.as,
   pay,
   "환불할 때 결제 모델의 amount를 그대로 쓰나요? 부분 환불이면 깨질 것 같은데요.",
@@ -258,6 +258,17 @@ for (const [as, emoji] of [
   [seoyeon.as, "👀"],
 ] as const)
   await call(as, api.react, { message: webhookOnly.id, emoji, on: true });
+// 답장과 인용(#344): 첫 질문에 단 답장(원래 메시지로 가는 줄)과, `> **minsu**` 인용 블록이 앞에 붙은 글.
+await call(seoyeon.as, api.send, {
+  channel: pay,
+  text: "부분 환불은 제가 테스트 케이스로 막아 둘게요.",
+  replyTo: refundQuestion.id,
+});
+await say(
+  hajun.as,
+  pay,
+  "> **minsu**\n> 부분 환불이면 깨질 것 같은데요.\n\n맞아요, 영수증 금액이랑도 안 맞을 거예요.",
+);
 
 // 부딪힘: 같은 줄(직접 충돌), 정의 줄을 바꾼 함수를 쓰는 곳(간접 충돌), 같은 이름의 새 정의(중복 구현), 선점에 붙인 계획(선언된 계약 변경).
 await own("src/config.ts", line3("owner"));

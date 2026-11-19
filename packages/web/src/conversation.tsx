@@ -10,7 +10,7 @@ import {
   type MemberView,
   type Qa,
 } from "@omagari/contract";
-import { ArrowUp, Hash } from "lucide-react";
+import { ArrowUp, Hash, Reply, TextQuote } from "lucide-react";
 import {
   type ComponentProps,
   type Dispatch,
@@ -35,6 +35,15 @@ import { language, t } from "./i18n.ts";
 import type { LiveState } from "./live.ts";
 import { Person } from "./profile-card.tsx";
 import { ReactButton, Reactions } from "./reactions.tsx";
+import {
+  MessageText,
+  quoteLines,
+  type Replying,
+  ReplyLine,
+  ReplyStrip,
+  SelectionQuote,
+  withQuote,
+} from "./reply.tsx";
 import { VerdictStrip } from "./verdict.tsx";
 import { Avatar, personName } from "./workspace.tsx";
 
@@ -47,6 +56,11 @@ export type View = {
   /** Older messages are loading. */
   older?: boolean;
 };
+
+/** What a send carries when it's a reply (ADR-0047). */
+export type ReplyBody = { replyTo: number; notify: boolean };
+/** How long a touch holds before the long-press menu opens on narrow screens. */
+const LONG_PRESS_MS = 500;
 
 /** Messages from the same person within this window group together, without a name and avatar. */
 const GROUP_MS = 5 * 60_000;
@@ -160,8 +174,8 @@ export function Conversation({
   /** The DM Q&A attached to the composer. The workspace holds it because the DM pane is shown too. */
   attached?: Qa;
   onAttach: Dispatch<SetStateAction<Qa | undefined>>;
-  onSend: (text: string) => Promise<void>;
-  onCall: (executor: ExecutorId, question: string) => Promise<void>;
+  onSend: (text: string, reply?: ReplyBody) => Promise<void>;
+  onCall: (executor: ExecutorId, question: string, reply?: ReplyBody) => Promise<void>;
   /** Posts a Q&A to the channel. `text` is the accompanying note; if empty, it posts without one. */
   onPost: (qa: Qa, text: string) => Promise<void>;
   onRetry: () => void;
@@ -173,10 +187,30 @@ export function Conversation({
 }) {
   const [text, setText] = useState("");
   const [token, setToken] = useState<ExecutorId>();
+  const [replying, setReplying] = useState<Replying>();
+  const area = useRef<HTMLTextAreaElement>(null);
   /** What failed to send. For a GIF, "Try again" sends that GIF again. */
   const [failure, setFailure] = useState<{ text: string; gif?: string }>();
   const scroller = useRef<HTMLDivElement>(null);
   const agentsOf = (login: string) => members?.find((member) => member.login === login)?.agents;
+  const nameOf = (login: string) =>
+    members?.find((member) => member.login === login)?.name || login;
+
+  /** Puts a quote at the start of the composer, a blank line, then the caret (draft 115-B). */
+  const quote = (quoted: string, login?: string) => {
+    const lines = quoteLines(quoted, login);
+    const next = withQuote(text, lines);
+    setText((now) => withQuote(now, lines).text);
+    document.getSelection()?.removeAllRanges();
+    requestAnimationFrame(() => {
+      area.current?.focus();
+      area.current?.setSelectionRange(next.caret, next.caret);
+    });
+  };
+  const reply = (message: Exclude<ChannelMessage, { kind: "alert" | "decision" }>) => {
+    setReplying({ id: message.id, login: message.login, name: message.name, notify: true });
+    area.current?.focus();
+  };
   /** The Q&A just posted. Scroll to it and highlight it once its message is drawn. */
   const [posted, setPosted] = useState<number>();
   // biome-ignore lint/correctness/useExhaustiveDependencies: look again each time messages are redrawn
@@ -189,8 +223,11 @@ export function Conversation({
     const qa = attached;
     if (!message && !qa) return;
     const called = token;
+    const replied = qa ? undefined : replying;
+    const body = replied && { replyTo: replied.id, notify: replied.notify };
     setText("");
     setToken(undefined);
+    setReplying(undefined);
     onAttach(undefined);
     setFailure(undefined);
     scroller.current?.scrollTo({ top: 0 }); // the list stacks in reverse, so 0 is the bottom
@@ -198,7 +235,7 @@ export function Conversation({
       if (qa) {
         await onPost(qa, message);
         setPosted(qa.id);
-      } else await (called ? onCall(called, message) : onSend(message));
+      } else await (called ? onCall(called, message, body) : onSend(message, body));
     } catch (error) {
       const offline = error instanceof ContractFailure && error.code === "runner_offline";
       const f = t.conversation.failed;
@@ -213,6 +250,7 @@ export function Conversation({
       });
       setText((now) => now || message);
       setToken((now) => now ?? called);
+      setReplying((now) => now ?? replied);
       if (qa) onAttach((now) => now ?? qa);
     }
   };
@@ -288,6 +326,7 @@ export function Conversation({
               // A Q&A never groups, and the message after a Q&A gets its header again.
               const grouped =
                 !newDay &&
+                !(message.kind === "text" && message.replyTo) &&
                 message.kind === "text" &&
                 previous?.kind === "text" &&
                 previous.login === message.login &&
@@ -304,7 +343,10 @@ export function Conversation({
                       message={message}
                       grouped={grouped}
                       me={me}
+                      nameOf={nameOf}
                       onReact={(emoji, on) => react(message.id, emoji, on)}
+                      onReply={() => reply(message)}
+                      onQuote={() => quote(quotable(message), message.login)}
                       state={
                         message.kind === "qa"
                           ? agentsOf(message.login)?.find(
@@ -321,8 +363,12 @@ export function Conversation({
           </div>
         </div>
       )}
+      <SelectionQuote within=".message[data-login]" onQuote={quote} />
       {channel && (
         <CallComposer
+          area={area}
+          reply={replying && !attached && <ReplyStrip replying={replying} onChange={setReplying} />}
+          onEscape={replying && (() => setReplying(undefined))}
           label={label ?? t.conversation.sendTo(channel.name)}
           agents={agentsOf(me) ?? []}
           owner={members?.find((member) => member.login === me)?.name ?? me}
@@ -509,22 +555,56 @@ function Message({
   grouped,
   state,
   me,
+  nameOf,
   onReact,
+  onReply,
+  onQuote,
 }: {
   message: Exclude<ChannelMessage, { kind: "alert" | "decision" }>;
   grouped: boolean;
   state?: MemberView["agents"][number]["state"];
   me: string;
+  nameOf: (login: string) => string;
   onReact: (emoji: string, on: boolean) => void;
+  onReply: () => void;
+  onQuote: () => void;
 }) {
   // A message that is just one GIPHY URL shows as a picture. A note written with a Q&A stays as text.
   const gif = message.kind === "text" ? giphyId(message.text) : undefined;
   /** While the action bar's palette is open, keep the bar even if the mouse leaves. */
   const [picking, setPicking] = useState(false);
+  /** The long-press menu on narrow screens. */
+  const [menu, setMenu] = useState(false);
+  const press = useRef<number>(undefined);
+  const r = t.conversation.reply;
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(false);
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, [menu]);
   return (
     <article
-      className={`message${grouped ? " grouped" : ""}${picking ? " picking" : ""}`}
+      className={`message${grouped ? " grouped" : ""}${picking ? " picking" : ""}${message.replyTo ? " replying" : ""}`}
       data-qa={message.kind === "qa" ? message.qa.id : undefined}
+      data-message={message.id}
+      data-login={message.login}
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: a message is reached by keyboard to reply (R) or quote (Q) (DESIGN.md "Reply, thread, and quote")
+      tabIndex={0}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget || event.metaKey || event.ctrlKey) return;
+        // With text selected, Q belongs to the selection's "Quote" button.
+        if (document.getSelection()?.toString().trim()) return;
+        const key = event.key.toLowerCase();
+        if (key !== "r" && key !== "q") return;
+        event.preventDefault();
+        (key === "r" ? onReply : onQuote)();
+      }}
+      onTouchStart={() => {
+        press.current = window.setTimeout(() => setMenu(true), LONG_PRESS_MS);
+      }}
+      onTouchEnd={() => clearTimeout(press.current)}
+      onTouchMove={() => clearTimeout(press.current)}
     >
       <div className="message-tools" role="toolbar" aria-label={t.conversation.messageActions}>
         <ReactButton
@@ -533,7 +613,53 @@ function Message({
           onPick={(emoji) => onReact(emoji, true)}
           onOpen={setPicking}
         />
+        <button
+          type="button"
+          className="message-tool"
+          aria-label={r.reply}
+          title={r.reply}
+          onClick={onReply}
+        >
+          <Reply size={16} aria-hidden />
+        </button>
+        <button
+          type="button"
+          className="message-tool"
+          aria-label={r.quote}
+          title={r.quote}
+          onClick={onQuote}
+        >
+          <TextQuote size={16} aria-hidden />
+        </button>
       </div>
+      {menu && (
+        <div
+          className="menu message-menu"
+          role="menu"
+          aria-label={t.conversation.messageActions}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          {[
+            { label: r.reply, icon: Reply, run: onReply },
+            { label: r.quote, icon: TextQuote, run: onQuote },
+          ].map(({ label, icon: Icon, run }) => (
+            <button
+              key={label}
+              type="button"
+              role="menuitem"
+              className="menu-item"
+              onClick={() => {
+                setMenu(false);
+                run();
+              }}
+            >
+              <Icon size={18} aria-hidden />
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+      {message.replyTo && <ReplyLine replyTo={message.replyTo} />}
       {grouped ? (
         <time className="side-time" dateTime={message.at} title={fullTime(message.at)}>
           {timeOf(message.at)}
@@ -560,13 +686,21 @@ function Message({
           </p>
         )}
         {message.text &&
-          (gif ? <MessageGif id={gif} /> : <p className="message-text">{message.text}</p>)}
+          (gif ? <MessageGif id={gif} /> : <MessageText text={message.text} nameOf={nameOf} />)}
         {message.kind === "qa" && <QaLine message={message} state={state ?? "offline"} />}
         <Reactions reactions={message.reactions} me={me} onReact={onReact} />
       </div>
     </article>
   );
 }
+
+/** What quoting a whole message copies: its text, or for a Q&A its answer (its question while it has none). */
+const quotable = (message: Exclude<ChannelMessage, { kind: "alert" | "decision" }>) =>
+  message.kind === "text"
+    ? message.text
+    : message.qa.answer.state === "answered"
+      ? message.qa.answer.text
+      : message.qa.question;
 
 export const SkeletonRow = () => (
   <div className="skeleton-row" aria-hidden>
