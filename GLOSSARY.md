@@ -1,230 +1,229 @@
 # Omagari
 
-사람과 각자의 AI 에이전트가 함께 있는 웹 협업 공간. 누가 무엇을 하는지 보이고, 부딪히면 그 자리에서 이야기해 정하고, 정한 것은 레포에 남는다.
+A web collaboration space where people and each person's AI agents work together. You can see who is doing what. When work collides, you settle it right there in conversation. What gets decided stays in the repo.
 
-괄호 안은 영어 이름이다. 영어 화면과 영어 문서는 이 이름을 그대로 쓴다.
+The Korean name is in parentheses after each English term. The English UI and English docs use the English name.
 
-## 사람과 에이전트
+## People and agents
 
-**주인** (Owner):
-에이전트를 가진 사람. 에이전트는 주인의 기기에서 주인의 구독·사용량으로 돈다.
-_Avoid_: 사용자, 오너
+**Owner** (주인):
+A person who has an agent. The agent runs on the owner's machine, using the owner's subscription and usage.
+_Avoid_: user, owner account
 
-**에이전트** (Agent):
-사이드바에서 주인 옆에 보이는 구성원. 주인과 실행기 한 쌍이라, 한 사람이 실행기를 여럿 쓰면 에이전트도 여럿이다(ADR-0015). 그 뒤에서 여러 에이전트 세션이 돈다.
-_Avoid_: 봇, 어시스턴트
+**Agent** (에이전트):
+A member shown in the sidebar next to its owner. An agent is a pair of an owner and an executor, so one person with several executors has several agents (ADR-0015). Many agent sessions run behind each agent.
+_Avoid_: bot, assistant
 
-**실행기** (Executor):
-에이전트 세션을 실제로 돌리는 도구. 지금은 Claude Code와 Codex다.
-_Avoid_: 벤더, 모델
+**Executor** (실행기):
+The tool that actually runs agent sessions. Right now that is Claude Code and Codex.
+_Avoid_: vendor, model
 
-**에이전트 세션** (Agent session):
-에이전트가 실제로 도는 대화 하나. 작업 세션과 러너 세션이 있다.
-_Avoid_: 스레드, 대화(단독)
+**Agent session** (에이전트 세션):
+One conversation in which an agent actually runs. There are work sessions and runner sessions.
+_Avoid_: thread, conversation (on its own)
 
-**작업 세션** (Work session):
-주인이 직접 띄워 코드를 고치는 에이전트 세션. Omagari는 훅으로 상황을 넣어 줄 뿐, 이 세션에 말을 걸지 않는다.
+**Work session** (작업 세션):
+An agent session the owner starts directly to change code. Omagari feeds it context through hooks but never talks to this session on its own.
 
-**러너 세션** (Runner session):
-러너가 화면 없이 띄워 질문에 답하는 읽기 전용 에이전트 세션.
-_Avoid_: 포크(포크는 러너 세션을 만드는 방법 중 하나일 뿐이다)
+**Runner session** (러너 세션):
+A read-only agent session that the runner starts without a screen to answer questions.
+_Avoid_: fork (a fork is only one way to make a runner session)
 
-**채널 세션** (Channel session):
-채널과 에이전트마다 하나씩 이어 가는 러너 세션. 그 채널에서 그 에이전트에게 한 DM과 @호출이 함께 쓴다.
+**Channel session** (채널 세션):
+A runner session kept going for each channel and each agent. The DMs and @calls one agent gets in that channel share it.
 
-**러너** (Runner):
-주인 기기에서 도는 Omagari 프로그램. 레포를 받은 폴더 하나에 짝지어지고, 관측하고, 그 기기에서 쓸 수 있는 실행기로 러너 세션을 띄운다.
-_Avoid_: 데몬, 에이전트
+**Runner** (러너):
+The Omagari program that runs on the owner's machine. It is paired with one work folder, watches it, and starts runner sessions on that machine with the executors it has.
+_Avoid_: daemon, agent
 
-**오프라인** (Offline):
-에이전트의 러너가 서버에 붙어 있지 않은 상태. 이때 그 에이전트는 답할 수 없다. 사람의 접속 상태가 "오프라인"인 것과는 다르다.
+**Offline** (오프라인):
+The state where an agent's runner is not connected to the server. The agent can't answer then. This is different from a person's status of "offline".
 
-**접속 상태** (Presence):
-사람이 지금 들어와 있는지와 스스로 고른 표시. 온라인, 자리 비움, 방해 금지, 오프라인 가운데 하나다. 들어와 있지 않거나 "오프라인으로 보이기"를 고르면 오프라인이다. 자리 비움, 방해 금지, 오프라인으로 보이기는 시간을 정해 걸 수 있다.
-_Avoid_: 상태(단독), 프레즌스
+**Presence** (접속 상태):
+Whether a person is in right now, and the status they pick. It is one of online, away, do not disturb, or offline. A person who is not in, or who picks "appear offline", is offline. Away, do not disturb, and appear offline can be set for a set time.
+_Avoid_: status (on its own)
 
-**상태 메시지** (Status message):
-사람이 직접 쓰는 한 줄. 이모지를 쓸 수 있고, 프로필과 멤버 목록에 보인다. 작업마다 에이전트가 쓰는 상태 한 줄과는 다르다.
-_Avoid_: 상태(단독), 커스텀 상태
+**Status message** (상태 메시지):
+One line the person writes. It can contain emoji and shows on the profile and in the member list. It is different from the status line the agent writes for each work.
+_Avoid_: status (on its own), custom status
 
-**프로필** (Profile):
-한 사람을 모아 보이는 것. 사람을 누르면 뜨는 작은 프로필 카드와, 거기서 여는 오른쪽 칸의 전체 보기가 있다. 사진, 이름, GitHub 로그인, 접속 상태, 상태 메시지, 그 사람의 작업과 에이전트를 보인다. 내 것을 바꾸는 왼쪽 아래 프로필 패널과는 다르다.
+**Profile** (프로필):
+Everything about one person, gathered in one place. Clicking a person opens a small profile card. The full view opens in the right-hand pane from there. It shows photo, name, GitHub login, presence, status message, and that person's work and agents. It is different from the profile panel at the bottom left, where you change your own.
 
-**반응** (Reaction):
-메시지에 단 이모지. 메시지 하나에 이모지마다 단 사람들이 모이고, 같은 반응을 누르면 달고 뗀다.
-_Avoid_: 리액션, 좋아요
+**Reaction** (반응):
+An emoji added to a message. Each message groups the people who added each emoji. Pressing the same reaction again adds or removes it.
+_Avoid_: like
 
-## 지금 상황
+## Current situation
 
-**작업** (Work):
-한 사람이 한 브랜치에서 진행 중인 일. 상태 한 줄과 관측의 단위다.
-_Avoid_: 태스크, 세션
+**Work** (작업):
+One person's ongoing work on one branch. It is the unit for the status line and for observation.
+_Avoid_: task, session
 
-**상황** (Awareness):
-팀에서 누가 어떤 작업을 하는지의 전체 그림. CSCW의 작업 공간 인식(workspace awareness)에 해당한다.
-_Avoid_: 상태(단독)
+**Awareness** (상황):
+The overall picture of who is doing what in the team. It corresponds to workspace awareness in CSCW.
+_Avoid_: status (on its own)
 
-**상태 한 줄** (Status line):
-작업마다 이름 옆에 보이는 "~하는 중" 한 줄.
-_Avoid_: 상태(단독), 상태 메시지, 상황
+**Status line** (상태 한 줄):
+The one-line "doing ~" shown next to a person's name, for each work.
+_Avoid_: status (on its own), status message, awareness
 
-**관측** (Observation):
-러너가 작업 폴더의 Git 상태에서 그 작업이 바꾼 파일과 그 내용을 읽어 서버에 올리는 것. 남의 변경을 내 폴더에 쓰지는 않는다.
-_Avoid_: 동기화, 감시
+**Observation** (관측):
+The runner reads from the work folder's Git state which files the work changed and what they contain, and sends that to the server. It never writes someone else's changes into your folder.
+_Avoid_: sync, surveillance
 
-**공유 수준** (Share level):
-관측이 서버에 올리는 범위. full(바뀐 파일의 내용 전체), declared(경로는 모두, 내용은 선점한 경로만), intent(상태 한 줄과 선점만) 가운데 하나다.
-_Avoid_: 공개 범위(공개 범위는 문답에 붙는 말이다)
+**Share level** (공유 수준):
+How much an observation sends to the server. It is one of full (the full content of changed files), declared (all paths, content only for claimed paths), or intent (only the status line and claims).
+_Avoid_: visibility (visibility is a word for Q&A)
 
-**기준 커밋** (Base commit):
-관측이 작업의 변경을 견주는 커밋. 그 브랜치와 기본 브랜치가 갈라진 지점이다.
-_Avoid_: 베이스(단독)
+**Base commit** (기준 커밋):
+The commit an observation compares a work's changes against. It is where that branch split from the default branch.
+_Avoid_: base (on its own)
 
-**정의 줄** (Definition line):
-이름 붙은 심볼(함수, 메서드, 클래스, 타입)을 선언하는 줄.
-_Avoid_: 시그니처(시그니처는 정의 줄의 일부다)
+**Definition line** (정의 줄):
+The line that declares a named symbol (function, method, class, type).
+_Avoid_: signature (a signature is part of a definition line)
 
-**근처 작업** (Nearby work):
-내가 고치려는 파일을 바꾸고 있는 다른 작업. 내 다른 브랜치의 작업도 근처 작업이다.
-_Avoid_: 이웃, 주변 작업
+**Nearby work** (근처 작업):
+Other work that changes a file I am about to edit. My other branches' work counts as nearby work too.
+_Avoid_: neighbor, surrounding work
 
-**선점** (Claim):
-에이전트가 심볼, 줄 범위, 폴더에 거는 "여기 내가 한다"는 표시. 알리기만 하고 아무것도 막지 않는다.
-_Avoid_: 잠금, 락, 예약
+**Claim** (선점):
+A mark an agent puts on a symbol, line range, or folder that says "I'm doing this here." It only informs others. It blocks nothing.
+_Avoid_: lock, reservation
 
-**계약** (Contract):
-다른 사람의 코드가 기대는 공개 인터페이스. 함수 시그니처, API 명세 같은 것.
-_Avoid_: 인터페이스(단독), 스펙
+**Contract** (계약):
+The public interface other people's code depends on. For example, a function signature or an API spec.
+_Avoid_: interface (on its own), spec
 
-## 에이전트에게 닿는 길
+## Routes to the agent
 
-**세션 시작 훅** (Session-start hook):
-작업 세션이 시작될 때 지금 상황을 한 번 넣어 주는 훅.
+**Session-start hook** (세션 시작 훅):
+A hook that gives a work session the current situation once, when it starts.
 
-**편집 전 훅** (Pre-edit hook):
-작업 세션이 파일을 고치기 직전에 그 파일의 근처 작업을 넣어 주는 훅. 지난번과 달라졌을 때만 넣는다.
-_Avoid_: 편집 훅, 사전 훅
+**Pre-edit hook** (편집 전 훅):
+A hook that gives a work session the nearby work for a file just before it edits that file. It only gives the context when it changed since last time.
+_Avoid_: edit hook, pre hook
 
-**편지함** (Inbox):
-작업마다 있는, 그 작업의 에이전트에게 직접 들어가는 소식. 내 작업과의 부딪힘, 내가 쓰는 계약의 변경, 내가 물은 질문의 답처럼 나에게 걸린 것만 온다.
-_Avoid_: 알림함, 인박스
+**Inbox** (편지함):
+Each work has one. It holds news sent directly to that work's agent. Only things that involve you come in: a collision with your work, a change to a contract you use, or the answer to a question you asked.
+_Avoid_: notification box
 
-**피드** (Feed):
-조회할 때만 보이는 나머지 소식.
-_Avoid_: 타임라인, 로그
+**Feed** (피드):
+The rest of the news, which you see only when you look it up.
+_Avoid_: timeline, log
 
-**묻기** (Ask):
-내 에이전트가 다른 멤버의 에이전트에게 하는 질문. 받는 쪽 러너 세션이 답하고, 답은 묻는 작업의 편지함으로 온다. 받는 쪽 주인이 받지 않기로 하면 묻지 못한다.
-_Avoid_: 문답(문답은 나와 내 에이전트 사이의 것이다), DM
+**Ask** (묻기):
+A question your agent sends to another member's agent. The receiving runner session answers, and the answer arrives in the asking work's inbox. The receiving owner can refuse to take questions, and then you can't ask.
+_Avoid_: Q&A (Q&A is between you and your own agent), DM
 
-## 공간
+## Spaces
 
-**워크스페이스** (Workspace):
-Omagari를 함께 쓰는 사람들의 가장 바깥 단위. GitHub 계정(조직이나 개인) 하나와 짝지어지고, 안에 그 계정의 레포 여럿을 둔다. 서버 하나에 여럿이 있다.
+**Workspace** (워크스페이스):
+The outermost unit that the people using Omagari share. It is paired with one GitHub account (an organization or a personal account) and holds several of that account's repos. One server can hold several workspaces.
 
-**레포** (Repo):
-워크스페이스 안의 칸 하나. GitHub 레포 하나와 짝지어지고, 작업, 포스트, 라벨, 결정이 레포마다 있다.
-_Avoid_: 공간, 룸, 프로젝트
+**Repo** (레포):
+One room in a workspace. It is paired with one GitHub repo, and work, posts, labels, and decisions are kept per repo.
+_Avoid_: space, room, project
 
-**멤버** (Member):
-워크스페이스에 들어온 사람. 워크스페이스 레포 가운데 하나라도 push 권한이 있는 GitHub 계정이다.
-_Avoid_: 사용자, 팀원(팀원은 Omagari를 쓰지 않는 사람도 포함한다)
+**Member** (멤버):
+A person who has joined a workspace. A member is a GitHub account with push permission on at least one of the workspace's repos.
+_Avoid_: user, teammate (a teammate may include people who don't use Omagari)
 
-**채널** (Channel):
-사람끼리 대화하는 곳. 채팅 채널과 포럼 채널이 있다. 레포 밑에도 워크스페이스 밑에도 둔다.
+**Channel** (채널):
+Where people talk to each other. There are chat channels and forum channels. They sit under a repo or under a workspace.
 
 **DM** (DM):
-채널 안에서 나와 내 에이전트 하나만 보는 문답. 에이전트가 여럿이면 물을 에이전트를 고른다. 고른 문답은 채널에 올릴 수 있다.
-_Avoid_: 귓속말, 개인 메시지
+A Q&A inside a channel that only you and one of your agents can see. If you have several agents, you pick which one to ask. You can post a finished DM to the channel.
+_Avoid_: whisper, private message
 
-**@호출** (@call):
-채널에서 처음부터 모두가 보는 내 에이전트와의 문답. 내 에이전트 가운데 하나를 부르고, 에이전트는 주인만 부를 수 있다.
-_Avoid_: 멘션(사람끼리의 멘션과 헷갈린다)
+**@call** (@호출):
+A Q&A in a channel with one of your agents, visible to everyone from the start. You pick one of your agents to call, and only an owner can call an agent.
+_Avoid_: mention (confused with mentions between people)
 
-**문답** (Q&A):
-질문 하나와 그 답 한 쌍. 공개 범위(비공개, 공개)는 문답마다 붙는다.
+**Q&A** (문답):
+One question and its answer. Each Q&A has its own visibility (private or public).
 
-**포럼 채널** (Forum channel):
-포스트를 중요도나 라벨로 거른 보기. 포럼 자체에는 글을 쓰지 않고 포스트 안에서 이야기한다. 포스트는 맞는 포럼마다 보인다. 처음엔 "논의"와 "참고"가 있다(ADR-0039).
+**Forum channel** (포럼 채널):
+A view that filters posts by importance or by label. You don't write in the forum itself. You talk inside each post. A post appears in every forum that fits it. At first there are "Discuss" and "FYI" (ADR-0039).
 
-**포스트** (Post):
-한 주제를 이야기하고 정리하는 대화. 채널처럼 글을 쓰고 DM과 @호출을 쓴다. 알림 하나가 포스트 하나로 올라온다.
-중요도가 논의인 포스트 하나는 GitHub 이슈 하나다. 포스트의 글은 이슈 댓글로, 이슈 댓글은 포스트의 글로 맞춰진다(ADR-0032, ADR-0039).
-_Avoid_: 스레드, 토픽
+**Post** (포스트):
+A conversation that discusses and settles one topic. Like a channel, you write messages in it and use DMs and @calls. Each alert starts as one post.
+A post whose importance is Discuss is one GitHub issue. Messages in the post map to issue comments, and issue comments map to messages in the post (ADR-0032, ADR-0039).
+_Avoid_: thread, topic
 
-## 부딪힘과 결정
+## Conflicts and decisions
 
-**부딪힘** (Conflict):
-두 작업이 서로 맞지 않는 것. 같은 사람의 두 작업도 부딪힌다. 직접 충돌, 간접 충돌, 중복 구현을 함께 부르는 말. 중요도(참고, 논의)와는 다르다.
-_Avoid_: 충돌(단독)
+**Conflict** (부딪힘):
+Two works that don't fit together. Work by the same person can also collide. It is the umbrella term for direct conflict, indirect conflict, and duplicate work. It is different from importance (FYI, Discuss).
+_Avoid_: collision (on its own)
 
-**직접 충돌** (Direct conflict):
-두 작업이 같은 파일의 같은 곳을 고쳐, 합치면 줄이 부딪히는 것.
+**Direct conflict** (직접 충돌):
+Two works change the same spot in the same file, so their lines clash when merged.
 
-**간접 충돌** (Indirect conflict):
-한 작업이 바꾼 정의를 다른 작업이 쓰는 것. 이름 매칭으로 추정한 것과, 합쳐 돌려 보기로 확인한 것을 나눈다.
+**Indirect conflict** (간접 충돌):
+One work changes a definition that another work uses. Some are guessed from name matching, and some are confirmed by a merge run. The two are kept apart.
 
-**중복 구현** (Duplicate work):
-두 작업이 같은 것을 따로 만드는 것.
+**Duplicate work** (중복 구현):
+Two works each build the same thing separately.
 
-**합쳐 돌려 보기** (Merge run):
-두 작업을 임시로 합쳐 검사 명령을 돌려 보는 것. 추정한 간접 충돌이 실제로 깨지는지 가린다.
-_Avoid_: 합쳐 보기(Room의 것), 가상 머지, 머지 프리뷰
+**Merge run** (합쳐 돌려 보기):
+Temporarily merges two works and runs the check command on the result. It shows whether a guessed indirect conflict really breaks.
+_Avoid_: merge preview, virtual merge
 
-**검사 명령** (Check command):
-합쳐 돌려 보기가 합친 것에 돌리는 팀의 명령. 테스트일 수도, 빌드나 린트일 수도 있다.
-_Avoid_: 테스트 명령
+**Check command** (검사 명령):
+The team's command that a merge run executes on the merged result. It can be a test, a build, or a lint.
+_Avoid_: test command
 
-**판정** (Verdict):
-합쳐 돌려 본 결과. 통과, 깨짐, 가릴 수 없음(한쪽이 혼자서도 깨진다), 돌리지 못함 가운데 하나다.
-_Avoid_: 결과(단독), 상태(단독)
+**Verdict** (판정):
+The result of a merge run. It is one of pass, fail, cannot tell (one side breaks even alone), or could not run.
+_Avoid_: result (on its own), status (on its own)
 
-**알림** (Alert):
-Omagari가 부딪힘을 채널에 올리는 한 줄. 두 작업 한 쌍과 부딪힘의 종류마다 하나이고, 두 작업의 편지함에도 들어간다.
-_Avoid_: 경고, 노티(화면 위의 알림 띠는 다른 것이다)
+**Alert** (알림):
+One line Omagari posts to a channel about a conflict. There is one per pair of works and per kind of conflict. It also lands in the inboxes of both works.
+_Avoid_: warning, notification (the banner on screen is something else)
 
-**라벨** (Label):
-포스트에 붙는 이름표. 레포의 GitHub 라벨과 같다. 종류 넷과 "확인됨"은 처음부터 있고, 경로 규칙과 사람이 더 붙인다(ADR-0039).
-_Avoid_: 태그
+**Label** (라벨):
+A tag on a post. It is the same as a GitHub label in the repo. Four kinds and "confirmed" exist from the start. Path rules and people add more (ADR-0039).
+_Avoid_: tag
 
-**중요도** (Importance):
-라벨마다 팀이 다는 값. 참고(FYI, 보기만 한다)와 논의(Discuss, 사람이 보고 이야기해 정한다, 이슈를 연다) 둘이다. 포스트의 중요도는 그 라벨 중 가장 높은 것이다.
-_Avoid_: 우선순위, 긴급도(Room의 것)
+**Importance** (중요도):
+A value the team sets for each label. It is either FYI (only look) or Discuss (a person reads it and talks it through to decide; this opens an issue). A post's importance is the highest importance among its labels.
+_Avoid_: priority, urgency (Room's term)
 
-**토론** (Debate):
-포스트에서 부딪힌 두 작업의 주인 에이전트가 근거를 붙여 입장을 내고, 실험, 검증된 근거, 사람 순으로 끝내는 것. 증거 라벨(확인됨, 계약 변경)이 붙으면 저절로 열리고, 그 밖에는 요청해서 연다(ADR-0040).
-_Avoid_: 회의, 논쟁
+**Debate** (토론):
+In a post, the owner agents of two conflicting works state positions with reasons, then end with experiments, verified evidence, and finally people. It opens on its own when an evidence label (confirmed, contract change) is attached. Otherwise someone requests it (ADR-0040).
+_Avoid_: meeting, argument
 
-**입장** (Stance):
-토론에서 에이전트 하나가 내는 주장과 그 근거. 첫 라운드는 다 모일 때까지 서로 가린다. 바꾸면 사유를 적는다.
-_Avoid_: 의견, 발언(단독)
+**Stance** (입장):
+The claim and its reasons that one agent makes in a debate. In the first round, positions stay hidden until everyone has posted. A changed stance records the reason.
+_Avoid_: opinion, statement (on its own)
 
-**실험** (Experiment):
-토론에서 입장에 붙은 패치를 두 작업과 합쳐 검사 명령으로 돌려 보는 것. 판정이 그 입장의 검증된 근거가 된다.
-_Avoid_: 실험 브랜치(푸시하지 않는다)
+**Experiment** (실험):
+In a debate, applying the patch attached to a stance to both works and running the check command on the result. The verdict becomes that stance's verified evidence.
+_Avoid_: experiment branch (never pushed)
 
-**결정** (Decision):
-레포에 남는 결론 하나. 상태는 제안됨, 수락됨, 대체됨, 폐기됨이다.
-_Avoid_: 합의, 메모, 기억
+**Decision** (결정):
+One conclusion that is recorded in the repo. Its status is proposed, accepted, superseded, or rejected.
 
-**결정 PR** (Decision PR):
-제안된 결정을 레포에 올리는 PR. 이의 창이 곧 이 PR이 열려 있는 동안이다.
+**Decision PR** (결정 PR):
+A PR that puts a proposed decision into the repo. The objection window is the time this PR stays open.
 
-**이의 창** (Objection window):
-제안된 결정에 이의를 낼 수 있는 시간. 이의가 없으면 확정된다.
-_Avoid_: 승인 단계, 리뷰 기간
+**Objection window** (이의 창):
+The time during which someone can object to a proposed decision. If there are no objections, it is confirmed.
+_Avoid_: approval step, review period
 
-**이의** (Objection):
-제안된 결정에 반대하는 표시. 하나라도 걸려 있으면 그 결정은 확정되지 않는다.
-_Avoid_: 거절, 반려
+**Objection** (이의):
+A mark against a proposed decision. While any objection stands, the decision is not confirmed.
+_Avoid_: rejection, veto
 
-**결정자** (Decider):
-결정을 정한 사람들. 그 결정을 정리한 포스트에서 말한 멤버다.
+**Decider** (결정자):
+The people who make the decision. They are the members named in the post that summarizes the decision.
 
-**동의** (Agree):
-결정자가 제안된 결정에 찬성하는 표시. 결정자가 모두 동의하면 이의 창을 일찍 닫는다(ADR-0029). 누르지 않아도 창이 닫히면 확정된다.
-_Avoid_: 승인(GitHub 리뷰 승인과 헷갈린다)
+**Agree** (동의):
+A decider's mark in favor of a proposed decision. When all deciders agree, the objection window closes early (ADR-0029). Without anyone pressing it, the decision is confirmed when the window closes.
+_Avoid_: approve (confused with a GitHub review approval)
 
-**대행** (Stand-in):
-오프라인인 주인의 자리에서, 그 사람이 남긴 기록만 보고 말하는 에이전트 세션. 발언에 "대행" 표시가 붙는다. 기본은 주인을 기다리고, 포스트의 멤버 누구나 언제든 불러 자기 사용량으로 띄운다(ADR-0040).
-_Avoid_: 대리, 프록시
+**Stand-in** (대행):
+An agent session that speaks in place of an offline owner, using only what that person left behind. Its messages are marked "stand-in". By default it waits for the owner. Any member of the post can call one in at any time, using their own usage (ADR-0040).
+_Avoid_: proxy, substitute
