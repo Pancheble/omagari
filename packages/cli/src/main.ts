@@ -63,7 +63,7 @@ const DEBATE_PATHS = [
 ] as const;
 
 const USAGE = `Usage:
-  omagari --version             Show this checkout's version (git tag) and contract version
+  omagari --version             Show the version (the npm package's, or the git tag in a clone) and contract version
   omagari runner [--share <level>] [--merge-check on|off]
                                 Start the runner in the repo folder. On first run, log in with GitHub device flow
                                 Share level is full (default), declared (paths only), or intent (status line only). Your choice is kept for this repo

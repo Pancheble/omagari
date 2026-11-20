@@ -1,0 +1,59 @@
+name: Publish
+# npm에 omagari를 올린다(ADR-0048). v* 태그는 X.Y.Z를 latest로, CI를 통과한 dev는 0.0.0-dev.<실행 번호>를 next로.
+# 토큰 없이 trusted publishing(OIDC)으로 올린다. npm에 등록한 파일 이름이 publish.yml이라 이름을 바꾸면 안 된다.
+on:
+  push:
+    tags: ["v*"]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [dev]
+concurrency:
+  group: publish
+  cancel-in-progress: false
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  publish:
+    # 태그 push, 또는 dev에 push된 커밋의 CI가 통과했을 때만. PR의 CI는 올리지 않는다.
+    if: github.event_name == 'push' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 버전과 dist-tag를 정한다
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+            echo "TAG=latest" >> "$GITHUB_ENV"
+            echo "REF=$GITHUB_SHA" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          # 옛 CI 실행을 다시 돌려도 next가 예전 판으로 돌아가지 않게, CI가 돈 커밋이 dev의 끝일 때만 올린다(deploy.yml과 같다).
+          tip=$(gh api "repos/$GITHUB_REPOSITORY/commits/dev" --jq .sha)
+          if [ "$tip" != "$HEAD_SHA" ]; then
+            echo "CI가 돈 커밋 $HEAD_SHA이 dev의 끝($tip)이 아니라 올리지 않는다"
+            exit 0
+          fi
+          echo "VERSION=0.0.0-dev.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "TAG=next" >> "$GITHUB_ENV"
+          echo "REF=$HEAD_SHA" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v7
+        if: env.VERSION != ''
+        with:
+          ref: ${{ env.REF }}
+      - uses: actions/setup-node@v7
+        if: env.VERSION != ''
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      # trusted publishing은 npm 11.5.1 이상이 필요하다.
+      - run: npm install -g npm@^11.5.1
+        if: env.VERSION != ''
+      - run: node scripts/build-package.ts "$VERSION" "$TAG"
+        if: env.VERSION != ''
+      - run: npm publish ./dist/omagari --tag "$TAG"
+        if: env.VERSION != ''
