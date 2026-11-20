@@ -28,7 +28,9 @@ const exec = promisify(execFile);
 /**
  * Looks at the runner pulling an installed clone (ADR-0042) with a temporary remote and an installed clone. There is a fake server whose contract is `contract` and which refuses every hello,
  * and the installed clone's CLI is started in the observed repo folder. The remote has a commit that raised the contract after the clone was taken.
- * Fakes: the server, and `npm ci` (it needs a download and is unstable in CI. It leaves only a mark in the clone that it was called).
+ * With `npm`, the installed folder is an npm install (package.json with a dist-tag) instead, which updates by `npm i -g omagari@next` (ADR-0048).
+ * Fakes: the server, `npm ci` and `npm i -g` (they need a download and are unstable in CI. They leave only a mark in the installed folder that they were called;
+ * the fake `npm i -g` also raises the installed contract and version the way the new package would, or fails with a permission error).
  */
 type Hello = { v: number; id: string };
 type Reply = (socket: WebSocket, hello: Hello, n: number) => void;
@@ -66,7 +68,7 @@ const welcome: Reply = (socket, hello) =>
     }),
   );
 
-async function setup(t: TestContext, reply: Reply) {
+async function setup(t: TestContext, reply: Reply, npm?: "ok" | "fail") {
   const dir = await realpath(await mkdtemp(join(tmpdir(), "omagari-update-")));
   const env = {
     GIT_CONFIG_GLOBAL: "/dev/null",
@@ -93,6 +95,11 @@ async function setup(t: TestContext, reply: Reply) {
   await git(origin, "commit", "-m", "init");
   const installed = join(dir, "installed");
   await git(dir, "clone", origin, installed);
+  if (npm)
+    await writeFile(
+      join(installed, "package.json"),
+      '{"private":true,"type":"module","version":"0.0.0-dev.1","publishConfig":{"tag":"next"}}',
+    );
   const index = join(origin, "packages/contract/src/index.ts");
   await writeFile(
     index,
@@ -115,7 +122,24 @@ async function setup(t: TestContext, reply: Reply) {
   // Fake npm: leaves the arguments it was called with in the clone.
   const bin = join(dir, "bin");
   await mkdir(bin);
-  await writeFile(join(bin, "npm"), '#!/bin/sh\necho "$@" > npm-called\n');
+  await writeFile(
+    join(bin, "npm"),
+    npm
+      ? `#!${process.execPath}
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+const installed = ${JSON.stringify(installed)};
+appendFileSync(installed + "/npm-called", process.argv.slice(2).join(" ") + "\\n");
+if (${JSON.stringify(npm)} === "fail") {
+  console.error("EACCES: permission denied, mkdir '/usr/local/lib/node_modules/omagari'");
+  process.exit(243);
+}
+const index = installed + "/packages/contract/src/index.ts";
+writeFileSync(index, readFileSync(index, "utf8").replace(/CONTRACT_VERSION = \\d+;/, "CONTRACT_VERSION = ${CONTRACT_VERSION + 1};"));
+const pkg = installed + "/package.json";
+writeFileSync(pkg, readFileSync(pkg, "utf8").replace("0.0.0-dev.1", "0.0.0-dev.2"));
+`
+      : '#!/bin/sh\necho "$@" > npm-called\n',
+  );
   await chmod(join(bin, "npm"), 0o755);
 
   const hellos: number[] = [];
@@ -292,5 +316,42 @@ test("when, after a runner that pulled and restarted attaches well, the server g
   assert.equal(
     await world.git(world.installed, "rev-parse", "HEAD"),
     await world.git(world.origin, "rev-parse", "HEAD"),
+  );
+});
+
+test("an npm-installed runner rejected by a newer contract installs its dist-tag, restarts and logs the versions", async (t) => {
+  const N = CONTRACT_VERSION;
+  const world = await setup(
+    t,
+    (socket, hello, n) => (n === 1 ? refuse(N + 1) : welcome)(socket, hello, n),
+    "ok",
+  );
+  // Not pulled: the remote's new commit is not in the installed folder.
+  const before = await world.git(world.installed, "rev-parse", "HEAD");
+  await world.keep(2);
+  assert.deepEqual(world.hellos, [N, N + 1]);
+  assert.equal(
+    (await readFile(join(world.installed, "npm-called"), "utf8")).trim(),
+    "i -g omagari@next",
+  );
+  assert.equal(await world.git(world.installed, "rev-parse", "HEAD"), before);
+
+  const log = await world.omagari("runner", "log");
+  assert.match(log.stdout, /Runner updated omagari@next 0\.0\.0-dev\.1 → 0\.0\.0-dev\.2/);
+});
+
+test("when the npm install fails, nothing changes and what to run is shown", async (t) => {
+  const world = await setup(t, refuse(CONTRACT_VERSION + 1), "fail");
+  const started = await world.omagari(...runner);
+  assert.notEqual(started.code, 0);
+  assert.match(
+    started.stderr,
+    /Could not update automatically.*`npm i -g omagari@next` failed.*not with sudo.*EACCES/s,
+  );
+  assert.deepEqual(world.hellos, [CONTRACT_VERSION]);
+  assert.match(await readFile(join(world.installed, "package.json"), "utf8"), /0\.0\.0-dev\.1/);
+  assert.equal(
+    (await world.omagari("runner", "log")).stdout.trim(),
+    "The runner hasn't run anything yet",
   );
 });

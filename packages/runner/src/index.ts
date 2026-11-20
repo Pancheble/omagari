@@ -52,7 +52,7 @@ import {
   type WorkRef,
   type WorkView,
 } from "@omagari/contract";
-import { checkoutBranch, checkoutVersion } from "@omagari/contract/version";
+import { checkoutBranch, checkoutVersion, installedPackage } from "@omagari/contract/version";
 import {
   CHECK_LIMITS,
   type CheckLimits,
@@ -775,8 +775,11 @@ function versionAdvice(frame: unknown) {
   const server = refusal.data.payload;
   const versions = `The server is on ${server.version}, and this machine is on ${checkoutVersion()}.`;
   const newer = server.contract > CONTRACT_VERSION;
+  const installed = installedPackage();
   const todo = newer
-    ? `Pull \`${checkoutBranch() ?? "this clone's branch"}\` (\`git pull\`, \`npm ci\`) and turn the runner back on`
+    ? installed
+      ? `Run \`npm i -g omagari@${installed.tag}\` and turn the runner back on`
+      : `Pull \`${checkoutBranch() ?? "this clone's branch"}\` (\`git pull\`, \`npm ci\`) and turn the runner back on`
     : "The server is older. Update the server (tell whoever runs it)";
   return new ServerContractMismatch(
     { code: "version_mismatch", message: `${versions} ${todo}` },
