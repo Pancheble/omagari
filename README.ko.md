@@ -55,7 +55,7 @@ Omagari가 레포를 지켜보는 방식은 Room의 동작을 따라요. Room은
 
 ## 빠른 시작
 
-Node.js 24.12 이상, 이 기기에서 로그인한 Claude Code나 Codex, 워크스페이스 레포에 push 권한이 있는 GitHub 계정, 팀이 띄운 Omagari 서버의 주소가 필요해요. 아직 서버가 없다면 [서버 띄우기](docs/server.md)부터 해요.
+Node.js 24.12 이상, 이 기기에서 로그인한 Claude Code나 Codex, 워크스페이스 레포에 push 권한이 있는 GitHub 계정, 팀이 띄운 Omagari 서버의 주소가 필요해요. 아직 서버가 없다면 [서버 띄우기](https://omagari-dev.github.io/omagari/server)부터 해요.
 
 ```bash
 npm i -g omagari
@@ -68,7 +68,7 @@ omagari setup https://<팀의 서버>
 
 웹의 "컴퓨터 연결" 카드에 서버 주소가 채워진 이 두 줄이 나와요. 에이전트에게 붙여 넣고 실행해 달라고 해도 돼요.
 
-합쳐 돌려 보기, 업데이트, Windows(WSL2)가 필요하면 [기기 설정](docs/setup.md)을 봐요. 이 문서는 영어예요.
+합쳐 돌려 보기, 업데이트, Windows(WSL2)가 필요하면 [기기 설정](https://omagari-dev.github.io/omagari/setup)을 봐요. 문서 사이트는 영어예요.
 
 ## 어떻게 돌아가나
 
@@ -112,7 +112,7 @@ omagari setup https://<팀의 서버>
 조금 써요. 부딪힘을 찾는 데는 안 써요. 러너가 바뀐 것을 비교하고 검사 명령을 돌릴 뿐이고, 서버에는 AI가 없어요. 늘어나는 곳은 두 군데예요. 훅이 에이전트의 맥락에 짧은 글을 넣어요(세션을 시작할 때 팀 요약, 파일을 고치기 직전에 근처 작업. 달라졌을 때만 넣어요). 그리고 내가 내 에이전트를 @호출하거나 팀원이 내 에이전트에게 물으면 내 사용량으로 답해요. 팀원 질문에 답하는 것은 끌 수 있어요. 아끼는 양이 쓰는 양보다 큰지는 아직 재 보지 않았어서, 아낀다고는 말하지 않아요.
 
 **서버를 꼭 띄워야 하나요?**
-네, 팀마다 하나요. Omagari는 직접 띄워 쓰고, 공개 서버는 없어요. [서버 띄우기](docs/server.md)를 봐요.
+네, 팀마다 하나요. Omagari는 직접 띄워 쓰고, 공개 서버는 없어요. [서버 띄우기](https://omagari-dev.github.io/omagari/server)를 봐요.
 
 **어떤 에이전트가 돼요?**
 Claude Code와 Codex예요. 각자 주인의 로그인과 사용량으로 돌아요.
@@ -121,17 +121,16 @@ Claude Code와 Codex예요. 각자 주인의 로그인과 사용량으로 돌아
 기본 공유 수준(`full`)에서는 내가 바꾼 파일의 내용이 팀 서버로 올라가요. 팀원의 러너가 합쳐서 검사할 수 있게요. `omagari runner --share`로 `declared`(경로만)나 `intent`(상태 한 줄만)를 고를 수 있고, 고른 것은 그 레포에 남아요.
 
 **Windows에서 돼요?**
-WSL2 안에서 `omagari setup`부터 하고, 레포도 WSL2 안에 둬요. [기기 설정](docs/setup.md)을 봐요.
+WSL2 안에서 `omagari setup`부터 하고, 레포도 WSL2 안에 둬요. [기기 설정](https://omagari-dev.github.io/omagari/setup)을 봐요.
 
 **팀 없이 써 볼 수 있어요?**
 [데모 서버](CONTRIBUTING.md#try-the-ui-without-a-team)로 화면을 둘러볼 수 있어요. Omagari는 2~10명 팀을 위한 거라, 혼자서는 볼 것이 많지 않아요.
 
 ## 문서
 
+- [문서 사이트](https://omagari-dev.github.io/omagari): 시작하기, 기기 설정, 합쳐 돌려 보기, 서버 띄우기 등 (영어)
 - [docs/omagari-v3.md](docs/omagari-v3.md): Omagari가 뭐고 왜 만드는지
 - [docs/omagari-v3-implementation.md](docs/omagari-v3-implementation.md): 어떻게 만드는지
-- [docs/setup.md](docs/setup.md): 기기 설정, 검사 명령, 업데이트
-- [docs/server.md](docs/server.md): 서버 띄우기, Fly.io에 올리기
 - [GLOSSARY.md](GLOSSARY.md): 쓰는 말
 - [docs/adr/](docs/adr/): 설계 결정
 - [DESIGN.md](DESIGN.md): 화면의 모양과 글

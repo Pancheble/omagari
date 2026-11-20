@@ -1,0 +1,11 @@
+/* The web app's single blue accent (DESIGN.md: primary, primary-on-dark). */
+:root {
+  --vp-c-brand-1: #0066cc;
+  --vp-c-brand-2: #0071e3;
+  --vp-c-brand-3: #0066cc;
+}
+.dark {
+  --vp-c-brand-1: #2997ff;
+  --vp-c-brand-2: #0071e3;
+  --vp-c-brand-3: #0066cc;
+}
