@@ -63,6 +63,7 @@ const DEBATE_PATHS = [
 ] as const;
 
 const USAGE = `Usage:
+  omagari --help                Show this usage
   omagari --version             Show the version (the npm package's, or the git tag in a clone) and contract version
   omagari runner [--share <level>] [--merge-check on|off]
                                 Start the runner in the repo folder. On first run, log in with GitHub device flow
@@ -124,6 +125,8 @@ const [command, sub, ...rest] = process.argv.slice(2);
 try {
   if (command === "--version") {
     console.log(`omagari ${checkoutVersion()} (contract ${CONTRACT_VERSION})`);
+  } else if (command === "--help" || command === "-h" || command === "help") {
+    console.log(USAGE);
   } else if (command === "runner" && (sub === undefined || sub.startsWith("--"))) {
     const { values } = parseArgs({
       args: process.argv.slice(3),

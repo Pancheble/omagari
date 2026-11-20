@@ -420,6 +420,10 @@ test("the CLI and hooks are operated through the executable's input and output",
     stdout: `omagari ${gitVersion()} (contract ${CONTRACT_VERSION})\n`,
     stderr: "",
   });
+  // --help is a request, not a mistake: usage on stdout, exit 0.
+  const help = await world.cli("--help");
+  assert.equal(help.code, 0);
+  assert.match(help.stdout, /^Usage:/);
 
   // A hook never blocks a tool call whatever it receives: it ends with 0 and puts in nothing.
   const silent = { code: 0, stdout: "", stderr: "" };
