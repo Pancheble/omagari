@@ -8,6 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { serve, upgradeWebSocket } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import {
+  type AccessRequest,
   ALERT_FILES,
   ALERT_LABELS,
   type Alert,
@@ -577,6 +578,11 @@ export async function startServer(options: {
   githubApp?: string;
   /** GIF search (ADR-0044). Given only when the server config has a GIPHY key. Without it the web has no GIF button. */
   giphy?: Giphy;
+  /** GitHub logins of the server's operators (`OMAGARI_OPERATORS`, ADR-0052). They approve access requests. Without any, the server takes no requests. */
+  operators?: string[];
+  /** Links to the server's terms and privacy policy. When either is set, an access request needs agreeing to them (ADR-0052). */
+  terms?: string;
+  privacy?: string;
   /** SQLite file. If not given, it lives in memory and is lost when the server stops. */
   database?: string;
   /**
@@ -685,6 +691,8 @@ export async function startServer(options: {
   ) as GitHub;
   /** Accounts to accept (lowercase). */
   const accounts = new Set(options.accept.map((entry) => entry.split("/")[0]?.toLowerCase()));
+  const operators = new Set((options.operators ?? []).map((login) => login.toLowerCase()));
+  const isOperator = (login: string) => operators.has(login.toLowerCase());
   /** Repos set by the server config. */
   const seeds = options.accept.filter((entry) => entry.includes("/"));
   /** The repo from when there was one repo. Rows in an existing DB without a repo belong to this repo. */
@@ -732,6 +740,20 @@ export async function startServer(options: {
       row.hash,
     );
   }
+  // Access requests (ADR-0052). `account` is lowercase. Approved accounts join the accepted accounts, also after a restart.
+  db.exec(`CREATE TABLE IF NOT EXISTS access_requests (
+    id INTEGER PRIMARY KEY,
+    account TEXT NOT NULL,
+    login TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('pending', 'approved', 'denied')),
+    at INTEGER NOT NULL,
+    decided_by TEXT,
+    decided_at INTEGER
+  ) STRICT`);
+  for (const { account } of db
+    .prepare("SELECT DISTINCT account FROM access_requests WHERE state = 'approved'")
+    .all() as { account: string }[])
+    accounts.add(account);
   // Each member's GitHub profile name. Rewritten at every login.
   db.exec(`CREATE TABLE IF NOT EXISTS people (
     login TEXT PRIMARY KEY,
@@ -3383,7 +3405,8 @@ export async function startServer(options: {
         message: "Couldn't check push access on GitHub. Try again in a bit",
       });
     }
-    if (access.push.length === 0) {
+    // A server that takes access requests lets the person in without a workspace, so they can request one (ADR-0052).
+    if (access.push.length === 0 && operators.size === 0) {
       throw new ContractFailure({
         code: "forbidden",
         // Don't include the server's repo names. A private repo's name doesn't leak to someone who couldn't join.
@@ -3424,6 +3447,7 @@ export async function startServer(options: {
       prefs: prefsOf(login),
       connected: !!db.prepare("SELECT 1 FROM runner_seen WHERE login = ?").get(login),
       shared: repos.filter((r) => shared(r, login)),
+      operator: isOperator(login),
     };
   });
 
@@ -3523,7 +3547,11 @@ export async function startServer(options: {
   });
 
   mount(app, api.adminRepos, async (_, c) => {
-    const found = await github.adminRepos(callerToken(c), workspaceOf(c));
+    // An account approved for the caller has no workspace until its first repo comes in, so its repos are listed for adding.
+    const wanted = c.req.header(WORKSPACE_HEADER)?.trim().toLowerCase();
+    const account =
+      wanted && approvedFor(c.get("login") as string).includes(wanted) ? wanted : workspaceOf(c);
+    const found = await github.adminRepos(callerToken(c), account);
     if (!found)
       throw new ContractFailure({
         code: "github_failed",
@@ -3631,6 +3659,8 @@ export async function startServer(options: {
     "objections",
     "seats",
     "debate_requests",
+    // An approved request is the operator accepting the account, not the person: it keeps the account accepted after a restart.
+    "access_requests",
   ];
 
   mount(app, api.deleteAccount, (_, c) => {
@@ -3645,6 +3675,7 @@ export async function startServer(options: {
       // A DM is only theirs. Questions others sent them, and their claims in the feed, go too.
       db.prepare("DELETE FROM qas WHERE login = ? AND visibility = 'private'").run(login);
       db.prepare("DELETE FROM questions WHERE target = ?").run(login);
+      db.prepare("DELETE FROM access_requests WHERE login = ? AND state != 'approved'").run(login);
       db.prepare("DELETE FROM feed WHERE json_extract(claim, '$.login') = ?").run(login);
       for (const table of tablesWith("login")) {
         if (KEPT_AFTER_DELETE.includes(table))
@@ -3670,7 +3701,106 @@ export async function startServer(options: {
     return {};
   });
 
-  mount(app, api.accounts, () => ({ accounts: [...accounts].sort() }));
+  /** Accounts approved on the caller's own requests. */
+  const approvedFor = (login: string) =>
+    (
+      db
+        .prepare(
+          "SELECT DISTINCT account FROM access_requests WHERE login = ? AND state = 'approved'",
+        )
+        .all(login) as { account: string }[]
+    ).map((row) => row.account);
+
+  // Someone without a workspace (signed in to request access) sees only the accounts approved for them, not who else is on this server.
+  mount(app, api.accounts, (_, c) => {
+    const login = c.get("login") as string;
+    const list = workspacesOf(login).length > 0 ? [...accounts] : approvedFor(login);
+    return { accounts: list.sort() };
+  });
+
+  const accessStatus = (login: string) => ({
+    open: operators.size > 0,
+    ...(options.terms && { terms: options.terms }),
+    ...(options.privacy && { privacy: options.privacy }),
+    requests: (
+      db
+        .prepare(
+          "SELECT id, account, state, at FROM access_requests WHERE login = ? ORDER BY id DESC",
+        )
+        .all(login) as { id: number; account: string; state: AccessRequest["state"]; at: number }[]
+    ).map((row) => ({ ...row, at: new Date(row.at).toISOString() })),
+  });
+  const pendingAccess = () =>
+    (
+      db
+        .prepare(
+          `SELECT r.id, r.account, r.state, r.at, r.login, p.name FROM access_requests r
+           LEFT JOIN people p ON p.login = r.login WHERE r.state = 'pending' ORDER BY r.id`,
+        )
+        .all() as {
+        id: number;
+        account: string;
+        state: AccessRequest["state"];
+        at: number;
+        login: string;
+        name: string | null;
+      }[]
+    ).map((row) => ({ ...row, name: row.name ?? row.login, at: new Date(row.at).toISOString() }));
+  const mustOperate = (login: string) => {
+    if (!isOperator(login))
+      throw new ContractFailure({
+        code: "forbidden",
+        message: `${login} isn't an operator of this server`,
+      });
+  };
+
+  mount(app, api.myAccess, (_, c) => accessStatus(c.get("login") as string));
+
+  mount(app, api.requestAccess, ({ account, agree }, c) => {
+    const login = c.get("login") as string;
+    if (operators.size === 0)
+      throw new ContractFailure({
+        code: "forbidden",
+        message: "This server doesn't take access requests",
+      });
+    if ((options.terms || options.privacy) && !agree)
+      throw new ContractFailure({
+        code: "invalid_request",
+        message: "Agree to the terms and privacy policy to request access",
+      });
+    const wanted = account.toLowerCase();
+    if (
+      !db
+        .prepare(
+          "SELECT 1 FROM access_requests WHERE login = ? AND account = ? AND state = 'pending'",
+        )
+        .get(login, wanted)
+    )
+      db.prepare(
+        "INSERT INTO access_requests (account, login, state, at) VALUES (?, ?, 'pending', ?)",
+      ).run(wanted, login, Date.now());
+    return accessStatus(login);
+  });
+
+  mount(app, api.accessRequests, (_, c) => {
+    mustOperate(c.get("login") as string);
+    return { requests: pendingAccess() };
+  });
+
+  mount(app, api.decideAccess, ({ id, approve }, c) => {
+    const login = c.get("login") as string;
+    mustOperate(login);
+    const row = db
+      .prepare("SELECT account FROM access_requests WHERE id = ? AND state = 'pending'")
+      .get(id) as { account: string } | undefined;
+    if (!row)
+      throw new ContractFailure({ code: "not_found", message: "That request isn't waiting" });
+    db.prepare(
+      "UPDATE access_requests SET state = ?, decided_by = ?, decided_at = ? WHERE id = ?",
+    ).run(approve ? "approved" : "denied", login, Date.now(), id);
+    if (approve) accounts.add(row.account);
+    return { requests: pendingAccess() };
+  });
 
   mount(app, api.share, ({ on }, c) => {
     const login = c.get("login") as string;
@@ -5669,7 +5799,7 @@ export async function startServer(options: {
         if (!db.prepare("SELECT 1 FROM sessions WHERE hash = ?").get(row.hash)) continue;
         const access = await readAccess(row.login, row.github_token);
         if (stopped) return;
-        if (access.push.length > 0 || access.unknown.length > 0) continue;
+        if (access.push.length > 0 || access.unknown.length > 0 || operators.size > 0) continue;
         endSession(row.hash, {
           code: "forbidden",
           message: `${row.login} was removed: no push permission on any workspace repo anymore`,

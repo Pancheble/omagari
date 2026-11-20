@@ -5,6 +5,7 @@ import "./app.css";
 import { api, call } from "@omagari/contract";
 import { StrictMode, useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { Access } from "./access.tsx";
 import {
   lastKey,
   type Me,
@@ -115,6 +116,17 @@ function App() {
     history.replaceState(null, "", remembered(lastKey(workspace, place)) || location.pathname);
     setState({ ...state, workspace });
   };
+  // Signed in, but in no workspace yet: a server that takes access requests let them in to request one (ADR-0052).
+  if (state.workspaces.length === 0)
+    return (
+      <Access
+        session={session}
+        me={state.me}
+        onEnter={() => void enter(session)}
+        onLogout={logout}
+        onSignedOut={expire}
+      />
+    );
   return (
     <Workspace
       key={state.workspace}

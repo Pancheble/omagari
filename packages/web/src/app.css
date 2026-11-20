@@ -317,6 +317,24 @@ svg.lucide {
   line-height: 1.38;
 }
 
+/* Access request form (ADR-0052): the agree line sits under the account field, links inline. */
+.also-send.access-agree {
+  margin: 16px 0 0;
+  align-items: flex-start;
+  line-height: 1.38;
+}
+
+.also-send.access-agree input {
+  margin-top: 1px;
+}
+
+/* Approve and Deny on an operator's request row. */
+.access-actions {
+  display: flex;
+  flex: none;
+  gap: 8px;
+}
+
 /* Code to enter on GitHub. People copy it by hand, so it is large and monospaced. */
 .device-code {
   display: grid;

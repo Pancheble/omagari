@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** Contract version. Sent in every envelope; a different one is rejected. Bump it on every breaking change. */
-export const CONTRACT_VERSION = 66;
+export const CONTRACT_VERSION = 67;
 
 /**
  * The server's limits (ADR-0052). Each is a setting, and unset means no limit. `requests` is per person a minute, `repos` and `storage` (megabytes)
@@ -1784,6 +1784,29 @@ export const REPO_HEADER = "omagari-repo";
 export const WORKSPACE_HEADER = "omagari-workspace";
 
 /** A workspace: paired with one GitHub account (an organization or a person), and created when you add that account's repo (ADR-0043). */
+/** An access request (ADR-0052): asks the server's operators to accept GitHub account `account` (lowercase). */
+export const AccessRequest = z.strictObject({
+  id: z.number().int(),
+  account: z.string(),
+  state: z.enum(["pending", "approved", "denied"]),
+  /** When it was requested. */
+  at: z.string(),
+});
+export type AccessRequest = z.output<typeof AccessRequest>;
+
+/** A waiting request as an operator sees it: who asked. */
+export const PendingAccess = AccessRequest.extend({ login: z.string(), name: z.string() });
+export type PendingAccess = z.output<typeof PendingAccess>;
+
+/** `api.myAccess`: whether the server takes requests, its legal text links, and the caller's requests, newest first. */
+export const AccessStatus = z.strictObject({
+  open: z.boolean(),
+  terms: z.string().optional(),
+  privacy: z.string().optional(),
+  requests: z.array(AccessRequest),
+});
+export type AccessStatus = z.output<typeof AccessStatus>;
+
 export const Workspace = z.strictObject({
   /** The account name in lowercase. Used in `WORKSPACE_HEADER` and `hello.workspace`. */
   id: z.string(),
@@ -1872,6 +1895,8 @@ export const api = {
       connected: z.boolean(),
       /** The repos in `repos` this member has shared (repo sharing, ADR-0049). In the others, the web offers a Share button. */
       shared: z.array(z.string()),
+      /** This member is one of the server's operators (`OMAGARI_OPERATORS`, ADR-0052). The web shows them the access requests in settings. */
+      operator: z.boolean(),
     }),
   },
   /**
@@ -1932,6 +1957,44 @@ export const api = {
     method: "GET",
     path: "/api/accounts",
     response: z.strictObject({ accounts: z.array(z.string()) }),
+  },
+  /**
+   * My access requests and whether this server takes them (ADR-0052). `open` is false when the server has no operators; then requesting is `forbidden`.
+   * `terms` and `privacy` are the server's legal text links; when either is set, requesting needs `agree`. Only the caller's own requests are listed.
+   */
+  myAccess: {
+    method: "GET",
+    path: "/api/access",
+    response: AccessStatus,
+  },
+  /**
+   * Asks the operators to accept a GitHub account (an organization or the caller's own). A pending request for the same account isn't made twice.
+   * Whether the account is already accepted isn't told, so a request reveals nothing about other workspaces.
+   */
+  requestAccess: {
+    method: "POST",
+    path: "/api/access",
+    body: z.strictObject({
+      account: z.string().regex(/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/),
+      agree: z.boolean(),
+    }),
+    response: AccessStatus,
+  },
+  /** The requests waiting for an operator, oldest first. `forbidden` for anyone who isn't an operator. */
+  accessRequests: {
+    method: "GET",
+    path: "/api/access/pending",
+    response: z.strictObject({ requests: z.array(PendingAccess) }),
+  },
+  /**
+   * An operator approves or denies a waiting request. An approved account joins the accepted accounts right away and stays after restarts.
+   * `not_found` if it isn't waiting anymore. The answer is the requests still waiting.
+   */
+  decideAccess: {
+    method: "POST",
+    path: "/api/access/decide",
+    body: z.strictObject({ id: z.number().int(), approve: z.boolean() }),
+    response: z.strictObject({ requests: z.array(PendingAccess) }),
   },
   /**
    * Shares the repo `REPO_HEADER` picks, or stops sharing it (repo sharing, ADR-0049). Per member and repo, so it follows the member to other machines.

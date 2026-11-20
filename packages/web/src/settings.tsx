@@ -25,10 +25,12 @@ import {
   RefreshCw,
   Search,
   Tag,
+  UserPlus,
   UserRound,
   X,
 } from "lucide-react";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
+import { AccessRequestsPage } from "./access.tsx";
 import { type Me, server } from "./api.ts";
 import { ConfirmDelete } from "./confirm-delete.tsx";
 import { type PostItem, settled } from "./forum.tsx";
@@ -48,7 +50,8 @@ type Page =
   | "account"
   | "alerts"
   | "labels"
-  | "info";
+  | "info"
+  | "access";
 
 /** The docs page on the check command and the sandbox tools (site/merge-runs.md). */
 const MERGE_RUN_DOCS = "https://omagari-dev.github.io/omagari/merge-runs";
@@ -178,6 +181,7 @@ export function Settings({
     ["alerts", t.settings.pages.alerts, <GitMerge key="alerts" size={18} aria-hidden />],
     ["labels", t.settings.pages.labels, <Tag key="labels" size={18} aria-hidden />],
     ["info", t.settings.pages.info, <Info key="info" size={18} aria-hidden />],
+    ["access", t.settings.pages.access, <UserPlus key="access" size={18} aria-hidden />],
   ];
   const item = ([id, name, icon]: (typeof items)[number]) => (
     <button
@@ -194,7 +198,10 @@ export function Settings({
   const pageName = items.find(([id]) => id === page)?.[1];
 
   let body: ReactNode;
-  if (page === "labels") {
+  if (page === "access") {
+    // Server-wide, not part of the workspace's settings read.
+    body = <AccessRequestsPage session={session} check={check} />;
+  } else if (page === "labels") {
     // Labels use a live list, separate from the settings read.
     body = <LabelsPage posts={posts} session={session} check={check} />;
   } else if (page === "language") {
@@ -289,7 +296,13 @@ export function Settings({
         <h3>{t.settings.me}</h3>
         {items.slice(0, 5).map(item)}
         <h3>{t.settings.workspace(workspace ?? "")}</h3>
-        {items.slice(5).map(item)}
+        {items.slice(5, 8).map(item)}
+        {me.operator && (
+          <>
+            <h3>{t.settings.server}</h3>
+            {items.slice(8).map(item)}
+          </>
+        )}
       </nav>
       <section className={page === "labels" ? "settings-page labels-page" : "settings-page"}>
         <h2 id={title}>{pageName}</h2>
