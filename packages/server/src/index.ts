@@ -110,6 +110,8 @@ const MAX_PENDING_PER_CLIENT = 5;
 const ABANDONED_LOGIN_MS = 60_000;
 /** Time allowed to finish hello. The connection is closed after this. */
 const HELLO_MS = 10_000;
+/** What a runner sends from observing its repo. Dropped from a runner whose member hasn't shared the repo (ADR-0049). */
+const OBSERVED = new Set(["observation", "conflicts", "checkCommand", "merged", "working"]);
 /** Max size of one frame received before hello finishes. hello is small. */
 const MAX_HELLO_BYTES = 64 * 1024;
 /** Max number of connections that haven't finished hello. */
@@ -1274,6 +1276,21 @@ export async function startServer(options: {
     }),
     Date.now(),
   );
+  // Repo sharing (ADR-0049): each member's yes, once per repo, to let their runner observe it.
+  // Members who already observed a repo before sharing existed (a work or a dropped runner there) count as shared.
+  const hadShares = db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'shares'").get();
+  db.exec(`CREATE TABLE IF NOT EXISTS shares (
+    repo TEXT NOT NULL,
+    login TEXT NOT NULL,
+    PRIMARY KEY (repo, login)
+  ) STRICT`);
+  if (!hadShares)
+    db.exec(
+      "INSERT OR IGNORE INTO shares (repo, login) SELECT repo, login FROM works UNION SELECT repo, login FROM offline",
+    );
+  const shared = (repo: string, login: string) =>
+    !!db.prepare("SELECT 1 FROM shares WHERE repo = ? AND login = ?").get(repo, login);
+
   // The server just started, so no runner is connected. Members who were already dropped keep their drop time.
   db.prepare(
     `INSERT OR IGNORE INTO offline (repo, login, since)
@@ -1398,6 +1415,8 @@ export async function startServer(options: {
       executors: ExecutorId[];
       choices: Partial<Record<ExecutorId, Choices>>;
       mergeCheck: MergeCheckState;
+      /** The member shared this repo (ADR-0049). Until then nothing it observes is taken. */
+      shared: boolean;
     }
   >();
   /** Live web connections that finished hello, with each session's hash, member, and chosen repo. Closed when the session ends. */
@@ -3162,6 +3181,32 @@ export async function startServer(options: {
     return { repos: reposOf(login) };
   });
 
+  mount(app, api.accounts, () => ({ accounts: [...accounts].sort() }));
+
+  mount(app, api.share, ({ on }, c) => {
+    const login = c.get("login") as string;
+    const repo = repoOf(c);
+    if (on) db.prepare("INSERT OR IGNORE INTO shares (repo, login) VALUES (?, ?)").run(repo, login);
+    else {
+      // Like going offline, but nothing is kept: other members stop seeing these works right away.
+      db.exec("BEGIN");
+      db.prepare("DELETE FROM shares WHERE repo = ? AND login = ?").run(repo, login);
+      for (const table of ["works", "lines", "work_agents"])
+        db.prepare(`DELETE FROM ${table} WHERE repo = ? AND login = ?`).run(repo, login);
+      db.exec("COMMIT");
+    }
+    for (const [socket, runner] of runners) {
+      if (runner.repo !== repo || runner.login !== login) continue;
+      runner.shared = on;
+      if (!on) reports.delete(socket);
+      if (open(socket, runner)) socket.send(encode(serverToRunner, "sharing", { shared: on }));
+    }
+    if (!on) reconcile(repo);
+    shareSituation();
+    shareMembers();
+    return { repo, shared: on };
+  });
+
   mount(app, api.logout, (_, c) => {
     endSession(hash(bearer(c.req.header("authorization")) as string), {
       code: "unauthorized",
@@ -4733,7 +4778,7 @@ export async function startServer(options: {
         }
         const { message } = decoded;
         if (message.kind === "hello") {
-          const { session, repos, executors, choices, mergeCheck } = message.payload;
+          const { session, repos, shareRepo, executors, choices, mergeCheck } = message.payload;
           const login = sessionLogin(session);
           if (!login) {
             return refuse(
@@ -4760,7 +4805,19 @@ export async function startServer(options: {
               message.id,
             );
           }
-          runners.set(socket, { login, hash: hash(session), repo, executors, choices, mergeCheck });
+          // A runner a person started by hand shares the repo (ADR-0049).
+          if (shareRepo)
+            db.prepare("INSERT OR IGNORE INTO shares (repo, login) VALUES (?, ?)").run(repo, login);
+          const isShared = shared(repo, login);
+          runners.set(socket, {
+            login,
+            hash: hash(session),
+            repo,
+            executors,
+            choices,
+            mergeCheck,
+            shared: isShared,
+          });
           greet(socket);
           db.prepare("DELETE FROM offline WHERE repo = ? AND login = ?").run(repo, login);
           db.prepare("UPDATE claims SET stale = NULL WHERE repo = ? AND login = ?").run(
@@ -4771,7 +4828,9 @@ export async function startServer(options: {
           db.prepare("DELETE FROM agents WHERE login = ?").run(login);
           const known = db.prepare("INSERT OR IGNORE INTO agents (login, executor) VALUES (?, ?)");
           for (const executor of executors) known.run(login, executor);
-          socket.send(encode(serverToRunner, "welcome", { login, repo }, message.id));
+          socket.send(
+            encode(serverToRunner, "welcome", { login, repo, shared: isShared }, message.id),
+          );
           shareSituation(socket);
           shareInbox(socket);
           shareRuns(repo, login, socket);
@@ -4783,6 +4842,8 @@ export async function startServer(options: {
         if (!runner) {
           // Don't accept messages from a connection that hasn't finished hello.
           refuse(socket, { code: "unauthorized", message: "Send hello first" }, message.id);
+        } else if (!runner.shared && OBSERVED.has(message.kind)) {
+          // Not shared: what it observed isn't taken (ADR-0049). It may have sent it just before sharing stopped.
         } else if (message.kind === "checkCommand") {
           db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run(
             `check ${runner.repo}`,

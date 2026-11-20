@@ -891,6 +891,7 @@ for (const who of ["dahee", "woojin", "sora", "minji", "jiho"] as const) {
     encode(runnerToServer, "hello", {
       session: as.session,
       repos: [REPO],
+      shareRepo: true,
       executors: ["claude-code"],
       choices: {},
       mergeCheck: "on",

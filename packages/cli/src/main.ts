@@ -26,6 +26,7 @@ import {
 } from "@omagari/contract";
 import { checkoutVersion } from "@omagari/contract/version";
 import {
+  acceptedRemotes,
   alertLine,
   type CheckRecord,
   callBackground,
@@ -71,8 +72,10 @@ const USAGE = `Usage:
                                 and show pass, broken, or couldn't run. Use it to confirm the check command runs on this machine
   omagari runner ask <message>  Ask this repo's runner session. The next question continues in the same session
   omagari runner log            Show what the runner has run
-  omagari runner background     Run the background runner: one runner for each repo an agent session opens, if a runner ran there before.
-                                omagari setup registers it to start at login, so you don't run it yourself
+  omagari runner background     Run the background runner: one runner for each workspace repo an agent session opens.
+                                It observes a repo only once you share it. omagari setup registers it to start at login, so you don't run it yourself
+  omagari share on|off          Share this repo with the team (once per repo, it follows you to other machines), or stop sharing it.
+                                Until you share it, your runner doesn't observe it. Starting omagari runner by hand here shares it too
   omagari status                Show the current situation: members, Work, status lines, changed files, recent news (Feed)
   omagari status set <line>     Write a status line on the Work of the current branch
   omagari claim <path> [--symbol <name> | --lines <start>-<end>] [--plan <kind>[:<symbol>] [--detail <line>]]
@@ -151,6 +154,8 @@ try {
     process.exitCode = await requestDebate(sub);
   } else if (command === "wait") {
     await wait();
+  } else if (command === "share" && (sub === "on" || sub === "off") && rest.length === 0) {
+    await share(sub === "on");
   } else if (command === "metrics" && (sub === undefined || sub.startsWith("--"))) {
     const { values } = parseArgs({
       args: process.argv.slice(3),
@@ -364,7 +369,8 @@ async function startIn(folder: string) {
   const mergeCheck = await remembered(paths.mergeCheck, undefined, "Merge run", ["on", "off"]);
   const session = (await readSessions())[server];
   if (!session) throw new Error(`Not signed in to ${server}. Run omagari setup`);
-  return startRunner({ serverUrl: server, folder, session, share, mergeCheck });
+  // Starting by itself isn't a yes to share the repo (ADR-0049).
+  return startRunner({ serverUrl: server, folder, session, share, mergeCheck, shareRepo: false });
 }
 
 /** Asks the runner paired with this folder's repo and returns the answer. */
@@ -453,11 +459,26 @@ async function member() {
   const session = (await readSessions())[server];
   if (!session) throw new Error("Not logged in. Start omagari runner in the repo folder first");
   // Per-repo things (Work, status lines, Feed) are called for this folder's repo (ADR-0043). Outside a repo folder, the server picks.
-  const repos = await readRepo(process.cwd()).then(
-    (found) => found.repos,
-    () => undefined,
+  // Only remotes under the server's accounts are named (ADR-0049); a repo with none isn't Omagari's.
+  const found = await readRepo(process.cwd()).catch(() => undefined);
+  if (!found) return { url: server, session };
+  const accepted = await acceptedRemotes({ url: server, session }, found.remotes);
+  if (accepted.length === 0)
+    throw new Error("This folder's GitHub remotes aren't under an account this server accepts");
+  return { url: server, session, repos: [...new Set(accepted.map((remote) => remote.repo))] };
+}
+
+/** Shares this folder's repo or stops sharing it (repo sharing, ADR-0049). */
+async function share(on: boolean) {
+  const as = await member();
+  if (!as.repos)
+    throw new Error("This folder is not a Git repo with a GitHub remote. Use it in a repo folder");
+  const { repo } = await call(as, api.share, { on });
+  console.log(
+    on
+      ? `Shared ${repo}. Your runner observes it now, and the team sees your Work there`
+      : `Stopped sharing ${repo}. Your runner stops observing it, and the team no longer sees your Work there`,
   );
-  return { url: server, session, repos };
 }
 
 /** Shows each member's agents and Work, and each Work's status line and changed files. */

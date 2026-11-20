@@ -21,7 +21,8 @@ test("refusal messages don't carry the server's repo names, and a repo you can't
   world.github.grant("alice");
   const alice = await world.login("alice");
   const messages: string[] = [];
-  for (const remote of ["someone/elsewhere", REPO3]) {
+  // Both remotes are under accepted accounts; a remote outside them never reaches the server (repo-sharing.test).
+  for (const remote of ["omagari-test/elsewhere", REPO3]) {
     const desk = await tempRepo(remote);
     t.after(desk.remove);
     const failed = await startRunner({

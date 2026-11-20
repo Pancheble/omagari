@@ -1,11 +1,11 @@
 // The background runner (ADR-0049): one process per user that runs one runner per repo folder, in-process.
 // The session-start hook sends it folders over one socket. It keeps the folders in the config folder and starts them again after a restart.
 import { once } from "node:events";
-import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { dirname } from "node:path";
 import { text } from "node:stream/consumers";
-import { backgroundSocket, readRepo, runnerPaths } from "@omagari/runner";
+import { backgroundSocket, OutsideAccounts, readRepo, runnerPaths } from "@omagari/runner";
 
 /** How often it tries again the folders whose runner isn't on (server down at login, a terminal runner that ended). */
 const RETRY_MS = 60_000;
@@ -14,7 +14,7 @@ type Running = { ended: Promise<unknown>; stop: () => Promise<void> | void };
 
 /**
  * Runs until SIGINT or SIGTERM. `start` starts the runner of one repo folder; `foldersFile` keeps the folders it has seen.
- * Until repo sharing (#353), it starts only repos where a runner already ran by hand: `<git-common-dir>/omagari` exists.
+ * A folder whose remotes aren't under the server's accounts is dropped without sending anything (ADR-0049). It comes back only if a session opens there again.
  */
 export async function background(foldersFile: string, start: (folder: string) => Promise<Running>) {
   let folders: string[] = JSON.parse(await readFile(foldersFile, "utf8").catch(() => "[]"));
@@ -33,22 +33,10 @@ export async function background(foldersFile: string, start: (folder: string) =>
 
   /** Starts the runner of `folder` unless it's on. Resolves once it's on or it's clear it won't be. */
   async function watch(folder: string) {
-    const { socket, log } = await runnerPaths(folder);
+    const { socket } = await runnerPaths(folder);
     const current = running.get(socket);
     if (current) return current;
     const started = (async () => {
-      if (
-        !(await access(dirname(log)).then(
-          () => true,
-          () => false,
-        ))
-      ) {
-        say(
-          socket,
-          `Not watching ${folder}: no runner has run in this repo yet. Run omagari runner there once`,
-        );
-        return undefined;
-      }
       const runner = await start(folder);
       say(socket, `Watching ${folder}`);
       runner.ended.then((reason) => {
@@ -59,8 +47,12 @@ export async function background(foldersFile: string, start: (folder: string) =>
         );
       });
       return runner;
-    })().catch((error) => {
-      say(socket, `Couldn't start the runner for ${folder}: ${error.message ?? error}`);
+    })().catch(async (error) => {
+      if (error instanceof OutsideAccounts) {
+        say(socket, `Not watching ${folder}: its remotes aren't under the server's accounts`);
+        folders = folders.filter((kept) => kept !== folder);
+        await save();
+      } else say(socket, `Couldn't start the runner for ${folder}: ${error.message ?? error}`);
       return undefined;
     });
     running.set(socket, started);
@@ -75,7 +67,7 @@ export async function background(foldersFile: string, start: (folder: string) =>
         readRepo(folder).then(
           async () => {
             await watch(folder);
-            return folder;
+            return folders.includes(folder) ? folder : undefined;
           },
           () => undefined,
         ),
