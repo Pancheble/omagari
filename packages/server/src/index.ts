@@ -1140,10 +1140,12 @@ export async function startServer(options: {
     db.exec("COMMIT");
     db.exec("PRAGMA foreign_keys = ON");
   }
-  // A channel's name is unique per layer within a workspace: among workspace channels (forums included), and a repo channel within its repo. So a name can't be revealed by colliding with a channel name in a repo you can't access.
+  // A chat channel's name is unique per layer within a workspace: among workspace channels, and a repo channel within its repo. So a name can't be revealed by colliding with a channel name in a repo you can't access.
+  // Forums aren't in the index: a forum you can't see may share a name with one you can, so `mustBeNew` checks only what the caller can see.
   db.exec("DROP INDEX IF EXISTS channels_by_name");
+  db.exec("DROP INDEX IF EXISTS channels_by_layer_name");
   db.exec(
-    "CREATE UNIQUE INDEX IF NOT EXISTS channels_by_layer_name ON channels (workspace, COALESCE(repo, ''), name)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS channels_by_chat_name ON channels (workspace, COALESCE(repo, ''), name) WHERE kind != 'forum'",
   );
   /** Puts the "Discuss" and "FYI" forums in a new workspace. */
   const seedForums = (workspace: string) => {
@@ -3681,15 +3683,15 @@ export async function startServer(options: {
       }),
   }));
 
-  /** `conflict` if the name overlaps with a channel other than `id` at the same level (workspace, or `repo`). Names are case-insensitive. */
-  const mustBeNew = (workspace: string, name: string, id = "", repo = "") => {
-    if (
-      db
-        .prepare(
-          "SELECT 1 FROM channels WHERE workspace = ? AND COALESCE(repo, '') = ? AND name = ? AND id != ?",
-        )
-        .get(workspace, repo, name, id)
-    ) {
+  /** `conflict` if the name overlaps with a channel other than `id` at the same level (workspace, or `repo`) that `login` can see. Names are case-insensitive. */
+  const mustBeNew = (login: string, workspace: string, name: string, id = "", repo = "") => {
+    const rows = db
+      .prepare(
+        "SELECT id, name, kind, filter, repo FROM channels WHERE workspace = ? AND COALESCE(repo, '') = ? AND name = ? AND id != ?",
+      )
+      .all(workspace, repo, name, id) as Parameters<typeof channelView>[0][];
+    // A forum the caller can't see doesn't count, or its name would leak.
+    if (rows.some((row) => channelFor(login, row))) {
       throw new ContractFailure({ code: "conflict", message: `A #${name} channel already exists` });
     }
   };
@@ -3707,7 +3709,7 @@ export async function startServer(options: {
           );
     if (repo !== undefined && !found)
       throw new ContractFailure({ code: "not_found", message: `Not a repo you can see: ${repo}` });
-    mustBeNew(workspace, name, "", found);
+    mustBeNew(login, workspace, name, "", found);
     const channel = {
       id: randomBytes(8).toString("hex"),
       name,
@@ -3759,7 +3761,7 @@ export async function startServer(options: {
     id?: string,
     old?: ForumFilter,
   ) => {
-    mustBeNew(workspace, name, id);
+    mustBeNew(login, workspace, name, id);
     // The repo filter must be repos in this workspace that the caller can see (matched to the joined repo's name). A repo they can't see is rejected the same as one that doesn't exist.
     const mine = reposOf(login).filter((r) => ownerOf(r) === workspace);
     const repos = (input.repos ?? []).map((repo) => {
