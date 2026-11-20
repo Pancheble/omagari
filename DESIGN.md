@@ -1943,6 +1943,17 @@ One window holds both personal settings and workspace settings, as two groups in
   - **`app-banner-warning`** warning: "The Codex runner is off · View settings"
   - **`app-banner-error`** error (`role="alert"`): "Couldn't send the message · Try again"
 
+#### Connect your computer
+
+Shown until this member's runner has connected to the server once (`api.me` `connected`, #354). @Pancheble picked a card above the conversation (2026-11-20), not a dialog or an empty-state screen.
+
+- **`app-connect-card`** Right under the channel header band, in the banner's spot and width. 1px `{colors.hairline}` border, `{rounded.md}`, padding 14px 16px. It doesn't collapse. It goes away on its own once a runner connects.
+  - Title "Connect your computer" (컴퓨터 연결하기) (15px/600), then a 13px secondary line.
+  - Two rows. Each has a 12px secondary label and an `app-code-block` (parchment, mono 13px) with the command and an outline `app-button` with a 16px Lucide `copy` ("Copy" (복사), then `check` "Copied" (복사했어요) for 2 seconds). The commands are `npm i -g omagari` and `omagari setup <this server's address>`. The address is the one the page was loaded from.
+  - A 12px secondary line for Codex: "Using Codex? Trust the Omagari hooks in /hooks."
+  - On narrow screens (833px and below) the copy button drops under its command, right-aligned.
+- **Share notice** In a repo the member hasn't shared (ADR-0049), an `app-banner-info` with "You haven't shared this repo yet, so your teammates can't see your work in it." and an underlined "Share" action on the right. It doesn't show on "All". If sharing fails it turns into `app-banner-error` with "Couldn't share that. Try again in a bit?" and the same action.
+
 #### Floating layers
 
 - **`app-popover`** menu. White background, 1px line, the floating layer's shadow, `{rounded.md}`, 6px padding.

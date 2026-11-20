@@ -1288,6 +1288,13 @@ export async function startServer(options: {
     db.exec(
       "INSERT OR IGNORE INTO shares (repo, login) SELECT repo, login FROM works UNION SELECT repo, login FROM offline",
     );
+  // Members whose runner has connected here at least once. The web shows "Connect your computer" until then (#354).
+  const hadSeen = db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'runner_seen'").get();
+  db.exec("CREATE TABLE IF NOT EXISTS runner_seen (login TEXT PRIMARY KEY) STRICT");
+  if (!hadSeen)
+    db.exec(
+      "INSERT OR IGNORE INTO runner_seen (login) SELECT login FROM shares UNION SELECT login FROM agents",
+    );
   const shared = (repo: string, login: string) =>
     !!db.prepare("SELECT 1 FROM shares WHERE repo = ? AND login = ?").get(repo, login);
 
@@ -3049,6 +3056,8 @@ export async function startServer(options: {
       repos,
       gif: !!options.giphy,
       prefs: prefsOf(login),
+      connected: !!db.prepare("SELECT 1 FROM runner_seen WHERE login = ?").get(login),
+      shared: repos.filter((r) => shared(r, login)),
     };
   });
 
@@ -4808,6 +4817,7 @@ export async function startServer(options: {
           // A runner a person started by hand shares the repo (ADR-0049).
           if (shareRepo)
             db.prepare("INSERT OR IGNORE INTO shares (repo, login) VALUES (?, ?)").run(repo, login);
+          db.prepare("INSERT OR IGNORE INTO runner_seen (login) VALUES (?)").run(login);
           const isShared = shared(repo, login);
           runners.set(socket, {
             login,
