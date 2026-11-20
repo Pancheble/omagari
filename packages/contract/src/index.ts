@@ -2163,6 +2163,8 @@ export const api = {
     response: z.strictObject({
       /** This server's version (`git describe --tags`), shown under Info in the settings window. */
       version: z.string(),
+      /** Where the server's source is (AGPL section 13). `OMAGARI_SOURCE_URL`, or Omagari's GitHub repo if unset. Shown under Info as "Source code". */
+      sourceUrl: z.string(),
       askSwitch: z.boolean(),
       answered: z.strictObject({
         count: z.number(),

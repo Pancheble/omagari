@@ -79,6 +79,7 @@ export const en = {
       repo: "Repo",
       server: "This server",
       version: "Version",
+      source: "Source code",
     },
     agent: {
       whenAsked: "When others ask",
