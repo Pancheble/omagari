@@ -122,6 +122,8 @@ const MAX_UNGREETED = 200;
 const FOLLOW_MS = 60_000;
 /** How long an offline member's observations and status line are kept. Room's 7 days (stage 1 Q A10). */
 const FORGET_MS = 7 * 24 * 60 * 60_000;
+/** How long changed-file content and debate patches are kept once unchanged (ADR-0054). */
+const CONTENT_MS = 30 * 24 * 60 * 60_000;
 /** Time zone that cuts the metrics day. The building team's day (ADR-0018). Seoul has no daylight saving, so a day is always 24 hours. */
 const TIME_ZONE = "Asia/Seoul";
 const DAY_MS = 24 * 60 * 60_000;
@@ -134,6 +136,13 @@ function filesLine(files: ObservedFile[]): StatusLine | null {
   return first ? { source: "files", file: basename(first.path), more: files.length - 1 } : null;
 }
 
+/** A file without its content (and definitions). Its path and whether it was deleted stay. */
+const dropContent = (file: ObservedFile): ObservedFile =>
+  "content" in file
+    ? { path: file.path, omitted: "share" }
+    : "deleted" in file
+      ? { path: file.path, deleted: true }
+      : file;
 const hash = (session: string) => createHash("sha256").update(session).digest("hex");
 const bearer = (authorization?: string) => authorization?.match(/^Bearer (\S+)$/)?.[1];
 
@@ -540,6 +549,8 @@ export async function startServer(options: {
   heartbeatMs?: number;
   followMs?: number;
   forgetMs?: number;
+  /** How long changed-file content and debate patches stay once unchanged. Default 30 days (`CONTENT_MS`). Tests shorten it. Swept every `followMs`. */
+  contentMs?: number;
   /** How long inbox items are kept. Default 14 days (`INBOX_MS`). Tests shorten it. Expiry is swept every `followMs`. */
   inboxMs?: number;
   /** Time for a chosen presence to go back to online. Tests shorten it. If not given, it's the contract's time. */
@@ -1365,6 +1376,13 @@ export async function startServer(options: {
     db.exec(
       "INSERT OR IGNORE INTO shares (repo, login) SELECT repo, login FROM works UNION SELECT repo, login FROM offline",
     );
+  // When a work's files last changed (ms), and a digest of the files as the runner sent them. Content older than `contentMs` is dropped (ADR-0054).
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('works') WHERE name = 'changed'").get()) {
+    db.exec(
+      "ALTER TABLE works ADD COLUMN changed INTEGER NOT NULL DEFAULT 0; ALTER TABLE works ADD COLUMN digest TEXT NOT NULL DEFAULT ''",
+    );
+    db.prepare("UPDATE works SET changed = ?").run(Date.now());
+  }
   // Members whose runner has connected here at least once. The web shows "Connect your computer" until then (#354).
   const hadSeen = db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'runner_seen'").get();
   db.exec("CREATE TABLE IF NOT EXISTS runner_seen (login TEXT PRIMARY KEY) STRICT");
@@ -1397,19 +1415,76 @@ export async function startServer(options: {
           .all(repo, login) as { branch: string }[]
       ).map((row) => row.branch),
     );
+    const before = new Map(
+      (
+        db
+          .prepare("SELECT branch, changed, digest FROM works WHERE repo = ? AND login = ?")
+          .all(repo, login) as { branch: string; changed: number; digest: string }[]
+      ).map((row) => [row.branch, row]),
+    );
     db.prepare("DELETE FROM works WHERE repo = ? AND login = ?").run(repo, login);
     const insert = db.prepare(
-      "INSERT OR REPLACE INTO works (repo, login, branch, base, share, files) VALUES (?, ?, ?, ?, ?, ?)",
+      "INSERT OR REPLACE INTO works (repo, login, branch, base, share, files, changed, digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     );
+    const now = Date.now();
     const clear = db.prepare("DELETE FROM lines WHERE repo = ? AND login = ? AND branch = ?");
     for (const work of works) {
-      insert.run(repo, login, work.branch, work.base, work.share, JSON.stringify(work.files));
+      // Files that look the same as last time haven't changed. Old ones come back without content even if the runner sends it again.
+      const digest = hash(JSON.stringify(work.files));
+      const prev = before.get(work.branch);
+      const changedAt = prev?.digest === digest ? prev.changed : now;
+      const old = changedAt < now - (options.contentMs ?? CONTENT_MS);
+      const files = old ? work.files.map(dropContent) : work.files;
+      insert.run(
+        repo,
+        login,
+        work.branch,
+        work.base,
+        work.share,
+        JSON.stringify(files),
+        changedAt,
+        digest,
+      );
       // An empty files in an intent means not sent, not that changes went to 0. Even if the level drops, the written line stays.
       if (work.share !== "intent" && work.files.length === 0 && changed.has(work.branch)) {
         clear.run(repo, login, work.branch);
       }
     }
     db.exec("COMMIT");
+  };
+  /**
+   * Drops changed-file content of works unchanged for `contentMs`, and debate patches whose work is gone or whose debate opened that long ago (ADR-0054).
+   * Paths, status lines and chat stay. A work whose branch is gone is deleted from `works` when its runner reports, so only patches need the gone check here.
+   * ponytail: reads every old work and every seat with a patch each period. When that gets big, keep a flag for rows already dropped.
+   */
+  const dropStaleContent = (now: number) => {
+    const cutoff = now - (options.contentMs ?? CONTENT_MS);
+    const putFiles = db.prepare(
+      "UPDATE works SET files = ? WHERE repo = ? AND login = ? AND branch = ?",
+    );
+    for (const row of db
+      .prepare("SELECT repo, login, branch, files FROM works WHERE changed < ?")
+      .all(cutoff) as { repo: string; login: string; branch: string; files: string }[]) {
+      const files: ObservedFile[] = JSON.parse(row.files);
+      const dropped = JSON.stringify(files.map(dropContent));
+      if (dropped !== row.files) putFiles.run(dropped, row.repo, row.login, row.branch);
+    }
+    const putStance = db.prepare("UPDATE seats SET stance = ? WHERE debate = ? AND seat = ?");
+    for (const row of db
+      .prepare(
+        `SELECT s.debate, s.seat, s.stance, d.at,
+           EXISTS (SELECT 1 FROM works w WHERE w.repo = c.repo AND w.login = s.login AND w.branch = s.branch) AS live
+         FROM seats s JOIN debates d ON d.id = s.debate JOIN channels c ON c.id = d.post
+         WHERE s.stance LIKE '%"patch":"_%'`,
+      )
+      .all() as { debate: number; seat: number; stance: string; at: number; live: number }[]) {
+      if (row.live && row.at >= cutoff) continue;
+      const stored = JSON.parse(row.stance);
+      const next = (Array.isArray(stored) ? stored : [stored]).map((stance: Stance) =>
+        stance.experiment ? { ...stance, experiment: { ...stance.experiment, patch: "" } } : stance,
+      );
+      putStance.run(JSON.stringify(next), row.debate, row.seat);
+    }
   };
   /** The title of the open draft PR for each repo and branch. The key is JSON of `[repo, branch]`. Reread from GitHub every `followMs`. Lost when the server stops and reread on the next round. */
   let drafts = new Map<string, string>();
@@ -5938,6 +6013,7 @@ export async function startServer(options: {
       ).run(now, cutoff);
       db.prepare("DELETE FROM offline WHERE since < ?").run(cutoff);
       db.prepare("DELETE FROM claims WHERE stale < ?").run(now - (options.forgetMs ?? FORGET_MS));
+      dropStaleContent(now);
       db.prepare("DELETE FROM inbox WHERE at <= ?").run(now - inboxMs);
       db.prepare("DELETE FROM feed WHERE at <= ?").run(now - inboxMs);
       db.prepare("DELETE FROM questions WHERE at <= ?").run(now - inboxMs); // Expire if unanswered
