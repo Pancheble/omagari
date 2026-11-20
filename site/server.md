@@ -9,6 +9,26 @@ cp .env.example .env     # fill in OMAGARI_REPO and GITHUB_CLIENT_ID (don't comm
 HOST=0.0.0.0 npm run server
 ```
 
+## GitHub sign-in
+
+People sign in with GitHub's device flow: the web or CLI shows a code, and they enter it on GitHub. The server keeps the GitHub token; members' machines never see it. `GITHUB_CLIENT_ID` is the client ID of either a GitHub App or an OAuth app ([ADR-0053](https://github.com/omagari-dev/omagari/blob/dev/docs/adr/0053-github-app-sign-in-and-encrypted-tokens.md)). Both keep working, so pick one.
+
+**A GitHub App** (what the hosted server uses) only reaches the repos an account's admin installed it on, with only the permissions below. Create one under Settings → Developer settings → GitHub Apps → New GitHub App (for an organization, in the organization's settings):
+
+- Homepage URL: your server's address. Callback URL: leave it empty.
+- Turn on **Enable Device Flow**. Leave **Expire user authorization tokens** on.
+- Webhook: turn **Active** off. The server doesn't take webhooks.
+- Repository permissions: **Metadata** read-only; **Contents**, **Issues**, and **Pull requests** read and write. Nothing else. The server uses them to check push access, open and merge decision PRs, open post issues, and edit labels.
+- Where it can be installed: "Only on this account" for your own team, "Any account" if other accounts sign in too.
+
+Then set `GITHUB_CLIENT_ID` to the App's client ID and `GITHUB_APP_SLUG` to its slug (the end of `https://github.com/apps/<slug>`). An admin of each accepted account installs the App on the workspace repos. A repo without the App is hidden from everyone's token, so Omagari treats it as no access. With `GITHUB_APP_SLUG` set, the login screen, the "Add a repo" window, and the CLI then say to install the App, with the link.
+
+The App's tokens expire after 8 hours. The server keeps the refresh token (good for 6 months) and gets a new token before it calls GitHub, so people stay signed in. A device-flow token refreshes without a client secret, so the server needs none. If GitHub rejects the refresh (unused for 6 months, or the person revoked the App), the session ends: the web goes back to its login screen, and on the command line `omagari setup` signs in again.
+
+**An OAuth app** still works the same as before: create one under Settings → Developer settings → OAuth Apps, turn on **Enable Device Flow**, and set `GITHUB_CLIENT_ID`. Leave `GITHUB_APP_SLUG` unset. Sign-in asks for the `repo` scope, which reaches every repo the person can, and its tokens don't expire. An organization with OAuth app access restrictions has to approve the app once.
+
+Moving a server from an OAuth app to a GitHub App signs everyone out once: they sign in again with the App.
+
 `OMAGARI_REPO` is the list of GitHub accounts the server accepts ([ADR-0043](https://github.com/omagari-dev/omagari/blob/dev/docs/adr/0043-workspace-is-a-github-account-people-follow-github.md)). Separate several with commas. Each entry is an account (`owner`) or a repo (`owner/name`).
 
 - Each accepted account is one workspace (`api.workspaces`). Repos from different accounts go into different workspaces, and members, presence, channels, forums, posts, decisions, and metrics never mix between workspaces. A person who is in two picks one with the `Omagari-Workspace` header (for the live connection, `workspace` in hello). Without it, they get the first workspace they belong to. A database from the single-repo or single-workspace versions moves to the first workspace on start. The UI only works as before when there's one workspace (#238).
@@ -34,7 +54,7 @@ The server runs on one small Fly.io machine (Tokyo, `nrt`). This is how the repo
 set -a; . ./.env; set +a                    # read FLY_APP and OMAGARI_REPO into the shell
 fly apps create "$FLY_APP"
 fly volumes create omagari_data --region nrt --size 1 -a "$FLY_APP"
-fly secrets set GITHUB_CLIENT_ID=<GitHub app with device flow on> -a "$FLY_APP"
+fly secrets set GITHUB_CLIENT_ID=<GitHub App or OAuth app with device flow on> GITHUB_APP_SLUG=<App slug, GitHub App only> -a "$FLY_APP"
 fly deploy -a "$FLY_APP" -e OMAGARI_REPO="$OMAGARI_REPO"
 ```
 

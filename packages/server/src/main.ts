@@ -10,7 +10,7 @@ const { OMAGARI_REPO, GITHUB_CLIENT_ID } = process.env;
 const accept = (OMAGARI_REPO ?? "").split(/[\s,]+/).filter(Boolean);
 if (accept.length === 0 || !GITHUB_CLIENT_ID) {
   console.error(
-    "Set OMAGARI_REPO (the list of GitHub accounts to accept: owner or owner/name, separated by commas) and GITHUB_CLIENT_ID (the GitHub app with device flow on)",
+    "Set OMAGARI_REPO (the list of GitHub accounts to accept: owner or owner/name, separated by commas) and GITHUB_CLIENT_ID (the GitHub App or OAuth app with device flow on)",
   );
   process.exit(1);
 }
@@ -19,6 +19,8 @@ if (accept.length === 0 || !GITHUB_CLIENT_ID) {
 const server = await startServer({
   accept,
   github: realGitHub(GITHUB_CLIENT_ID),
+  // With a GitHub App (ADR-0053), its slug (github.com/apps/<slug>). "No access" then says to install the App, with the link. Not set for an OAuth app.
+  githubApp: process.env.GITHUB_APP_SLUG || undefined,
   // GIF search (ADR-0044). Without a key there's no GIF button. With a production key, raise the hourly limit with GIPHY_PER_HOUR (beta keys get 100).
   giphy: process.env.GIPHY_API_KEY
     ? realGiphy(process.env.GIPHY_API_KEY, {
