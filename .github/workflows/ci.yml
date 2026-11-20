@@ -25,3 +25,14 @@ jobs:
         run: npm run typecheck
       - name: 테스트
         run: npm test
+      # npm 패키지를 빌드해 임시 prefix에 설치하고, 설치된 것이 도는지 본다(ADR-0048, publish.yml이 같은 빌드를 올린다).
+      - name: npm 패키지
+        run: |
+          node scripts/build-package.ts 0.0.0-ci next
+          out=$(mktemp -d)
+          npm pack ./dist/omagari --pack-destination "$out"
+          npm install -g --prefix "$out/prefix" "$out/omagari-0.0.0-ci.tgz"
+          "$out/prefix/bin/omagari" --version | tee /dev/stderr | grep -q "^omagari 0.0.0-ci "
+          "$out/prefix/bin/omagari" --help
+          echo "{\"hook_event_name\":\"SessionStart\",\"cwd\":\"$PWD\",\"session_id\":\"ci\",\"source\":\"startup\"}" \
+            | "$out/prefix/bin/omagari-hook" claude-code

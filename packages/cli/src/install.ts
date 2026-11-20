@@ -2,11 +2,14 @@
 // Each executor gets them in its own user settings. There is one hook file and one skill; the hook tells executors apart by its argument.
 import { copyFile, mkdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExecutorId } from "@omagari/contract";
 
-const HOOK = fileURLToPath(new URL("../../hooks/src/main.ts", import.meta.url));
+/** The hook file next to this one: `.ts` in a clone, `.js` in the npm package (ADR-0048). */
+const HOOK = fileURLToPath(
+  new URL(`../../hooks/src/main${extname(import.meta.filename)}`, import.meta.url),
+);
 /** The one skill given to every executor. Claude Code and Codex read the same SKILL.md format. */
 const SKILL = fileURLToPath(new URL("../skills/omagari-status/SKILL.md", import.meta.url));
 /** Seconds before the agent cuts a hook off. Hooks finish within 3 seconds on their own, so this is only an upper bound. */

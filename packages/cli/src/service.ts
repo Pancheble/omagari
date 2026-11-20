@@ -2,11 +2,11 @@
 import { execFile } from "node:child_process";
 import { access, mkdir, rm, writeFile } from "node:fs/promises";
 import { homedir, release } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
-const MAIN = fileURLToPath(new URL("./main.ts", import.meta.url));
+const MAIN = fileURLToPath(new URL(`./main${extname(import.meta.filename)}`, import.meta.url));
 const LABEL = "com.github.omagari-dev.runner";
 const UNIT = "omagari-runner.service";
 /** What the runner needs from the shell `setup` runs in: `claude`, `codex` and `git` on PATH, the temp folder its sockets are in, and where configs are. */
