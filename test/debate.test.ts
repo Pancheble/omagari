@@ -617,6 +617,36 @@ test("a patch attached to a stance is applied on top of the two works merged and
   );
 });
 
+test("a debate's patches are dropped after 30 days; the claims, grounds and conclusion stay", async (t) => {
+  const { world, debate, stanceOf } = await experimentDebate(t, {
+    owner: { claim: "add reason", evidence: ["partial refund request"], patch: REASON_PATCH },
+    alice: {
+      claim: "fix the caller",
+      evidence: ["src/money.ts:2 body of refund"],
+      patch: CALLER_PATCH,
+    },
+  });
+  assert.ok(stanceOf("add reason").stances[0]?.experiment?.patch);
+  // The test clock: 30 days shortened to 1 millisecond.
+  await world.restartServer({ contentMs: 1 });
+  await eventually(async () => {
+    const found = (await postOf(world.owner, "declared"))?.debate;
+    for (const claim of ["add reason", "fix the caller"])
+      assert.equal(
+        found?.options.find((o) => o.stances[0]?.claim === claim)?.stances[0]?.experiment?.patch,
+        "",
+      );
+  });
+  const after = (await postOf(world.owner, "declared"))?.debate;
+  assert.equal(after?.state, "concluded");
+  assert.equal(after?.conclusion?.by, debate.conclusion?.by);
+  assert.equal(
+    after?.options.find((o) => o.stances[0]?.claim === "add reason")?.stances[0]?.experiment
+      ?.verdict,
+    "pass",
+  );
+});
+
 test("if both options pass, it is not decided by the experiment and moves on to verified grounds", async (t) => {
   const { debate, stanceOf } = await experimentDebate(t, {
     owner: { claim: "add reason", evidence: ["src/money.ts:2 body"], patch: REASON_PATCH },
