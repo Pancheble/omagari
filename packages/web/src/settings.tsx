@@ -40,8 +40,8 @@ import { Avatar, personName } from "./workspace.tsx";
 type Reply = Awaited<ReturnType<typeof call<typeof api.settings>>>;
 type Page = "agent" | "language" | "appearance" | "notifications" | "alerts" | "labels" | "info";
 
-/** How to set the check command and install sandbox tools (README "Check command"). */
-const CHECK_HELP = "https://github.com/omagari-dev/omagari/blob/dev/docs/setup.md#check-command";
+/** The docs page on the check command and the sandbox tools (site/merge-runs.md). */
+const MERGE_RUN_DOCS = "https://omagari-dev.github.io/omagari/merge-runs";
 
 /**
  * Settings window (DESIGN.md "Settings window"). Pick an item in the left list and see its content on the right.
@@ -464,8 +464,13 @@ function InfoPage({
   );
 }
 
-const help = (text: string) => (
-  <a className="settings-link" href={CHECK_HELP} target="_blank" rel="noreferrer">
+const help = (text: string, section: "check-command" | "sandbox") => (
+  <a
+    className="settings-link"
+    href={`${MERGE_RUN_DOCS}#${section}`}
+    target="_blank"
+    rel="noreferrer"
+  >
     {text} ›
   </a>
 );
@@ -482,7 +487,7 @@ function MergeCheckGroup({ runner, check }: Reply["mergeCheck"]) {
       </span>,
     ],
     off: [words.runOff, off],
-    no_sandbox: [words.noSandbox, help(words.howToInstall)],
+    no_sandbox: [words.noSandbox, help(words.howToInstall, "sandbox")],
     offline: [words.runnerOff, off],
   };
   const [description, control] = rows[runner];
@@ -502,7 +507,7 @@ function MergeCheckGroup({ runner, check }: Reply["mergeCheck"]) {
         {check && "config" in check && (
           <code className="settings-value settings-command">{check.config.check}</code>
         )}
-        {problem && help(words.howToSet)}
+        {problem && help(words.howToSet, "check-command")}
       </Row>
       <Row name={words.runOnMine} description={description}>
         {control}

@@ -4,7 +4,8 @@ import { type ReactNode, useEffect, useId, useReducer, useState } from "react";
 import { ago, t } from "./i18n.ts";
 import { notRunWords } from "./verdict-words.ts";
 
-const DOCS = "https://github.com/omagari-dev/omagari/blob/dev/docs/adr";
+/** The docs page on the check command and the sandbox tools (site/merge-runs.md). */
+const DOCS = "https://omagari-dev.github.io/omagari/merge-runs";
 const link = (href: string, text: string) => (
   <a href={href} target="_blank" rel="noreferrer">
     {text}
@@ -22,14 +23,13 @@ function notRun(reason: string, mine: string): ReactNode {
   if (help === "sandbox")
     return (
       <>
-        {text} · {link(`${DOCS}/0033-merge-runs-in-runner-sandbox.md`, t.verdict.howToInstall)}
+        {text} · {link(`${DOCS}#sandbox`, t.verdict.howToInstall)}
       </>
     );
   if (help === "check")
     return (
       <>
-        {text} ·{" "}
-        {link(`${DOCS}/0034-check-command-from-repo-file-on-by-default.md`, t.verdict.howToSet)}
+        {text} · {link(`${DOCS}#check-command`, t.verdict.howToSet)}
       </>
     );
   return text;
