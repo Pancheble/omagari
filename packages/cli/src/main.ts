@@ -24,7 +24,7 @@ import {
   ShareLevel,
   VERDICT_LABELS,
 } from "@omagari/contract";
-import { checkoutVersion } from "@omagari/contract/version";
+import { checkoutVersion, installedPackage } from "@omagari/contract/version";
 import {
   acceptedRemotes,
   alertLine,
@@ -48,7 +48,7 @@ import {
 import { background } from "./background.ts";
 import { install, uninstall } from "./install.ts";
 import { register, unregister, unsupported } from "./service.ts";
-import { restart, UPDATED, type UpdateRecord, updateClone } from "./update.ts";
+import { restart, UPDATED, type UpdateRecord, update } from "./update.ts";
 
 /** First line of commands that show other people's text in quotes (status, impact). Same meaning as the hooks' notice. */
 const DATA_NOTE =
@@ -304,11 +304,18 @@ async function remembered<T extends string>(
  * If the server's contract is newer and it rejected us, fetches the installed clone and restarts (doesn't return). Otherwise rethrows the error as is.
  * If it's rejected again right after fetching, before the restarted runner even connects, it doesn't fetch again.
  */
-async function selfUpdate(error: Error, log: string): Promise<never> {
+async function selfUpdate(
+  error: Error,
+  log: string,
+  /** What follows a successful update. The background runner ends instead, and launchd or systemd starts it again in the new version (ADR-0049). */
+  then: () => Promise<number> = restart,
+): Promise<never> {
   if (!(error instanceof ServerContractMismatch) || !error.newer || process.env[UPDATED])
     throw error;
-  console.log(`${error.message}\nThe server's contract is newer, so this clone will be updated`);
-  const updated = await updateClone();
+  console.log(
+    `${error.message}\nThe server's contract is newer, so this ${installedPackage() ? "install" : "clone"} will be updated`,
+  );
+  const updated = await update();
   if ("todo" in updated)
     throw new Error(`${error.message}\nCould not update automatically. ${updated.todo}`);
   const record: UpdateRecord = {
@@ -318,10 +325,15 @@ async function selfUpdate(error: Error, log: string): Promise<never> {
   };
   await mkdir(dirname(log), { recursive: true });
   await appendFile(log, `${JSON.stringify(record)}\n`);
-  console.log(
-    `Updated ${record.branch} from ${record.from.slice(0, 7)} to ${record.to.slice(0, 7)}. Restarting the runner`,
-  );
-  process.exit(await restart());
+  console.log(`Updated ${updateLabel(record)}. Restarting the runner`);
+  process.exit(await then());
+}
+
+/** "dev from abc1234 to def5678" for a clone, "omagari@next from 0.0.0-dev.1 to 0.0.0-dev.2" for npm. */
+function updateLabel(run: Pick<UpdateRecord, "branch" | "tag" | "from" | "to">) {
+  return run.tag
+    ? `omagari@${run.tag} from ${run.from} to ${run.to}`
+    : `${run.branch} from ${run.from.slice(0, 7)} to ${run.to.slice(0, 7)}`;
 }
 
 /** Starts the runner in this folder and runs until it's stopped or the server rejects it. */
@@ -373,7 +385,26 @@ async function startIn(folder: string) {
   const session = (await readSessions())[server];
   if (!session) throw new Error(`Not signed in to ${server}. Run omagari setup`);
   // Starting by itself isn't a yes to share the repo (ADR-0049).
-  return startRunner({ serverUrl: server, folder, session, share, mergeCheck, shareRepo: false });
+  const started = await startRunner({
+    serverUrl: server,
+    folder,
+    session,
+    share,
+    mergeCheck,
+    shareRepo: false,
+  }).catch((error) => npmSelfUpdate(error, paths.log));
+  // The background runner itself says why a runner stopped, so a failed update is only added to its message.
+  started.ended.then((reason) => {
+    if (reason instanceof ServerContractMismatch)
+      npmSelfUpdate(reason, paths.log).catch((error) => console.error(error.message));
+  });
+  return started;
+}
+
+/** The background runner updates itself only from npm, never a clone's files. Exit code 1 so systemd's `Restart=on-failure` starts it again too. */
+async function npmSelfUpdate(error: Error, log: string): Promise<never> {
+  if (!installedPackage()) throw error;
+  return selfUpdate(error, log, async () => 1);
 }
 
 /** Asks the runner paired with this folder's repo and returns the answer. */
@@ -430,7 +461,9 @@ async function log() {
     const run: RunRecord | CheckRecord | UpdateRecord = JSON.parse(line);
     if ("kind" in run && run.kind === "update") {
       console.log(
-        `${run.at}  Runner updated its clone ${run.branch} ${run.from.slice(0, 7)} → ${run.to.slice(0, 7)}`,
+        run.tag
+          ? `${run.at}  Runner updated omagari@${run.tag} ${run.from} → ${run.to}`
+          : `${run.at}  Runner updated its clone ${run.branch} ${run.from.slice(0, 7)} → ${run.to.slice(0, 7)}`,
       );
       continue;
     }

@@ -1,27 +1,56 @@
 // Fetches the installed clone when the server's contract is newer and rejected us (ADR-0042). Never touches the watched repo folder.
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
-import { checkoutBranch, checkoutRoot } from "@omagari/contract/version";
+import { checkoutBranch, checkoutRoot, installedPackage } from "@omagari/contract/version";
 
 /** Marker passed to the runner restarted from the fetched clone. Stops it from fetching the same version again. */
 export const UPDATED = "OMAGARI_UPDATED";
 
-/** One run-log line (installed clone updated): when, which branch, from which commit to which commit. */
+/**
+ * One run-log line (installed copy updated): when, from which commit to which commit on `branch` for a clone,
+ * or from which version to which on the dist-tag `tag` for an npm install.
+ */
 export type UpdateRecord = {
   at: string;
   kind: "update";
-  branch: string;
+  branch?: string;
+  tag?: string;
   from: string;
   to: string;
 };
+
+/** What the self-update did: `record` if it updated, `todo` (what a person has to do) if it changed nothing. */
+export type Updated = { record: Omit<UpdateRecord, "at" | "kind"> } | { todo: string };
+
+/**
+ * Runs `npm i -g omagari@<dist-tag>` for a runner installed from npm (ADR-0048). If the install fails (for example
+ * npm can't write the global folder), npm leaves the old version and this returns `todo`. Never uses sudo.
+ */
+export async function updateNpm(): Promise<Updated> {
+  const installed = installedPackage();
+  if (!installed) return { todo: "This is not an npm install" };
+  const command = `npm i -g omagari@${installed.tag}`;
+  try {
+    await promisify(execFile)("npm", ["i", "-g", `omagari@${installed.tag}`]);
+  } catch (error) {
+    const why = error instanceof Error ? error.message : error;
+    return {
+      todo: `\`${command}\` failed, so nothing changed. Run it yourself (not with sudo): ${why}`,
+    };
+  }
+  const to = installedPackage()?.version;
+  if (!to || to === installed.version)
+    return {
+      todo: `\`${command}\` found no new version of ${installed.tag}. Check which version the server runs`,
+    };
+  return { record: { tag: installed.tag, from: installed.version, to } };
+}
 
 /**
  * Runs `git pull --ff-only` and `npm ci` in the installed clone. If it can't update (for example there are
  * modified files or a fast-forward isn't possible), it changes nothing and returns `todo` (what a person has to do).
  */
-export async function updateClone(): Promise<
-  { record: Omit<UpdateRecord, "at" | "kind"> } | { todo: string }
-> {
+export async function updateClone(): Promise<Updated> {
   const root = checkoutRoot();
   const branch = checkoutBranch();
   if (!root) return { todo: "This checkout is not a Git clone. Clone it again" };
@@ -69,3 +98,6 @@ export function restart() {
   for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, () => child.kill(signal));
   return new Promise<number>((done) => child.on("exit", (code) => done(code ?? 1)));
 }
+
+/** Updates the way this was installed: from npm, or the clone with git. */
+export const update = () => (installedPackage() ? updateNpm() : updateClone());
