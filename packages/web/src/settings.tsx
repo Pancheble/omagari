@@ -617,7 +617,7 @@ function NotificationsPage({
   const kind = (
     name: string,
     help: string,
-    key: "notifyConflicts" | "notifyAnswers" | "notifyDecisions",
+    key: "notifyConflicts" | "notifyAnswers" | "notifyDecisions" | "notifyReplies",
     title: string,
     body: string,
     extra?: ReactNode,
@@ -703,6 +703,13 @@ function NotificationsPage({
             "notifyDecisions",
             words.decisionTitle,
             words.previewDecision,
+          )}
+          {kind(
+            words.replies,
+            words.repliesHelp,
+            "notifyReplies",
+            words.replyTitle,
+            words.previewReply,
           )}
         </div>
         <p>{words.quietNote}</p>

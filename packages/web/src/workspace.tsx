@@ -251,6 +251,7 @@ export function Workspace({
   const since = useRef<number>(undefined);
   const asking = useRef(new Set<number>());
   const notified = useRef(new Set<string>());
+  const heard = useRef(new Set<number>());
   /** All written-up Decisions. The decision status strip reads it. Read at first, and replaced when a decision line arrives and when I change one. */
   const [decisions, setDecisions] = useState<Decision[]>([]);
   /** The write-up dialog: has a value while open, and holds that Decision while editing. */
@@ -717,11 +718,13 @@ export function Workspace({
       looking: document.hasFocus(),
       since: since.current,
       asking: asking.current,
+      heard: heard.current,
       postTitle: (channel) => {
         const item = posts?.find((one) => one.channel === channel);
         return item && postTitle(item);
       },
     });
+    if (event.kind === "message") heard.current.add(event.payload.id);
     if (!notice || notified.current.has(notice.tag)) return;
     notified.current.add(notice.tag);
     const shownNow = new Notification(notice.title, { body: notice.body, tag: notice.tag });
@@ -731,10 +734,11 @@ export function Workspace({
       shownNow.close();
     };
   };
-  const goTo = ({ channel, dm }: Notice) => {
+  const goTo = ({ channel, dm, thread }: Notice) => {
     const item = posts?.find((one) => one.channel === channel);
     location.hash = item ? `${item.forums[0] ?? OTHER.id}/${item.alert}` : channel;
     if (dm) setRight("agent");
+    if (thread !== undefined) void openThread(channel, thread);
   };
 
   /**

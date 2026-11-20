@@ -1651,7 +1651,7 @@ A Q&A message in a channel or post works like any other message. You can only re
     The first line is the original author's GitHub login in bold. It's text you can edit or delete like any other text. A quote is a copy of the text at that moment, not a link, so it stays even if the original goes away.
   - In a message, lines starting with `> ` show as a quote block: a 3px `{colors.hairline}` line on the left, 12px gap, the text in secondary color. If the first quoted line is only `**login**`, it shows as a 16px avatar and that member's name (12px/600 secondary). A login that isn't a member shows as the login.
   - In the DM column, quoting a paragraph of an answer puts it at the start of the question ("explain this part").
-- **Who gets called** (delivery is browser notifications, #313): a reply calls the original's author unless the `@` toggle is off. A thread calls the original's author and everyone who wrote in it (like Slack). A quote calls nobody. Your own message never calls you.
+- **Who gets called** (delivery is browser notifications, #313, #370): a reply calls the original's author unless the `@` toggle is off. A thread calls the original's author and everyone who wrote in it (like Slack). A quote calls nobody. Your own message never calls you. Each thread message carries everyone who wrote in its thread, since the summary under the original only names three.
 - **Posts and GitHub** (ADR-0047): a reply in a post becomes an issue comment that starts with
   ```
   > **minsu** · [original](link to the original comment)
@@ -1883,6 +1883,7 @@ One window holds both personal settings and workspace settings, as two groups in
     1. "Conflicts on my work" (내 작업의 부딪힘), description "When another member touches what I'm editing", on. Under the description, a segmented control "Discuss only / FYI too" (논의만 / 참고도), default "Discuss only". Conflicts whose label importance is FYI only notify when "FYI too" is picked.
     2. "Answers to what I asked" (내가 물은 것의 답), description "When what I asked in a DM or with an @call gets an answer", on.
     3. "Decisions and debates I'm in" (내가 낄 결정과 토론), description "When a decision I decide on is proposed, or a debate needs my agent's stance", on.
+    4. "Replies and threads" (내 글의 답장과 스레드), description "When someone replies to my message, or writes in a thread I started or wrote in", on (2026-11-20 draft 116-A, #370. We didn't pick 116-B, a "Replies only / Threads too" choice with one title and the channel in the body, or 116-C, the same card off by default). It follows "Who gets called" under "Reply, thread, and quote".
   - Under the cards: "Notifications don't show while you're on Do not disturb or looking at the Omagari tab."
   - When the cards don't fit, the right side scrolls, as for any item.
   - **States** (draft 111, the same whatever the layout):
@@ -1896,8 +1897,12 @@ One window holds both personal settings and workspace settings, as two groups in
     | Conflict | "Conflict on your work" / "Minsu's Claude Code is also editing refund.ts"   | "내 작업에 부딪힘이 생겼어요" / "민수의 Claude Code도 refund.ts를 고치고 있어요" |
     | Answer   | "Your question got an answer" / "Jieun's Codex: It clamps at 0 since #212." | "물어본 것에 답이 왔어요" / "지은의 Codex: #212부터 0 아래로는 안 내려가요."     |
     | Decision | "Your call is needed" / "Decision: Send refund mail from a queue"           | "결정이 필요해요" / "결정: 환불 메일을 큐로 보내기"                              |
+    | Reply    | "Someone replied to you" / "Minsu: Shall we send it from a queue?"          | "내 글에 답장이 왔어요" / "민수: 큐로 보내는 건 어때요?"                         |
+    | Thread   | "New message in a thread" / "Minsu: Pushed the queue version."              | "스레드에 새 글이 왔어요" / "민수: 큐로 바꾼 거 올렸어요."                       |
 
     A debate that needs my agent's stance uses the decision title with the body "Debate: <agenda>" ("토론: <안건>"), or the post title when there's no agenda. It only notifies when my seat waits and my runner is off, because a running runner gives the stance by itself (2026-11-20 @Pancheble, #313).
+
+    A reply or thread body is the writer's name and the message's first line that isn't a `>` quote. When a message is both a reply to me and in my thread, the reply title wins. Pressing a thread notification opens the channel and that thread.
 - **Merge run** (formerly "Conflict alerts"):
   - "Forum to post alerts to" is gone (ADR-0039). You create and edit forums on the forum screen ("Create a forum" and the filter row under "Conflict forum").
   - "Merge run" (2026-11-13 draft 30-C. We didn't pick 30-A, which makes a new item, or 30-B, which puts it under My agent): the item's first group. It has no switch. You turn it on and off from the runner, not the web (ADR-0034).

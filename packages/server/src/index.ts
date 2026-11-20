@@ -281,7 +281,9 @@ const MESSAGES = `SELECT m.id, m.channel, m.login, m.text, m.note, m.at, m.githu
   (SELECT json_group_array(json_array(r.emoji, r.login, COALESCE(rp.name, r.login)) ORDER BY r.at, r.rowid)
     FROM reactions r LEFT JOIN people rp ON rp.login = r.login WHERE r.message = m.id) AS reactions,
   m.reply_to, m.notify, ${ORIGINAL("m.reply_to")} AS original,
-  m.thread_of, m.also_in_channel, ${ORIGINAL("m.thread_of")} AS thread_original, ${THREAD} AS thread FROM messages m
+  m.thread_of, m.also_in_channel, ${ORIGINAL("m.thread_of")} AS thread_original,
+  CASE WHEN m.thread_of IS NULL THEN NULL ELSE (SELECT json_group_array(DISTINCT w.login) FROM messages w WHERE w.thread_of = m.thread_of) END AS thread_writers,
+  ${THREAD} AS thread FROM messages m
   LEFT JOIN people p ON p.login = m.login
   LEFT JOIN qas q ON q.id = m.qa
   LEFT JOIN alerts a ON a.id = m.alert
@@ -333,6 +335,8 @@ type MessageRow = {
   thread_of: number | null;
   also_in_channel: number | null;
   thread_original: string | null;
+  /** JSON array of the logins who wrote in the thread `m` sits in. NULL outside a thread. */
+  thread_writers: string | null;
   /** JSON of the thread under this message `{ count, last, writers }`. NULL without replies. */
   thread: string | null;
 } & Pick<QaRow, "executor" | "question" | "answer" | "visibility">;
@@ -448,7 +452,11 @@ const replyView = (row: MessageRow) => ({
     replyTo: { id: row.reply_to, notify: row.notify === 1, original: originalView(row.original) },
   }),
   ...(row.thread_of !== null && {
-    threadOf: { id: row.thread_of, original: originalView(row.thread_original) },
+    threadOf: {
+      id: row.thread_of,
+      original: originalView(row.thread_original),
+      writers: JSON.parse(row.thread_writers ?? "[]"),
+    },
   }),
   ...(row.also_in_channel === 1 && { alsoInChannel: true as const }),
   ...(row.thread !== null && {
