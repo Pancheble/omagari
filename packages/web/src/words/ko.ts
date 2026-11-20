@@ -70,7 +70,12 @@ export const ko: Words = {
       description: "날짜와 시간도 이 언어로 보여요.",
       note: "처음엔 늘 영어로 시작해요. 고른 언어는 다른 기기에서도 그대로예요.",
     },
-    appearance: { soon: "밝게·어둡게 모양은 곧 나와요." },
+    appearance: {
+      title: "모양",
+      looks: { light: "밝게", dark: "어둡게", system: "시스템 따라" },
+      note: (now) =>
+        `시스템 따라: 지금 컴퓨터가 ${now === "dark" ? "어두워서 어둡게" : "밝아서 밝게"} 보여요. 컴퓨터에서 바꾸면 바로 따라가요. 고른 모양은 다른 기기에서도 그대로예요.`,
+    },
     notifications: { soon: "브라우저 알림은 곧 나와요." },
     info: {
       workspace: "워크스페이스",
