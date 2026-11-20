@@ -6299,6 +6299,8 @@ button.person {
   height: 28px;
   padding: 0 12px;
   font-size: 13px;
+}
+
 /* Appearance (draft 107-A): three picture cards. Each picture uses its look's own colors, so they're fixed here. */
 .look-cards {
   grid-template-columns: repeat(3, minmax(0, 1fr));

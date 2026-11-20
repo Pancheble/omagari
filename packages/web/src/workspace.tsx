@@ -656,6 +656,7 @@ export function Workspace({
         call(server(session), api.me)
           .then((me) => {
             setLanguage(me.prefs.language);
+            setAppearance(me.prefs.appearance);
             setPrefs(me.prefs);
           })
           .catch(check);
