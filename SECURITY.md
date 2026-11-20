@@ -25,3 +25,7 @@ The maintainer @Pancheble receives and checks reports. We'll reply as soon as we
 ## Disclosure
 
 We disclose a vulnerability after the fix is merged and any needed release is out. If the fix takes longer, we'll agree on a disclosure date with you.
+
+## Hosted server incidents
+
+If the hosted server (`app.omagari.org`) has an outage or a possible personal data leak, the operator follows the internal plan in [docs/hosted-incident-plan.md](docs/hosted-incident-plan.md).
