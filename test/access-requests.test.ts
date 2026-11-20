@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { api, type ContractFailure, call } from "@omagari/contract";
-import { REPO, REPO3, startWorld } from "./harness.ts";
+import { eventually, REPO, REPO3, startWorld } from "./harness.ts";
 
 const refused = (code: string) => (error: ContractFailure) => error.code === code;
 const TERMS = "https://example.org/terms";
@@ -96,6 +96,8 @@ test("an approved account stays accepted after a restart", async (t) => {
   await call(world.owner, api.decideAccess, { id: requests[0]?.id as number, approve: true });
 
   await world.restartServer();
+  // The connection to the stopped server stays broken, so the first request may fail.
+  await eventually(() => call(carol, api.myAccess));
   assert.deepEqual(await call(carol, api.addRepo, { repo: REPO3 }), { repos: [REPO3] });
 });
 
