@@ -28,6 +28,8 @@ const server = await startServer({
       })
     : undefined,
   database: process.env.OMAGARI_DB ?? "omagari.db",
+  // Encrypts GitHub tokens in the database (ADR-0053). Without it, a key file is made next to the database.
+  tokenKey: process.env.OMAGARI_TOKEN_KEY || undefined,
   port: Number(process.env.PORT ?? 3000),
   hostname: process.env.HOST,
   // If there's a built web UI (`npm run build -w @omagari/web`, the deploy image), serve it from the same address.
