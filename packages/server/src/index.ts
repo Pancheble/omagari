@@ -100,6 +100,8 @@ export { type Account, type GitHub, type Pull, type RepoLabel, realGitHub } from
 
 /** How often push access is rechecked. Starts from Room's 10 minutes (ADR-0011). */
 const RECHECK_MS = 10 * 60_000;
+/** A GitHub App's token is refreshed this long before it expires, so a call doesn't start with a token that ends midway. */
+const REFRESH_AHEAD_MS = 60_000;
 /** How often a runner connection is pinged. No answer by the next round closes it. */
 const HEARTBEAT_MS = 30_000;
 /** Max number of unfinished device authorizations held. This path is called without login, so it doesn't ask GitHub without limit. */
@@ -531,6 +533,11 @@ export async function startServer(options: {
    */
   accept: string[];
   github: GitHub;
+  /**
+   * The GitHub App's slug (`GITHUB_APP_SLUG`), when sign-in goes through a GitHub App (ADR-0053). Then "no access" says to install the App, with its link.
+   * Not given for an OAuth app.
+   */
+  githubApp?: string;
   /** GIF search (ADR-0044). Given only when the server config has a GIPHY key. Without it the web has no GIF button. */
   giphy?: Giphy;
   /** SQLite file. If not given, it lives in memory and is lost when the server stops. */
@@ -565,7 +572,63 @@ export async function startServer(options: {
   /** Folder of the built web UI (`vite build`'s dist). If given, it's served from the same address as the API. In development it's not given and Vite is used. */
   webDir?: string;
 }) {
-  const { github } = options;
+  /** Where an account's admin installs the GitHub App. None for an OAuth app. */
+  const install =
+    options.githubApp && `https://github.com/apps/${options.githubApp}/installations/new`;
+  /** What to add to a "can't see the repo" message on a GitHub App server: the App may not be installed on that account. */
+  const installHint = install
+    ? ` If the Omagari GitHub App isn't installed on that account, its admin installs it: ${install}`
+    : "";
+  /** Sessions whose GitHub token is being refreshed. A refresh token works once, so calls at the same time share one refresh. */
+  const refreshing = new Map<string, Promise<string>>();
+  /**
+   * `token`, or its session's refreshed token if a GitHub App's token is about to expire (ADR-0053). An OAuth app's token never expires and passes as is.
+   * If GitHub rejects the refresh token, the session ends and the person signs in again. If the refresh fails, the old token goes on,
+   * and GitHub's answer to it is what callers already handle for a token that stopped working.
+   */
+  // ponytail: looks the session up by the plain token. When tokens are encrypted (#382), look it up by a hash of the token instead.
+  const fresh = (token: string) => {
+    const row = db
+      .prepare("SELECT hash, refresh_token, expires_at FROM sessions WHERE github_token = ?")
+      .get(token) as
+      | { hash: string; refresh_token: string | null; expires_at: number | null }
+      | undefined;
+    if (!row?.refresh_token || (row.expires_at ?? 0) > Date.now() + REFRESH_AHEAD_MS) return token;
+    const { hash: session, refresh_token } = row;
+    let pending = refreshing.get(session);
+    if (!pending) {
+      pending = (async () => {
+        const got = await options.github.refresh(refresh_token).catch((error: Error) => {
+          console.error("Couldn't refresh a GitHub token:", error.message);
+          return undefined;
+        });
+        if (!got) return token; // GitHub didn't answer. Try again on the next call
+        if ("error" in got) {
+          endSession(session, {
+            code: "unauthorized",
+            message: "GitHub sign-in expired. Log in again (omagari setup)",
+          });
+          return token;
+        }
+        db.prepare(
+          "UPDATE sessions SET github_token = ?, refresh_token = ?, expires_at = ? WHERE hash = ?",
+        ).run(got.token, got.refreshToken, Date.now() + got.expiresInMs, session);
+        return got.token;
+      })().finally(() => refreshing.delete(session));
+      refreshing.set(session, pending);
+    }
+    return pending;
+  };
+  /** GitHub, but every call that takes a token gets a fresh one first. */
+  const github = Object.fromEntries(
+    Object.entries(options.github).map(([name, call]) => [
+      name,
+      ["startDevice", "pollDevice", "refresh"].includes(name)
+        ? call
+        : async (token: string, ...rest: unknown[]) =>
+            (call as (...args: unknown[]) => unknown)(await fresh(token), ...rest),
+    ]),
+  ) as GitHub;
   /** Accounts to accept (lowercase). */
   const accounts = new Set(options.accept.map((entry) => entry.split("/")[0]?.toLowerCase()));
   /** Repos set by the server config. */
@@ -581,6 +644,10 @@ export async function startServer(options: {
     login TEXT NOT NULL,
     github_token TEXT NOT NULL
   ) STRICT`);
+  // A GitHub App's token expires (ADR-0053): the refresh token and when the token expires (ms). Both NULL for an OAuth app's token.
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'refresh_token'").get())
+    db.exec(`ALTER TABLE sessions ADD COLUMN refresh_token TEXT;
+      ALTER TABLE sessions ADD COLUMN expires_at INTEGER`);
   // Each member's GitHub profile name. Rewritten at every login.
   db.exec(`CREATE TABLE IF NOT EXISTS people (
     login TEXT PRIMARY KEY,
@@ -3065,6 +3132,7 @@ export async function startServer(options: {
       userCode: started.userCode,
       verificationUri: started.verificationUri,
       intervalMs: started.intervalMs,
+      ...(install && { install }),
     };
   });
 
@@ -3111,14 +3179,18 @@ export async function startServer(options: {
       throw new ContractFailure({
         code: "forbidden",
         // Don't include the server's repo names. A private repo's name doesn't leak to someone who couldn't join.
-        message: `${login} can't join: no push access to any of this server's workspace repos`,
+        message: `${login} can't join: no push access to any of this server's workspace repos.${installHint}`,
       });
     }
     const session = randomBytes(32).toString("hex");
-    db.prepare("INSERT INTO sessions (hash, login, github_token) VALUES (?, ?, ?)").run(
+    db.prepare(
+      "INSERT INTO sessions (hash, login, github_token, refresh_token, expires_at) VALUES (?, ?, ?, ?, ?)",
+    ).run(
       hash(session),
       login,
       polled.token,
+      polled.refreshToken ?? null,
+      polled.expiresInMs === undefined ? null : Date.now() + polled.expiresInMs,
     );
     db.prepare(
       "INSERT OR REPLACE INTO people (login, name, avatar, github_id) VALUES (?, ?, ?, ?)",
@@ -3244,6 +3316,7 @@ export async function startServer(options: {
       repos: found
         .map((repo) => ({ ...repo, added: added.has(repo.name.toLowerCase()) }))
         .sort((a, b) => a.name.localeCompare(b.name)),
+      ...(install && { install }),
     };
   });
 
@@ -4894,7 +4967,7 @@ export async function startServer(options: {
               {
                 code: "forbidden",
                 // A missing repo and a repo without permission get the same answer. It leaks neither the server's repo names nor whether someone else's repo is there.
-                message: `This folder isn't a workspace repo visible to ${login} (GitHub remote: ${repos.join(", ")}). If it isn't in the workspace, that repo's Admin can add it. If it is, you need push permission`,
+                message: `This folder isn't a workspace repo visible to ${login} (GitHub remote: ${repos.join(", ")}). If it isn't in the workspace, that repo's Admin can add it. If it is, you need push permission.${installHint}`,
               },
               message.id,
             );
@@ -5237,13 +5310,11 @@ export async function startServer(options: {
       // Follow the name and profile picture changed on GitHub. Read per token; if it can't be read, keep the last one.
       // If the token's GitHub name differs from the session's, end that session. Someone else who takes the old name doesn't inherit that line and permissions.
       let renamed = false;
-      const ended = new Set<string>();
       const people = new Set<string>();
       for (const row of rows) {
         const user = await github.user(row.github_token).catch(() => undefined);
         if (stopped) return;
         if (user && user.login !== row.login) {
-          ended.add(row.hash);
           endSession(row.hash, {
             code: "unauthorized",
             message: `GitHub name changed from ${row.login} to ${user.login}. Log in again`,
@@ -5266,7 +5337,8 @@ export async function startServer(options: {
       }
       if (renamed) shareMembers();
       for (const row of rows) {
-        if (ended.has(row.hash)) continue;
+        // Skip sessions that ended above, or when GitHub rejected their refresh.
+        if (!db.prepare("SELECT 1 FROM sessions WHERE hash = ?").get(row.hash)) continue;
         const access = await readAccess(row.login, row.github_token);
         if (stopped) return;
         if (access.push.length > 0 || access.unknown.length > 0) continue;

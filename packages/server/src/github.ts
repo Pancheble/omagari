@@ -13,10 +13,15 @@ export type GitHub = {
     expiresInMs: number;
     intervalMs: number;
   }>;
-  /** Checks device flow once. If the person entered the code, a GitHub token comes back. */
+  /**
+   * Checks device flow once. If the person entered the code, a GitHub token comes back.
+   * A GitHub App's token expires: it comes with `expiresInMs` and the `refreshToken` that gets the next one (ADR-0053). An OAuth app's token has neither.
+   */
   pollDevice(
     deviceCode: string,
-  ): Promise<{ token: string } | { pending: true; intervalMs?: number } | { error: string }>;
+  ): Promise<Grant | { pending: true; intervalMs?: number } | { error: string }>;
+  /** Swaps a GitHub App's refresh token for a new token and refresh token. `error` if GitHub rejects it (expired or used); throws if GitHub can't answer. */
+  refresh(refreshToken: string): Promise<Required<Grant> | { error: string }>;
   /**
    * The token owner's GitHub numeric id, login, profile name, and avatar URL. `name` is null if they left the name blank.
    * Logins change and someone else can take them, but `id` stays with the account (#315).
@@ -122,6 +127,9 @@ export type GitHub = {
   ): Promise<RepoLabel>;
 };
 
+/** A token from GitHub. `refreshToken` and `expiresInMs` only come with a GitHub App's expiring token. */
+export type Grant = { token: string; refreshToken?: string; expiresInMs?: number };
+
 /** A GitHub account's kind and avatar URL. */
 export type Account = { kind: "organization" | "user"; avatar: string | null };
 
@@ -217,6 +225,16 @@ export function realGitHub(clientId: string): GitHub {
     };
   };
 
+  /** GitHub's token answer. `expires_in` and `refresh_token` are there only for a GitHub App with expiring tokens. */
+  const grant = (b: { access_token: string; refresh_token?: unknown; expires_in?: unknown }) => ({
+    token: b.access_token,
+    ...(typeof b.refresh_token === "string" &&
+      typeof b.expires_in === "number" && {
+        refreshToken: b.refresh_token,
+        expiresInMs: b.expires_in * 1000,
+      }),
+  });
+
   return {
     async startDevice() {
       // Reading permissions on private repos needs the repo scope for an OAuth app. For a GitHub App, the scope is ignored.
@@ -237,9 +255,20 @@ export function realGitHub(clientId: string): GitHub {
         device_code: deviceCode,
         grant_type: "urn:ietf:params:oauth:grant-type:device_code",
       });
-      if (typeof b.access_token === "string") return { token: b.access_token };
+      if (typeof b.access_token === "string") return grant(b);
       if (b.error === "authorization_pending") return { pending: true };
       if (b.error === "slow_down") return { pending: true, intervalMs: b.interval * 1000 };
+      return { error: b.error_description ?? b.error ?? "GitHub didn't give a token" };
+    },
+    // https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/refreshing-user-access-tokens
+    // A device-flow token refreshes without a client secret (ADR-0053).
+    async refresh(refreshToken) {
+      const b = await post("https://github.com/login/oauth/access_token", {
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+      });
+      const got = typeof b.access_token === "string" ? grant(b) : undefined;
+      if (got?.refreshToken && got.expiresInMs) return got as Required<Grant>;
       return { error: b.error_description ?? b.error ?? "GitHub didn't give a token" };
     },
     async user(token) {

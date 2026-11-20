@@ -203,12 +203,20 @@ async function mailbox() {
   await callRunner(process.cwd(), "delivered", { ids: notice.ids }).catch(() => {});
 }
 
-/** Saves the server address, signs in if this server has no session yet, installs the hooks, and says what's left. */
+/** Saves the server address, signs in if this server has no session yet (or it ended), installs the hooks, and says what's left. */
 async function setup(address: string | undefined) {
   if (process.platform === "win32") throw new Error(await unsupported());
   const chosen = address ?? process.env.OMAGARI_SERVER ?? savedServer ?? (await askAddress());
   server = chosen.replace(/\/+$/, "");
-  if (!(await readSessions())[server]) await login();
+  const saved = (await readSessions())[server];
+  // A saved session can end on the server (logged out, or GitHub sign-in expired, ADR-0053). Then sign in again.
+  const ended =
+    saved &&
+    (await call({ url: server, session: saved }, api.me).then(
+      () => false,
+      (error) => error instanceof ContractFailure && error.code === "unauthorized",
+    ));
+  if (!saved || ended) await login();
   await mkdir(configDir, { recursive: true, mode: 0o700 });
   await writeFile(configFile, `${JSON.stringify({ server }, null, 2)}\n`);
   for (const line of await install()) console.log(line);
@@ -392,7 +400,12 @@ async function startIn(folder: string) {
     share,
     mergeCheck,
     shareRepo: false,
-  }).catch((error) => npmSelfUpdate(error, paths.log));
+  }).catch((error) => {
+    // The saved session ended (logged out, or GitHub sign-in expired). Only setup can sign in.
+    if (error instanceof ContractFailure && error.code === "unauthorized")
+      throw new Error(`${error.message}: run omagari setup`);
+    return npmSelfUpdate(error, paths.log);
+  });
   // The background runner itself says why a runner stopped, so a failed update is only added to its message.
   started.ended.then((reason) => {
     if (reason instanceof ServerContractMismatch)

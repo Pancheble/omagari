@@ -216,6 +216,9 @@ export async function tempRepo(repo = REPO) {
  * PRs the server opened (decision PRs) also pile up in `pulls`, and the owner of the token that opened them is `author`. `block` blocks merging and `review` adds a review.
  * Issues the server opened (a post's issue) pile up in `issues`; what a person does on GitHub is editing the issue or adding a comment with `comment`.
  * To invalidate a token, remove it from `tokens`.
+ * `app(lifetimeMs)` makes it act like a GitHub App (ADR-0053): tokens it hands out expire after `lifetimeMs` and come with a refresh token in `refreshTokens`.
+ * A refresh token works once. To make GitHub reject it, remove it from `refreshTokens`.
+ * `uninstall(account)` takes the App off an account: its repos are hidden from every token, like a repo that doesn't exist.
  */
 export function fakeGitHub() {
   /** Push access and Admin. `repo login`. */
@@ -226,6 +229,9 @@ export function fakeGitHub() {
   const known = new Set(REPOS);
   const moves = new Map<string, string>();
   const exists = (repo: string) => known.has(moves.get(repo) ?? repo);
+  /** Accounts the GitHub App isn't installed on. GitHub hides their repos from the App's tokens. */
+  const uninstalled = new Set<string>();
+  const hidden = (repo: string) => uninstalled.has(repo.split("/")[0] as string);
   /** GitHub numeric ids of repos and people. Assigned when first seen, and they follow a move or rename (`move`, `rename`). */
   const ids = new Map<string, number>();
   let nextId = 1;
@@ -285,6 +291,26 @@ export function fakeGitHub() {
   };
   const devices = new Map<string, { userCode: string; login?: string }>();
   const tokens = new Map<string, string>();
+  /** A GitHub App's token lifetime. None for an OAuth app, whose tokens don't expire. */
+  let lifetimeMs: number | undefined;
+  /** Refresh tokens and whose they are. */
+  const refreshTokens = new Map<string, string>();
+  /** How many times a token was refreshed. */
+  let refreshes = 0;
+  /** Hands `login` a token: a GitHub App's expires and comes with a refresh token. */
+  const issue = (login: string) => {
+    if (lifetimeMs === undefined) {
+      const token = `gho_fake_${crypto.randomUUID()}`;
+      tokens.set(token, login);
+      return { token };
+    }
+    const token = `ghu_fake_${crypto.randomUUID()}`;
+    const refreshToken = `ghr_fake_${crypto.randomUUID()}`;
+    tokens.set(token, login);
+    refreshTokens.set(refreshToken, login);
+    setTimeout(() => tokens.delete(token), lifetimeMs).unref();
+    return { token, refreshToken, expiresInMs: lifetimeMs };
+  };
   const names = new Map<string, string>();
   /** URL of a person's GitHub profile picture. Only people listed have one. */
   const avatars = new Map<string, string>();
@@ -305,9 +331,14 @@ export function fakeGitHub() {
       const login = devices.get(deviceCode)?.login;
       if (!login) return { pending: true };
       devices.delete(deviceCode);
-      const token = `gho_fake_${crypto.randomUUID()}`;
-      tokens.set(token, login);
-      return { token };
+      return issue(login);
+    },
+    async refresh(refreshToken) {
+      const login = refreshTokens.get(refreshToken);
+      if (!login) return { error: "The refresh token passed is incorrect or expired." };
+      refreshTokens.delete(refreshToken);
+      refreshes++;
+      return issue(login) as { token: string; refreshToken: string; expiresInMs: number };
     },
     async user(token) {
       const login = tokens.get(token);
@@ -323,7 +354,7 @@ export function fakeGitHub() {
       await gates.get(`${asked} ${tokens.get(token)}`);
       // Like GitHub, the old name of a moved repo redirects to the new repo.
       const repo = moves.get(asked) ?? asked;
-      if (!known.has(repo)) return { push: false, name: asked };
+      if (!known.has(repo) || hidden(repo)) return { push: false, name: asked };
       const owner = repo.split("/")[0] as string;
       return {
         push: pushers.has(`${repo} ${tokens.get(token)}`),
@@ -341,7 +372,9 @@ export function fakeGitHub() {
         .map((key) => key.split(" ") as [string, string])
         .filter(
           ([repo, who]) =>
-            who === login && repo.split("/")[0]?.toLowerCase() === owner.toLowerCase(),
+            who === login &&
+            repo.split("/")[0]?.toLowerCase() === owner.toLowerCase() &&
+            !hidden(repo),
         )
         .map(([name]) => ({
           name,
@@ -531,6 +564,17 @@ export function fakeGitHub() {
   return {
     github,
     tokens,
+    refreshTokens,
+    /** How many times the server refreshed a token. */
+    get refreshes() {
+      return refreshes;
+    },
+    /** Acts like a GitHub App from now on: tokens expire after `ms` and come with a refresh token. */
+    app(ms: number) {
+      lifetimeMs = ms;
+    },
+    /** The GitHub App is taken off (or was never installed on) account `account`. */
+    uninstall: (account: string) => uninstalled.add(account),
     names,
     avatars,
     /** A person entered `userCode` in the browser and approved it with the `login` account. */
@@ -565,7 +609,8 @@ export function fakeGitHub() {
     rename(from: string, to: string) {
       ids.set(`user ${to}`, idOf(`user ${from}`));
       ids.delete(`user ${from}`);
-      for (const [token, login] of tokens) if (login === from) tokens.set(token, to);
+      for (const map of [tokens, refreshTokens])
+        for (const [token, login] of map) if (login === from) map.set(token, to);
       for (const set of [pushers, admins])
         for (const key of [...set])
           if (key.endsWith(` ${from}`)) {
@@ -837,6 +882,8 @@ export async function startWorld(
     accept?: string[];
     /** GIF search. If not given, a server with no GIPHY key. Tests plug the real `realGiphy` in against the fake GIPHY (`fakeGiphy`). */
     giphy?: Giphy;
+    /** The GitHub App's slug: the server signs in through a GitHub App and says to install it (ADR-0053). Not given for an OAuth app. */
+    githubApp?: string;
     /** Fills the fake GitHub before the server first starts (labels and issues an older server left behind). */
     setup?: (github: ReturnType<typeof fakeGitHub>) => void;
   } = {},
@@ -871,6 +918,7 @@ export async function startWorld(
     helloMs: options.helloMs,
     behindFly: options.behindFly,
     sourceUrl: options.sourceUrl,
+    githubApp: options.githubApp,
   };
   let server = await startServer(serverOptions).catch(async (error) => {
     await cleanup();

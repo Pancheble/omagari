@@ -215,12 +215,17 @@ export function Workspace({
   const repoDialog = useRef<HTMLDialogElement>(null);
   /** The repos I'm Admin of, per account (the "Add a repo" list and the ⋯ on repo rows). Missing means not loaded yet. */
   const [admins, setAdmins] = useState<Record<string, AdminRepo[] | "error">>({});
+  /** Where to install the server's GitHub App (ADR-0053). Absent on a server with an OAuth app. */
+  const [install, setInstall] = useState<string>();
   /** The accounts being loaded. Keeps the menu from loading the same account over and over. */
   const reading = useRef(new Set<string>());
   const loadAdmin = (id: string) => {
     reading.current.add(id);
     return call({ ...server(session), workspace: id }, api.adminRepos)
-      .then(({ repos: list }) => setAdmins((all) => ({ ...all, [id]: list })))
+      .then(({ repos: list, install }) => {
+        setAdmins((all) => ({ ...all, [id]: list }));
+        setInstall(install);
+      })
       .catch((error) => {
         check(error);
         setAdmins((all) => ({ ...all, [id]: "error" }));
@@ -1523,6 +1528,7 @@ export function Workspace({
               dialog={repoDialog}
               account={workspaces.find((other) => other.id === adding) ?? space}
               repos={admins[adding]}
+              install={install}
               onAdd={addRepo}
             />
             <ForumDialog

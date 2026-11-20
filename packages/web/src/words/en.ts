@@ -34,6 +34,9 @@ export const en = {
     refusedTitle: "You can't join this workspace",
     refusedBody:
       "Only accounts with push access to the repo can join. Ask a repo admin for access, or switch accounts on GitHub and log in again.",
+    installBody:
+      "A repo only shows once an admin of its account installs the Omagari GitHub App there.",
+    install: "Install App",
     again: "Log in again",
     failedTitle: "Couldn't log you in",
     ended: "The code expired, or it wasn't approved on GitHub.",
