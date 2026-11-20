@@ -67,6 +67,7 @@ import {
   RepoDialog,
   useCollapsed,
 } from "./channels.tsx";
+import { ConnectCard, ShareNotice } from "./connect.tsx";
 import { ChannelTitle, Conversation, type ReplyBody, type View } from "./conversation.tsx";
 import { DEBATE_STRIP, DebateDialog, DebateLog, DebateStrip, ProxyDialog } from "./debate.tsx";
 import { DecisionDialog, type Fields } from "./decision.tsx";
@@ -243,6 +244,9 @@ export function Workspace({
   const [settings, setSettings] = useState(false);
   /** My personal settings. Changes from my other tabs and devices come as `prefs` on the live connection. */
   const [prefs, setPrefs] = useState<Prefs>(me.prefs);
+  /** Has my runner ever connected, and which repos have I shared (#354). Read again on every connect and when the member list changes. */
+  const [setup, setSetup] = useState({ connected: me.connected, shared: me.shared });
+  const [shareFailed, setShareFailed] = useState(false);
   /** Browser notifications (#313): the message number when this tab first connected, the Q&As seen waiting, and the notifications already shown. */
   const since = useRef<number>(undefined);
   const asking = useRef(new Set<number>());
@@ -395,6 +399,17 @@ export function Workspace({
     remember(placeKey(workspace), here);
     if (found) remember(lastKey(workspace, here), `#${hash}`);
   }, [here, hash, found, picked, workspace]);
+  /** Share the repo being viewed (the Share button). The notice goes away once the server says yes. */
+  const share = async () => {
+    try {
+      await call(server(session, here), api.share, { on: true });
+      setSetup((now) => ({ ...now, shared: [...now.shared, here] }));
+      setShareFailed(false);
+    } catch (error) {
+      check(error);
+      setShareFailed(true);
+    }
+  };
   /** Pick a place from the menu. On another account the app switches to that workspace. Goes to the last channel seen there. */
   const pick = (id: string, place: string) => {
     if (id !== workspace) return onSwitch(id, place);
@@ -658,6 +673,7 @@ export function Workspace({
             setLanguage(me.prefs.language);
             setAppearance(me.prefs.appearance);
             setPrefs(me.prefs);
+            setSetup({ connected: me.connected, shared: me.shared });
           })
           .catch(check);
         since.current ??= event.payload.seq;
@@ -672,8 +688,13 @@ export function Workspace({
       else if (event.kind === "forumDeleted")
         setChannels((list) => list?.filter((channel) => channel.id !== event.payload.id));
       else if (event.kind === "message") receive(event.payload);
-      else if (event.kind === "members") setMembers(event.payload.members);
-      else if (event.kind === "qa") receiveQa(event.payload);
+      else if (event.kind === "members") {
+        setMembers(event.payload.members);
+        // A runner that just connected, or a repo shared from the CLI, changes what the setup notices show.
+        call(server(session), api.me)
+          .then((me) => setSetup({ connected: me.connected, shared: me.shared }))
+          .catch(check);
+      } else if (event.kind === "qa") receiveQa(event.payload);
       else if (event.kind === "debate") {
         const { post: channel, ...rest } = event.payload;
         setDebates((all) => ({ ...all, [channel]: rest }));
@@ -1302,6 +1323,10 @@ export function Workspace({
                   )}
                 </div>
               </header>
+              {!missing && !setup.connected && <ConnectCard address={server(session).url} />}
+              {!missing && here !== ALL && !setup.shared.includes(here) && (
+                <ShareNotice onShare={() => void share()} failed={shareFailed} />
+              )}
               {missing ? (
                 <div className="empty">
                   <h2>{t.channels.frame.hiddenTitle}</h2>

@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** Contract version. Sent in every envelope; a different one is rejected. Bump it on every breaking change. */
-export const CONTRACT_VERSION = 60;
+export const CONTRACT_VERSION = 61;
 
 /** Error shape. Shared by the runner/server `error` message and the HTTP error body (`{ error }`). */
 export const ContractError = z.strictObject({
@@ -1828,6 +1828,10 @@ export const api = {
       gif: z.boolean(),
       /** My personal settings (`api.setPrefs`). `DEFAULT_PREFS` until I change one. */
       prefs: Prefs,
+      /** A runner of this member has connected to this server at least once. If not, the web shows how to connect a computer (#354). */
+      connected: z.boolean(),
+      /** The repos in `repos` this member has shared (repo sharing, ADR-0049). In the others, the web offers a Share button. */
+      shared: z.array(z.string()),
     }),
   },
   /**

@@ -77,6 +77,8 @@ test("a kept session reads me and the workspace again, and only the logged-out s
     repos: [REPO],
     gif: false,
     prefs: DEFAULT_PREFS,
+    connected: false,
+    shared: [],
   });
   // For a person who left the profile name empty, the login is the name.
   assert.deepEqual(await call(world.owner, api.me), {
@@ -87,6 +89,8 @@ test("a kept session reads me and the workspace again, and only the logged-out s
     repos: [REPO],
     gif: false,
     prefs: DEFAULT_PREFS,
+    connected: true,
+    shared: [REPO],
   });
 
   await call(browser, api.logout);

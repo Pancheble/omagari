@@ -6392,3 +6392,89 @@ button.person {
     grid-template-columns: 1fr;
   }
 }
+
+/* Connect your computer (#354): a card above the conversation with two copyable commands. */
+.connect {
+  flex: none;
+  margin: 8px 20px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--rounded-md);
+}
+
+.connect h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.connect p {
+  margin: 2px 0 10px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.connect-row {
+  margin-bottom: 8px;
+}
+
+.connect-label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.connect-command {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.connect-command pre {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 10px 14px;
+  overflow-x: auto;
+  border-radius: var(--rounded-md);
+  background: var(--parchment);
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.connect .connect-note {
+  margin: 4px 0 0;
+  font-size: 12px;
+}
+
+.connect-notice {
+  flex: none;
+  margin: 8px 20px 0;
+}
+
+.connect-notice .banner-action {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* On narrow screens the copy button goes under its command so the command has the full width. */
+@media (max-width: 833px) {
+  .connect,
+  .connect-notice {
+    margin-inline: 8px;
+  }
+
+  .connect-command {
+    flex-wrap: wrap;
+  }
+
+  .connect-command pre {
+    flex-basis: 100%;
+  }
+
+  .connect-command .button {
+    margin-left: auto;
+  }
+}

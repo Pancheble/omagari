@@ -15,6 +15,8 @@
 //   a hidden first round, a rebuttal round, waiting (calling a proxy), proxy, choosing turn (changed stance, changed without a reason, three experiments), a human-chosen conclusion, decided by experiment,
 //   decided by evidence and an opted-out seat, ended without submitting, and expired. "points" has a request made without grounds (not opened), and "invoice" has a debate between me and Sora Han.
 //   Posts confirmed as broken (such as "tax") already have a debate opened by themselves. Expiry is made by pulling the opened time back in the DB.
+// - DEMO_SETUP=new: a member whose runner never connected and who shared nothing, so you see "Connect your computer" and the repo Share notice (#354).
+//   Combine with DEMO_RUNNER=off. (Only the DB rows are cleared; the stopped runner stays out.)
 // - DEMO_MERGE_CHECK=off|no_sandbox: sets my runner's merge-run in the settings window to off or no sandbox. If not given, it is on.
 // - DEMO_CHECK=none: doesn't put a check command (.omagari.json) on the default branch. You see "no check command" in the settings window.
 // - Workspaces and repos (ADR-0043, #238): the workspace "omagari-test" has two repos (space, other) and a repo ("billing") where "me" is Admin but hasn't added it,
@@ -1082,6 +1084,11 @@ await say(
 );
 
 if (process.env.DEMO_RUNNER === "off") await world.runner.stop();
+if (process.env.DEMO_SETUP === "new") {
+  const fresh = new DatabaseSync(join(dirname(world.config), "omagari.db"));
+  fresh.exec("DELETE FROM runner_seen; DELETE FROM shares");
+  fresh.close();
+}
 
 // Once everything pre-seeded is in, a device auth opened in the browser is approved here as "me" instead of entering the code on GitHub.
 const startDevice = fake.github.startDevice.bind(fake.github);

@@ -1,5 +1,6 @@
 import type { CheckReading, Importance } from "@omagari/contract";
 import { channelsEn } from "./channels.en.ts";
+import { connectEn } from "./connect.en.ts";
 import { conversationEn } from "./conversation.en.ts";
 import { dmEn } from "./dm.en.ts";
 import { notifyEn } from "./notify.en.ts";
@@ -519,4 +520,5 @@ export const en = {
 
   profile: profileEn,
   notify: notifyEn,
+  connect: connectEn,
 };

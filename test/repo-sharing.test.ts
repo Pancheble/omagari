@@ -7,6 +7,7 @@ import type { IncomingMessage } from "node:http";
 import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
+import { api, call } from "@omagari/contract";
 import { startRunner } from "@omagari/runner";
 import { WebSocket as ServerSocket } from "ws";
 import { eventually, REPO, startWorld, stubbed, tempRepo, writer } from "./harness.ts";
@@ -108,6 +109,40 @@ test("an unshared workspace repo isn't observed and the hook says how to share; 
   // It stays gone: her runner stopped observing.
   await sleep(3500);
   assert.deepEqual(await aliceWorks(), []);
+});
+
+test("the web's Share button (api.share) starts observation, and api.me says when a runner has connected and which repos are shared", async (t) => {
+  const world = await startWorld();
+  t.after(world.stop);
+  world.github.grant("alice");
+  const alice = await world.login("alice");
+  // Before any runner: "Connect your computer" shows, and nothing is shared.
+  const before = await call(alice, api.me);
+  assert.deepEqual([before.connected, before.shared], [false, []]);
+  const desk = await tempRepo();
+  t.after(desk.remove);
+  await desk.git("switch", "--create", "refund");
+  await writer(desk.folder)("refund.ts", "export const refund = 1;\n");
+  // Started the way the background runner starts it: not a yes to share.
+  const runner = await startRunner({
+    serverUrl: world.server.url,
+    folder: desk.folder,
+    session: alice.session,
+    observeMs: 50,
+    shareRepo: false,
+    ...stubbed(),
+  });
+  t.after(runner.stop);
+  await eventually(async () => assert.equal((await call(alice, api.me)).connected, true));
+  assert.deepEqual((await call(alice, api.me)).shared, []);
+  await sleep(300);
+  const aliceWorks = async () =>
+    (await world.works(world.owner)).filter((work) => work.login === "alice");
+  assert.deepEqual(await aliceWorks(), []);
+
+  assert.deepEqual(await call(alice, api.share, { on: true }), { repo: REPO, shared: true });
+  assert.deepEqual((await call(alice, api.me)).shared, [REPO]);
+  await eventually(async () => assert.equal((await aliceWorks())[0]?.branch, "refund"));
 });
 
 test("a member who already observed a repo before sharing existed counts as shared, and one who didn't doesn't", async (t) => {
