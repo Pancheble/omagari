@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { appendFile, mkdir, readFile, rm } from "node:fs/promises";
 import { connect as connectLocal, createServer } from "node:net";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { text } from "node:stream/consumers";
@@ -539,6 +539,27 @@ export async function callRunner<K extends keyof typeof cliToRunner & string>(
   const { message } = decoded;
   if (message.kind === "error") throw new ContractFailure(message.payload);
   return message;
+}
+
+/**
+ * The socket of this user's background runner (ADR-0049). One per config folder, which is one per user; tests get their own through `XDG_CONFIG_HOME`.
+ * Like the per-repo socket, it lives in the temp folder because of the socket path length limit.
+ */
+export function backgroundSocket() {
+  const config = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "omagari");
+  const id = createHash("sha256").update(config).digest("hex").slice(0, 16);
+  return join(process.env.XDG_RUNTIME_DIR ?? tmpdir(), `omagari-background-${id}.sock`);
+}
+
+/**
+ * Tells the background runner about `folder` (the session-start hook) and returns the runner sockets it watches, one per repo.
+ * With "" it adds nothing and only answers (`omagari runner` asks this). Throws if the background runner is off.
+ * It answers a folder after it has tried to start that folder's runner, so the caller can talk to that runner right after.
+ */
+export async function callBackground(folder: string): Promise<string[]> {
+  const connection = connectLocal(backgroundSocket());
+  connection.end(folder);
+  return JSON.parse(await text(connection));
 }
 
 /**

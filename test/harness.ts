@@ -45,6 +45,7 @@ const CLI = executable("../packages/cli/src/main.ts");
 const HOOK = executable("../packages/hooks/src/main.ts");
 const FAKE_CODEX = executable("./fake-codex.ts");
 const FAKE_CLAUDE = executable("./fake-claude.ts");
+const FAKE_SERVICE = executable("./fake-service.ts");
 
 /** Puts a `name` command in the `bin` folder. Calling it runs a fake CLI script (`script`). */
 const shim = (bin: string, name: string, script: string) =>
@@ -917,8 +918,19 @@ export async function startWorld(
   const bin = join(data, "bin");
   await mkdir(bin);
   await shim(bin, "claude", FAKE_CLAUDE);
+  // `omagari setup` registers the background runner with launchd or systemd. Fakes stand in for both, and the plist goes to a temp home (ADR-0050).
+  for (const name of ["launchctl", "systemctl"])
+    await writeFile(
+      join(bin, name),
+      `#!/bin/sh\nexec '${process.execPath}' '${FAKE_SERVICE}' ${name} "$@"\n`,
+      { mode: 0o755 },
+    );
+  const home = join(data, "home");
+  const serviceCalls = join(data, "service-calls.jsonl");
   const cliEnv = () => ({
     PATH: `${bin}${delimiter}${process.env.PATH}`,
+    HOME: home,
+    FAKE_SERVICE_CALLS: serviceCalls,
     OMAGARI_SERVER: server.url,
     XDG_CONFIG_HOME: join(data, "config"),
     CLAUDE_CONFIG_DIR: join(data, "claude"),
@@ -940,6 +952,14 @@ export async function startWorld(
     claude: join(data, "claude"),
     /** This machine's Codex user config folder (where `~/.codex` would be). `omagari setup` installs here. */
     codex: join(data, "codex"),
+    /** This machine's home folder for the CLI. The launchd plist goes under it. */
+    home,
+    /** The launchctl and systemctl commands the CLI ran, each as `[command, ...args]`. */
+    serviceCalls: async (): Promise<string[][]> =>
+      (await readFile(serviceCalls, "utf8").catch(() => ""))
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line)),
     /** Runs `omagari setup` as if this machine's CLI had logged in as owner. The login flow is covered by login.test. */
     async setup(...args: string[]) {
       await this.signInCli(owner);
@@ -1134,8 +1154,9 @@ export async function startWorld(
     launchCliIn: (cwd: string, ...args: string[]) =>
       launch(process.execPath, [CLI, ...args], { cwd, env: cliEnv() }),
     /** Like an agent does, runs one hook command line written in the config with `sh -c` in `cwd` and feeds it input (JSON). */
+    // Hooks get this machine's config folder too, so they talk to this test's background runner, not the one of the person running the tests.
     shell: (command: string, stdin: string, cwd = repo.folder) =>
-      run("sh", ["-c", command], { cwd, stdin }),
+      run("sh", ["-c", command], { cwd, stdin, env: cliEnv() }),
     /** Feeds the input (JSON) an agent gives to the installed hook executable of the executor (Claude Code by default) and runs it. */
     hook: (
       stdin: string,
@@ -1149,6 +1170,7 @@ export async function startWorld(
         cwd: options.cwd ?? repo.folder,
         stdin,
         keepStdinOpen: options.keepStdinOpen,
+        env: cliEnv(),
       }),
     async stop() {
       await runner.stop();

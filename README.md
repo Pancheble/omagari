@@ -78,7 +78,7 @@ Sign in with GitHub, save the server address, and install the hooks into this ma
 omagari setup https://<your-team-server>
 ```
 
-Start the runner in the folder where you cloned the workspace repo. The first time, it signs you in with GitHub. Keep it running, because the team only sees your work and your agent while it is.
+Start the runner once in the folder where you cloned the workspace repo. After that, the background runner that `setup` registered starts it at login and whenever an agent session opens there, so you can close the terminal.
 
 ```bash
 cd <your workspace repo folder>
@@ -109,7 +109,7 @@ The full idea is in [docs/omagari-v3.md](docs/omagari-v3.md). How it's built is 
 
 | Command | What it does |
 |---|---|
-| `omagari setup [<address>]` | Sign in, save the server address, and put the hooks and the status line skill into this machine's agents |
+| `omagari setup [<address>]` | Sign in, save the server address, put the hooks and the status line skill into this machine's agents, and register the background runner to start at login |
 | `omagari uninstall` | Remove the hooks and the skill (`--sign-out` also ends your session) |
 | `omagari runner` | Start the runner in a repo folder (`--share full\|declared\|intent` picks what you upload, `--merge-check on\|off`) |
 | `omagari runner check` | Run the check command once on your current work, in the sandbox |
