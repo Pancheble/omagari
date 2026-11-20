@@ -38,6 +38,8 @@ export const ko: Words = {
     refusedTitle: "이 워크스페이스에 들어올 수 없어요",
     refusedBody:
       "레포에 push 권한이 있는 계정만 들어와요. 레포 관리자에게 권한을 받거나, GitHub에서 계정을 바꾼 뒤 다시 로그인해 주세요.",
+    installBody: "레포가 있는 계정의 관리자가 Omagari GitHub App을 설치해야 그 레포가 보여요.",
+    install: "App 설치",
     again: "다시 로그인",
     failedTitle: "로그인하지 못했어요",
     ended: "코드가 만료됐거나 GitHub에서 승인하지 않았어요.",

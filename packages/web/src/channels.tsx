@@ -641,6 +641,7 @@ export function RepoDialog({
   dialog,
   account,
   repos,
+  install,
   onAdd,
 }: {
   dialog: RefObject<HTMLDialogElement | null>;
@@ -648,6 +649,8 @@ export function RepoDialog({
   account: Space;
   /** Missing means loading; `"error"` means GitHub couldn't be read. */
   repos?: AdminRepo[] | "error";
+  /** Where to install the server's GitHub App. A repo without the App isn't listed (ADR-0053). */
+  install?: string;
   onAdd: (repo: string) => Promise<void>;
 }) {
   const heading = useId();
@@ -714,6 +717,14 @@ export function RepoDialog({
       {error && (
         <p className="help error" role="alert">
           {t.channels.addRepo.addFailed}
+        </p>
+      )}
+      {install && (
+        <p className="help">
+          {t.channels.addRepo.missing}{" "}
+          <a className="settings-link" href={install} target="_blank" rel="noreferrer">
+            {t.channels.addRepo.install} <ExternalLink size={12} aria-hidden />
+          </a>
         </p>
       )}
       <p className="help">{t.channels.addRepo.other}</p>

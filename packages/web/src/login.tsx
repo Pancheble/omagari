@@ -8,14 +8,15 @@ type Step =
   | { kind: "idle" }
   | { kind: "starting" }
   | { kind: "code"; userCode: string; verificationUri: string }
-  | { kind: "refused"; reason: string }
+  | { kind: "refused"; reason: string; install?: string }
   | { kind: "ended" }
   | { kind: "failed"; reason: string };
 
-function failure(error: unknown): Step {
+function failure(error: unknown, install?: string): Step {
   // Without push access, the server sends who lacks access to which repo. That is the reason for the refusal.
+  // On a GitHub App server, the repo may only be hidden because the App isn't installed (ADR-0053).
   if (error instanceof ContractFailure && error.code === "forbidden") {
-    return { kind: "refused", reason: error.message };
+    return { kind: "refused", reason: error.message, install };
   }
   if (signedOut(error)) return { kind: "ended" };
   if (error instanceof ContractFailure) return { kind: "failed", reason: error.message };
@@ -49,8 +50,10 @@ export function Login({
     const live = () => attempt.current === mine;
     setStep({ kind: "starting" });
     setCopied(false);
+    let install: string | undefined;
     try {
       const started = await call(server(), api.login);
+      install = started.install;
       if (!live()) return;
       setStep({ kind: "code", ...started });
       for (;;) {
@@ -61,7 +64,7 @@ export function Login({
         if ("session" in polled) return onSession(polled.session);
       }
     } catch (error) {
-      if (live()) setStep(failure(error));
+      if (live()) setStep(failure(error, install));
     }
   };
 
@@ -117,10 +120,17 @@ export function Login({
           {step.reason}
         </div>
         <p>{t.login.refusedBody}</p>
+        {step.install && <p>{t.login.installBody}</p>}
         <div className="actions">
           <button type="button" className="button primary" onClick={start}>
             {t.login.again}
           </button>
+          {step.install && (
+            <a className="button outline" href={step.install} target="_blank" rel="noreferrer">
+              {t.login.install}
+              <ExternalLink size={16} aria-hidden />
+            </a>
+          )}
         </div>
       </Centered>
     );

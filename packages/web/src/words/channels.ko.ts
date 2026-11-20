@@ -40,6 +40,8 @@ export const channelsKo: Words["channels"] = {
     added: "넣음",
     add: "넣기",
     addFailed: "레포를 못 넣었어요. 조금 있다 다시 해 볼래요?",
+    missing: "레포가 안 보여요? 그 레포에 Omagari GitHub App이 설치돼 있어야 해요.",
+    install: "App 설치",
     other: `다른 계정의 레포는 메뉴에서 그 계정 아래 "레포 넣기"로 넣어요.`,
     close: "닫기",
   },
