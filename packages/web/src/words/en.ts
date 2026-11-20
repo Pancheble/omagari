@@ -67,7 +67,12 @@ export const en = {
       description: "Dates and times show in this language too.",
       note: "It always starts in English. The language you pick follows you to your other devices.",
     },
-    appearance: { soon: "Light and dark looks are coming soon." },
+    appearance: {
+      title: "Appearance",
+      looks: { light: "Light", dark: "Dark", system: "Match system" },
+      note: (now: "light" | "dark") =>
+        `Match system: your computer is ${now} right now, so it's ${now}. It follows right away when you change your computer. The look you pick follows you to your other devices.`,
+    },
     info: {
       workspace: "Workspace",
       name: "Name",

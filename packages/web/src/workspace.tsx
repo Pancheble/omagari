@@ -92,6 +92,7 @@ import { ALL, placeIn, placeOf } from "./places.ts";
 import { ProfilePanel } from "./profile.tsx";
 import { type Opened, PeopleContext, ProfileCard, ProfileView } from "./profile-card.tsx";
 import { Settings } from "./settings.tsx";
+import { setAppearance } from "./theme.ts";
 
 /** From this width the channel panel is always visible. Narrower, only the conversation shows and the channel panel opens as a drawer (DESIGN.md, app on narrow screens). */
 const WIDE = "(min-width: 834px)";
@@ -651,7 +652,7 @@ export function Workspace({
         loadRepos(repos);
         // Replies that arrived while disconnected don't come again. Drop the loaded DMs and read the open one again.
         setDms({});
-        // A language picked elsewhere while we were cut off doesn't come again.
+        // A language or look picked elsewhere while we were cut off doesn't come again.
         call(server(session), api.me)
           .then((me) => {
             setLanguage(me.prefs.language);
@@ -661,6 +662,7 @@ export function Workspace({
         since.current ??= event.payload.seq;
       } else if (event.kind === "prefs") {
         setLanguage(event.payload.language);
+        setAppearance(event.payload.appearance);
         setPrefs(event.payload);
       } else if (event.kind === "draft") setIncoming(event.payload);
       else if (event.kind === "channel") add(event.payload);

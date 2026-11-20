@@ -20,6 +20,7 @@ import {
 } from "./api.ts";
 import { setLanguage, t, useLanguage } from "./i18n.ts";
 import { Centered, Login } from "./login.tsx";
+import { setAppearance } from "./theme.ts";
 import { Tooltip } from "./tooltip.tsx";
 import { Workspace } from "./workspace.tsx";
 
@@ -42,6 +43,7 @@ function App() {
   const expire = useCallback(() => {
     saveSession(undefined);
     setLanguage("en"); // before login it's always English (ADR-0045)
+    setAppearance("system");
     setState({ kind: "out", notice: t.login.expired });
   }, []);
 
@@ -60,6 +62,7 @@ function App() {
           workspaces.find((space) => space.id === saved)?.id ?? workspaces[0]?.id ?? "";
         setWorkspace(workspace);
         setLanguage(me.prefs.language);
+        setAppearance(me.prefs.appearance);
         setState({ kind: "in", session, me, workspaces, workspace });
       } catch (error) {
         if (!signedOut(error)) return setState({ kind: "unreachable", session });
@@ -95,6 +98,7 @@ function App() {
     // live connection isn't wrongly announced as "Your login ended".
     saveSession(undefined);
     setLanguage("en");
+    setAppearance("system");
     setState({ kind: "out" });
     void call(server(session), api.logout).catch(() => {});
   };

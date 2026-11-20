@@ -1,4 +1,5 @@
 // Personal settings (ADR-0045, #303): everyone starts in English, and a member's language follows them, not others.
+// The look (#312) follows them the same way.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { api, type ContractFailure, call, DEFAULT_PREFS } from "@omagari/contract";
@@ -61,4 +62,28 @@ test("turning a notification kind off reaches the same member's other connection
   // Picking a language later doesn't undo it.
   await call(owner, api.setPrefs, { language: "ko" });
   assert.equal((await call(owner, api.me)).prefs.notifyAnswers, false);
+});
+
+test("picking dark reaches the same member's other connections and keeps the language", async (t) => {
+  const world = await startWorld();
+  t.after(world.stop);
+  const owner = world.owner;
+  const otherTab = await world.live(owner);
+  await call(owner, api.setPrefs, { language: "ko" });
+  assert.deepEqual(await call(owner, api.setPrefs, { appearance: "dark" }), {
+    ...DEFAULT_PREFS,
+    language: "ko",
+    appearance: "dark",
+  });
+  await eventually(() =>
+    assert.ok(
+      otherTab.received.some((m) => m.kind === "prefs" && m.payload.appearance === "dark"),
+      "the other tab hasn't heard yet",
+    ),
+  );
+  assert.equal((await call(owner, api.me)).prefs.appearance, "dark");
+  await assert.rejects(
+    call(owner, api.setPrefs, { appearance: "sepia" as "dark" }),
+    (error: ContractFailure) => error.code === "invalid_request",
+  );
 });
