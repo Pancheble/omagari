@@ -543,3 +543,54 @@ test("a forum's label filter doesn't show the label names of a repo without push
   const frames = live.received.filter((m) => m.kind === "channel");
   assert.equal(JSON.stringify(frames).includes("secret"), false);
 });
+
+test("a forum name only has to be unique among the forums you can see, so creating or renaming never shows that a hidden forum exists", async (t) => {
+  const world = await startWorld({ accept: [REPO, REPO2] });
+  t.after(world.stop);
+  const owner = world.owner as As & { login: string };
+  world.github.admin("owner", REPO2);
+  world.github.grant("owner", REPO2);
+  await call(owner, api.addRepo, { repo: REPO2 });
+  // alice sees REPO2 only, so a forum filtering REPO is hidden from her.
+  world.github.grant("alice", REPO2);
+  const alice = await world.login("alice");
+  const forum = (as: As, name: string, repo: string) =>
+    call(as, api.createForum, { name, filter: { importance: "discuss", repos: [repo] } }).then(
+      (r) => r.channel,
+    );
+  const hidden = await forum(owner, "Secret", REPO);
+  await forum(owner, "Plan", REPO);
+  await forum(owner, "Roadmap", REPO);
+
+  // She can create and rename to the hidden name, and a chat channel can take it too, with no "already exists".
+  const mine = await forum(alice, "secret", REPO2);
+  const other = await forum(alice, "Other", REPO2);
+  await call(alice, api.updateForum, {
+    id: other.id,
+    name: "PLAN",
+    filter: { importance: "discuss", repos: [REPO2] },
+  });
+  await call(alice, api.createChannel, { name: "roadmap" });
+  // She sees only her own forums, and the hidden one keeps its name.
+  const names = async (as: As) =>
+    (await call(as, api.channels)).channels.filter((c) => c.kind === "forum").map((c) => c.id);
+  assert.ok(!(await names(alice)).includes(hidden.id));
+  assert.ok((await names(alice)).includes(mine.id));
+  assert.equal(
+    (await call(owner, api.channels)).channels.find((c) => c.id === hidden.id)?.name,
+    "Secret",
+  );
+
+  // Among the forums she can see, a name is still unique.
+  await assert.rejects(forum(alice, "secret", REPO2), refused("conflict"));
+  await assert.rejects(
+    call(alice, api.updateForum, {
+      id: other.id,
+      name: "Other2",
+      filter: { importance: "discuss", repos: [REPO2] },
+    }).then(() => forum(alice, "other2", REPO2)),
+    refused("conflict"),
+  );
+  // The owner sees both forums named "Plan", so the name is taken for them.
+  await assert.rejects(forum(owner, "plan", REPO), refused("conflict"));
+});
