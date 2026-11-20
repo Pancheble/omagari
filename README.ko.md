@@ -17,7 +17,7 @@
 Omagari는 사람과 각자의 AI 에이전트가 함께 일하는, 직접 띄워 쓰는 웹 협업 공간이에요. 팀원 옆에 그 사람의 에이전트(Claude Code, Codex)가 보여요. 누가 어느 브랜치에서 일하는지 보이고, 두 작업이 서로 깨뜨릴 것 같으면 머지하기 전에 알려 줘요. 그리고 알림이 뜬 그 자리에서 바로 이야기해요.
 
 > [!NOTE]
-> Omagari는 아직 첫 릴리즈 전이에요. `main`을 받아 쓰고, 바뀔 수 있다는 점을 알아 둬요. 겪은 일은 [Issues](https://github.com/omagari-dev/omagari/issues)에 알려 줘요.
+> Omagari는 아직 첫 릴리즈 전이에요. 그 전엔 `npm i -g omagari@next`로 최신 `dev` 빌드를 깔 수 있고, 바뀔 수 있다는 점을 알아 둬요. 겪은 일은 [Issues](https://github.com/omagari-dev/omagari/issues)에 알려 줘요.
 
 ## 왜 Omagari인가
 
@@ -55,37 +55,20 @@ Omagari가 레포를 지켜보는 방식은 Room의 동작을 따라요. Room은
 
 ## 빠른 시작
 
-Node.js 24.12 이상, git, 이 기기에서 로그인한 Claude Code나 Codex, 워크스페이스 레포에 push 권한이 있는 GitHub 계정, 팀이 띄운 Omagari 서버의 주소가 필요해요. 아직 서버가 없다면 [서버 띄우기](docs/server.md)부터 해요.
+Node.js 24.12 이상, 이 기기에서 로그인한 Claude Code나 Codex, 워크스페이스 레포에 push 권한이 있는 GitHub 계정, 팀이 띄운 Omagari 서버의 주소가 필요해요. 아직 서버가 없다면 [서버 띄우기](docs/server.md)부터 해요.
 
 ```bash
-git clone --branch main https://github.com/omagari-dev/omagari.git ~/omagari
-cd ~/omagari
-npm ci
-```
-
-`omagari`를 PATH에 두고, 서버 주소를 알려 줘요.
-
-```bash
-mkdir -p ~/.local/bin
-ln -sf "$PWD/packages/cli/src/main.ts" ~/.local/bin/omagari
-export OMAGARI_SERVER=https://<팀의 서버>   # 셸 설정에도 넣어 둬요
-omagari --version
-```
-
-GitHub로 로그인하고, 서버 주소를 저장하고, 이 기기의 에이전트에 훅을 깔아요. 기기마다 한 번이에요. Codex는 Codex에서 `/hooks`를 열어 두 훅을 신뢰해야 돌아요.
-
-```bash
+npm i -g omagari
 omagari setup https://<팀의 서버>
 ```
 
-워크스페이스 레포를 받은 폴더에서 러너를 한 번 켜요. 이러면 그 레포를 팀에 공유한 것도 돼요(러너를 켜지 않고 `omagari share on`으로 해도 같아요). 그다음부터는 `setup`이 등록한 백그라운드 러너가 로그인할 때와 그 폴더에서 에이전트 세션이 열릴 때 알아서 켜요. 터미널은 닫아도 돼요. 팀의 GitHub 계정 밖에 있는 레포는 아무것도 보내지 않아요.
+`setup`이 GitHub로 로그인하고, 서버 주소를 저장하고, 이 기기의 에이전트에 훅을 깔고, 로그인할 때 켜지는 백그라운드 러너를 등록해요. 기기마다 한 번이에요. Codex는 Codex에서 `/hooks`를 열어 Omagari 훅 둘을 신뢰해야 돌아요.
 
-```bash
-cd <워크스페이스 레포 폴더>
-omagari runner
-```
+그다음 워크스페이스 레포에서 에이전트 세션을 열고, 그 레포를 한 번 공유해요. 웹의 공유 버튼이나 레포 폴더에서 `omagari share on`이면 돼요. 공유하기 전엔 팀원이 거기서 한 일을 볼 수 없어요. 그다음부터는 직접 켤 게 없어요. 러너가 공유한 레포를 알아서 봐요. 팀의 GitHub 계정 밖에 있는 레포는 아무것도 보내지 않아요.
 
-`command not found`가 나오거나, 합쳐 돌려 보기, 업데이트, Windows가 필요하면 [기기 설정](docs/setup.md)을 봐요. 이 문서는 영어예요.
+웹의 "컴퓨터 연결" 카드에 서버 주소가 채워진 이 두 줄이 나와요. 에이전트에게 붙여 넣고 실행해 달라고 해도 돼요.
+
+합쳐 돌려 보기, 업데이트, Windows(WSL2)가 필요하면 [기기 설정](docs/setup.md)을 봐요. 이 문서는 영어예요.
 
 ## 어떻게 돌아가나
 
@@ -138,7 +121,7 @@ Claude Code와 Codex예요. 각자 주인의 로그인과 사용량으로 돌아
 기본 공유 수준(`full`)에서는 내가 바꾼 파일의 내용이 팀 서버로 올라가요. 팀원의 러너가 합쳐서 검사할 수 있게요. `omagari runner --share`로 `declared`(경로만)나 `intent`(상태 한 줄만)를 고를 수 있고, 고른 것은 그 레포에 남아요.
 
 **Windows에서 돼요?**
-WSL2 안에서 러너를 켜고 레포도 WSL2 안에 둬요. [기기 설정](docs/setup.md)을 봐요.
+WSL2 안에서 `omagari setup`부터 하고, 레포도 WSL2 안에 둬요. [기기 설정](docs/setup.md)을 봐요.
 
 **팀 없이 써 볼 수 있어요?**
 [데모 서버](CONTRIBUTING.md#try-the-ui-without-a-team)로 화면을 둘러볼 수 있어요. Omagari는 2~10명 팀을 위한 거라, 혼자서는 볼 것이 많지 않아요.

@@ -1,6 +1,6 @@
 # Run a server
 
-Omagari is self-hosted, and there's no public server. One person on the team runs it, and everyone else points `OMAGARI_SERVER` at it (see [Set up a machine](setup.md)).
+Omagari is self-hosted, and there's no public server. One person on the team runs it, and everyone else connects with `omagari setup <address>` (see [Set up a machine](setup.md)).
 
 The server also runs `main`, and updating works like for members (`git pull`, `npm ci`, start again). The dogfood server follows `dev` and deploys to Fly.io by itself (see [Deploy to Fly.io](#deploy-to-flyio)). On start, it logs its version, like `Omagari server v0.1.0 (contract 9): ...`.
 
