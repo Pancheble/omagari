@@ -28,6 +28,7 @@ import { checkoutVersion } from "@omagari/contract/version";
 import {
   alertLine,
   type CheckRecord,
+  callBackground,
   callRunner,
   checkNotice,
   claimNews,
@@ -43,7 +44,9 @@ import {
   ServerContractMismatch,
   startRunner,
 } from "@omagari/runner";
+import { background } from "./background.ts";
 import { install, uninstall } from "./install.ts";
+import { register, unregister, unsupported } from "./service.ts";
 import { restart, UPDATED, type UpdateRecord, updateClone } from "./update.ts";
 
 /** First line of commands that show other people's text in quotes (status, impact). Same meaning as the hooks' notice. */
@@ -68,6 +71,8 @@ const USAGE = `Usage:
                                 and show pass, broken, or couldn't run. Use it to confirm the check command runs on this machine
   omagari runner ask <message>  Ask this repo's runner session. The next question continues in the same session
   omagari runner log            Show what the runner has run
+  omagari runner background     Run the background runner: one runner for each repo an agent session opens, if a runner ran there before.
+                                omagari setup registers it to start at login, so you don't run it yourself
   omagari status                Show the current situation: members, Work, status lines, changed files, recent news (Feed)
   omagari status set <line>     Write a status line on the Work of the current branch
   omagari claim <path> [--symbol <name> | --lines <start>-<end>] [--plan <kind>[:<symbol>] [--detail <line>]]
@@ -93,10 +98,11 @@ const USAGE = `Usage:
   omagari metrics [--days <days>]
                                 Show, for each past day (default 14), the number of members who joined and the number of Q&As
   omagari setup [<server address>]
-                                Sign in with GitHub, save the server address, and install the session-start hook, pre-edit hook, and status line skill into this machine's agents (Claude Code, Codex)
+                                Sign in with GitHub, save the server address, install the session-start hook, pre-edit hook, and status line skill into this machine's agents (Claude Code, Codex),
+                                and register the background runner to start at login (launchd on macOS, systemd on Linux and WSL2)
                                 Asks for the address if none is saved. Running it again changes nothing; a new address switches to it
   omagari uninstall [--sign-out]
-                                Remove the hooks and the status line skill. The saved session stays unless --sign-out
+                                Remove the hooks, the status line skill, and the background runner. The saved session stays unless --sign-out
 
 The server is OMAGARI_SERVER if set, else the address 'omagari setup' saved, else http://127.0.0.1:3000.
 Every command except starting the runner appends the news backed up in the current branch's Inbox to its response.`;
@@ -121,6 +127,8 @@ try {
       options: { share: { type: "string" }, "merge-check": { type: "string" } },
     });
     await runner(values.share, values["merge-check"]);
+  } else if (command === "runner" && sub === "background" && rest.length === 0) {
+    await background(join(configDir, "folders.json"), startIn);
   } else if (command === "runner" && sub === "ask" && rest.length > 0) {
     console.log(await ask(rest.join(" ")));
   } else if (command === "runner" && sub === "check" && rest.length === 0) {
@@ -165,8 +173,9 @@ try {
   console.error(error instanceof Error ? error.message : error);
   process.exitCode = 1;
 }
-// The command that starts the runner runs until it ends, so it doesn't append the Inbox.
-if (!(command === "runner" && (sub === undefined || sub.startsWith("--")))) await mailbox();
+// The commands that start a runner run until they end, so they don't append the Inbox.
+if (!(command === "runner" && (sub === undefined || sub.startsWith("--") || sub === "background")))
+  await mailbox();
 
 /**
  * Appends the news backed up in the current branch's Inbox to the end of the response, and tells the runner it was delivered. Agents without hooks get it too.
@@ -188,12 +197,14 @@ async function mailbox() {
 
 /** Saves the server address, signs in if this server has no session yet, installs the hooks, and says what's left. */
 async function setup(address: string | undefined) {
+  if (process.platform === "win32") throw new Error(await unsupported());
   const chosen = address ?? process.env.OMAGARI_SERVER ?? savedServer ?? (await askAddress());
   server = chosen.replace(/\/+$/, "");
   if (!(await readSessions())[server]) await login();
   await mkdir(configDir, { recursive: true, mode: 0o700 });
   await writeFile(configFile, `${JSON.stringify({ server }, null, 2)}\n`);
   for (const line of await install()) console.log(line);
+  console.log(await register());
   console.log(
     `\nServer: ${server}\nOne step is left: Open /hooks in Codex and trust the two Omagari hooks (Codex has no way to trust them in advance).`,
   );
@@ -210,6 +221,7 @@ async function askAddress() {
 /** Removes the hooks and skill. With `signOut`, also ends this server's session and forgets it. */
 async function signOutAfter(signOut: boolean) {
   for (const line of await uninstall()) console.log(line);
+  console.log(await unregister());
   if (!signOut) return;
   const session = (await readSessions())[server];
   if (!session) return console.log(`Not signed in to ${server}.`);
@@ -309,6 +321,9 @@ async function runner(chosen: string | undefined, chosenMergeCheck: string | und
   const folder = process.cwd();
   await readRepo(folder); // if it's not a Git repo, stop before logging in
   const paths = await runnerPaths(folder);
+  const watched = await callBackground("").catch((): string[] => []);
+  if (watched.includes(paths.socket))
+    return console.log("The background runner already watches this folder");
   const share = await remembered(paths.share, chosen, "Share level", ShareLevel.options);
   const mergeCheck = await remembered(paths.mergeCheck, chosenMergeCheck, "Merge run", [
     "on",
@@ -340,6 +355,16 @@ async function runner(chosen: string | undefined, chosenMergeCheck: string | und
   // The same goes if it's rejected while reconnecting after startup (the server restarted with a new contract).
   if (reason) await selfUpdate(reason, paths.log);
   console.log("Runner stopped");
+}
+
+/** Starts the runner of one folder for the background runner, with the choices kept for that repo. It can't log in, so it needs the session `setup` saved. */
+async function startIn(folder: string) {
+  const paths = await runnerPaths(folder);
+  const share = await remembered(paths.share, undefined, "Share level", ShareLevel.options);
+  const mergeCheck = await remembered(paths.mergeCheck, undefined, "Merge run", ["on", "off"]);
+  const session = (await readSessions())[server];
+  if (!session) throw new Error(`Not signed in to ${server}. Run omagari setup`);
+  return startRunner({ serverUrl: server, folder, session, share, mergeCheck });
 }
 
 /** Asks the runner paired with this folder's repo and returns the answer. */

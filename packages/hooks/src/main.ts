@@ -12,7 +12,14 @@ import { text } from "node:stream/consumers";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import { ago, ExecutorId, filesText, type NearbyWork, type WorkView } from "@omagari/contract";
-import { callRunner, claimOwner, claimPlace, inboxNotice, runnerPaths } from "@omagari/runner";
+import {
+  callBackground,
+  callRunner,
+  claimOwner,
+  claimPlace,
+  inboxNotice,
+  runnerPaths,
+} from "@omagari/runner";
 
 /** Upper limit on the injected text. Claude Code sends anything longer to a file and shows only the first 2,000 characters (ADR-0005). */
 const MAX_CONTEXT = 10_000;
@@ -20,6 +27,8 @@ const MAX_CONTEXT = 10_000;
 const INPUT_MS = 1000;
 /** How long to wait for the situation from the runner. If it runs out, the hook says it couldn't confirm and exits. The runner answers right away from what it already has. */
 const SITUATION_MS = 2000;
+/** How long to wait for the background runner to start this folder's runner. If it runs out, the hook goes on without it. */
+const BACKGROUND_MS = 1000;
 /** How many same-file names to write on one Work's line. The rest is just a count. */
 const SAME_FILES_SHOWN = 5;
 /** How many line ranges to write for one Nearby work. The rest is just a count. */
@@ -140,6 +149,8 @@ function workLine(work: WorkView & { line: NonNullable<WorkView["line"]> }, same
  * When the session is cleared or compacted and restarts, it deletes the Pre-edit hook's memory, since that has probably gone from the conversation.
  */
 async function sessionStart(executor: ExecutorId) {
+  // Tell the background runner where this session is (ADR-0049), so this repo's runner is on before the situation is asked.
+  await Promise.race([callBackground(cwd).catch(() => {}), sleep(BACKGROUND_MS)]);
   const paths = await omagariPaths();
   if (!paths) return;
   if (session && (event?.source === "clear" || event?.source === "compact")) {

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -8,6 +9,40 @@ type World = Awaited<ReturnType<typeof startWorld>>;
 type Handler = { type: string; command: string; timeout?: number };
 type Group = { matcher?: string; hooks: Handler[] };
 type Settings = Record<string, unknown> & { hooks: Record<string, Group[]> };
+
+/**
+ * Where setup registers the background runner on this machine, and the service commands setup and uninstall run (faked, ADR-0050).
+ * On Linux without systemd nothing is registered.
+ */
+function service(world: World) {
+  const uid = process.getuid?.();
+  const label = "com.github.omagari-dev.runner";
+  if (process.platform === "darwin") {
+    const file = join(world.home, "Library", "LaunchAgents", `${label}.plist`);
+    return {
+      file,
+      setup: [
+        ["launchctl", "bootout", `gui/${uid}/${label}`],
+        ["launchctl", "bootstrap", `gui/${uid}`, file],
+      ],
+      uninstall: [["launchctl", "bootout", `gui/${uid}/${label}`]],
+    };
+  }
+  if (!existsSync("/run/systemd/system")) return { file: undefined, setup: [], uninstall: [] };
+  const unit = "omagari-runner.service";
+  return {
+    file: join(world.config, "systemd", "user", unit),
+    setup: [
+      ["systemctl", "--user", "daemon-reload"],
+      ["systemctl", "--user", "enable", unit],
+      ["systemctl", "--user", "restart", unit],
+    ],
+    uninstall: [
+      ["systemctl", "--user", "disable", "--now", unit],
+      ["systemctl", "--user", "daemon-reload"],
+    ],
+  };
+}
 
 const SESSION = "11111111-2222-3333-4444-555555555555";
 const EDIT_MATCHER = "Edit|Write|MultiEdit|NotebookEdit|Bash";
@@ -282,9 +317,19 @@ test("omagari uninstall removes the hooks and skills and puts the agent config b
 
   assert.equal((await world.setup()).code, 0);
   assert.notEqual(await readFile(settingsFile(world), "utf8"), `${seed}\n`);
+  // The background runner is registered to start at login with this machine's service manager.
+  const expected = service(world);
+  assert.deepEqual(await world.serviceCalls(), expected.setup);
+  if (expected.file)
+    assert.match(
+      await readFile(expected.file, "utf8"),
+      /runner(<\/string>\s*<string>|" ")background/,
+    );
 
   const removed = await world.cli("uninstall");
   assert.equal(removed.code, 0, removed.stderr);
+  assert.deepEqual(await world.serviceCalls(), [...expected.setup, ...expected.uninstall]);
+  if (expected.file) await assert.rejects(access(expected.file));
   assert.equal(await readFile(settingsFile(world), "utf8"), `${seed}\n`);
   await assert.rejects(access(join(world.claude, "skills", "omagari-status")));
   // Codex, which had no config file, is left with no file either.
