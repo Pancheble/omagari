@@ -46,6 +46,21 @@ GIFs in chat ([ADR-0044](https://github.com/omagari-dev/omagari/blob/dev/docs/ad
 
 If a web build exists (`npm run build -w @omagari/web` creates `packages/web/dist`), the server serves it at the same address and sends unknown paths to its first file. While developing, use `npm run web` (Vite). The health check is `GET /api/health`.
 
+## Limits
+
+Limits ([ADR-0052](https://github.com/omagari-dev/omagari/blob/dev/docs/adr/0052-hosted-beta-on-the-dogfood-server-by-request.md)) keep one person or team from using up a shared server. Each is a setting, and an unset one is no limit, so a server with none works as before. When one is hit, the server answers `429` with the error code `limited` and which limit it was, the web shows a banner naming it, and the CLI prints the same sentence.
+
+| Setting | Limit | Hosted server |
+| --- | --- | --- |
+| `OMAGARI_LIMIT_REQUESTS` | API requests per person a minute | 120 |
+| `OMAGARI_LIMIT_REPOS` | Repos per workspace. Adding one more is refused | 20 |
+| `OMAGARI_LIMIT_STORAGE_MB` | Megabytes a workspace keeps: messages and Q&A, plus the file content and conflict snapshots its runners shared. Past it, new messages, post replies, and Q&A are refused; runners keep sharing, and their content drops after 30 days | 100 |
+| `OMAGARI_LIMIT_GIFS` | GIF searches per workspace an hour, inside the server-wide `GIPHY_PER_HOUR` | 20 |
+
+The hosted numbers come from the dogfood server on 2026-11-21: at most 2 repos in a workspace and under 50 KB stored per workspace (1.5 MB database). They leave lots of room above that, and five full workspaces still fit the 1 GB volume. 20 GIF searches an hour lets five workspaces share the beta key's 100. On Fly: `fly secrets set OMAGARI_LIMIT_REQUESTS=120 OMAGARI_LIMIT_REPOS=20 OMAGARI_LIMIT_STORAGE_MB=100 OMAGARI_LIMIT_GIFS=20 -a "$FLY_APP"`.
+
+Request counts live in memory, so a restart starts them over. Only signed-in HTTP requests count; the live connections of the web and runners don't.
+
 ## Deploy to Fly.io
 
 The server runs on one small Fly.io machine (Tokyo, `nrt`). This is how the repo's dogfood server runs ([ADR-0042](https://github.com/omagari-dev/omagari/blob/dev/docs/adr/0042-dogfood-server-on-fly-follows-dev.md)). Settings are in `fly.toml` and the image is in `Dockerfile`. The app name and the account list aren't in the repo; put them in `.env` (start with `cp .env.example .env`). A person does the first deploy by hand.

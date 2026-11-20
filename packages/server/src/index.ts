@@ -53,6 +53,7 @@ import {
   INBOX_MS,
   type InboxItem,
   type Label,
+  type LIMITS,
   LIVE_SOCKET,
   MAX_FRAME_BYTES,
   MERGE_RUN_LABELS,
@@ -569,6 +570,11 @@ export async function startServer(options: {
   behindFly?: boolean;
   /** Time to finish hello. Default 10 seconds. Tests shorten it. */
   helloMs?: number;
+  /**
+   * Limits (ADR-0052): requests per person a minute, repos and stored megabytes per workspace, and GIF searches per workspace an hour.
+   * An unset one is no limit, so a server with none works as before.
+   */
+  limits?: Partial<Record<(typeof LIMITS)[number], number>>;
   /** Folder of the built web UI (`vite build`'s dist). If given, it's served from the same address as the API. In development it's not given and Vite is used. */
   webDir?: string;
 }) {
@@ -3006,6 +3012,64 @@ export async function startServer(options: {
     return session && sessionLogin(session);
   });
 
+  const limits = options.limits ?? {};
+  const LIMITED = {
+    requests: (max: number) => `Hit the limit of ${max} requests a minute. Try again in a minute`,
+    repos: (max: number) => `This workspace can have up to ${max} repos. Remove one to add another`,
+    storage: (max: number) =>
+      `This workspace is over its ${max} MB of storage. Ask the server's operators`,
+    gifs: (max: number) =>
+      `This workspace used its ${max} GIF searches for this hour. Try again later`,
+  } satisfies Record<(typeof LIMITS)[number], (max: number) => string>;
+  /** The one error shape for a hit limit. The web and CLI name the limit from it. */
+  const limited = (name: keyof typeof LIMITED, max: number) =>
+    new ContractFailure({ code: "limited", message: LIMITED[name](max), limit: { name, max } });
+  /** When each person's requests and each workspace's GIF searches happened, within their window. Not kept across restarts. */
+  const spent = new Map<string, number[]>();
+  /** Counts one use of `name` by `key` within `windowMs`. `limited` once the setting's number is reached in that window. */
+  const spend = (name: "requests" | "gifs", key: string, windowMs: number) => {
+    const max = limits[name];
+    if (max === undefined) return;
+    const now = Date.now();
+    const recent = (spent.get(`${name} ${key}`) ?? []).filter((at) => now - at < windowMs);
+    if (recent.length >= max) throw limited(name, max);
+    recent.push(now);
+    spent.set(`${name} ${key}`, recent);
+  };
+  app.use(async (c, next) => {
+    const login = c.get("login");
+    if (login) spend("requests", login, 60_000);
+    await next();
+  });
+  /** Bytes a workspace keeps: messages and Q&A in its channels and posts, and the file content and conflict snapshots its runners shared. */
+  const storedBytes = (workspace: string) => {
+    const bytes = (x: string) => `COALESCE(LENGTH(CAST(${x} AS BLOB)), 0)`;
+    const inWorkspace = `COALESCE(c.workspace, ${ownerSql("c.repo")}) = :ws`;
+    return (
+      db
+        .prepare(
+          `SELECT ${[
+            `SELECT SUM(${bytes("m.text")} + ${bytes("m.note")}) FROM messages m JOIN channels c ON c.id = m.channel WHERE ${inWorkspace}`,
+            `SELECT SUM(${bytes("q.question")} + ${bytes("q.answer")}) FROM qas q JOIN channels c ON c.id = q.channel WHERE ${inWorkspace}`,
+            `SELECT SUM(${bytes("files")}) FROM works WHERE ${ownerSql("repo")} = :ws`,
+            `SELECT SUM(${bytes("works")} + ${bytes("files")}) FROM alerts WHERE ${ownerSql("repo")} = :ws`,
+          ]
+            .map((sum) => `COALESCE((${sum}), 0)`)
+            .join(" + ")} AS total`,
+        )
+        .get({ ws: workspace }) as { total: number }
+    ).total;
+  };
+  /**
+   * New messages and Q&A stop once the workspace keeps more than its storage limit. Runners keep sharing; that content drops after 30 days (`CONTENT_MS`).
+   * ponytail: sums the workspace's rows on every write, and only when the limit is set. Keep a running total if sends get slow.
+   */
+  const mustHaveRoom = (workspace: string) => {
+    const max = limits.storage;
+    if (max !== undefined && storedBytes(workspace) > max * 1_000_000)
+      throw limited("storage", max);
+  };
+
   mount(app, api.health, () => ({ contract: CONTRACT_VERSION }));
 
   /**
@@ -3219,10 +3283,11 @@ export async function startServer(options: {
   });
 
   // The server adds the key and asks GIPHY instead of the browser. The key never leaves the server, and results aren't stored (ADR-0044).
-  mount(app, api.gifs, ({ query }) => {
+  mount(app, api.gifs, ({ query }, c) => {
     if (!options.giphy) {
       throw new ContractFailure({ code: "not_found", message: "This server has no GIPHY key" });
     }
+    spend("gifs", workspaceOf(c), 3_600_000);
     return options.giphy.search(query).then((gifs) => ({ gifs }));
   });
 
@@ -3272,6 +3337,13 @@ export async function startServer(options: {
         message: `${repo.split("/")[0]} isn't a GitHub account this server accepts`,
       });
     await mustAdmin(login, callerToken(c), repo);
+    const others = allRepos().filter((r) => ownerOf(r) === ownerOf(repo));
+    if (
+      limits.repos !== undefined &&
+      others.length >= limits.repos &&
+      !others.some((r) => r.toLowerCase() === repo.toLowerCase())
+    )
+      throw limited("repos", limits.repos);
     // Record the GitHub id when adding. If a different repo with the same name was here before, block it so that repo's stuff isn't carried over (#315).
     const found = await github.canPush(callerToken(c), repo);
     if (found?.id !== undefined && !sameRepo(repo, found.id))
@@ -3731,6 +3803,7 @@ export async function startServer(options: {
           "Only answered Q&As can be posted to a channel. The question and answer go up together",
       });
     }
+    mustHaveRoom(channelWorkspace(row.channel) ?? ownerOf(channelRepo(row.channel) ?? ""));
     db.exec("BEGIN");
     db.prepare("UPDATE qas SET visibility = 'public' WHERE id = ?").run(qa);
     db.prepare("INSERT INTO messages (channel, login, qa, note, at) VALUES (?, ?, ?, ?, ?)").run(
@@ -4648,6 +4721,7 @@ export async function startServer(options: {
         message: "Can't write in a forum. Write inside a post",
       });
     }
+    mustHaveRoom(channelWorkspace(channel) ?? ownerOf(channelRepo(channel) ?? ""));
   };
 
   mount(app, api.history, ({ channel, before, thread }, c) => {

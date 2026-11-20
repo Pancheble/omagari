@@ -10,4 +10,15 @@ export const connectEn = {
   notShared: "You haven't shared this repo yet, so your teammates can't see your work in it.",
   share: "Share",
   shareFailed: "Couldn't share that. Try again in a bit?",
+  /** A hit limit (ADR-0052), with its number. */
+  limit: {
+    requests: (max: number) => `Hit the limit of ${max} requests a minute. Try again in a minute?`,
+    repos: (max: number) =>
+      `This workspace can have up to ${max} repos. Remove one to add another.`,
+    storage: (max: number) =>
+      `This workspace is over its ${max} MB of storage. Ask the server's operators.`,
+    gifs: (max: number) =>
+      `This workspace used its ${max} GIF searches for this hour. Try again later?`,
+  },
+  closeLimit: "Close",
 };

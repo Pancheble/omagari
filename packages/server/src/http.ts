@@ -27,6 +27,7 @@ const STATUS = {
   turn_timeout: 504,
   conflict: 409,
   github_failed: 502,
+  limited: 429,
 } as const satisfies Record<ContractError["code"], number>;
 
 const fail = (
@@ -60,7 +61,11 @@ export function createApp(member: (authorization?: string) => string | undefined
   );
   app.onError((error, c) => {
     if (error instanceof ContractFailure) {
-      return fail(c, STATUS[error.code], { code: error.code, message: error.message });
+      return fail(c, STATUS[error.code], {
+        code: error.code,
+        message: error.message,
+        ...(error.limit && { limit: error.limit }),
+      });
     }
     console.error(error);
     return fail(c, 500, { code: "internal", message: "Something failed inside the server" });

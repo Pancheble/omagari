@@ -1,5 +1,6 @@
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, X } from "lucide-react";
 import { useState } from "react";
+import { clearLimit, useLimit } from "./api.ts";
 import { t } from "./i18n.ts";
 
 /** One command in a code block with its own copy button. */
@@ -56,6 +57,26 @@ export function ShareNotice({ onShare, failed }: { onShare: () => void; failed: 
       {failed ? t.connect.shareFailed : t.connect.notShared}
       <button type="button" className="banner-action" onClick={onShare}>
         {t.connect.share}
+      </button>
+    </div>
+  );
+}
+
+/** A limit the server said was hit (ADR-0052), named with its number. Stays until closed or the next hit replaces it. */
+export function LimitNotice() {
+  const limit = useLimit();
+  if (!limit) return null;
+  return (
+    <div className="banner warning connect-notice" role="alert">
+      {t.connect.limit[limit.name](limit.max)}
+      <button
+        type="button"
+        className="reply-stop limit-close"
+        aria-label={t.connect.closeLimit}
+        title={t.connect.closeLimit}
+        onClick={clearLimit}
+      >
+        <X size={16} aria-hidden />
       </button>
     </div>
   );

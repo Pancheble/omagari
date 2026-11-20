@@ -3,7 +3,13 @@
 import * as z from "zod";
 
 /** Contract version. Sent in every envelope; a different one is rejected. Bump it on every breaking change. */
-export const CONTRACT_VERSION = 64;
+export const CONTRACT_VERSION = 65;
+
+/**
+ * The server's limits (ADR-0052). Each is a setting, and unset means no limit. `requests` is per person a minute, `repos` and `storage` (megabytes)
+ * are per workspace, and `gifs` is GIF searches per workspace an hour.
+ */
+export const LIMITS = ["requests", "repos", "storage", "gifs"] as const;
 
 /** Error shape. Shared by the runner/server `error` message and the HTTP error body (`{ error }`). */
 export const ContractError = z.strictObject({
@@ -22,16 +28,21 @@ export const ContractError = z.strictObject({
     "turn_timeout", // One turn of a runner session hit the time limit and was cut off
     "conflict", // Already exists (a channel with the same name)
     "github_failed", // GitHub rejected the request (invalid member token, no permission, GitHub could not answer)
+    "limited", // Hit one of the server's limits (ADR-0052). `limit` says which
   ]),
   message: z.string(),
+  /** With `limited`: which limit and its number, so the web and CLI can name it. */
+  limit: z.strictObject({ name: z.enum(LIMITS), max: z.number() }).optional(),
 });
 export type ContractError = z.infer<typeof ContractError>;
 
 export class ContractFailure extends Error {
   code: ContractError["code"];
+  limit?: ContractError["limit"];
   constructor(error: ContractError) {
     super(error.message);
     this.code = error.code;
+    this.limit = error.limit;
   }
 }
 
@@ -2535,7 +2546,14 @@ export const serverToWeb = {
 
 /** Calls one API. The web, CLI, and tests all use it. An error answer is thrown as `ContractFailure`. */
 export async function call<R extends Route>(
-  server: { url: string; session?: string; repos?: string[]; workspace?: string },
+  server: {
+    url: string;
+    session?: string;
+    repos?: string[];
+    workspace?: string;
+    /** Hears every error answer before it's thrown. The web shows a hit limit in one place this way. */
+    onFailure?: (failure: ContractFailure) => void;
+  },
   route: R,
   ...[body]: R["body"] extends z.ZodType ? [z.input<R["body"]>] : []
 ): Promise<z.output<R["response"]>> {
@@ -2551,10 +2569,12 @@ export async function call<R extends Route>(
   });
   const json: unknown = await response.json().catch(() => undefined);
   if (!response.ok) {
-    const failure = z.strictObject({ error: ContractError }).safeParse(json);
-    throw new ContractFailure(
-      failure.data?.error ?? { code: "internal", message: `HTTP ${response.status}` },
+    const parsed = z.strictObject({ error: ContractError }).safeParse(json);
+    const failure = new ContractFailure(
+      parsed.data?.error ?? { code: "internal", message: `HTTP ${response.status}` },
     );
+    server.onFailure?.(failure);
+    throw failure;
   }
   return route.response.parse(json) as z.output<R["response"]>;
 }
