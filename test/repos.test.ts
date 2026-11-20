@@ -40,7 +40,7 @@ test("only an Admin adds and removes a repo of the same account, a runner connec
     repo: REPO2,
     repos: [REPO2],
     gif: false,
-    prefs: { language: "en" },
+    prefs: { language: "en", appearance: "system" },
   });
   await assert.rejects(call(alice, api.removeRepo, { repo: REPO2 }), refused("forbidden"));
   // The add-repo list shows only repos I am Admin of. If not an Admin it is empty, so not even the names of other repos or their count show (draft 93-C).
@@ -177,7 +177,7 @@ test("even when started with a DB from the single-repo version, what was there s
     repo: REPO,
     repos: [REPO],
     gif: false,
-    prefs: { language: "en" },
+    prefs: { language: "en", appearance: "system" },
   });
 
   // owner comes back in after getting access to the new repo.
