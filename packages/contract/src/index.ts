@@ -3,7 +3,13 @@
 import * as z from "zod";
 
 /** Contract version. Sent in every envelope; a different one is rejected. Bump it on every breaking change. */
-export const CONTRACT_VERSION = 65;
+export const CONTRACT_VERSION = 67;
+
+/**
+ * The server's limits (ADR-0052). Each is a setting, and unset means no limit. `requests` is per person a minute, `repos` and `storage` (megabytes)
+ * are per workspace, and `gifs` is GIF searches per workspace an hour.
+ */
+export const LIMITS = ["requests", "repos", "storage", "gifs"] as const;
 
 /** Error shape. Shared by the runner/server `error` message and the HTTP error body (`{ error }`). */
 export const ContractError = z.strictObject({
@@ -22,16 +28,21 @@ export const ContractError = z.strictObject({
     "turn_timeout", // One turn of a runner session hit the time limit and was cut off
     "conflict", // Already exists (a channel with the same name)
     "github_failed", // GitHub rejected the request (invalid member token, no permission, GitHub could not answer)
+    "limited", // Hit one of the server's limits (ADR-0052). `limit` says which
   ]),
   message: z.string(),
+  /** With `limited`: which limit and its number, so the web and CLI can name it. */
+  limit: z.strictObject({ name: z.enum(LIMITS), max: z.number() }).optional(),
 });
 export type ContractError = z.infer<typeof ContractError>;
 
 export class ContractFailure extends Error {
   code: ContractError["code"];
+  limit?: ContractError["limit"];
   constructor(error: ContractError) {
     super(error.message);
     this.code = error.code;
+    this.limit = error.limit;
   }
 }
 
@@ -160,6 +171,12 @@ export type WorkView = z.infer<typeof WorkView>;
 
 /** Max length of the status line an agent writes. Newlines and repeated spaces fold into one space. */
 export const MAX_STATUS_CHARS = 200;
+
+/**
+ * A member who deleted their account (ADR-0054). Their messages, Q&As, and decisions stay under a stand-in login that starts with `~`,
+ * which a GitHub login can't, one per deleted person. The web shows it as a deleted member.
+ */
+export const isDeletedMember = (login: string) => login.startsWith("~");
 
 /** The executor that runs agent sessions. An agent is an owner-executor pair, so there is one per executor (ADR-0015). */
 export const ExecutorId = z.enum(["claude-code", "codex"]);
@@ -1922,7 +1939,10 @@ export const api = {
       install: z.string().optional(),
     }),
   },
-  /** Removes a repo from the workspace. Like adding, only that repo's GitHub Admin can do it. Its data isn't deleted and comes back if you add it again. */
+  /**
+   * Removes a repo from the workspace and deletes its data (ADR-0054): works, alerts, posts and their messages, labels, decisions, check commands, and repo channels.
+   * Like adding, only that repo's GitHub Admin can do it. Adding it again starts empty.
+   */
   removeRepo: {
     method: "POST",
     path: "/api/repos/remove",
@@ -1985,6 +2005,25 @@ export const api = {
     path: "/api/share",
     body: z.strictObject({ on: z.boolean() }),
     response: z.strictObject({ repo: z.string(), shared: z.boolean() }),
+  },
+  /**
+   * Deletes the workspace `id` and everything in it (ADR-0054): every repo's data as in `removeRepo`, workspace channels and forums, and metrics.
+   * Only a GitHub Admin of every repo in it can (`forbidden`). A workspace the caller isn't in is `not_found`.
+   */
+  deleteWorkspace: {
+    method: "POST",
+    path: "/api/workspaces/delete",
+    body: z.strictObject({ workspace: z.string() }),
+    response: z.strictObject({}),
+  },
+  /**
+   * Deletes the caller's account (ADR-0054): every session and GitHub token, profile, presence, works, claims, settings, and private DMs.
+   * Messages, public Q&As, and decisions stay under a stand-in login (`isDeletedMember`). Every runner and web of this person drops.
+   */
+  deleteAccount: {
+    method: "POST",
+    path: "/api/account/delete",
+    response: z.strictObject({}),
   },
   /** Ends this session. Other sessions of the same member (other browsers, the CLI, and the runner) stay as they are. */
   logout: {
@@ -2598,7 +2637,14 @@ export const serverToWeb = {
 
 /** Calls one API. The web, CLI, and tests all use it. An error answer is thrown as `ContractFailure`. */
 export async function call<R extends Route>(
-  server: { url: string; session?: string; repos?: string[]; workspace?: string },
+  server: {
+    url: string;
+    session?: string;
+    repos?: string[];
+    workspace?: string;
+    /** Hears every error answer before it's thrown. The web shows a hit limit in one place this way. */
+    onFailure?: (failure: ContractFailure) => void;
+  },
   route: R,
   ...[body]: R["body"] extends z.ZodType ? [z.input<R["body"]>] : []
 ): Promise<z.output<R["response"]>> {
@@ -2614,10 +2660,12 @@ export async function call<R extends Route>(
   });
   const json: unknown = await response.json().catch(() => undefined);
   if (!response.ok) {
-    const failure = z.strictObject({ error: ContractError }).safeParse(json);
-    throw new ContractFailure(
-      failure.data?.error ?? { code: "internal", message: `HTTP ${response.status}` },
+    const parsed = z.strictObject({ error: ContractError }).safeParse(json);
+    const failure = new ContractFailure(
+      parsed.data?.error ?? { code: "internal", message: `HTTP ${response.status}` },
     );
+    server.onFailure?.(failure);
+    throw failure;
   }
   return route.response.parse(json) as z.output<R["response"]>;
 }

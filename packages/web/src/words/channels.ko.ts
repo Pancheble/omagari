@@ -26,9 +26,7 @@ export const channelsKo: Words["channels"] = {
   repoMenu: {
     label: "레포 메뉴",
     openGithub: "GitHub에서 열기",
-    confirmRemove: "한 번 더 누르면 빠져요",
     remove: "워크스페이스에서 빼기",
-    removeFailed: "못 뺐어요. 조금 있다 다시 해 볼래요?",
   },
 
   addRepo: {

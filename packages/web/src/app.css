@@ -6477,6 +6477,12 @@ button.person {
   white-space: nowrap;
 }
 
+.connect-notice .limit-close {
+  flex: none;
+  margin-left: auto;
+  color: inherit;
+}
+
 /* On narrow screens the copy button goes under its command so the command has the full width. */
 @media (max-width: 833px) {
   .connect,
@@ -6495,4 +6501,22 @@ button.person {
   .connect-command .button {
     margin-left: auto;
   }
+}
+
+/* Delete confirmation (ADR-0054): "Delete" sits at the right, after Cancel. */
+.confirm-delete .dialog-actions .button.danger {
+  margin-right: 0;
+}
+
+.confirm-delete .field code {
+  font-weight: 600;
+}
+
+.confirm-delete .button.danger:disabled {
+  background: var(--chip);
+  color: var(--text-secondary);
+}
+
+.confirm-delete .dialog-lead {
+  margin-top: 12px;
 }

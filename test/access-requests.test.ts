@@ -124,6 +124,13 @@ test("a denied request shows denied, and asking about an accepted account reveal
     [owner, "dave"],
   );
   assert.deepEqual(await call(dave, api.workspaces), { workspaces: [] });
+
+  // Deleting the account takes its requests with it (ADR-0054): the operator no longer sees dave's waiting one.
+  await call(dave, api.deleteAccount);
+  assert.deepEqual(
+    (await call(world.owner, api.accessRequests)).requests.map(({ login }) => login),
+    ["erin"],
+  );
 });
 
 test("with no operators the server takes no requests and OMAGARI_REPO works as before", async (t) => {

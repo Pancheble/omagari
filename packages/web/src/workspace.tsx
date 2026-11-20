@@ -11,6 +11,7 @@ import {
   type ExecutorId,
   type ForumFilter,
   HISTORY_PAGE,
+  isDeletedMember,
   type Label,
   type MemberView,
   type Prefs,
@@ -67,7 +68,7 @@ import {
   RepoDialog,
   useCollapsed,
 } from "./channels.tsx";
-import { ConnectCard, ShareNotice } from "./connect.tsx";
+import { ConnectCard, LimitNotice, ShareNotice } from "./connect.tsx";
 import { ChannelTitle, Conversation, type ReplyBody, type View } from "./conversation.tsx";
 import { DEBATE_STRIP, DebateDialog, DebateLog, DebateStrip, ProxyDialog } from "./debate.tsx";
 import { DecisionDialog, type Fields } from "./decision.tsx";
@@ -180,6 +181,7 @@ export function Workspace({
   onRepos,
   onLogout,
   onSignedOut,
+  onReload,
 }: {
   me: Me;
   session: string;
@@ -193,6 +195,8 @@ export function Workspace({
   onLogout: () => void;
   /** The session ended (the API or the live connection said so). */
   onSignedOut: () => void;
+  /** Reads me and the workspaces again (after the open workspace was deleted). */
+  onReload: () => void;
 }) {
   const drawer = useRef<HTMLDialogElement>(null);
   const creator = useRef<HTMLDialogElement>(null);
@@ -1332,6 +1336,7 @@ export function Workspace({
                   )}
                 </div>
               </header>
+              <LimitNotice />
               {!missing && !setup.connected && <ConnectCard address={server(session).url} />}
               {!missing && here !== ALL && !setup.shared.includes(here) && (
                 <ShareNotice onShare={() => void share()} failed={shareFailed} />
@@ -1632,6 +1637,22 @@ export function Workspace({
                   }
                 }}
                 onDndOff={() => void setPresence("online").catch(() => {})}
+                space={space}
+                adminAll={(() => {
+                  const mine = admins[workspace];
+                  return (
+                    Array.isArray(mine) &&
+                    repos.every((repo) => mine.some((r) => r.added && r.name === repo))
+                  );
+                })()}
+                onDeleteAccount={async () => {
+                  await call(server(session), api.deleteAccount);
+                  onLogout();
+                }}
+                onDeleteWorkspace={async () => {
+                  await call(server(session), api.deleteWorkspace, { workspace: space.id });
+                  onReload();
+                }}
                 onClose={() => setSettings(false)}
               />
             )}
@@ -1775,9 +1796,16 @@ function ChannelPanel({
 /** GitHub profile photo URL per person (login). The app frame fills it from the member list. */
 export const FacesContext = createContext<Map<string, string>>(new Map());
 
-/** Person name (#288): "GitHub name (login)". If there is no GitHub name or it equals the login, only the login. */
+/**
+ * Person name (#288): "GitHub name (login)". If there is no GitHub name or it equals the login, only the login.
+ * Someone who deleted their account is "Deleted member" (ADR-0054).
+ */
 export const personName = (name: string, login: string) =>
-  name && name !== login ? `${name} (${login})` : login;
+  isDeletedMember(login)
+    ? t.deletion.deletedMember
+    : name && name !== login
+      ? `${name} (${login})`
+      : login;
 
 /** The words that read a presence. The name of the presence dot, and the second line of a member row with no status message. */
 // Getters, so the words follow the current language at render time.
@@ -1819,7 +1847,9 @@ export const Avatar = ({
       {src && failed !== src ? (
         <img src={src} alt="" onError={() => setFailed(src)} />
       ) : (
-        Array.from(name)[0]?.toUpperCase()
+        Array.from(
+          login && isDeletedMember(login) ? t.deletion.deletedMember : name,
+        )[0]?.toUpperCase()
       )}
     </span>
   );

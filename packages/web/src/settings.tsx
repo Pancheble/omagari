@@ -26,11 +26,13 @@ import {
   Search,
   Tag,
   UserPlus,
+  UserRound,
   X,
 } from "lucide-react";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { AccessRequestsPage } from "./access.tsx";
 import { type Me, server } from "./api.ts";
+import { ConfirmDelete } from "./confirm-delete.tsx";
 import { type PostItem, settled } from "./forum.tsx";
 import { LANGUAGE_NAMES, language, setLanguage, t } from "./i18n.ts";
 import { ImportanceBadge, LabelDot, useLabels } from "./labels.tsx";
@@ -45,6 +47,7 @@ type Page =
   | "language"
   | "appearance"
   | "notifications"
+  | "account"
   | "alerts"
   | "labels"
   | "info"
@@ -67,9 +70,19 @@ export function Settings({
   prefs,
   onPrefs,
   onDndOff,
+  space,
+  adminAll,
+  onDeleteAccount,
+  onDeleteWorkspace,
   onClose,
 }: {
   me: Me;
+  /** The open workspace and the repos in it I can see. */
+  space: { id: string; name: string; repos: string[] };
+  /** I'm a GitHub Admin of every repo in it, so I may delete it (ADR-0054). The server checks again. */
+  adminAll: boolean;
+  onDeleteAccount: () => Promise<void>;
+  onDeleteWorkspace: () => Promise<void>;
   posts?: PostItem[];
   mine?: MemberView;
   session: string;
@@ -88,6 +101,7 @@ export function Settings({
   const [settings, setSettings] = useState<Reply>();
   const [failed, setFailed] = useState(false);
   const [saveError, setSaveError] = useState<string>();
+  const [asking, setAsking] = useState<"account" | "workspace">();
   const workspace = me.repo.split("/")[1];
 
   const load = () => {
@@ -163,6 +177,7 @@ export function Settings({
       t.settings.pages.notifications,
       <Bell key="notifications" size={18} aria-hidden />,
     ],
+    ["account", t.settings.pages.account, <UserRound key="account" size={18} aria-hidden />],
     ["alerts", t.settings.pages.alerts, <GitMerge key="alerts" size={18} aria-hidden />],
     ["labels", t.settings.pages.labels, <Tag key="labels" size={18} aria-hidden />],
     ["info", t.settings.pages.info, <Info key="info" size={18} aria-hidden />],
@@ -209,6 +224,17 @@ export function Settings({
         }
       />
     );
+  } else if (page === "account") {
+    // Needs nothing from the settings read.
+    body = (
+      <Group>
+        <Row name={t.deletion.account.title} description={t.deletion.account.body}>
+          <button type="button" className="button danger" onClick={() => setAsking("account")}>
+            {t.deletion.account.button}
+          </button>
+        </Row>
+      </Group>
+    );
   } else if (failed) {
     body = (
       <div className="empty">
@@ -238,6 +264,7 @@ export function Settings({
         repo={me.repo}
         version={settings.version}
         sourceUrl={settings.sourceUrl}
+        onDelete={adminAll ? () => setAsking("workspace") : undefined}
       />
     );
   } else {
@@ -267,13 +294,13 @@ export function Settings({
           </span>
         </div>
         <h3>{t.settings.me}</h3>
-        {items.slice(0, 4).map(item)}
+        {items.slice(0, 5).map(item)}
         <h3>{t.settings.workspace(workspace ?? "")}</h3>
-        {items.slice(4, 7).map(item)}
+        {items.slice(5, 8).map(item)}
         {me.operator && (
           <>
             <h3>{t.settings.server}</h3>
-            {items.slice(7).map(item)}
+            {items.slice(8).map(item)}
           </>
         )}
       </nav>
@@ -294,6 +321,25 @@ export function Settings({
         )}
         {body}
       </section>
+      {asking === "account" && (
+        <ConfirmDelete
+          title={t.deletion.account.confirm}
+          lines={t.deletion.account.lines}
+          name={me.login}
+          onDelete={onDeleteAccount}
+          onClose={() => setAsking(undefined)}
+        />
+      )}
+      {asking === "workspace" && (
+        <ConfirmDelete
+          title={t.deletion.workspace.confirm(space.name)}
+          lines={t.deletion.workspace.lines(space.repos.length)}
+          name={space.name}
+          forbidden={t.deletion.workspace.forbidden}
+          onDelete={onDeleteWorkspace}
+          onClose={() => setAsking(undefined)}
+        />
+      )}
     </dialog>
   );
 }
@@ -452,11 +498,14 @@ function InfoPage({
   repo,
   version,
   sourceUrl,
+  onDelete,
 }: {
   workspace: string;
   repo: string;
   version: string;
   sourceUrl: string;
+  /** Asks to delete the workspace. Missing unless I'm a GitHub Admin of every repo in it. */
+  onDelete?: () => void;
 }) {
   const words = t.settings.info;
   return (
@@ -480,6 +529,15 @@ function InfoPage({
           </a>
         </Row>
       </Group>
+      {onDelete && (
+        <Group note={t.deletion.workspace.note}>
+          <Row name={t.deletion.workspace.title} description={t.deletion.workspace.body}>
+            <button type="button" className="button danger" onClick={onDelete}>
+              {t.deletion.workspace.button}
+            </button>
+          </Row>
+        </Group>
+      )}
     </>
   );
 }

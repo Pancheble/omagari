@@ -1,5 +1,6 @@
-import { createHash, randomBytes, randomInt } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomInt } from "node:crypto";
 import { once } from "node:events";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { relative } from "node:path";
 import { basename } from "node:path/posix";
@@ -54,6 +55,7 @@ import {
   INBOX_MS,
   type InboxItem,
   type Label,
+  type LIMITS,
   LIVE_SOCKET,
   MAX_FRAME_BYTES,
   MERGE_RUN_LABELS,
@@ -145,6 +147,41 @@ const dropContent = (file: ObservedFile): ObservedFile =>
       ? { path: file.path, deleted: true }
       : file;
 const hash = (session: string) => createHash("sha256").update(session).digest("hex");
+
+const TOKEN_PREFIX = "enc1:";
+const isEncrypted = (text: string) => text.startsWith(TOKEN_PREFIX);
+/** The key that encrypts GitHub tokens: the setting, else a key file next to the database (made on first start), else a throwaway one for a memory database. */
+const tokenKeyFor = (setting: string | undefined, database: string | undefined) => {
+  if (setting) return createHash("sha256").update(setting).digest();
+  if (!database || database === ":memory:") return randomBytes(32);
+  const file = `${database}.key`;
+  if (!existsSync(file)) {
+    writeFileSync(file, randomBytes(32).toString("hex"), { mode: 0o600 });
+    console.log(
+      `Made ${file}, the key that encrypts GitHub tokens. Keep it with the database. Set OMAGARI_TOKEN_KEY to use your own`,
+    );
+  }
+  return createHash("sha256").update(readFileSync(file, "utf8").trim()).digest();
+};
+/** AES-256-GCM. The stored text is the prefix, then nonce, tag, and ciphertext (base64). */
+const encryptToken = (key: Buffer, plain: string) => {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const body = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
+  return TOKEN_PREFIX + Buffer.concat([iv, cipher.getAuthTag(), body]).toString("base64");
+};
+/** The plain token, or null if it isn't encrypted text or the key is wrong. */
+const decryptToken = (key: Buffer, text: string) => {
+  if (!isEncrypted(text)) return null;
+  try {
+    const raw = Buffer.from(text.slice(TOKEN_PREFIX.length), "base64");
+    const decipher = createDecipheriv("aes-256-gcm", key, raw.subarray(0, 12));
+    decipher.setAuthTag(raw.subarray(12, 28));
+    return Buffer.concat([decipher.update(raw.subarray(28)), decipher.final()]).toString("utf8");
+  } catch {
+    return null;
+  }
+};
 const bearer = (authorization?: string) => authorization?.match(/^Bearer (\S+)$/)?.[1];
 
 /** Reads Q&As. Append WHERE and ORDER BY. */
@@ -548,6 +585,11 @@ export async function startServer(options: {
   privacy?: string;
   /** SQLite file. If not given, it lives in memory and is lost when the server stops. */
   database?: string;
+  /**
+   * Secret that encrypts GitHub tokens in the database (`OMAGARI_TOKEN_KEY`, ADR-0053). Any long random string.
+   * If not given, the key lives in a file next to the database (made on first start), or in memory for a memory database.
+   */
+  tokenKey?: string;
   port?: number;
   /** Address to listen on. By default it listens only on this machine. Give something like "0.0.0.0" only to open it outside. */
   hostname?: string;
@@ -575,6 +617,11 @@ export async function startServer(options: {
   behindFly?: boolean;
   /** Time to finish hello. Default 10 seconds. Tests shorten it. */
   helloMs?: number;
+  /**
+   * Limits (ADR-0052): requests per person a minute, repos and stored megabytes per workspace, and GIF searches per workspace an hour.
+   * An unset one is no limit, so a server with none works as before.
+   */
+  limits?: Partial<Record<(typeof LIMITS)[number], number>>;
   /** Folder of the built web UI (`vite build`'s dist). If given, it's served from the same address as the API. In development it's not given and Vite is used. */
   webDir?: string;
 }) {
@@ -592,11 +639,12 @@ export async function startServer(options: {
    * If GitHub rejects the refresh token, the session ends and the person signs in again. If the refresh fails, the old token goes on,
    * and GitHub's answer to it is what callers already handle for a token that stopped working.
    */
-  // ponytail: looks the session up by the plain token. When tokens are encrypted (#382), look it up by a hash of the token instead.
   const fresh = (token: string) => {
     const row = db
-      .prepare("SELECT hash, refresh_token, expires_at FROM sessions WHERE github_token = ?")
-      .get(token) as
+      .prepare(
+        "SELECT hash, dec(refresh_token) AS refresh_token, expires_at FROM sessions WHERE token_hash = ?",
+      )
+      .get(hash(token)) as
       | { hash: string; refresh_token: string | null; expires_at: number | null }
       | undefined;
     if (!row?.refresh_token || (row.expires_at ?? 0) > Date.now() + REFRESH_AHEAD_MS) return token;
@@ -617,8 +665,14 @@ export async function startServer(options: {
           return token;
         }
         db.prepare(
-          "UPDATE sessions SET github_token = ?, refresh_token = ?, expires_at = ? WHERE hash = ?",
-        ).run(got.token, got.refreshToken, Date.now() + got.expiresInMs, session);
+          "UPDATE sessions SET github_token = ?, token_hash = ?, refresh_token = ?, expires_at = ? WHERE hash = ?",
+        ).run(
+          enc(got.token),
+          hash(got.token),
+          enc(got.refreshToken),
+          Date.now() + got.expiresInMs,
+          session,
+        );
         return got.token;
       })().finally(() => refreshing.delete(session));
       refreshing.set(session, pending);
@@ -646,6 +700,8 @@ export async function startServer(options: {
   const version = checkoutVersion();
   const hostname = options.hostname ?? "127.0.0.1";
   const db = new DatabaseSync(options.database ?? ":memory:");
+  // Deleted rows are overwritten in the file, not just marked free (ADR-0054: deletion is real deletion).
+  db.exec("PRAGMA secure_delete = ON");
   // Sessions are kept only as hashes. The GitHub token never leaves the server.
   db.exec(`CREATE TABLE IF NOT EXISTS sessions (
     hash TEXT PRIMARY KEY,
@@ -656,6 +712,34 @@ export async function startServer(options: {
   if (!db.prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'refresh_token'").get())
     db.exec(`ALTER TABLE sessions ADD COLUMN refresh_token TEXT;
       ALTER TABLE sessions ADD COLUMN expires_at INTEGER`);
+  // GitHub tokens are encrypted at rest (ADR-0053). `token_hash` finds a session by its token, since the encrypted text differs each time.
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'token_hash'").get())
+    db.exec("ALTER TABLE sessions ADD COLUMN token_hash TEXT");
+  db.exec("CREATE INDEX IF NOT EXISTS sessions_token ON sessions (token_hash)");
+  const tokenKey = tokenKeyFor(options.tokenKey, options.database);
+  const enc = (plain: string) => encryptToken(tokenKey, plain);
+  const dec = (text: unknown) => decryptToken(tokenKey, String(text));
+  db.function("dec", { deterministic: true }, (text) => (text === null ? null : dec(text)));
+  // Encrypt tokens an older server left in plain text. A token that doesn't open with this key (the key changed) ends its session: the person signs in again.
+  for (const row of db.prepare("SELECT hash, github_token, refresh_token FROM sessions").all() as {
+    hash: string;
+    github_token: string;
+    refresh_token: string | null;
+  }[]) {
+    if (isEncrypted(row.github_token)) {
+      if (decryptToken(tokenKey, row.github_token) === null)
+        db.prepare("DELETE FROM sessions WHERE hash = ?").run(row.hash);
+      continue;
+    }
+    db.prepare(
+      "UPDATE sessions SET github_token = ?, token_hash = ?, refresh_token = ? WHERE hash = ?",
+    ).run(
+      enc(row.github_token),
+      hash(row.github_token),
+      row.refresh_token === null ? null : enc(row.refresh_token),
+      row.hash,
+    );
+  }
   // Access requests (ADR-0052). `account` is lowercase. Approved accounts join the accepted accounts, also after a restart.
   db.exec(`CREATE TABLE IF NOT EXISTS access_requests (
     id INTEGER PRIMARY KEY,
@@ -1277,6 +1361,78 @@ export async function startServer(options: {
     if (!adopted) seedForums(id);
   };
   for (const repo of allRepos()) ensureWorkspace(repo);
+  /** The tables that have `column`. */
+  const tablesWith = (column: string) =>
+    (
+      db
+        .prepare(
+          "SELECT m.name FROM sqlite_master m JOIN pragma_table_info(m.name) p WHERE m.type = 'table' AND p.name = ?",
+        )
+        .all(column) as { name: string }[]
+    ).map((row) => row.name);
+  /** Runs `change` in one transaction whose foreign keys are checked only at the end, so rows that point at each other can go in any order. */
+  const deleting = (change: () => void) => {
+    db.exec("BEGIN");
+    try {
+      db.exec("PRAGMA defer_foreign_keys = ON");
+      change();
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  };
+  /** Deletes the channels `where` picks and everything in them: messages, reactions, Q&As, decisions, and debates. Call inside `deleting`. */
+  const dropChannels = (where: string, value: string) => {
+    const ids = `SELECT id FROM channels WHERE ${where}`;
+    const decisions = `SELECT id FROM decisions WHERE post IN (${ids})`;
+    const debates = `SELECT id FROM debates WHERE post IN (${ids})`;
+    for (const sql of [
+      `DELETE FROM reactions WHERE message IN (SELECT id FROM messages WHERE channel IN (${ids}))`,
+      `DELETE FROM agreements WHERE decision IN (${decisions})`,
+      `DELETE FROM objections WHERE decision IN (${decisions})`,
+      `DELETE FROM seats WHERE debate IN (${debates})`,
+      `DELETE FROM debate_comments WHERE debate IN (${debates})`,
+      `DELETE FROM debates WHERE post IN (${ids})`,
+      `DELETE FROM debate_requests WHERE post IN (${ids})`,
+      `DELETE FROM decisions WHERE post IN (${ids})`,
+      `DELETE FROM messages WHERE channel IN (${ids})`,
+      `DELETE FROM qas WHERE channel IN (${ids})`,
+      `DELETE FROM channels WHERE ${where}`,
+    ])
+      db.prepare(sql).run(value);
+  };
+  /**
+   * Deletes everything of `repo` (ADR-0054): every table with a `repo` column, its posts and repo channels with what's in them, the alert lines,
+   * its check command, its moves, and its name in forum filters. Returns the forums whose filter changed. The GitHub id (`repo_ids`) stays (#315).
+   */
+  const deleteRepoData = (repo: string) => {
+    const forums: { id: string; filter: string }[] = [];
+    deleting(() => {
+      dropChannels("repo = ?", repo);
+      // Alert lines stand in the alert place (`ALERTS`), not in the repo's channels.
+      const lines = "SELECT id FROM messages WHERE alert IN (SELECT id FROM alerts WHERE repo = ?)";
+      db.prepare(`DELETE FROM reactions WHERE message IN (${lines})`).run(repo);
+      db.prepare(`DELETE FROM messages WHERE id IN (${lines})`).run(repo);
+      for (const table of tablesWith("repo"))
+        db.prepare(`DELETE FROM ${table} WHERE repo = ?`).run(repo);
+      db.prepare("DELETE FROM repos WHERE name = ?").run(repo);
+      db.prepare("DELETE FROM settings WHERE key = ?").run(`check ${repo}`);
+      db.prepare("DELETE FROM repo_moves WHERE old = ? OR new = ?").run(repo, repo);
+      for (const forum of db
+        .prepare("SELECT id, filter FROM channels WHERE kind = 'forum' AND workspace = ?")
+        .all(ownerOf(repo)) as { id: string; filter: string | null }[]) {
+        const filter = JSON.parse(forum.filter ?? "{}") as { repos?: string[] };
+        if (!filter.repos?.includes(repo)) continue;
+        filter.repos = filter.repos.filter((r) => r !== repo);
+        if (!filter.repos.length) delete filter.repos;
+        const next = JSON.stringify(filter);
+        db.prepare("UPDATE channels SET filter = ? WHERE id = ?").run(next, forum.id);
+        forums.push({ id: forum.id, filter: next });
+      }
+    });
+    return forums;
+  };
   /**
    * Moves everything of repo `from`, which moved or was renamed on GitHub, under the new name `to` (ADR-0043). Every table with a `repo` column,
    * the repo's channels (to that workspace if it went to another account), the filters of forums in the same workspace, check commands, and connected runners and webs.
@@ -1298,13 +1454,7 @@ export async function startServer(options: {
       );
       return false;
     }
-    const tables = (
-      db
-        .prepare(
-          "SELECT m.name FROM sqlite_master m JOIN pragma_table_info(m.name) p WHERE m.type = 'table' AND p.name = 'repo'",
-        )
-        .all() as { name: string }[]
-    ).map((row) => row.name);
+    const tables = tablesWith("repo");
     db.exec("BEGIN");
     try {
       db.prepare("UPDATE repos SET name = ? WHERE name = ?").run(to, from);
@@ -3028,6 +3178,64 @@ export async function startServer(options: {
     return session && sessionLogin(session);
   });
 
+  const limits = options.limits ?? {};
+  const LIMITED = {
+    requests: (max: number) => `Hit the limit of ${max} requests a minute. Try again in a minute`,
+    repos: (max: number) => `This workspace can have up to ${max} repos. Remove one to add another`,
+    storage: (max: number) =>
+      `This workspace is over its ${max} MB of storage. Ask the server's operators`,
+    gifs: (max: number) =>
+      `This workspace used its ${max} GIF searches for this hour. Try again later`,
+  } satisfies Record<(typeof LIMITS)[number], (max: number) => string>;
+  /** The one error shape for a hit limit. The web and CLI name the limit from it. */
+  const limited = (name: keyof typeof LIMITED, max: number) =>
+    new ContractFailure({ code: "limited", message: LIMITED[name](max), limit: { name, max } });
+  /** When each person's requests and each workspace's GIF searches happened, within their window. Not kept across restarts. */
+  const spent = new Map<string, number[]>();
+  /** Counts one use of `name` by `key` within `windowMs`. `limited` once the setting's number is reached in that window. */
+  const spend = (name: "requests" | "gifs", key: string, windowMs: number) => {
+    const max = limits[name];
+    if (max === undefined) return;
+    const now = Date.now();
+    const recent = (spent.get(`${name} ${key}`) ?? []).filter((at) => now - at < windowMs);
+    if (recent.length >= max) throw limited(name, max);
+    recent.push(now);
+    spent.set(`${name} ${key}`, recent);
+  };
+  app.use(async (c, next) => {
+    const login = c.get("login");
+    if (login) spend("requests", login, 60_000);
+    await next();
+  });
+  /** Bytes a workspace keeps: messages and Q&A in its channels and posts, and the file content and conflict snapshots its runners shared. */
+  const storedBytes = (workspace: string) => {
+    const bytes = (x: string) => `COALESCE(LENGTH(CAST(${x} AS BLOB)), 0)`;
+    const inWorkspace = `COALESCE(c.workspace, ${ownerSql("c.repo")}) = :ws`;
+    return (
+      db
+        .prepare(
+          `SELECT ${[
+            `SELECT SUM(${bytes("m.text")} + ${bytes("m.note")}) FROM messages m JOIN channels c ON c.id = m.channel WHERE ${inWorkspace}`,
+            `SELECT SUM(${bytes("q.question")} + ${bytes("q.answer")}) FROM qas q JOIN channels c ON c.id = q.channel WHERE ${inWorkspace}`,
+            `SELECT SUM(${bytes("files")}) FROM works WHERE ${ownerSql("repo")} = :ws`,
+            `SELECT SUM(${bytes("works")} + ${bytes("files")}) FROM alerts WHERE ${ownerSql("repo")} = :ws`,
+          ]
+            .map((sum) => `COALESCE((${sum}), 0)`)
+            .join(" + ")} AS total`,
+        )
+        .get({ ws: workspace }) as { total: number }
+    ).total;
+  };
+  /**
+   * New messages and Q&A stop once the workspace keeps more than its storage limit. Runners keep sharing; that content drops after 30 days (`CONTENT_MS`).
+   * ponytail: sums the workspace's rows on every write, and only when the limit is set. Keep a running total if sends get slow.
+   */
+  const mustHaveRoom = (workspace: string) => {
+    const max = limits.storage;
+    if (max !== undefined && storedBytes(workspace) > max * 1_000_000)
+      throw limited("storage", max);
+  };
+
   mount(app, api.health, () => ({ contract: CONTRACT_VERSION }));
 
   /**
@@ -3207,12 +3415,13 @@ export async function startServer(options: {
     }
     const session = randomBytes(32).toString("hex");
     db.prepare(
-      "INSERT INTO sessions (hash, login, github_token, refresh_token, expires_at) VALUES (?, ?, ?, ?, ?)",
+      "INSERT INTO sessions (hash, login, github_token, token_hash, refresh_token, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
     ).run(
       hash(session),
       login,
-      polled.token,
-      polled.refreshToken ?? null,
+      enc(polled.token),
+      hash(polled.token),
+      polled.refreshToken === undefined ? null : enc(polled.refreshToken),
       polled.expiresInMs === undefined ? null : Date.now() + polled.expiresInMs,
     );
     db.prepare(
@@ -3243,10 +3452,11 @@ export async function startServer(options: {
   });
 
   // The server adds the key and asks GIPHY instead of the browser. The key never leaves the server, and results aren't stored (ADR-0044).
-  mount(app, api.gifs, ({ query }) => {
+  mount(app, api.gifs, ({ query }, c) => {
     if (!options.giphy) {
       throw new ContractFailure({ code: "not_found", message: "This server has no GIPHY key" });
     }
+    spend("gifs", workspaceOf(c), 3_600_000);
     return options.giphy.search(query).then((gifs) => ({ gifs }));
   });
 
@@ -3273,8 +3483,13 @@ export async function startServer(options: {
     };
   });
 
-  /** Adds or removes a repo. `forbidden` unless they're a GitHub Admin of that repo. */
-  const mustAdmin = async (login: string, token: string, repo: string) => {
+  /** Adds or removes a repo, or deletes a workspace. `forbidden` unless they're a GitHub Admin of that repo. */
+  const mustAdmin = async (
+    login: string,
+    token: string,
+    repo: string,
+    what = "add or remove it",
+  ) => {
     const admin = await github.canAdmin(token, repo);
     if (admin === undefined)
       throw new ContractFailure({
@@ -3284,7 +3499,7 @@ export async function startServer(options: {
     if (!admin)
       throw new ContractFailure({
         code: "forbidden",
-        message: `${login} isn't an Admin of ${repo}, so they can't add or remove it`,
+        message: `${login} isn't an Admin of ${repo}, so they can't ${what}`,
       });
   };
 
@@ -3296,6 +3511,13 @@ export async function startServer(options: {
         message: `${repo.split("/")[0]} isn't a GitHub account this server accepts`,
       });
     await mustAdmin(login, callerToken(c), repo);
+    const others = allRepos().filter((r) => ownerOf(r) === ownerOf(repo));
+    if (
+      limits.repos !== undefined &&
+      others.length >= limits.repos &&
+      !others.some((r) => r.toLowerCase() === repo.toLowerCase())
+    )
+      throw limited("repos", limits.repos);
     // Record the GitHub id when adding. If a different repo with the same name was here before, block it so that repo's stuff isn't carried over (#315).
     const found = await github.canPush(callerToken(c), repo);
     if (found?.id !== undefined && !sameRepo(repo, found.id))
@@ -3312,7 +3534,7 @@ export async function startServer(options: {
     await Promise.all(
       (
         db
-          .prepare("SELECT login, MAX(github_token) AS token FROM sessions GROUP BY login")
+          .prepare("SELECT login, dec(MAX(github_token)) AS token FROM sessions GROUP BY login")
           .all() as {
           login: string;
           token: string;
@@ -3357,23 +3579,123 @@ export async function startServer(options: {
     if (!found || !sees(login, found.name))
       throw new ContractFailure({ code: "not_found", message: `No such repo: ${repo}` });
     await mustAdmin(login, callerToken(c), found.name);
-    // That repo's stuff isn't deleted. It comes back if the repo is added again.
-    db.prepare("DELETE FROM repos WHERE name = ?").run(found.name);
-    db.prepare("DELETE FROM access WHERE repo = ?").run(found.name);
-    for (const [socket, runner] of runners)
-      if (runner.repo === found.name)
-        refuse(socket, {
-          code: "forbidden",
-          message: `${found.name} was removed from the workspace`,
-        });
-    for (const [socket, watcher] of watchers)
-      if (watcher.repo === found.name)
-        refuse(socket, {
-          code: "forbidden",
-          message: `${found.name} was removed from the workspace`,
-        });
-    shareSituation();
+    removeRepos([found.name], `${found.name} was removed from the workspace`);
     return { repos: reposOf(login) };
+  });
+
+  /**
+   * Drops the runners and webs `which` picks with `error`. They're taken off the lists first, so closing doesn't write anything back
+   * (a dropped runner would otherwise leave an offline row behind).
+   */
+  const dropSockets = (
+    which: (connection: { login: string; repo: string }) => boolean,
+    error: ContractError,
+  ) => {
+    for (const [socket, runner] of runners)
+      if (which(runner)) {
+        runners.delete(socket);
+        reports.delete(socket);
+        refuse(socket, error);
+      }
+    for (const [socket, watcher] of watchers)
+      if (which(watcher)) {
+        watchers.delete(socket);
+        refuse(socket, error);
+      }
+  };
+
+  /** Deletes the repos' data (ADR-0054) and tells the webs still open in the workspace. */
+  const removeRepos = (repos: string[], message: string) => {
+    dropSockets((connection) => repos.includes(connection.repo), { code: "forbidden", message });
+    for (const repo of repos) {
+      const channels = (
+        db.prepare("SELECT id FROM channels WHERE repo = ? AND alert IS NULL").all(repo) as {
+          id: string;
+        }[]
+      ).map((row) => row.id);
+      const forums = deleteRepoData(repo);
+      const frames = channels.map((id) => encode(serverToWeb, "forumDeleted", { id }));
+      for (const [socket, watcher] of watchers)
+        if (watcher.workspace === ownerOf(repo) && open(socket, watcher))
+          for (const frame of frames) socket.send(frame);
+      for (const forum of forums)
+        broadcastChannel(ownerOf(repo), {
+          ...(db
+            .prepare("SELECT id, name, kind, filter, repo FROM channels WHERE id = ?")
+            .get(forum.id) as Parameters<typeof channelView>[0]),
+        });
+    }
+    shareSituation();
+    shareMembers();
+  };
+
+  mount(app, api.deleteWorkspace, async ({ workspace }, c) => {
+    const login = c.get("login") as string;
+    const id = workspace.toLowerCase();
+    const repos = allRepos().filter((repo) => ownerOf(repo) === id);
+    // A workspace you aren't in gets the same answer as one that doesn't exist.
+    if (!repos.some((repo) => sees(login, repo)))
+      throw new ContractFailure({ code: "not_found", message: `No such workspace: ${workspace}` });
+    const token = callerToken(c);
+    await Promise.all(repos.map((repo) => mustAdmin(login, token, repo, "delete the workspace")));
+    const message = `The ${workspace} workspace was deleted`;
+    dropSockets((connection) => ownerOf(connection.repo) === id, { code: "forbidden", message });
+    removeRepos(repos, message);
+    deleting(() => {
+      dropChannels("workspace = ?", id);
+      for (const table of ["visits", "merge_runs"])
+        db.prepare(`DELETE FROM ${table} WHERE workspace = ?`).run(id);
+      db.prepare("DELETE FROM workspaces WHERE id = ?").run(id);
+    });
+    return {};
+  });
+
+  /** Tables whose rows of a deleted person stay under a stand-in login (ADR-0054). Rows in every other table with a `login` are deleted. */
+  const KEPT_AFTER_DELETE = [
+    "messages",
+    "qas",
+    "decisions",
+    "agreements",
+    "objections",
+    "seats",
+    "debate_requests",
+  ];
+
+  mount(app, api.deleteAccount, (_, c) => {
+    const login = c.get("login") as string;
+    const repos = reposOf(login);
+    const stand = `~${randomBytes(4).toString("hex")}`;
+    dropSockets((connection) => connection.login === login, {
+      code: "unauthorized",
+      message: "This account was deleted",
+    });
+    deleting(() => {
+      // A DM is only theirs. Questions others sent them, and their claims in the feed, go too.
+      db.prepare("DELETE FROM qas WHERE login = ? AND visibility = 'private'").run(login);
+      db.prepare("DELETE FROM questions WHERE target = ?").run(login);
+      db.prepare("DELETE FROM feed WHERE json_extract(claim, '$.login') = ?").run(login);
+      for (const table of tablesWith("login")) {
+        if (KEPT_AFTER_DELETE.includes(table))
+          db.prepare(`UPDATE OR IGNORE ${table} SET login = ? WHERE login = ?`).run(stand, login);
+        db.prepare(`DELETE FROM ${table} WHERE login = ?`).run(login);
+      }
+      db.prepare("UPDATE seats SET proxy = ? WHERE proxy = ?").run(stand, login);
+      db.prepare("UPDATE debates SET chooser = ? WHERE chooser = ?").run(stand, login);
+      // The login inside JSON: an alert's works, and a decision's deciders and absentees. Written by JSON.stringify, so the quoted forms match exactly.
+      db.prepare("UPDATE alerts SET works = replace(works, ?, ?)").run(
+        `"login":${JSON.stringify(login)}`,
+        `"login":${JSON.stringify(stand)}`,
+      );
+      for (const column of ["deciders", "absent"])
+        db.prepare(`UPDATE decisions SET ${column} = replace(${column}, ?, ?)`).run(
+          JSON.stringify(login),
+          JSON.stringify(stand),
+        );
+    });
+    for (const repo of repos) reconcile(repo);
+    shareSituation();
+    shareMembers();
+    return {};
   });
 
   /** Accounts approved on the caller's own requests. */
@@ -3858,6 +4180,7 @@ export async function startServer(options: {
           "Only answered Q&As can be posted to a channel. The question and answer go up together",
       });
     }
+    mustHaveRoom(channelWorkspace(row.channel) ?? ownerOf(channelRepo(row.channel) ?? ""));
     db.exec("BEGIN");
     db.prepare("UPDATE qas SET visibility = 'public' WHERE id = ?").run(qa);
     db.prepare("INSERT INTO messages (channel, login, qa, note, at) VALUES (?, ?, ?, ?, ?)").run(
@@ -4231,7 +4554,9 @@ export async function startServer(options: {
     merging.add(id);
     try {
       const session = db
-        .prepare("SELECT github_token FROM sessions WHERE login = ? ORDER BY rowid DESC")
+        .prepare(
+          "SELECT dec(github_token) AS github_token FROM sessions WHERE login = ? ORDER BY rowid DESC",
+        )
         .get(decision.login) as { github_token: string } | undefined;
       const merged = session
         ? await github
@@ -4293,7 +4618,7 @@ export async function startServer(options: {
   const callerToken = (c: { req: { header(name: string): string | undefined } }) =>
     (
       db
-        .prepare("SELECT github_token FROM sessions WHERE hash = ?")
+        .prepare("SELECT dec(github_token) AS github_token FROM sessions WHERE hash = ?")
         .get(hash(bearer(c.req.header("authorization")) as string)) as { github_token: string }
     ).github_token;
 
@@ -4775,6 +5100,7 @@ export async function startServer(options: {
         message: "Can't write in a forum. Write inside a post",
       });
     }
+    mustHaveRoom(channelWorkspace(channel) ?? ownerOf(channelRepo(channel) ?? ""));
   };
 
   mount(app, api.history, ({ channel, before, thread }, c) => {
@@ -5429,7 +5755,9 @@ export async function startServer(options: {
     if (checking) return;
     checking = true;
     try {
-      const rows = db.prepare("SELECT hash, login, github_token FROM sessions").all() as {
+      const rows = db
+        .prepare("SELECT hash, login, dec(github_token) AS github_token FROM sessions")
+        .all() as {
         hash: string;
         login: string;
         github_token: string;
@@ -5499,7 +5827,7 @@ export async function startServer(options: {
     (
       db
         .prepare(
-          "SELECT github_token FROM sessions WHERE login IN (SELECT login FROM access WHERE repo = ?) ORDER BY rowid DESC",
+          "SELECT dec(github_token) AS github_token FROM sessions WHERE login IN (SELECT login FROM access WHERE repo = ?) ORDER BY rowid DESC",
         )
         .all(repo) as { github_token: string }[]
     ).map((session) => session.github_token);
@@ -5507,7 +5835,9 @@ export async function startServer(options: {
   const tokenOf = (login: string) =>
     (
       db
-        .prepare("SELECT github_token FROM sessions WHERE login = ? ORDER BY rowid DESC")
+        .prepare(
+          "SELECT dec(github_token) AS github_token FROM sessions WHERE login = ? ORDER BY rowid DESC",
+        )
         .get(login) as { github_token: string } | undefined
     )?.github_token;
 
@@ -6154,7 +6484,7 @@ export async function startServer(options: {
 
       const branches = db
         .prepare(
-          `SELECT w.repo, w.branch, MAX(s.github_token) AS token
+          `SELECT w.repo, w.branch, dec(MAX(s.github_token)) AS token
            FROM (SELECT repo, login, branch FROM works UNION SELECT repo, login, branch FROM claims) w
            JOIN sessions s ON s.login = w.login
            JOIN access a ON a.login = w.login AND a.repo = w.repo
@@ -6194,8 +6524,8 @@ export async function startServer(options: {
       const open = db
         .prepare(
           `SELECT d.id, d.pull, c.repo, COALESCE(
-             (SELECT github_token FROM sessions WHERE login = d.login),
-             (SELECT github_token FROM sessions WHERE login IN (SELECT login FROM access WHERE repo = c.repo))) AS token
+             (SELECT dec(github_token) AS github_token FROM sessions WHERE login = d.login),
+             (SELECT dec(github_token) AS github_token FROM sessions WHERE login IN (SELECT login FROM access WHERE repo = c.repo))) AS token
            FROM decisions d JOIN channels c ON c.id = d.post
            WHERE d.state = 'proposed' AND c.repo IN (SELECT name FROM repos)`,
         )

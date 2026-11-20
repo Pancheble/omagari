@@ -27,6 +27,7 @@
 //   Going to other's channel address (printed in the console) shows "You can't see this repo". In other-team Minsu Park is alone, so the alone case (mockup 100-A) shows.
 // - DEMO_AS=newcomer: logs the browser in as someone with no workspace, so you see the access request screen (ADR-0052).
 // - GIPHY_API_KEY=<key>: turns on GIFs with the real GIPHY (ADR-0044). If not given, the input has no GIF button.
+//   DEMO_LIMIT_GIFS=<n>: n GIF searches per workspace an hour, to see the limit banner (ADR-0052).
 //   DEMO_GIPHY=fake: look at the GIF area without a key. Regardless of the search words it gives eight public GIPHY GIFs (the pictures are fetched from GIPHY).
 // - When you quit (Ctrl+C) it deletes the temporary repo and DB. It isn't named *.test.ts so npm test and CI don't run it.
 // - A fake GitHub issue is opened for each post and the text goes there as comments. The post "Minsu Park · Hajun Choi" receives comments made on GitHub and the changed title and labels.
@@ -142,25 +143,9 @@ const executors = {
 };
 // To show merge stalled, delete one member's GitHub token. Delay the permission re-check so it doesn't drop that member.
 // A post's issue (ADR-0032) is read from GitHub every cycle. In the demo, every 2 seconds.
-/** Set once everything is seeded: from then on a device auth is the browser's, approved by itself. */
-let browserLogins = false;
+/** Everything pre-seeded is in. Only then does the browser's login get approved. */
+let seeded = false;
 const world = await startWorld({
-  // The server takes the fake GitHub's functions when it starts, so the auto-approval is plugged in before that.
-  setup: (github) => {
-    const startDevice = github.github.startDevice.bind(github.github);
-    github.github.startDevice = async () => {
-      const device = await startDevice();
-      if (browserLogins)
-        setTimeout(() => {
-          try {
-            github.approve(device.userCode, process.env.DEMO_AS ?? "owner");
-          } catch {
-            // That auth expired in the meantime or has already ended.
-          }
-        }, 1500);
-      return device;
-    };
-  },
   executors,
   observeMs: 200,
   recheckMs: FOREVER,
@@ -172,7 +157,7 @@ const world = await startWorld({
   quietMs: FOREVER,
   // Two workspaces: REPO's account and REPO3's account (ADR-0043).
   accept: [REPO, REPO3],
-  // "me" is the operator, so settings show Server → Access requests (ADR-0052). A request from "jiwoo" is waiting there.
+  // "me" is the operator, so settings show Server → Access requests (ADR-0052). A request from "yuna" is waiting there.
   operators: ["owner"],
   terms: "https://omagari-dev.github.io/omagari/terms",
   privacy: "https://omagari-dev.github.io/omagari/privacy",
@@ -181,6 +166,24 @@ const world = await startWorld({
     : process.env.DEMO_GIPHY === "fake"
       ? { search: async () => DEMO_GIFS }
       : undefined,
+  // DEMO_LIMIT_GIFS=2: a workspace gets 2 GIF searches an hour, so the third shows the limit banner (ADR-0052).
+  limits: process.env.DEMO_LIMIT_GIFS ? { gifs: Number(process.env.DEMO_LIMIT_GIFS) } : undefined,
+  // Once everything pre-seeded is in, a device auth opened in the browser is approved as "me" instead of entering the code on GitHub.
+  // Wrapped before the server starts, since the server keeps the GitHub calls it was given.
+  setup: (github) => {
+    const startDevice = github.github.startDevice.bind(github.github);
+    github.github.startDevice = async () => {
+      const device = await startDevice();
+      setTimeout(() => {
+        try {
+          if (seeded) github.approve(device.userCode, process.env.DEMO_AS ?? "owner");
+        } catch {
+          // That auth expired in the meantime or has already ended.
+        }
+      }, 1500);
+      return device;
+    };
+  },
 });
 const fake = world.github;
 const NAMES = {
@@ -1114,13 +1117,12 @@ if (process.env.DEMO_SETUP === "new") {
 }
 
 {
-  fake.names.set("jiwoo", "Jiwoo Kang");
-  const jiwoo = await world.login("jiwoo");
-  await call(jiwoo, api.requestAccess, { account: "kang-studio", agree: true });
+  fake.names.set("yuna", "Yuna Kang");
+  const yuna = await world.login("yuna");
+  await call(yuna, api.requestAccess, { account: "kang-studio", agree: true });
 }
 
-// Once everything pre-seeded is in, a device auth opened in the browser is approved as "me" instead of entering the code on GitHub (`setup` above).
-browserLogins = true;
+seeded = true;
 
 const PORT = process.env.DEMO_PORT ?? process.env.PORT ?? "5180";
 const web = spawn("npx", ["vite", "--port", PORT, "--strictPort"], {

@@ -2,6 +2,7 @@ import type { CheckReading, Importance } from "@omagari/contract";
 import { channelsEn } from "./channels.en.ts";
 import { connectEn } from "./connect.en.ts";
 import { conversationEn } from "./conversation.en.ts";
+import { deletionEn } from "./deletion.en.ts";
 import { dmEn } from "./dm.en.ts";
 import { notifyEn } from "./notify.en.ts";
 import { profileEn } from "./profile.en.ts";
@@ -87,6 +88,7 @@ export const en = {
       alerts: "Merge run",
       labels: "Labels",
       info: "Info",
+      account: "Account",
       access: "Access requests",
     },
     server: "Server",
@@ -556,4 +558,5 @@ export const en = {
   profile: profileEn,
   notify: notifyEn,
   connect: connectEn,
+  deletion: deletionEn,
 };

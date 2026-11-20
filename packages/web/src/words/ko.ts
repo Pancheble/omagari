@@ -2,6 +2,7 @@ import type { Words } from "../i18n.ts";
 import { channelsKo } from "./channels.ko.ts";
 import { connectKo } from "./connect.ko.ts";
 import { conversationKo } from "./conversation.ko.ts";
+import { deletionKo } from "./deletion.ko.ts";
 import { dmKo } from "./dm.ko.ts";
 import { notifyKo } from "./notify.ko.ts";
 import { profileKo } from "./profile.ko.ts";
@@ -90,6 +91,7 @@ export const ko: Words = {
       alerts: "합쳐 돌려 보기",
       labels: "라벨",
       info: "정보",
+      account: "계정",
       access: "가입 신청",
     },
     server: "서버",
@@ -536,4 +538,5 @@ export const ko: Words = {
   profile: profileKo,
   notify: notifyKo,
   connect: connectKo,
+  deletion: deletionKo,
 };

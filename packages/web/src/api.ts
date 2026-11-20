@@ -1,10 +1,12 @@
 import {
   type api,
+  type ContractError,
   ContractFailure,
   type call,
   type ExecutorId,
   type ModelPick,
 } from "@omagari/contract";
+import { useSyncExternalStore } from "react";
 
 export type Me = Awaited<ReturnType<typeof call<typeof api.me>>>;
 
@@ -21,12 +23,32 @@ export const setWorkspace = (id: string) => {
   workspace = id;
 };
 
+/** The last limit the server said was hit (ADR-0052), until the banner is closed. Every call goes through `server`, so any screen's hit lands here. */
+let hit: ContractError["limit"];
+const hitListeners = new Set<() => void>();
+const setHit = (limit: ContractError["limit"]) => {
+  hit = limit;
+  for (const listener of hitListeners) listener();
+};
+export const clearLimit = () => setHit(undefined);
+export const useLimit = () =>
+  useSyncExternalStore(
+    (listener) => {
+      hitListeners.add(listener);
+      return () => hitListeners.delete(listener);
+    },
+    () => hit,
+  );
+
 /** The server the web calls. It serves the API from the same place as the screen (in development, Vite forwards it). */
 export const server = (session?: string, repo?: string) => ({
   url: location.origin,
   session,
   workspace,
   repos: repo ? [repo] : undefined,
+  onFailure: (failure: ContractFailure) => {
+    if (failure.code === "limited") setHit(failure.limit);
+  },
 });
 
 const KEY = "omagari.session";

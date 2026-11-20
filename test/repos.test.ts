@@ -122,14 +122,11 @@ test("only an Admin adds and removes a repo of the same account, a runner connec
   assert.equal(await importance(owner), "reference");
   assert.equal(await importance(alice), "discuss");
 
-  // Removing a repo disconnects that repo's runner and hides it from everyone. Adding it back brings its things back.
+  // Removing a repo disconnects that repo's runner, hides it from everyone, and deletes its data (ADR-0054). Adding it back starts empty.
   assert.deepEqual(await call(owner, api.removeRepo, { repo: REPO2 }), { repos: [REPO] });
   await assert.rejects(call(alice, api.posts), refused("not_found"));
   assert.deepEqual(await call(owner, api.addRepo, { repo: REPO2 }), { repos: [REPO, REPO2] });
-  assert.deepEqual(
-    (await call(alice, api.posts)).posts.map((p) => p.channel),
-    [post],
-  );
+  assert.ok(!(await call(alice, api.posts)).posts.some((p) => p.channel === post));
 });
 
 test("only repos with push access are visible, and after losing access on GitHub and checking again, that repo is not visible", async (t) => {
