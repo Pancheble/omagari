@@ -2,6 +2,7 @@ import type { CheckReading, Importance } from "@omagari/contract";
 import { channelsEn } from "./channels.en.ts";
 import { conversationEn } from "./conversation.en.ts";
 import { dmEn } from "./dm.en.ts";
+import { notifyEn } from "./notify.en.ts";
 import { profileEn } from "./profile.en.ts";
 
 type CheckProblem = Extract<CheckReading, { problem: unknown }>["problem"];
@@ -72,7 +73,6 @@ export const en = {
       note: (now: "light" | "dark") =>
         `Match system: your computer is ${now} right now, so it's ${now}. It follows right away when you change your computer. The look you pick follows you to your other devices.`,
     },
-    notifications: { soon: "Browser notifications are coming soon." },
     info: {
       workspace: "Workspace",
       name: "Name",
@@ -518,4 +518,5 @@ export const en = {
   dm: dmEn,
 
   profile: profileEn,
+  notify: notifyEn,
 };

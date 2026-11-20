@@ -9,14 +9,17 @@ import {
   type Label,
   Language,
   type MemberView,
+  type Prefs,
 } from "@omagari/contract";
 import {
   Bell,
   Bot,
+  CircleMinus,
   ExternalLink,
   GitMerge,
   Info,
   Languages,
+  Lock,
   Palette,
   Plus,
   RefreshCw,
@@ -30,6 +33,7 @@ import { type PostItem, settled } from "./forum.tsx";
 import { LANGUAGE_NAMES, language, setLanguage, t } from "./i18n.ts";
 import { ImportanceBadge, LabelDot, useLabels } from "./labels.tsx";
 import { Mark } from "./members.tsx";
+import { browserSwitch, setBrowserSwitch } from "./notify.ts";
 import { appearance, setAppearance, systemLook, useLook } from "./theme.ts";
 import { Avatar, personName } from "./workspace.tsx";
 
@@ -50,12 +54,20 @@ export function Settings({
   mine,
   session,
   check,
+  prefs,
+  onPrefs,
+  onDndOff,
   onClose,
 }: {
   me: Me;
   posts?: PostItem[];
   mine?: MemberView;
   session: string;
+  prefs: Prefs;
+  /** Saves some of my personal settings (the screen shows them right away). */
+  onPrefs: (next: Partial<Prefs>) => Promise<void>;
+  /** Turns Do not disturb off from the notifications item. */
+  onDndOff: () => void;
   /** If the session ended, send the user back to login. */
   check: (error: unknown) => unknown;
   onClose: () => void;
@@ -170,11 +182,18 @@ export function Settings({
     // Comes with `api.me` too, like the language.
     body = <AppearancePage onPick={pickAppearance} />;
   } else if (page === "notifications") {
-    // Placeholder: #313 (browser notifications) fills it.
     body = (
-      <div className="settings-section">
-        <p>{t.settings[page].soon}</p>
-      </div>
+      <NotificationsPage
+        prefs={prefs}
+        dnd={mine?.presence === "dnd"}
+        onDndOff={onDndOff}
+        onChange={(next) =>
+          onPrefs(next).catch((error) => {
+            check(error);
+            setSaveError(t.settings.saveFailed);
+          })
+        }
+      />
     );
   } else if (failed) {
     body = (
@@ -539,11 +558,13 @@ function SwitchRow({
   name,
   description,
   on,
+  disabled,
   onChange,
 }: {
   name: string;
   description: string;
   on: boolean;
+  disabled?: boolean;
   onChange: (on: boolean) => void;
 }) {
   const nameId = useId();
@@ -557,9 +578,173 @@ function SwitchRow({
         aria-checked={on}
         aria-labelledby={nameId}
         aria-describedby={descriptionId}
+        disabled={disabled}
         onClick={() => onChange(!on)}
       />
     </Row>
+  );
+}
+
+/**
+ * Notifications (DESIGN.md "Notifications", drafts 110-C and 111). The first switch is per browser and is the only place we ask the browser for permission.
+ * The kinds are personal settings on the server. A browser without notifications (or one that blocked them) leaves the kinds as they are.
+ */
+function NotificationsPage({
+  prefs,
+  dnd,
+  onDndOff,
+  onChange,
+}: {
+  prefs: Prefs;
+  dnd: boolean;
+  onDndOff: () => void;
+  onChange: (next: Partial<Prefs>) => void;
+}) {
+  const words = t.notify;
+  const supported = typeof Notification !== "undefined";
+  const [permission, setPermission] = useState(() =>
+    supported ? Notification.permission : "denied",
+  );
+  const [on, setOn] = useState(browserSwitch);
+  const blocked = supported && permission === "denied";
+  const toggle = async (next: boolean) => {
+    const allowed = !next || permission === "granted" || (await Notification.requestPermission());
+    if (allowed !== true && allowed !== "granted") return setPermission(allowed);
+    setBrowserSwitch(next);
+    setOn(next);
+    setPermission(supported ? Notification.permission : "denied");
+  };
+  const kind = (
+    name: string,
+    help: string,
+    key: "notifyConflicts" | "notifyAnswers" | "notifyDecisions",
+    title: string,
+    body: string,
+    extra?: ReactNode,
+  ) => (
+    <KindCard
+      name={name}
+      help={help}
+      on={prefs[key]}
+      onChange={(next) => onChange({ [key]: next })}
+    >
+      {extra}
+      <div className="notify-preview" aria-hidden>
+        <span className="omagari-mark">
+          <GitMerge size={12} />
+        </span>
+        <span>
+          <strong>{title}</strong>
+          <small>{body}</small>
+        </span>
+      </div>
+    </KindCard>
+  );
+  return (
+    <>
+      {dnd && (
+        <p className="banner info notify-dnd">
+          <CircleMinus size={16} aria-hidden />
+          <span>{words.dnd}</span>
+          <button type="button" className="banner-action" onClick={onDndOff}>
+            {words.dndOff}
+          </button>
+        </p>
+      )}
+      <Group title={words.browser}>
+        <SwitchRow
+          name={words.thisBrowser}
+          description={!supported ? words.unsupported : blocked ? words.blocked : words.asksOnce}
+          on={on && permission === "granted"}
+          disabled={!supported || blocked}
+          onChange={toggle}
+        />
+      </Group>
+      {blocked && (
+        <p className="banner warning notify-blocked">
+          <Lock size={16} aria-hidden />
+          {words.blockedNote}
+        </p>
+      )}
+      <div className="settings-section">
+        <h3>{words.what}</h3>
+        <div className="notify-kinds">
+          {kind(
+            words.conflicts,
+            words.conflictsHelp,
+            "notifyConflicts",
+            words.conflictTitle,
+            words.previewConflict,
+            <div className="segments" role="radiogroup" aria-label={words.conflicts}>
+              {([false, true] as const).map((fyi) => (
+                <label key={String(fyi)} className="segment">
+                  <input
+                    type="radio"
+                    name="notify-fyi"
+                    checked={prefs.notifyFyi === fyi}
+                    disabled={!prefs.notifyConflicts}
+                    onChange={() => onChange({ notifyFyi: fyi })}
+                  />
+                  <span>{fyi ? words.fyiToo : words.discussOnly}</span>
+                </label>
+              ))}
+            </div>,
+          )}
+          {kind(
+            words.answers,
+            words.answersHelp,
+            "notifyAnswers",
+            words.answerTitle,
+            words.previewAnswer,
+          )}
+          {kind(
+            words.decisions,
+            words.decisionsHelp,
+            "notifyDecisions",
+            words.decisionTitle,
+            words.previewDecision,
+          )}
+        </div>
+        <p>{words.quietNote}</p>
+      </div>
+    </>
+  );
+}
+
+function KindCard({
+  name,
+  help,
+  on,
+  onChange,
+  children,
+}: {
+  name: string;
+  help: string;
+  on: boolean;
+  onChange: (on: boolean) => void;
+  children: ReactNode;
+}) {
+  const nameId = useId();
+  const helpId = useId();
+  return (
+    <div className="notify-kind">
+      <div className="notify-kind-head">
+        <span className="settings-text">
+          <span id={nameId}>{name}</span>
+          <small id={helpId}>{help}</small>
+        </span>
+        <button
+          type="button"
+          role="switch"
+          className="switch"
+          aria-checked={on}
+          aria-labelledby={nameId}
+          aria-describedby={helpId}
+          onClick={() => onChange(!on)}
+        />
+      </div>
+      {children}
+    </div>
   );
 }
 
