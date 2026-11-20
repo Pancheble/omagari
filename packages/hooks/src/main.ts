@@ -12,7 +12,14 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import { text } from "node:stream/consumers";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
-import { ago, ExecutorId, filesText, type NearbyWork, type WorkView } from "@omagari/contract";
+import {
+  ago,
+  ExecutorId,
+  filesText,
+  type NearbyWork,
+  shareLevelsText,
+  type WorkView,
+} from "@omagari/contract";
 import {
   callBackground,
   callRunner,
@@ -216,11 +223,14 @@ async function situation(executor: ExecutorId, branch: string | undefined) {
   const reply = await callRunner(cwd, "situation", { executor });
   if (reply.kind !== "situation")
     throw new Error(`the runner answered something that wasn't asked: ${reply.kind}`);
-  const { login, works, disconnectedAt, mine, shared } = reply.payload;
-  // Not shared yet (ADR-0049): the runner observes nothing here. Sharing is the person's yes, so the agent only passes it on.
+  const { login, works, disconnectedAt, mine, shared, server } = reply.payload;
+  // Not shared yet (ADR-0049): the runner observes nothing here. Sharing is the person's yes, so the agent only passes it on, with where the content goes (ADR-0054).
   const unshared = shared
     ? undefined
-    : "Omagari: this repo is in the team's workspace, but this person hasn't shared it yet, so Omagari doesn't observe the work here and the team doesn't see it. Tell the person they can share it once, on the web or with omagari share on. Sharing is their choice, so don't run it without their yes.";
+    : [
+        "Omagari: this repo is in the team's workspace, but this person hasn't shared it yet, so Omagari doesn't observe the work here and the team doesn't see it. Tell the person they can share it once, on the web or with omagari share on. Sharing is their choice, so don't run it without their yes. Before they share, tell them where it goes:",
+        ...shareLevelsText(server).map((line) => `- ${line}`),
+      ].join("\n");
 
   const myFiles = new Set(mine.find((work) => work.branch === branch)?.files.map((f) => f.path));
   // A Work with no status line (nothing changed, or it only publishes lines with intent and wrote none) has nothing to say, so it isn't injected.

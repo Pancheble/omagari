@@ -1545,7 +1545,12 @@ export async function startRunner(options: {
       }
       if (message.kind === "situation") {
         // ponytail: hands over what it received in full, contents and all. That's fine because it happens once at session start. A hook that runs on every edit filters through nearby.
-        return encode(runnerToCli, "situation", { login, ...situation, mine, shared }, message.id);
+        return encode(
+          runnerToCli,
+          "situation",
+          { login, ...situation, mine, shared, server: options.serverUrl },
+          message.id,
+        );
       }
       const { disconnectedAt, works, claims } = situation;
       if (message.kind === "inbox") {
