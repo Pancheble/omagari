@@ -43,6 +43,15 @@ const server = await startServer({
   sourceUrl: process.env.OMAGARI_SOURCE_URL || undefined,
   // Fly sets FLY_APP_NAME on the machine. Only then do we trust the Fly-Client-IP in front.
   behindFly: Boolean(process.env.FLY_APP_NAME),
+  // Limits (ADR-0052). Each unset one is no limit, so a self-hosted server works as before. The hosted server sets them (site/server.md).
+  limits: Object.fromEntries(
+    Object.entries({
+      requests: process.env.OMAGARI_LIMIT_REQUESTS,
+      repos: process.env.OMAGARI_LIMIT_REPOS,
+      storage: process.env.OMAGARI_LIMIT_STORAGE_MB,
+      gifs: process.env.OMAGARI_LIMIT_GIFS,
+    }).flatMap(([name, value]) => (value ? [[name, Number(value)]] : [])),
+  ),
   // The number of debate rounds. Three if not set.
   debateRounds: process.env.OMAGARI_DEBATE_ROUNDS
     ? Number(process.env.OMAGARI_DEBATE_ROUNDS)
