@@ -76,6 +76,9 @@ test("an unshared workspace repo isn't observed and the hook says how to share; 
   const background = world.launchCliIn(desk.folder, "runner", "background");
   t.after(() => background.stop("SIGTERM"));
   await background.output(/Background runner on/);
+  // The first session start only tells the background runner about this folder. The hook waits just 1 second for the repo's runner to be welcomed (the welcome creates .git/omagari), which takes longer on a loaded machine, so wait for it before the hook that must answer.
+  await world.hook(sessionStart(desk.folder), { cwd: desk.folder });
+  await eventually(() => access(join(desk.folder, ".git", "omagari")));
 
   const hook = await world.hook(sessionStart(desk.folder), { cwd: desk.folder });
   assert.equal(hook.code, 0);
