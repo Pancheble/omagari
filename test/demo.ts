@@ -26,6 +26,7 @@
 // - DEMO_AS=minsu: logs the browser in as Minsu Park, who is not an Admin (push access only to space in omagari-test, and to code in other-team). There is no add or remove repo.
 //   Going to other's channel address (printed in the console) shows "You can't see this repo". In other-team Minsu Park is alone, so the alone case (mockup 100-A) shows.
 // - GIPHY_API_KEY=<key>: turns on GIFs with the real GIPHY (ADR-0044). If not given, the input has no GIF button.
+//   DEMO_LIMIT_GIFS=<n>: n GIF searches per workspace an hour, to see the limit banner (ADR-0052).
 //   DEMO_GIPHY=fake: look at the GIF area without a key. Regardless of the search words it gives eight public GIPHY GIFs (the pictures are fetched from GIPHY).
 // - When you quit (Ctrl+C) it deletes the temporary repo and DB. It isn't named *.test.ts so npm test and CI don't run it.
 // - A fake GitHub issue is opened for each post and the text goes there as comments. The post "Minsu Park · Hajun Choi" receives comments made on GitHub and the changed title and labels.
@@ -141,6 +142,7 @@ const executors = {
 };
 // To show merge stalled, delete one member's GitHub token. Delay the permission re-check so it doesn't drop that member.
 // A post's issue (ADR-0032) is read from GitHub every cycle. In the demo, every 2 seconds.
+/** Everything pre-seeded is in. Only then does the browser's login get approved. */
 let seeded = false;
 const world = await startWorld({
   executors,
@@ -159,19 +161,21 @@ const world = await startWorld({
     : process.env.DEMO_GIPHY === "fake"
       ? { search: async () => DEMO_GIFS }
       : undefined,
-  // The server wraps GitHub's calls when it starts (#381), so the device auth hook goes in before that and waits for `seeded` below.
+  // DEMO_LIMIT_GIFS=2: a workspace gets 2 GIF searches an hour, so the third shows the limit banner (ADR-0052).
+  limits: process.env.DEMO_LIMIT_GIFS ? { gifs: Number(process.env.DEMO_LIMIT_GIFS) } : undefined,
+  // Once everything pre-seeded is in, a device auth opened in the browser is approved as "me" instead of entering the code on GitHub.
+  // Wrapped before the server starts, since the server keeps the GitHub calls it was given.
   setup: (github) => {
     const startDevice = github.github.startDevice.bind(github.github);
     github.github.startDevice = async () => {
       const device = await startDevice();
-      if (seeded)
-        setTimeout(() => {
-          try {
-            github.approve(device.userCode, process.env.DEMO_AS ?? "owner");
-          } catch {
-            // That auth expired in the meantime or has already ended.
-          }
-        }, 1500);
+      setTimeout(() => {
+        try {
+          if (seeded) github.approve(device.userCode, process.env.DEMO_AS ?? "owner");
+        } catch {
+          // That auth expired in the meantime or has already ended.
+        }
+      }, 1500);
       return device;
     };
   },
@@ -1107,7 +1111,6 @@ if (process.env.DEMO_SETUP === "new") {
   fresh.close();
 }
 
-// Once everything pre-seeded is in, a device auth opened in the browser is approved as "me" instead of entering the code on GitHub (the hook is in `setup` above).
 seeded = true;
 
 const PORT = process.env.DEMO_PORT ?? process.env.PORT ?? "5180";

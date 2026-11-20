@@ -40,11 +40,28 @@ Moving a server from an OAuth app to a GitHub App signs everyone out once: they 
 
 `OMAGARI_DB` (default `omagari.db`) and `PORT` (default 3000) change the database file and the port. If members open the web UI at a different address than the one the server listens on, set `OMAGARI_URL`. Decision PRs link back to posts using this address.
 
+GitHub tokens (access and refresh) are stored encrypted ([ADR-0053](https://github.com/omagari-dev/omagari/blob/dev/docs/adr/0053-github-app-sign-in-and-encrypted-tokens.md)). `OMAGARI_TOKEN_KEY` is the secret that encrypts them: any long random string, for example `openssl rand -hex 32`. Without it, the server makes a key file next to the database (`omagari.db.key`) on first start and logs where. A self-hosted server needs no new setting. Plain tokens an older server left in the database are encrypted on start. If the key changes or the key file is lost, everyone is signed out and signs in again. The server doesn't crash. A key kept next to the database only protects copies made without that file, such as a leaked backup. On the hosted server, keep the key out of backups' reach: set it as a Fly secret (`fly secrets set OMAGARI_TOKEN_KEY=$(openssl rand -hex 32) -a "$FLY_APP"`), and don't put it on the volume the backup copies.
+
 `OMAGARI_SOURCE_URL` sets the "Source code" link in the settings window (Info). It defaults to `https://github.com/omagari-dev/omagari`. If you change the server's code and let people use it over the network, point this at your fork (AGPL-3.0 section 13).
 
 GIFs in chat ([ADR-0044](https://github.com/omagari-dev/omagari/blob/dev/docs/adr/0044-gif-from-giphy-through-server-reactions-in-contract.md)) turn on when `GIPHY_API_KEY` holds a [GIPHY developer key](https://developers.giphy.com/dashboard/). Without it, the composer has no GIF button. The server adds the key and searches GIPHY on the browser's behalf, so the key never reaches the web UI. The server stays under the beta key's 100 requests an hour. With a production key, raise the limit with `GIPHY_PER_HOUR`. On Fly, set it with `fly secrets set GIPHY_API_KEY=<key> -a "$FLY_APP"`.
 
 If a web build exists (`npm run build -w @omagari/web` creates `packages/web/dist`), the server serves it at the same address and sends unknown paths to its first file. While developing, use `npm run web` (Vite). The health check is `GET /api/health`.
+
+## Limits
+
+Limits ([ADR-0052](https://github.com/omagari-dev/omagari/blob/dev/docs/adr/0052-hosted-beta-on-the-dogfood-server-by-request.md)) keep one person or team from using up a shared server. Each is a setting, and an unset one is no limit, so a server with none works as before. When one is hit, the server answers `429` with the error code `limited` and which limit it was, the web shows a banner naming it, and the CLI prints the same sentence.
+
+| Setting | Limit | Hosted server |
+| --- | --- | --- |
+| `OMAGARI_LIMIT_REQUESTS` | API requests per person a minute | 120 |
+| `OMAGARI_LIMIT_REPOS` | Repos per workspace. Adding one more is refused | 20 |
+| `OMAGARI_LIMIT_STORAGE_MB` | Megabytes a workspace keeps: messages and Q&A, plus the file content and conflict snapshots its runners shared. Past it, new messages, post replies, and Q&A are refused; runners keep sharing, and their content drops after 30 days | 100 |
+| `OMAGARI_LIMIT_GIFS` | GIF searches per workspace an hour, inside the server-wide `GIPHY_PER_HOUR` | 20 |
+
+The hosted numbers come from the dogfood server on 2026-11-21: at most 2 repos in a workspace and under 50 KB stored per workspace (1.5 MB database). They leave lots of room above that, and five full workspaces still fit the 1 GB volume. 20 GIF searches an hour lets five workspaces share the beta key's 100. On Fly: `fly secrets set OMAGARI_LIMIT_REQUESTS=120 OMAGARI_LIMIT_REPOS=20 OMAGARI_LIMIT_STORAGE_MB=100 OMAGARI_LIMIT_GIFS=20 -a "$FLY_APP"`.
+
+Request counts live in memory, so a restart starts them over. Only signed-in HTTP requests count; the live connections of the web and runners don't.
 
 ## Deploy to Fly.io
 

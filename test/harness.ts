@@ -860,6 +860,8 @@ export async function startWorld(
     debateRounds?: number;
     /** Time until a debate expires. Shorten it to see expiry. Expiry is checked every `followMs`. */
     debateMs?: number;
+    /** `OMAGARI_TOKEN_KEY`. If not given, the server makes a key file next to the database. */
+    tokenKey?: string;
     /** SQL to put into the DB before the server first starts. Used to start from a DB an older version made. */
     seed?: string;
     /** The owner runner's sandbox. If not given, an unusable one is plugged in. */
@@ -884,6 +886,8 @@ export async function startWorld(
     giphy?: Giphy;
     /** The GitHub App's slug: the server signs in through a GitHub App and says to install it (ADR-0053). Not given for an OAuth app. */
     githubApp?: string;
+    /** The server's limits (ADR-0052). If not given, none. */
+    limits?: Parameters<typeof startServer>[0]["limits"];
     /** Fills the fake GitHub before the server first starts (labels and issues an older server left behind). */
     setup?: (github: ReturnType<typeof fakeGitHub>) => void;
   } = {},
@@ -904,6 +908,7 @@ export async function startWorld(
     github: fake.github,
     giphy: options.giphy,
     database,
+    tokenKey: options.tokenKey,
     recheckMs: options.recheckMs,
     heartbeatMs: options.heartbeatMs,
     followMs: options.followMs,
@@ -919,6 +924,7 @@ export async function startWorld(
     behindFly: options.behindFly,
     sourceUrl: options.sourceUrl,
     githubApp: options.githubApp,
+    limits: options.limits,
   };
   let server = await startServer(serverOptions).catch(async (error) => {
     await cleanup();
@@ -997,11 +1003,11 @@ export async function startWorld(
       return server;
     },
     github: fake,
+    /** The server's SQLite file. */
+    database,
     owner,
     runner,
     login,
-    /** The server's SQLite file. Tests read it to check what's really stored. */
-    database,
     /** Folder where the CLI keeps sessions. */
     config: join(data, "config"),
     /** This machine's Claude Code user config folder (where `~/.claude` would be). `omagari setup` installs here. */
@@ -1125,7 +1131,7 @@ export async function startWorld(
       await server.stop();
     },
     /** Shuts down the server and restarts it on the same port with the same DB. Same as the server restarting on a deploy. */
-    async restartServer(override: { contentMs?: number } = {}) {
+    async restartServer(override: { contentMs?: number; tokenKey?: string } = {}) {
       const { port } = new URL(server.url);
       if (!serverDown) await server.stop();
       server = await startServer({ ...serverOptions, ...override, port: Number(port) });

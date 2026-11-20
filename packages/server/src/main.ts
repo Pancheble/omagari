@@ -28,6 +28,8 @@ const server = await startServer({
       })
     : undefined,
   database: process.env.OMAGARI_DB ?? "omagari.db",
+  // Encrypts GitHub tokens in the database (ADR-0053). Without it, a key file is made next to the database.
+  tokenKey: process.env.OMAGARI_TOKEN_KEY || undefined,
   port: Number(process.env.PORT ?? 3000),
   hostname: process.env.HOST,
   // If there's a built web UI (`npm run build -w @omagari/web`, the deploy image), serve it from the same address.
@@ -41,6 +43,15 @@ const server = await startServer({
   sourceUrl: process.env.OMAGARI_SOURCE_URL || undefined,
   // Fly sets FLY_APP_NAME on the machine. Only then do we trust the Fly-Client-IP in front.
   behindFly: Boolean(process.env.FLY_APP_NAME),
+  // Limits (ADR-0052). Each unset one is no limit, so a self-hosted server works as before. The hosted server sets them (site/server.md).
+  limits: Object.fromEntries(
+    Object.entries({
+      requests: process.env.OMAGARI_LIMIT_REQUESTS,
+      repos: process.env.OMAGARI_LIMIT_REPOS,
+      storage: process.env.OMAGARI_LIMIT_STORAGE_MB,
+      gifs: process.env.OMAGARI_LIMIT_GIFS,
+    }).flatMap(([name, value]) => (value ? [[name, Number(value)]] : [])),
+  ),
   // The number of debate rounds. Three if not set.
   debateRounds: process.env.OMAGARI_DEBATE_ROUNDS
     ? Number(process.env.OMAGARI_DEBATE_ROUNDS)

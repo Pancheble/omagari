@@ -81,6 +81,16 @@ test("deleting an account removes the person everywhere, keeps their messages as
   });
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.deepEqual(stored(world.database, "alice"), []);
+  // No token columns are left for the person: the session rows, with `github_token`, `token_hash`, and `refresh_token`, are gone.
+  const db = new DatabaseSync(world.database, { readOnly: true });
+  t.after(() => db.close());
+  assert.deepEqual(
+    db
+      .prepare("SELECT login FROM sessions")
+      .all()
+      .map((r) => r.login),
+    ["owner"],
+  );
   assert.deepEqual(stored(world.database, "secret plan"), []);
   assert.deepEqual(stored(world.database, "on leave"), []);
   // owner is untouched.

@@ -68,7 +68,7 @@ import {
   RepoDialog,
   useCollapsed,
 } from "./channels.tsx";
-import { ConnectCard, ShareNotice } from "./connect.tsx";
+import { ConnectCard, LimitNotice, ShareNotice } from "./connect.tsx";
 import { ChannelTitle, Conversation, type ReplyBody, type View } from "./conversation.tsx";
 import { DEBATE_STRIP, DebateDialog, DebateLog, DebateStrip, ProxyDialog } from "./debate.tsx";
 import { DecisionDialog, type Fields } from "./decision.tsx";
@@ -1336,6 +1336,7 @@ export function Workspace({
                   )}
                 </div>
               </header>
+              <LimitNotice />
               {!missing && !setup.connected && <ConnectCard address={server(session).url} />}
               {!missing && here !== ALL && !setup.shared.includes(here) && (
                 <ShareNotice onShare={() => void share()} failed={shareFailed} />

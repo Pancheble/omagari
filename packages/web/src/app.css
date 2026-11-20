@@ -6459,6 +6459,12 @@ button.person {
   white-space: nowrap;
 }
 
+.connect-notice .limit-close {
+  flex: none;
+  margin-left: auto;
+  color: inherit;
+}
+
 /* On narrow screens the copy button goes under its command so the command has the full width. */
 @media (max-width: 833px) {
   .connect,
