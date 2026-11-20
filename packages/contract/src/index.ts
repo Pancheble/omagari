@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** Contract version. Sent in every envelope; a different one is rejected. Bump it on every breaking change. */
-export const CONTRACT_VERSION = 62;
+export const CONTRACT_VERSION = 63;
 
 /** Error shape. Shared by the runner/server `error` message and the HTTP error body (`{ error }`). */
 export const ContractError = z.strictObject({
@@ -1815,6 +1815,8 @@ export const api = {
       userCode: z.string(),
       verificationUri: z.string(),
       intervalMs: z.number(),
+      /** Where an account's admin installs the server's GitHub App (ADR-0053). Absent on a server with an OAuth app. Shown if the login is refused. */
+      install: z.string().optional(),
     }),
   },
   /**
@@ -1891,6 +1893,8 @@ export const api = {
           added: z.boolean(),
         }),
       ),
+      /** Where to install the server's GitHub App (ADR-0053): a repo without the App isn't listed. Absent on a server with an OAuth app. */
+      install: z.string().optional(),
     }),
   },
   /** Removes a repo from the workspace. Like adding, only that repo's GitHub Admin can do it. Its data isn't deleted and comes back if you add it again. */

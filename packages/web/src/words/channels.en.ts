@@ -46,6 +46,8 @@ export const channelsEn = {
     added: "Added",
     add: "Add",
     addFailed: "Couldn't add that repo. Try again in a bit?",
+    missing: "Don't see a repo? The Omagari GitHub App has to be installed on it.",
+    install: "Install App",
     other: `Repos on other accounts: use "Add a repo" under that account in the menu.`,
     close: "Close",
   },
