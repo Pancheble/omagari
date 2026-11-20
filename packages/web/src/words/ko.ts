@@ -78,6 +78,7 @@ export const ko: Words = {
       repo: "레포",
       server: "이 서버",
       version: "버전",
+      source: "소스 코드",
     },
     agent: {
       whenAsked: "남이 물을 때",

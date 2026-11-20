@@ -35,6 +35,8 @@ const server = await startServer({
   publicUrl:
     process.env.OMAGARI_URL ??
     (process.env.FLY_APP_NAME ? `https://${process.env.FLY_APP_NAME}.fly.dev` : undefined),
+  // Section 13 of AGPL-3.0: if you change the server, point the settings' "Source code" link at your fork. Omagari's repo if not set.
+  sourceUrl: process.env.OMAGARI_SOURCE_URL || undefined,
   // Fly sets FLY_APP_NAME on the machine. Only then do we trust the Fly-Client-IP in front.
   behindFly: Boolean(process.env.FLY_APP_NAME),
   // The number of debate rounds. Three if not set.
