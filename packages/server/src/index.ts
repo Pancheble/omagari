@@ -529,6 +529,8 @@ export async function startServer(options: {
   presenceDurations?: Partial<Record<PresenceDuration, number>>;
   /** The address where people open the web. Used for a decision file's source (the post link). If not given, it's the address the server listens on. */
   publicUrl?: string;
+  /** Where people can get this server's source (AGPL section 13). If not given, Omagari's own repo. Shown in the settings window. */
+  sourceUrl?: string;
   /** Length of one hour in a decision PR's objection window. By default it's really one hour. Tests shorten it. Whether the window closed is checked every `followMs`. */
   hourMs?: number;
   /** Number of debate rounds. Default is `DEBATE_ROUNDS` (a blinded first round and two rebuttal rounds) and it can be reduced. */
@@ -3259,6 +3261,7 @@ export async function startServer(options: {
     const last = answered[0];
     return {
       version,
+      sourceUrl: options.sourceUrl ?? "https://github.com/omagari-dev/omagari",
       askSwitch: !db.prepare("SELECT 1 FROM ask_off WHERE login = ?").get(login),
       answered: {
         count: answered.length,

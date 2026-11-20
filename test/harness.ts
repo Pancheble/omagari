@@ -827,6 +827,8 @@ export async function startWorld(
     webDir?: string;
     /** Time to finish hello. Shorten it to see it cut off. */
     helloMs?: number;
+    /** The source link the settings window shows. If not given, the server's default (Omagari's repo). */
+    sourceUrl?: string;
     /** Pretends to be a server running on Fly (trusts Fly-Client-IP). */
     behindFly?: boolean;
     /** Accounts the server accepts and repos to put in at startup (`OMAGARI_REPO`). If not given, just `REPO`. */
@@ -865,6 +867,7 @@ export async function startWorld(
     webDir: options.webDir,
     helloMs: options.helloMs,
     behindFly: options.behindFly,
+    sourceUrl: options.sourceUrl,
   };
   let server = await startServer(serverOptions).catch(async (error) => {
     await cleanup();

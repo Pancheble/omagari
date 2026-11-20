@@ -2,6 +2,7 @@ import type { Words } from "../i18n.ts";
 import { channelsKo } from "./channels.ko.ts";
 import { conversationKo } from "./conversation.ko.ts";
 import { dmKo } from "./dm.ko.ts";
+import { notifyKo } from "./notify.ko.ts";
 import { profileKo } from "./profile.ko.ts";
 
 /** 받침이 있으면 앞, 없으면 뒤: 지은이 / 민수가. */
@@ -76,13 +77,13 @@ export const ko: Words = {
       note: (now) =>
         `시스템 따라: 지금 컴퓨터가 ${now === "dark" ? "어두워서 어둡게" : "밝아서 밝게"} 보여요. 컴퓨터에서 바꾸면 바로 따라가요. 고른 모양은 다른 기기에서도 그대로예요.`,
     },
-    notifications: { soon: "브라우저 알림은 곧 나와요." },
     info: {
       workspace: "워크스페이스",
       name: "이름",
       repo: "레포",
       server: "이 서버",
       version: "버전",
+      source: "소스 코드",
     },
     agent: {
       whenAsked: "남이 물을 때",
@@ -498,4 +499,5 @@ export const ko: Words = {
   dm: dmKo,
 
   profile: profileKo,
+  notify: notifyKo,
 };

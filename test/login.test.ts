@@ -9,6 +9,7 @@ import {
   CONTRACT_VERSION,
   ContractFailure,
   call,
+  DEFAULT_PREFS,
   encode,
   RUNNER_SOCKET,
   runnerToServer,
@@ -75,7 +76,7 @@ test("a kept session reads me and the workspace again, and only the logged-out s
     repo: REPO,
     repos: [REPO],
     gif: false,
-    prefs: { language: "en", appearance: "system" },
+    prefs: DEFAULT_PREFS,
   });
   // For a person who left the profile name empty, the login is the name.
   assert.deepEqual(await call(world.owner, api.me), {
@@ -85,7 +86,7 @@ test("a kept session reads me and the workspace again, and only the logged-out s
     repo: REPO,
     repos: [REPO],
     gif: false,
-    prefs: { language: "en", appearance: "system" },
+    prefs: DEFAULT_PREFS,
   });
 
   await call(browser, api.logout);

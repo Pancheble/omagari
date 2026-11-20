@@ -1897,7 +1897,7 @@ One window holds both personal settings and workspace settings, as two groups in
     | Answer   | "Your question got an answer" / "Jieun's Codex: It clamps at 0 since #212." | "물어본 것에 답이 왔어요" / "지은의 Codex: #212부터 0 아래로는 안 내려가요."     |
     | Decision | "Your call is needed" / "Decision: Send refund mail from a queue"           | "결정이 필요해요" / "결정: 환불 메일을 큐로 보내기"                              |
 
-    A debate that needs my agent's stance uses the decision title with the body "Debate: <agenda>" ("토론: <안건>").
+    A debate that needs my agent's stance uses the decision title with the body "Debate: <agenda>" ("토론: <안건>"), or the post title when there's no agenda. It only notifies when my seat waits and my runner is off, because a running runner gives the stance by itself (2026-11-20 @Pancheble, #313).
 - **Merge run** (formerly "Conflict alerts"):
   - "Forum to post alerts to" is gone (ADR-0039). You create and edit forums on the forum screen ("Create a forum" and the filter row under "Conflict forum").
   - "Merge run" (2026-11-13 draft 30-C. We didn't pick 30-A, which makes a new item, or 30-B, which puts it under My agent): the item's first group. It has no switch. You turn it on and off from the runner, not the web (ADR-0034).
@@ -2101,6 +2101,7 @@ The structural breakpoints that matter for agents: 1440px (content lock), 1068px
   - The debate's owner mark and the conclusion card: a stance's owner has no executor, so it's "Choi Hajun's agent" instead of "Choi Hajun's Claude Code", and the conclusion card's description is "Option 1 came from Choi Hajun's agent (feat/mail-queue). Press Wrap up the decision and my agent writes a decision draft based on Option 1."
   - The Omagari line for calling a stand-in has no time (the stand-in has no call time). A failed experiment line carries no output, so it's "View patch" instead of "View output", and the debate strip doesn't have the "Running an experiment" state yet. The description for opening a debate has no issue number.
   - The settings' connected agents don't know which machine it is, so it's "Runner on" ("Runner on · answering") instead of "This machine · runner on", and "What my agent answered" is "Minsu's agent asked “…”" instead of the asker's executor.
+  - Notifications (#313): the member list doesn't carry when Do not disturb ends, so the note says "You're on Do not disturb, so notifications don't show." without "It ends in 1 hour". The conflict body finds the other side's agent from that work in the member list, and says "Minsu is also editing refund.ts" when it can't.
   - The input placeholder in an expanded post is the post title ("Send a message to refund's reason field") instead of the conflicting file (the title became the issue title in ADR-0032).
 - App: when executors increase, add their abbreviations for `app-agent-mark` here (right now `CC` and `CX`).
 - App: what we haven't decided from the workspace and repo drafts (89–94, #231): what to do with the channels and posts of a repo that was removed, how the add-repo list looks when there's no repo to add and how a workspace with no repos at all looks, workspace posts that span repos (ADR-0043 pushed it until after dogfooding), and the dark screen.
