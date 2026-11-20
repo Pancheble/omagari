@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** Contract version. Sent in every envelope; a different one is rejected. Bump it on every breaking change. */
-export const CONTRACT_VERSION = 63;
+export const CONTRACT_VERSION = 64;
 
 /** Error shape. Shared by the runner/server `error` message and the HTTP error body (`{ error }`). */
 export const ContractError = z.strictObject({
@@ -55,6 +55,15 @@ type Payloads = Record<string, z.ZodType>;
  */
 export const ShareLevel = z.enum(["full", "declared", "intent"]);
 export type ShareLevel = z.infer<typeof ShareLevel>;
+
+/** Where each share level sends what, with the server's address (ADR-0054). The hook and `omagari share on` both say it, the same on hosted and self-hosted servers. */
+export function shareLevelsText(server: string) {
+  return [
+    `full (the default): the content of changed files goes to ${server}.`,
+    `declared: only the paths of changed files go to ${server}.`,
+    `intent: only the status line goes to ${server}.`,
+  ];
+}
 
 /**
  * One observed file: its current content, a deleted file, or a file sent as a path only, with the reason.
@@ -1665,6 +1674,8 @@ export const runnerToCli = {
     claims: z.array(Claim),
     /** Whether this member shared the repo (ADR-0049). If not, the session-start hook says how to share. */
     shared: z.boolean(),
+    /** The server's address, so the session-start hook can say where sharing sends the content (ADR-0054). */
+    server: z.string(),
   }),
   /** The answer to `nearby`. If there are no nearby works, `works` is empty. If nothing has been received yet, it's `error` (`runner_offline`). */
   nearby: z.strictObject({

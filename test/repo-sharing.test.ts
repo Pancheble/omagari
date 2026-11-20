@@ -84,6 +84,12 @@ test("an unshared workspace repo isn't observed and the hook says how to share; 
   assert.equal(hook.code, 0);
   assert.match(hook.stdout, /this person hasn't shared it yet/);
   assert.match(hook.stdout, /omagari share on/);
+  // Where it goes (ADR-0054): the server's address, on hosted and self-hosted alike, and the three share levels.
+  assert.ok(hook.stdout.includes(`the content of changed files goes to ${world.server.url}.`));
+  assert.ok(
+    hook.stdout.includes(`declared: only the paths of changed files go to ${world.server.url}.`),
+  );
+  assert.ok(hook.stdout.includes(`intent: only the status line goes to ${world.server.url}.`));
   await eventually(async () => assert.equal((await world.agents(world.owner)).alice, "online"));
   // Connected but not observing: give it more than one observation interval (3 seconds).
   await sleep(3500);
@@ -94,6 +100,8 @@ test("an unshared workspace repo isn't observed and the hook says how to share; 
   const on = await world.cliIn(desk.folder, "share", "on");
   assert.equal(on.code, 0, on.stderr);
   assert.match(on.stdout, new RegExp(`Shared ${REPO}`));
+  assert.ok(on.stdout.includes(`the content of changed files goes to ${world.server.url}.`));
+  assert.ok(on.stdout.includes(`intent: only the status line goes to ${world.server.url}.`));
   await eventually(async () => {
     const [work] = await aliceWorks();
     assert.equal(work?.branch, "refund");

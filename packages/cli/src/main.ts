@@ -22,6 +22,7 @@ import {
   Plan,
   RunVerdict,
   ShareLevel,
+  shareLevelsText,
   VERDICT_LABELS,
 } from "@omagari/contract";
 import { checkoutVersion, installedPackage } from "@omagari/contract/version";
@@ -525,7 +526,11 @@ async function share(on: boolean) {
   const { repo } = await call(as, api.share, { on });
   console.log(
     on
-      ? `Shared ${repo}. Your runner observes it now, and the team sees your Work there`
+      ? [
+          `Shared ${repo}. Your runner observes it now, and the team sees your Work there`,
+          "Where it goes:",
+          ...shareLevelsText(as.url).map((line) => `- ${line}`),
+        ].join("\n")
       : `Stopped sharing ${repo}. Your runner stops observing it, and the team no longer sees your Work there`,
   );
 }
