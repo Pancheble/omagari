@@ -1000,6 +1000,8 @@ export async function startWorld(
     owner,
     runner,
     login,
+    /** The server's SQLite file. Tests read it to check what's really stored. */
+    database,
     /** Folder where the CLI keeps sessions. */
     config: join(data, "config"),
     /** This machine's Claude Code user config folder (where `~/.claude` would be). `omagari setup` installs here. */

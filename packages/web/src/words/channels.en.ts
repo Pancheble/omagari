@@ -31,9 +31,7 @@ export const channelsEn = {
   repoMenu: {
     label: "Repo menu",
     openGithub: "Open on GitHub",
-    confirmRemove: "Click again to remove",
     remove: "Remove from workspace",
-    removeFailed: "Couldn't remove that. Try again in a bit?",
   },
 
   addRepo: {

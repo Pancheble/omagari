@@ -141,6 +141,7 @@ const executors = {
 };
 // To show merge stalled, delete one member's GitHub token. Delay the permission re-check so it doesn't drop that member.
 // A post's issue (ADR-0032) is read from GitHub every cycle. In the demo, every 2 seconds.
+let seeded = false;
 const world = await startWorld({
   executors,
   observeMs: 200,
@@ -158,6 +159,22 @@ const world = await startWorld({
     : process.env.DEMO_GIPHY === "fake"
       ? { search: async () => DEMO_GIFS }
       : undefined,
+  // The server wraps GitHub's calls when it starts (#381), so the device auth hook goes in before that and waits for `seeded` below.
+  setup: (github) => {
+    const startDevice = github.github.startDevice.bind(github.github);
+    github.github.startDevice = async () => {
+      const device = await startDevice();
+      if (seeded)
+        setTimeout(() => {
+          try {
+            github.approve(device.userCode, process.env.DEMO_AS ?? "owner");
+          } catch {
+            // That auth expired in the meantime or has already ended.
+          }
+        }, 1500);
+      return device;
+    };
+  },
 });
 const fake = world.github;
 const NAMES = {
@@ -1090,19 +1107,8 @@ if (process.env.DEMO_SETUP === "new") {
   fresh.close();
 }
 
-// Once everything pre-seeded is in, a device auth opened in the browser is approved here as "me" instead of entering the code on GitHub.
-const startDevice = fake.github.startDevice.bind(fake.github);
-fake.github.startDevice = async () => {
-  const device = await startDevice();
-  setTimeout(() => {
-    try {
-      fake.approve(device.userCode, process.env.DEMO_AS ?? "owner");
-    } catch {
-      // That auth expired in the meantime or has already ended.
-    }
-  }, 1500);
-  return device;
-};
+// Once everything pre-seeded is in, a device auth opened in the browser is approved as "me" instead of entering the code on GitHub (the hook is in `setup` above).
+seeded = true;
 
 const PORT = process.env.DEMO_PORT ?? process.env.PORT ?? "5180";
 const web = spawn("npx", ["vite", "--port", PORT, "--strictPort"], {
