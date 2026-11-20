@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** Contract version. Sent in every envelope; a different one is rejected. Bump it on every breaking change. */
-export const CONTRACT_VERSION = 61;
+export const CONTRACT_VERSION = 62;
 
 /** Error shape. Shared by the runner/server `error` message and the HTTP error body (`{ error }`). */
 export const ContractError = z.strictObject({
@@ -499,6 +499,8 @@ export const Prefs = z.strictObject({
   notifyAnswers: z.boolean(),
   /** A decision I decide on is proposed, or a debate needs my agent's stance. */
   notifyDecisions: z.boolean(),
+  /** A reply to my message (with its `@` on), or a new message in a thread I started or wrote in (#370). */
+  notifyReplies: z.boolean(),
 });
 export type Prefs = z.infer<typeof Prefs>;
 export const DEFAULT_PREFS: Prefs = {
@@ -508,6 +510,7 @@ export const DEFAULT_PREFS: Prefs = {
   notifyFyi: false,
   notifyAnswers: true,
   notifyDecisions: true,
+  notifyReplies: true,
 };
 export const IMPORTANCE_LABELS = {
   reference: "FYI",
@@ -1018,8 +1021,15 @@ export const ReplyTo = z.strictObject({
 });
 export type ReplyTo = z.infer<typeof ReplyTo>;
 
-/** The thread a reply sits in (ADR-0047): the original message's number and how it looks now (like `ReplyTo.original`). */
-export const ThreadOf = z.strictObject({ id: z.number(), original: ReplyTo.shape.original });
+/**
+ * The thread a reply sits in (ADR-0047): the original message's number and how it looks now (like `ReplyTo.original`).
+ * `writers` is everyone who has written in the thread so far (logins), so the web knows who a new reply calls (#370). `ThreadSummary.writers` only holds three.
+ */
+export const ThreadOf = z.strictObject({
+  id: z.number(),
+  original: ReplyTo.shape.original,
+  writers: z.array(z.string()),
+});
 export type ThreadOf = z.infer<typeof ThreadOf>;
 
 /**

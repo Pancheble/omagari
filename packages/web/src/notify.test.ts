@@ -15,6 +15,7 @@ const ctx = (more: Partial<NoticeContext> = {}): NoticeContext => ({
   looking: false,
   since: 10,
   asking: new Set([7]),
+  heard: new Set(),
   postTitle: () => "refund.ts",
   ...more,
 });
@@ -145,6 +146,70 @@ test("a debate notifies only when my seat waits and my runner is off", () => {
   assert.equal(noticeFor(debate({}), ctx()), undefined);
   assert.equal(
     noticeFor(debate({ away: true }), ctx({ prefs: { ...DEFAULT_PREFS, notifyDecisions: false } })),
+    undefined,
+  );
+});
+
+const chat = (more: object, text = "Shall we send it from a queue?\nMore.") =>
+  ({
+    kind: "message",
+    payload: {
+      kind: "text",
+      id: 13,
+      channel: "payments",
+      login: "minsu",
+      name: "Minsu",
+      text,
+      ...more,
+    },
+  }) as unknown as LiveEvent;
+const original = (login: string) => ({ login, name: login, line: "How do we send refund mail?" });
+
+test("a reply to my message notifies with who and its first line, unless its @ is off", () => {
+  assert.deepEqual(
+    noticeFor(chat({ replyTo: { id: 4, notify: true, original: original("jieun") } }), ctx()),
+    {
+      tag: "reply-13",
+      title: "Someone replied to you",
+      body: "Minsu: Shall we send it from a queue?",
+      channel: "payments",
+    },
+  );
+  assert.equal(
+    noticeFor(chat({ replyTo: { id: 4, notify: false, original: original("jieun") } }), ctx()),
+    undefined,
+  );
+  assert.equal(
+    noticeFor(chat({ replyTo: { id: 4, notify: true, original: original("hajun") } }), ctx()),
+    undefined,
+  );
+});
+
+test("a thread message calls its original's author and everyone who wrote in it, and opens the thread", () => {
+  const thread = (login: string, writers: string[]) =>
+    chat(
+      { threadOf: { id: 4, original: original(login), writers } },
+      "> quoted\nPushed the queue version.",
+    );
+  assert.deepEqual(noticeFor(thread("jieun", ["minsu"]), ctx()), {
+    tag: "reply-13",
+    title: "New message in a thread",
+    body: "Minsu: Pushed the queue version.",
+    channel: "payments",
+    thread: 4,
+  });
+  assert.ok(noticeFor(thread("hajun", ["hajun", "jieun", "minsu"]), ctx()));
+  assert.equal(noticeFor(thread("hajun", ["hajun", "minsu"]), ctx()), undefined);
+});
+
+test("a quote, my own message, an old or already heard message, and the kind off call nobody", () => {
+  const reply = { replyTo: { id: 4, notify: true, original: original("jieun") } };
+  assert.equal(noticeFor(chat({}, "> How do we send refund mail?\nQueue it."), ctx()), undefined);
+  assert.equal(noticeFor(chat({ ...reply, login: "jieun" }), ctx()), undefined);
+  assert.equal(noticeFor(chat({ ...reply, id: 9 }), ctx()), undefined);
+  assert.equal(noticeFor(chat(reply), ctx({ heard: new Set([13]) })), undefined);
+  assert.equal(
+    noticeFor(chat(reply), ctx({ prefs: { ...DEFAULT_PREFS, notifyReplies: false } })),
     undefined,
   );
 });

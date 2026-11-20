@@ -31,6 +31,7 @@ test("a thread reply updates the original's summary live and stays out of the ch
   assert.deepEqual(inThread.kind === "text" && inThread.threadOf, {
     id: original.id,
     original: { login: "owner", name: "owner", line: "Refunds went out twice" },
+    writers: ["alice"],
   });
   assert.equal(inThread.kind === "text" && inThread.alsoInChannel, undefined);
   // The original comes again with its summary.
@@ -45,6 +46,8 @@ test("a thread reply updates the original's summary live and stays out of the ch
     alsoInChannel: true,
   });
   assert.equal(copy.kind === "text" && copy.alsoInChannel, true);
+  // Everyone who wrote in the thread, not just the latest three, so the web knows who a reply calls (#370).
+  assert.deepEqual(copy.kind === "text" && copy.threadOf?.writers.toSorted(), ["alice", "owner"]);
   await eventually(() => {
     const thread = summary(live.messages().findLast((m) => m.id === original.id));
     assert.equal(thread?.count, 2);

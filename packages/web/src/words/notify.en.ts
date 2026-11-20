@@ -16,6 +16,8 @@ export const notifyEn = {
   answersHelp: "When what I asked in a DM or with an @call gets an answer",
   decisions: "Decisions and debates I'm in",
   decisionsHelp: "When a decision I decide on is proposed, or a debate needs my agent's stance",
+  replies: "Replies and threads",
+  repliesHelp: "When someone replies to my message, or writes in a thread I started or wrote in",
   quietNote:
     "Notifications don't show while you're on Do not disturb or looking at the Omagari tab.",
   dnd: "You're on Do not disturb, so notifications don't show.",
@@ -29,8 +31,12 @@ export const notifyEn = {
   decisionTitle: "Your call is needed",
   decisionBody: (title: string) => `Decision: ${title}`,
   debateBody: (agenda: string) => `Debate: ${agenda}`,
+  replyTitle: "Someone replied to you",
+  threadTitle: "New message in a thread",
+  replyBody: (name: string, line: string) => `${name}: ${line}`,
   /** Sample bodies in the settings previews. */
   previewConflict: "Minsu's Claude Code is also editing refund.ts",
   previewAnswer: "Jieun's Codex: It clamps at 0 since #212.",
   previewDecision: "Decision: Send refund mail from a queue",
+  previewReply: "Minsu: Shall we send it from a queue?",
 };

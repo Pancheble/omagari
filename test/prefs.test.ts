@@ -43,18 +43,31 @@ test("picking Korean reaches the same member's other connections and the next lo
   );
 });
 
-test("turning a notification kind off reaches the same member's other connections and keeps the rest (#313)", async (t) => {
+test("turning notification kinds off reaches the same member's other connections and keeps the rest (#313, #370)", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
   const owner = world.owner;
   const otherTab = await world.live(owner);
 
-  const after = await call(owner, api.setPrefs, { notifyAnswers: false, notifyFyi: true });
-  assert.deepEqual(after, { ...DEFAULT_PREFS, notifyAnswers: false, notifyFyi: true });
+  const after = await call(owner, api.setPrefs, {
+    notifyAnswers: false,
+    notifyFyi: true,
+    notifyReplies: false,
+  });
+  assert.deepEqual(after, {
+    ...DEFAULT_PREFS,
+    notifyAnswers: false,
+    notifyFyi: true,
+    notifyReplies: false,
+  });
   await eventually(() =>
     assert.ok(
       otherTab.received.some(
-        (m) => m.kind === "prefs" && !m.payload.notifyAnswers && m.payload.notifyFyi,
+        (m) =>
+          m.kind === "prefs" &&
+          !m.payload.notifyAnswers &&
+          m.payload.notifyFyi &&
+          !m.payload.notifyReplies,
       ),
       "the other tab hasn't heard yet",
     ),

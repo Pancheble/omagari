@@ -11,6 +11,8 @@ export type Notice = {
   channel: string;
   /** An answer to a DM opens the DM column there. */
   dm?: true;
+  /** A message in a thread opens that thread (its original's number). */
+  thread?: number;
 };
 
 export type NoticeContext = {
@@ -25,6 +27,8 @@ export type NoticeContext = {
   since: number;
   /** Q&As this tab saw waiting for an answer. Only those turn into an answer notification. */
   asking: ReadonlySet<number>;
+  /** Message numbers this tab already got. A message coming again with a change (a reaction) isn't new. */
+  heard: ReadonlySet<number>;
   /** A post's title by its channel (for a debate without an agenda). */
   postTitle: (channel: string) => string | undefined;
 };
@@ -76,6 +80,28 @@ export function noticeFor(event: LiveEvent, ctx: NoticeContext): Notice | undefi
         title: t.notify.decisionTitle,
         body: t.notify.decisionBody(decision.title),
         channel: decision.post,
+      };
+    }
+    if (message.kind === "text" || message.kind === "qa") {
+      // DESIGN.md "Who gets called" (#370): a reply calls the original's author unless its `@` is off; a thread calls its original's author
+      // and everyone who wrote in it. A quote is plain text and calls nobody.
+      const { replyTo, threadOf } = message;
+      if (!prefs.notifyReplies || message.login === me) return;
+      if (message.id <= ctx.since || ctx.heard.has(message.id)) return;
+      const replied = replyTo?.notify === true && replyTo.original?.login === me;
+      const inThread =
+        threadOf !== undefined &&
+        (threadOf.original?.login === me || threadOf.writers.includes(me));
+      if (!replied && !inThread) return;
+      const text = (message.kind === "qa" ? (message.text ?? message.qa.question) : message.text)
+        .split("\n")
+        .find((line) => line.trim() && !line.startsWith(">"));
+      return {
+        tag: `reply-${message.id}`,
+        title: replied ? t.notify.replyTitle : t.notify.threadTitle,
+        body: t.notify.replyBody(message.name || message.login, text?.trim().slice(0, 200) ?? ""),
+        channel: message.channel,
+        ...(threadOf && { thread: threadOf.id }),
       };
     }
     return;
