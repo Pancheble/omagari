@@ -123,6 +123,26 @@ _Avoid_: Q&A (Q&A is between you and your own agent), DM
 
 ## Spaces
 
+**Hosted server** (호스팅 서버):
+The Omagari server we run for teams that don't want to run their own, at `app.omagari.org`. During the beta it is the dogfood server (ADR-0052).
+_Avoid_: cloud, SaaS, public server
+
+**Self-hosted server** (직접 띄운 서버):
+An Omagari server a team runs for itself. Its branch names, files, chat, and patches never leave it. It is a first-class way to run Omagari, not a fallback.
+_Avoid_: on-prem, private server
+
+**Operator** (운영자):
+The person who runs a server. They approve access requests and answer for the data on it. On the hosted server it's @Pancheble. A self-hosting team picks its own.
+_Avoid_: admin (that's a GitHub repo role), owner (that's a person with an agent)
+
+**Accepted account** (받는 계정):
+A GitHub account (an organization or a personal account) whose repos a server takes in. Each accepted account becomes a workspace when its first repo comes in. The list comes from the server settings and from approved access requests (ADR-0043, ADR-0052).
+_Avoid_: allowlist, whitelist
+
+**Access request** (가입 신청):
+A request, made in the web after signing in, for a server to accept a GitHub account. An operator approves or denies it.
+_Avoid_: invite, waitlist
+
 **Workspace** (워크스페이스):
 The outermost unit that the people using Omagari share. It is paired with one GitHub account (an organization or a personal account) and holds several of that account's repos. One server can hold several workspaces.
 
