@@ -2,6 +2,7 @@ import type { CheckReading, Importance } from "@omagari/contract";
 import { channelsEn } from "./channels.en.ts";
 import { conversationEn } from "./conversation.en.ts";
 import { dmEn } from "./dm.en.ts";
+import { notifyEn } from "./notify.en.ts";
 import { profileEn } from "./profile.en.ts";
 
 type CheckProblem = Extract<CheckReading, { problem: unknown }>["problem"];
@@ -67,7 +68,6 @@ export const en = {
       note: "It always starts in English. The language you pick follows you to your other devices.",
     },
     appearance: { soon: "Light and dark looks are coming soon." },
-    notifications: { soon: "Browser notifications are coming soon." },
     info: {
       workspace: "Workspace",
       name: "Name",
@@ -512,4 +512,5 @@ export const en = {
   dm: dmEn,
 
   profile: profileEn,
+  notify: notifyEn,
 };

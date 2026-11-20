@@ -2,6 +2,7 @@ import type { Words } from "../i18n.ts";
 import { channelsKo } from "./channels.ko.ts";
 import { conversationKo } from "./conversation.ko.ts";
 import { dmKo } from "./dm.ko.ts";
+import { notifyKo } from "./notify.ko.ts";
 import { profileKo } from "./profile.ko.ts";
 
 /** 받침이 있으면 앞, 없으면 뒤: 지은이 / 민수가. */
@@ -71,7 +72,6 @@ export const ko: Words = {
       note: "처음엔 늘 영어로 시작해요. 고른 언어는 다른 기기에서도 그대로예요.",
     },
     appearance: { soon: "밝게·어둡게 모양은 곧 나와요." },
-    notifications: { soon: "브라우저 알림은 곧 나와요." },
     info: {
       workspace: "워크스페이스",
       name: "이름",
@@ -493,4 +493,5 @@ export const ko: Words = {
   dm: dmKo,
 
   profile: profileKo,
+  notify: notifyKo,
 };

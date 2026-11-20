@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** Contract version. Sent in every envelope; a different one is rejected. Bump it on every breaking change. */
-export const CONTRACT_VERSION = 57;
+export const CONTRACT_VERSION = 58;
 
 /** Error shape. Shared by the runner/server `error` message and the HTTP error body (`{ error }`). */
 export const ContractError = z.strictObject({
@@ -482,11 +482,28 @@ export const Language = z.enum(["en", "ko"]);
 export type Language = z.infer<typeof Language>;
 /**
  * A member's personal settings, stored on the server so they follow the person across tabs and devices.
- * Language comes first; more keys get added here later.
+ * The `notify*` keys pick which browser notifications to get (#313, DESIGN.md "Notifications"). Whether this browser shows them at all
+ * is the browser's permission and stays in that browser.
  */
-export const Prefs = z.strictObject({ language: Language });
+export const Prefs = z.strictObject({
+  language: Language,
+  /** Conflicts on my work. Only Discuss ones, unless `notifyFyi` is on too. */
+  notifyConflicts: z.boolean(),
+  /** "FYI too": conflicts whose importance is FYI also notify (only when `notifyConflicts` is on). */
+  notifyFyi: z.boolean(),
+  /** Answers to what I asked by DM or `@call`. */
+  notifyAnswers: z.boolean(),
+  /** A decision I decide on is proposed, or a debate needs my agent's stance. */
+  notifyDecisions: z.boolean(),
+});
 export type Prefs = z.infer<typeof Prefs>;
-export const DEFAULT_PREFS: Prefs = { language: "en" };
+export const DEFAULT_PREFS: Prefs = {
+  language: "en",
+  notifyConflicts: true,
+  notifyFyi: false,
+  notifyAnswers: true,
+  notifyDecisions: true,
+};
 export const IMPORTANCE_LABELS = {
   reference: "FYI",
   discuss: "Discuss",

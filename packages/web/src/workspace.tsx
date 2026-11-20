@@ -13,6 +13,7 @@ import {
   HISTORY_PAGE,
   type Label,
   type MemberView,
+  type Prefs,
   type Presence,
   type PresenceDuration,
   type Qa,
@@ -86,6 +87,7 @@ import { setLanguage, t } from "./i18n.ts";
 import { type CreateKind, ForumDialog, LabelsContext, PostLabels } from "./labels.tsx";
 import { useLive } from "./live.ts";
 import { MemberList, MemberSkeleton } from "./members.tsx";
+import { browserAllows, type Notice, noticeFor } from "./notify.ts";
 import { ALL, placeIn, placeOf } from "./places.ts";
 import { ProfilePanel } from "./profile.tsx";
 import { type Opened, PeopleContext, ProfileCard, ProfileView } from "./profile-card.tsx";
@@ -238,6 +240,12 @@ export function Workspace({
   const [collapsed, toggleCollapsed] = useCollapsed("omagari.channels-collapsed");
   const [members, setMembers] = useState<MemberView[]>();
   const [settings, setSettings] = useState(false);
+  /** My personal settings. Changes from my other tabs and devices come as `prefs` on the live connection. */
+  const [prefs, setPrefs] = useState<Prefs>(me.prefs);
+  /** Browser notifications (#313): the message number when this tab first connected, the Q&As seen waiting, and the notifications already shown. */
+  const since = useRef<number>(undefined);
+  const asking = useRef(new Set<number>());
+  const notified = useRef(new Set<string>());
   /** All written-up Decisions. The decision status strip reads it. Read at first, and replaced when a decision line arrives and when I change one. */
   const [decisions, setDecisions] = useState<Decision[]>([]);
   /** The write-up dialog: has a value while open, and holds that Decision while editing. */
@@ -604,6 +612,7 @@ export function Workspace({
         ...chosen(agent?.choices, picks[executor]),
         ...reply,
       });
+      asking.current.add(asked.qa.id);
       receiveQa(asked.qa);
       if (asked.message) receive(asked.message);
     } catch (error) {
@@ -644,10 +653,16 @@ export function Workspace({
         setDms({});
         // A language picked elsewhere while we were cut off doesn't come again.
         call(server(session), api.me)
-          .then((me) => setLanguage(me.prefs.language))
+          .then((me) => {
+            setLanguage(me.prefs.language);
+            setPrefs(me.prefs);
+          })
           .catch(check);
-      } else if (event.kind === "prefs") setLanguage(event.payload.language);
-      else if (event.kind === "draft") setIncoming(event.payload);
+        since.current ??= event.payload.seq;
+      } else if (event.kind === "prefs") {
+        setLanguage(event.payload.language);
+        setPrefs(event.payload);
+      } else if (event.kind === "draft") setIncoming(event.payload);
       else if (event.kind === "channel") add(event.payload);
       else if (event.kind === "labels" && repos[0])
         setLabelsByRepo((all) => ({ ...all, [repos[0] as string]: event.payload }));
@@ -660,9 +675,43 @@ export function Workspace({
         const { post: channel, ...rest } = event.payload;
         setDebates((all) => ({ ...all, [channel]: rest }));
       }
+      notify(event);
     },
     onSignedOut,
   );
+
+  /** Shows a browser notification for a live event, if my settings want one (`noticeFor`). Pressing it goes to that post or DM. */
+  const notify = (event: Parameters<typeof noticeFor>[0]) => {
+    if (event.kind === "qa" && event.payload.answer.state === "pending")
+      asking.current.add(event.payload.id);
+    if (since.current === undefined) return;
+    const notice = noticeFor(event, {
+      me: me.login,
+      prefs,
+      members,
+      allowed: browserAllows(),
+      looking: document.hasFocus(),
+      since: since.current,
+      asking: asking.current,
+      postTitle: (channel) => {
+        const item = posts?.find((one) => one.channel === channel);
+        return item && postTitle(item);
+      },
+    });
+    if (!notice || notified.current.has(notice.tag)) return;
+    notified.current.add(notice.tag);
+    const shownNow = new Notification(notice.title, { body: notice.body, tag: notice.tag });
+    shownNow.onclick = () => {
+      focus();
+      goTo(notice);
+      shownNow.close();
+    };
+  };
+  const goTo = ({ channel, dm }: Notice) => {
+    const item = posts?.find((one) => one.channel === channel);
+    location.hash = item ? `${item.forums[0] ?? OTHER.id}/${item.alert}` : channel;
+    if (dm) setRight("agent");
+  };
 
   /**
    * Things that are per repo (Posts, labels, Decisions) are read per repo and merged (ADR-0043). The live connection receives all of the workspace's alert lines,
@@ -1533,6 +1582,18 @@ export function Workspace({
                 mine={members?.find((member) => member.login === me.login)}
                 session={session}
                 check={check}
+                prefs={prefs}
+                onPrefs={async (next) => {
+                  const before = prefs;
+                  setPrefs({ ...prefs, ...next });
+                  try {
+                    setPrefs(await call(server(session), api.setPrefs, next));
+                  } catch (error) {
+                    setPrefs(before);
+                    throw error;
+                  }
+                }}
+                onDndOff={() => void setPresence("online").catch(() => {})}
                 onClose={() => setSettings(false)}
               />
             )}

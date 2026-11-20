@@ -1,0 +1,35 @@
+import type { Words } from "../i18n.ts";
+import { josa } from "./ko.ts";
+
+/** 브라우저 알림의 한국어 글: 설정 항목과 알림. */
+export const notifyKo: Words["notify"] = {
+  browser: "브라우저 알림",
+  thisBrowser: "이 브라우저에서 알림 받기",
+  asksOnce: "켤 때 브라우저가 한 번 물어봐요.",
+  blocked: "브라우저가 막아서 켤 수 없어요.",
+  blockedNote: "브라우저가 알림을 막았어요. 주소창 왼쪽 자물쇠 → 알림에서 허용으로 바꿔 주세요.",
+  unsupported: "이 브라우저는 알림을 띄울 수 없어요.",
+  what: "알려 줄 것",
+  conflicts: "내 작업의 부딪힘",
+  conflictsHelp: "다른 멤버가 내가 고치는 곳을 건드릴 때",
+  discussOnly: "논의만",
+  fyiToo: "참고도",
+  answers: "내가 물은 것의 답",
+  answersHelp: "DM이나 @call로 물은 것에 답이 올 때",
+  decisions: "내가 낄 결정과 토론",
+  decisionsHelp: "내가 결정자인 결정이 제안되거나, 토론에 내 에이전트의 입장이 필요할 때",
+  quietNote: "방해 금지 중이거나 Omagari 탭을 보고 있을 땐 알림이 안 떠요.",
+  dnd: "방해 금지 중이라 알림이 안 떠요.",
+  dndOff: "지금 끄기",
+  conflictTitle: "내 작업에 부딪힘이 생겼어요",
+  conflictBody: (name, agent, what) =>
+    `${agent ? `${name}의 ${agent}` : name}도 ${josa(what, "을", "를")} 고치고 있어요`,
+  answerTitle: "물어본 것에 답이 왔어요",
+  answerBody: (agent, line) => `${agent}: ${line}`,
+  decisionTitle: "결정이 필요해요",
+  decisionBody: (title) => `결정: ${title}`,
+  debateBody: (agenda) => `토론: ${agenda}`,
+  previewConflict: "민수의 Claude Code도 refund.ts를 고치고 있어요",
+  previewAnswer: "지은의 Codex: #212부터 0 아래로는 안 내려가요.",
+  previewDecision: "결정: 환불 메일을 큐로 보내기",
+};
