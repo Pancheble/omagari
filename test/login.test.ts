@@ -184,7 +184,8 @@ test("in a folder that is not a workspace repo it says why and does not start", 
   const world = await startWorld();
   t.after(world.stop);
   world.github.grant("alice");
-  const other = await tempRepo("someone/elsewhere");
+  // Under the account the server accepts, but not in the workspace.
+  const other = await tempRepo("omagari-test/elsewhere");
   t.after(other.remove);
 
   const runner = world.launchCliIn(other.folder, "runner");
@@ -230,6 +231,7 @@ test("a runner connection that does not answer is cut, and its agent goes offlin
     encode(runnerToServer, "hello", {
       session: alice.session,
       repos: [REPO],
+      shareRepo: true,
       executors: ["claude-code"],
       choices: {},
       mergeCheck: "on",

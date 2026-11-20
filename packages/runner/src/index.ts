@@ -11,6 +11,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import {
   ALERT_KINDS,
+  api,
   type Channel,
   type ChannelMessage,
   type Choices,
@@ -19,6 +20,7 @@ import {
   type ConflictPair,
   type ContractError,
   ContractFailure,
+  call,
   cliToRunner,
   DraftFields,
   decode,
@@ -737,6 +739,23 @@ export async function readRepo(folder: string) {
   return { folder: top, repos, remotes };
 }
 
+/** No GitHub remote of the folder is under an account the server accepts. Nothing about it was sent to the server (ADR-0049). */
+export class OutsideAccounts extends Error {}
+
+/**
+ * The remotes under the accounts the server accepts (ADR-0049). It asks the server for the accounts and checks on this machine,
+ * so the names of other remotes never leave it.
+ */
+export async function acceptedRemotes<T extends { repo: string }>(
+  server: { url: string; session: string },
+  remotes: T[],
+) {
+  const { accounts } = await call(server, api.accounts);
+  return remotes.filter((remote) =>
+    accounts.includes(remote.repo.split("/")[0]?.toLowerCase() ?? ""),
+  );
+}
+
 /** The server refused because the contract version differs. If `newer`, the server's contract is newer (when you pull this clone). */
 export class ServerContractMismatch extends ContractFailure {
   newer: boolean;
@@ -793,10 +812,26 @@ export async function startRunner(options: {
   mergeCheck?: "on" | "off";
   /** How long the two works must be quiet before a merge run. Default 2 minutes. */
   quietMs?: number;
+  /** A person started it by hand, which shares the repo (ADR-0049). Default true; the background runner passes false. */
+  shareRepo?: boolean;
 }) {
-  const { folder, repos, remotes } = await readRepo(options.folder);
+  const found = await readRepo(options.folder);
+  const { folder } = found;
+  // Only remotes under the server's accounts go to the server, not even the names of the others (ADR-0049).
+  // A server on another contract may not answer this. Then hello goes with no repos, which only learns its version (ADR-0042).
+  const remotes = await acceptedRemotes(
+    { url: options.serverUrl, session: options.session },
+    found.remotes,
+  ).catch((error) => {
+    if (error instanceof ContractFailure && error.code === "unauthorized") throw error;
+    return undefined;
+  });
+  const repos = [...new Set((remotes ?? []).map((remote) => remote.repo))];
+  if (remotes?.length === 0)
+    throw new OutsideAccounts(
+      `This folder's GitHub remotes aren't under an account the server accepts, so nothing was sent: ${folder}`,
+    );
   const paths = await runnerPaths(folder);
-  await mkdir(dirname(paths.log), { recursive: true });
   const executors = options.executors ?? {
     "claude-code": claudeCode,
     ...((await codexReady()) && { codex }),
@@ -832,6 +867,8 @@ export async function startRunner(options: {
   let live: WebSocket | undefined;
   /** The member of this runner that welcome reported. */
   let login: string | undefined;
+  /** The member shared this repo (ADR-0049). Until then the runner observes nothing and sends nothing it would observe. */
+  let shared = false;
   /** The current situation received from the server. Hooks read this instead of the server. When the connection drops it isn't cleared; it gets a disconnected time. */
   let situation: { works: WorkView[]; claims: Claim[]; disconnectedAt: string | null } | undefined;
   /** My work as last observed. It has the paths of changed files regardless of share level. */
@@ -907,6 +944,7 @@ export async function startRunner(options: {
         encode(runnerToServer, "hello", {
           session: options.session,
           repos,
+          shareRepo: options.shareRepo ?? true,
           executors: executorIds,
           choices,
           mergeCheck,
@@ -935,7 +973,10 @@ export async function startRunner(options: {
         // An answer nobody is waiting for (one that resolved by itself, or went over the limit) is dropped. It comes back through the situation.
       } else if (message.kind === "welcome") {
         login = message.payload.login;
+        shared = message.payload.shared;
         welcomed.resolve(message.payload);
+      } else if (message.kind === "sharing") {
+        shared = message.payload.shared;
       } else if (message.kind === "situation") {
         situation = { ...message.payload, disconnectedAt: null };
       } else if (message.kind === "runs") {
@@ -1481,7 +1522,7 @@ export async function startRunner(options: {
     if (message.kind !== "ask") {
       // It answers straight away from what was received, without waiting in the Q&A queue. It doesn't call the server.
       // The executor of a hook that asks for the inbox is reported to the server as that work's agent (ADR-0015). The executors of situation and nearby aren't used.
-      if (message.kind === "inbox" && message.payload.executor && live) {
+      if (message.kind === "inbox" && message.payload.executor && live && shared) {
         const { branch, executor } = message.payload;
         if (working.get(branch) !== executor) {
           live.send(encode(runnerToServer, "working", { branch, executor }));
@@ -1501,7 +1542,7 @@ export async function startRunner(options: {
       }
       if (message.kind === "situation") {
         // ponytail: hands over what it received in full, contents and all. That's fine because it happens once at session start. A hook that runs on every edit filters through nearby.
-        return encode(runnerToCli, "situation", { login, ...situation, mine }, message.id);
+        return encode(runnerToCli, "situation", { login, ...situation, mine, shared }, message.id);
       }
       const { disconnectedAt, works, claims } = situation;
       if (message.kind === "inbox") {
@@ -1826,7 +1867,9 @@ export async function startRunner(options: {
     await localClosed;
     throw error;
   });
-  remote = remotes.find((r) => r.repo.toLowerCase() === welcome.repo.toLowerCase());
+  // The hooks speak only in repos where a runner got welcome on this machine (ADR-0016, ADR-0049). The run log lives there too.
+  await mkdir(dirname(paths.log), { recursive: true });
+  remote = remotes?.find((r) => r.repo.toLowerCase() === welcome.repo.toLowerCase());
   const observing = remote ? observeLoop(remote.name) : Promise.resolve();
 
   /**
@@ -1848,6 +1891,17 @@ export async function startRunner(options: {
     const releasing = new Set<string>();
     while (!stopping.signal.aborted) {
       let problems: string[];
+      if (!shared) {
+        // Not shared (ADR-0049): observe nothing. Once shared, everything is sent from the start.
+        mine = [];
+        sent = {};
+        reported = {};
+        checkSent = {};
+        await sleep(options.observeMs ?? OBSERVE_MS, undefined, { signal: stopping.signal }).catch(
+          () => {},
+        );
+        continue;
+      }
       try {
         const observed = await observe(folder, remote, options.share ?? "full", claimedBy);
         mine = observed.works;

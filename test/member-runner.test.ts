@@ -23,6 +23,7 @@ const hello = (session: string) =>
   frame("hello", {
     session,
     repos: [REPO],
+    shareRepo: true,
     executors: ["claude-code"],
     choices: {},
     mergeCheck: "off",

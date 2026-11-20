@@ -78,7 +78,7 @@ Sign in with GitHub, save the server address, and install the hooks into this ma
 omagari setup https://<your-team-server>
 ```
 
-Start the runner once in the folder where you cloned the workspace repo. After that, the background runner that `setup` registered starts it at login and whenever an agent session opens there, so you can close the terminal.
+Start the runner once in the folder where you cloned the workspace repo. That also shares the repo with your team (`omagari share on` does the same without starting a runner). After that, the background runner that `setup` registered starts it at login and whenever an agent session opens there, so you can close the terminal. It never sends anything about repos outside your team's GitHub accounts.
 
 ```bash
 cd <your workspace repo folder>
@@ -112,6 +112,7 @@ The full idea is in [docs/omagari-v3.md](docs/omagari-v3.md). How it's built is 
 | `omagari setup [<address>]` | Sign in, save the server address, put the hooks and the status line skill into this machine's agents, and register the background runner to start at login |
 | `omagari uninstall` | Remove the hooks and the skill (`--sign-out` also ends your session) |
 | `omagari runner` | Start the runner in a repo folder (`--share full\|declared\|intent` picks what you upload, `--merge-check on\|off`) |
+| `omagari share on\|off` | Share this repo with your team once (it follows you to other machines), or stop sharing it. Until then your runner doesn't observe it |
 | `omagari runner check` | Run the check command once on your current work, in the sandbox |
 | `omagari runner ask <message>` / `runner log` | Ask this repo's runner session, or see what the runner ran |
 | `omagari status` / `status set <line>` | See what the team is doing, or write your status line |

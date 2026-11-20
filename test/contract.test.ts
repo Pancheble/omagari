@@ -241,7 +241,9 @@ test("unless opened separately, the server listens only inside this device", asy
 test("the runner takes only Q&A. It doesn't run a request not in the contract, a Q&A that widens tools, or a Q&A sent to an executor it doesn't run", async (t) => {
   // Imitating a breached server: it answers hello properly, then sends a request not in the contract, a Q&A that widens tools, and a proper Q&A.
   const server = await fakeServer(t, (socket, hello) => {
-    socket.send(encode(serverToRunner, "welcome", { login: "owner", repo: REPO }, hello.id));
+    socket.send(
+      encode(serverToRunner, "welcome", { login: "owner", repo: REPO, shared: true }, hello.id),
+    );
     socket.send(frame({ id: "x", kind: "run_command", payload: { command: "rm -rf ~" } }));
     const ask = {
       executor: "claude-code",

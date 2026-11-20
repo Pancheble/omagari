@@ -13,7 +13,7 @@ const sessionStart = (cwd: string) =>
     source: "startup",
   });
 
-test("the background runner starts the runner of a repo where one ran before once a session starts there, and leaves other repos alone", async (t) => {
+test("the background runner starts the runner of a workspace repo once a session starts there, and leaves repos outside the server's accounts alone", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
   // A runner ran in this repo by hand before. It's off now.
@@ -36,12 +36,12 @@ test("the background runner starts the runner of a repo where one ran before onc
     { code: 0, stdout: "The background runner already watches this folder\n" },
   );
 
-  // A repo where no runner ever ran isn't started.
-  const fresh = await tempRepo();
-  t.after(fresh.remove);
-  assert.equal((await world.hook(sessionStart(fresh.folder), { cwd: fresh.folder })).code, 0);
-  await background.output(/Not watching .+: no runner has run in this repo yet/);
-  await assert.rejects(callRunner(fresh.folder, "situation", { executor: "claude-code" }));
+  // A repo outside the server's accounts isn't started (repo-sharing.test checks nothing about it reaches the server).
+  const outside = await tempRepo("someone-else/code");
+  t.after(outside.remove);
+  assert.equal((await world.hook(sessionStart(outside.folder), { cwd: outside.folder })).code, 0);
+  await background.output(/Not watching .+: its remotes aren't under the server's accounts/);
+  await assert.rejects(callRunner(outside.folder, "situation", { executor: "claude-code" }));
 
   // After a restart it comes back without waiting for a session.
   assert.equal((await background.stop("SIGTERM")).code, 0);

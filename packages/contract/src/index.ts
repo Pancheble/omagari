@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** Contract version. Sent in every envelope; a different one is rejected. Bump it on every breaking change. */
-export const CONTRACT_VERSION = 59;
+export const CONTRACT_VERSION = 60;
 
 /** Error shape. Shared by the runner/server `error` message and the HTTP error body (`{ error }`). */
 export const ContractError = z.strictObject({
@@ -1243,10 +1243,13 @@ export const runnerToServer = {
    * `executors` are the executors this runner can run on this machine. One agent is created per executor (ADR-0015).
    * `choices` is what can be chosen per executor. Ones that could not be asked of the executor are left out (ADR-0020).
    * `mergeCheck` is this runner's merge run. Turning it on and off is only done on the runner (ADR-0034), so it is announced once when connecting.
+   * `repos` only has remotes under the accounts the server accepts (`api.accounts`). The runner never sends the others, not even by name (ADR-0049).
+   * `shareRepo` says a person started this runner by hand (`omagari runner`), which shares the repo (repo sharing, ADR-0049). The background runner sends false.
    */
   hello: z.strictObject({
     session: z.string(),
     repos: z.array(z.string()),
+    shareRepo: z.boolean(),
     executors: z.array(ExecutorId),
     choices: z.partialRecord(ExecutorId, Choices),
     mergeCheck: MergeCheckState,
@@ -1344,8 +1347,13 @@ export const runnerToServer = {
 
 /** What the server sends to the runner. The runner accepts only the kinds listed here. */
 export const serverToRunner = {
-  /** Accepts the hello. The runner is paired with this repo as this member's agent. */
-  welcome: z.strictObject({ login: z.string(), repo: z.string() }),
+  /**
+   * Accepts the hello. The runner is paired with this repo as this member's agent.
+   * `shared` says whether this member shared the repo (repo sharing, ADR-0049). Until then the runner sends no observation, conflicts, check command, merge runs or agents, and the server drops them.
+   */
+  welcome: z.strictObject({ login: z.string(), repo: z.string(), shared: z.boolean() }),
+  /** The member shared the repo or stopped sharing it (`api.share`). Sent to that member's runners in that repo. */
+  sharing: z.strictObject({ shared: z.boolean() }),
   /**
    * Q&A. The runner gets only this and decision drafts (`draft`). Only the agent to ask (`executor`), the channel, the question, and the channel conversation come; the runner decides tools, folders, and sessions.
    * The runner keeps one channel session per channel and executor (ADR-0015), runs one turn at a time, and queues the rest in arrival order.
@@ -1645,6 +1653,8 @@ export const runnerToCli = {
     mine: z.array(Work),
     /** All claims last received from the server (lines are in each person's own copy) */
     claims: z.array(Claim),
+    /** Whether this member shared the repo (ADR-0049). If not, the session-start hook says how to share. */
+    shared: z.boolean(),
   }),
   /** The answer to `nearby`. If there are no nearby works, `works` is empty. If nothing has been received yet, it's `error` (`runner_offline`). */
   nearby: z.strictObject({
@@ -1864,6 +1874,25 @@ export const api = {
     path: "/api/repos/remove",
     body: z.strictObject({ repo: z.string() }),
     response: z.strictObject({ repos: z.array(z.string()) }),
+  },
+  /**
+   * The GitHub accounts this server accepts, in lowercase (ADR-0043). The runner and CLI check a folder's remotes against them on the machine,
+   * and send only remotes under these accounts (ADR-0049).
+   */
+  accounts: {
+    method: "GET",
+    path: "/api/accounts",
+    response: z.strictObject({ accounts: z.array(z.string()) }),
+  },
+  /**
+   * Shares the repo `REPO_HEADER` picks, or stops sharing it (repo sharing, ADR-0049). Per member and repo, so it follows the member to other machines.
+   * Stopping removes that member's works in the repo, so other members stop seeing them, and their runners there stop observing.
+   */
+  share: {
+    method: "POST",
+    path: "/api/share",
+    body: z.strictObject({ on: z.boolean() }),
+    response: z.strictObject({ repo: z.string(), shared: z.boolean() }),
   },
   /** Ends this session. Other sessions of the same member (other browsers, the CLI, and the runner) stay as they are. */
   logout: {
