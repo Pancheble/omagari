@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { type ReactNode, type RefObject, useEffect, useId, useState } from "react";
 import { repoName, type Workspace as Space } from "./api.ts";
+import { ConfirmDelete } from "./confirm-delete.tsx";
 import { useMenu } from "./dm.tsx";
 import { OTHER, type PostItem, postTitle, settled } from "./forum.tsx";
 import { language, t } from "./i18n.ts";
@@ -543,8 +544,8 @@ export function PlacePicker({
 }
 
 /**
- * The ⋯ menu on a repo row (mocks 101-1, 91-C): "Open on GitHub" and "Remove from workspace". Removing takes one more click to confirm.
- * Only that repo's Admin sees it.
+ * The ⋯ menu on a repo row (mocks 101-1, 91-C): "Open on GitHub" and "Remove from workspace". Removing deletes the repo's data (ADR-0054),
+ * so it asks in a dialog where the repo's name is typed. Only that repo's Admin sees it.
  */
 function RepoMore({
   repo,
@@ -558,7 +559,7 @@ function RepoMore({
   onRemove: () => Promise<void>;
 }) {
   const menu = useId();
-  const [removing, setRemoving] = useState<"ask" | "busy" | "error">();
+  const [asking, setAsking] = useState(false);
   return (
     <>
       <button
@@ -570,10 +571,7 @@ function RepoMore({
         aria-expanded={open}
         aria-controls={open ? menu : undefined}
         tabIndex={-1}
-        onClick={() => {
-          setRemoving(undefined);
-          onOpen(!open);
-        }}
+        onClick={() => onOpen(!open)}
       >
         <Ellipsis size={18} aria-hidden />
       </button>
@@ -601,31 +599,24 @@ function RepoMore({
             role="menuitem"
             className="menu-item pop-row danger"
             tabIndex={-1}
-            disabled={removing === "busy"}
-            onClick={async () => {
-              if (removing !== "ask") return setRemoving("ask");
-              setRemoving("busy");
-              try {
-                await onRemove();
-                onOpen(false);
-              } catch {
-                setRemoving("error");
-              }
+            onClick={() => {
+              onOpen(false);
+              setAsking(true);
             }}
           >
             <Minus size={16} aria-hidden />
-            <span className="pop-name">
-              {removing === "ask" || removing === "busy"
-                ? t.channels.repoMenu.confirmRemove
-                : t.channels.repoMenu.remove}
-            </span>
+            <span className="pop-name">{t.channels.repoMenu.remove}</span>
           </button>
-          {removing === "error" && (
-            <p className="pop-note error" role="alert">
-              {t.channels.repoMenu.removeFailed}
-            </p>
-          )}
         </div>
+      )}
+      {asking && (
+        <ConfirmDelete
+          title={t.deletion.repo.confirm(repo)}
+          lines={t.deletion.repo.lines}
+          name={repo}
+          onDelete={onRemove}
+          onClose={() => setAsking(false)}
+        />
       )}
     </>
   );

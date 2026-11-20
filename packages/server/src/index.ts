@@ -692,6 +692,8 @@ export async function startServer(options: {
   const version = checkoutVersion();
   const hostname = options.hostname ?? "127.0.0.1";
   const db = new DatabaseSync(options.database ?? ":memory:");
+  // Deleted rows are overwritten in the file, not just marked free (ADR-0054: deletion is real deletion).
+  db.exec("PRAGMA secure_delete = ON");
   // Sessions are kept only as hashes. The GitHub token never leaves the server.
   db.exec(`CREATE TABLE IF NOT EXISTS sessions (
     hash TEXT PRIMARY KEY,
@@ -1337,6 +1339,78 @@ export async function startServer(options: {
     if (!adopted) seedForums(id);
   };
   for (const repo of allRepos()) ensureWorkspace(repo);
+  /** The tables that have `column`. */
+  const tablesWith = (column: string) =>
+    (
+      db
+        .prepare(
+          "SELECT m.name FROM sqlite_master m JOIN pragma_table_info(m.name) p WHERE m.type = 'table' AND p.name = ?",
+        )
+        .all(column) as { name: string }[]
+    ).map((row) => row.name);
+  /** Runs `change` in one transaction whose foreign keys are checked only at the end, so rows that point at each other can go in any order. */
+  const deleting = (change: () => void) => {
+    db.exec("BEGIN");
+    try {
+      db.exec("PRAGMA defer_foreign_keys = ON");
+      change();
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  };
+  /** Deletes the channels `where` picks and everything in them: messages, reactions, Q&As, decisions, and debates. Call inside `deleting`. */
+  const dropChannels = (where: string, value: string) => {
+    const ids = `SELECT id FROM channels WHERE ${where}`;
+    const decisions = `SELECT id FROM decisions WHERE post IN (${ids})`;
+    const debates = `SELECT id FROM debates WHERE post IN (${ids})`;
+    for (const sql of [
+      `DELETE FROM reactions WHERE message IN (SELECT id FROM messages WHERE channel IN (${ids}))`,
+      `DELETE FROM agreements WHERE decision IN (${decisions})`,
+      `DELETE FROM objections WHERE decision IN (${decisions})`,
+      `DELETE FROM seats WHERE debate IN (${debates})`,
+      `DELETE FROM debate_comments WHERE debate IN (${debates})`,
+      `DELETE FROM debates WHERE post IN (${ids})`,
+      `DELETE FROM debate_requests WHERE post IN (${ids})`,
+      `DELETE FROM decisions WHERE post IN (${ids})`,
+      `DELETE FROM messages WHERE channel IN (${ids})`,
+      `DELETE FROM qas WHERE channel IN (${ids})`,
+      `DELETE FROM channels WHERE ${where}`,
+    ])
+      db.prepare(sql).run(value);
+  };
+  /**
+   * Deletes everything of `repo` (ADR-0054): every table with a `repo` column, its posts and repo channels with what's in them, the alert lines,
+   * its check command, its moves, and its name in forum filters. Returns the forums whose filter changed. The GitHub id (`repo_ids`) stays (#315).
+   */
+  const deleteRepoData = (repo: string) => {
+    const forums: { id: string; filter: string }[] = [];
+    deleting(() => {
+      dropChannels("repo = ?", repo);
+      // Alert lines stand in the alert place (`ALERTS`), not in the repo's channels.
+      const lines = "SELECT id FROM messages WHERE alert IN (SELECT id FROM alerts WHERE repo = ?)";
+      db.prepare(`DELETE FROM reactions WHERE message IN (${lines})`).run(repo);
+      db.prepare(`DELETE FROM messages WHERE id IN (${lines})`).run(repo);
+      for (const table of tablesWith("repo"))
+        db.prepare(`DELETE FROM ${table} WHERE repo = ?`).run(repo);
+      db.prepare("DELETE FROM repos WHERE name = ?").run(repo);
+      db.prepare("DELETE FROM settings WHERE key = ?").run(`check ${repo}`);
+      db.prepare("DELETE FROM repo_moves WHERE old = ? OR new = ?").run(repo, repo);
+      for (const forum of db
+        .prepare("SELECT id, filter FROM channels WHERE kind = 'forum' AND workspace = ?")
+        .all(ownerOf(repo)) as { id: string; filter: string | null }[]) {
+        const filter = JSON.parse(forum.filter ?? "{}") as { repos?: string[] };
+        if (!filter.repos?.includes(repo)) continue;
+        filter.repos = filter.repos.filter((r) => r !== repo);
+        if (!filter.repos.length) delete filter.repos;
+        const next = JSON.stringify(filter);
+        db.prepare("UPDATE channels SET filter = ? WHERE id = ?").run(next, forum.id);
+        forums.push({ id: forum.id, filter: next });
+      }
+    });
+    return forums;
+  };
   /**
    * Moves everything of repo `from`, which moved or was renamed on GitHub, under the new name `to` (ADR-0043). Every table with a `repo` column,
    * the repo's channels (to that workspace if it went to another account), the filters of forums in the same workspace, check commands, and connected runners and webs.
@@ -1358,13 +1432,7 @@ export async function startServer(options: {
       );
       return false;
     }
-    const tables = (
-      db
-        .prepare(
-          "SELECT m.name FROM sqlite_master m JOIN pragma_table_info(m.name) p WHERE m.type = 'table' AND p.name = 'repo'",
-        )
-        .all() as { name: string }[]
-    ).map((row) => row.name);
+    const tables = tablesWith("repo");
     db.exec("BEGIN");
     try {
       db.prepare("UPDATE repos SET name = ? WHERE name = ?").run(to, from);
@@ -3391,8 +3459,13 @@ export async function startServer(options: {
     };
   });
 
-  /** Adds or removes a repo. `forbidden` unless they're a GitHub Admin of that repo. */
-  const mustAdmin = async (login: string, token: string, repo: string) => {
+  /** Adds or removes a repo, or deletes a workspace. `forbidden` unless they're a GitHub Admin of that repo. */
+  const mustAdmin = async (
+    login: string,
+    token: string,
+    repo: string,
+    what = "add or remove it",
+  ) => {
     const admin = await github.canAdmin(token, repo);
     if (admin === undefined)
       throw new ContractFailure({
@@ -3402,7 +3475,7 @@ export async function startServer(options: {
     if (!admin)
       throw new ContractFailure({
         code: "forbidden",
-        message: `${login} isn't an Admin of ${repo}, so they can't add or remove it`,
+        message: `${login} isn't an Admin of ${repo}, so they can't ${what}`,
       });
   };
 
@@ -3478,23 +3551,123 @@ export async function startServer(options: {
     if (!found || !sees(login, found.name))
       throw new ContractFailure({ code: "not_found", message: `No such repo: ${repo}` });
     await mustAdmin(login, callerToken(c), found.name);
-    // That repo's stuff isn't deleted. It comes back if the repo is added again.
-    db.prepare("DELETE FROM repos WHERE name = ?").run(found.name);
-    db.prepare("DELETE FROM access WHERE repo = ?").run(found.name);
-    for (const [socket, runner] of runners)
-      if (runner.repo === found.name)
-        refuse(socket, {
-          code: "forbidden",
-          message: `${found.name} was removed from the workspace`,
-        });
-    for (const [socket, watcher] of watchers)
-      if (watcher.repo === found.name)
-        refuse(socket, {
-          code: "forbidden",
-          message: `${found.name} was removed from the workspace`,
-        });
-    shareSituation();
+    removeRepos([found.name], `${found.name} was removed from the workspace`);
     return { repos: reposOf(login) };
+  });
+
+  /**
+   * Drops the runners and webs `which` picks with `error`. They're taken off the lists first, so closing doesn't write anything back
+   * (a dropped runner would otherwise leave an offline row behind).
+   */
+  const dropSockets = (
+    which: (connection: { login: string; repo: string }) => boolean,
+    error: ContractError,
+  ) => {
+    for (const [socket, runner] of runners)
+      if (which(runner)) {
+        runners.delete(socket);
+        reports.delete(socket);
+        refuse(socket, error);
+      }
+    for (const [socket, watcher] of watchers)
+      if (which(watcher)) {
+        watchers.delete(socket);
+        refuse(socket, error);
+      }
+  };
+
+  /** Deletes the repos' data (ADR-0054) and tells the webs still open in the workspace. */
+  const removeRepos = (repos: string[], message: string) => {
+    dropSockets((connection) => repos.includes(connection.repo), { code: "forbidden", message });
+    for (const repo of repos) {
+      const channels = (
+        db.prepare("SELECT id FROM channels WHERE repo = ? AND alert IS NULL").all(repo) as {
+          id: string;
+        }[]
+      ).map((row) => row.id);
+      const forums = deleteRepoData(repo);
+      const frames = channels.map((id) => encode(serverToWeb, "forumDeleted", { id }));
+      for (const [socket, watcher] of watchers)
+        if (watcher.workspace === ownerOf(repo) && open(socket, watcher))
+          for (const frame of frames) socket.send(frame);
+      for (const forum of forums)
+        broadcastChannel(ownerOf(repo), {
+          ...(db
+            .prepare("SELECT id, name, kind, filter, repo FROM channels WHERE id = ?")
+            .get(forum.id) as Parameters<typeof channelView>[0]),
+        });
+    }
+    shareSituation();
+    shareMembers();
+  };
+
+  mount(app, api.deleteWorkspace, async ({ workspace }, c) => {
+    const login = c.get("login") as string;
+    const id = workspace.toLowerCase();
+    const repos = allRepos().filter((repo) => ownerOf(repo) === id);
+    // A workspace you aren't in gets the same answer as one that doesn't exist.
+    if (!repos.some((repo) => sees(login, repo)))
+      throw new ContractFailure({ code: "not_found", message: `No such workspace: ${workspace}` });
+    const token = callerToken(c);
+    await Promise.all(repos.map((repo) => mustAdmin(login, token, repo, "delete the workspace")));
+    const message = `The ${workspace} workspace was deleted`;
+    dropSockets((connection) => ownerOf(connection.repo) === id, { code: "forbidden", message });
+    removeRepos(repos, message);
+    deleting(() => {
+      dropChannels("workspace = ?", id);
+      for (const table of ["visits", "merge_runs"])
+        db.prepare(`DELETE FROM ${table} WHERE workspace = ?`).run(id);
+      db.prepare("DELETE FROM workspaces WHERE id = ?").run(id);
+    });
+    return {};
+  });
+
+  /** Tables whose rows of a deleted person stay under a stand-in login (ADR-0054). Rows in every other table with a `login` are deleted. */
+  const KEPT_AFTER_DELETE = [
+    "messages",
+    "qas",
+    "decisions",
+    "agreements",
+    "objections",
+    "seats",
+    "debate_requests",
+  ];
+
+  mount(app, api.deleteAccount, (_, c) => {
+    const login = c.get("login") as string;
+    const repos = reposOf(login);
+    const stand = `~${randomBytes(4).toString("hex")}`;
+    dropSockets((connection) => connection.login === login, {
+      code: "unauthorized",
+      message: "This account was deleted",
+    });
+    deleting(() => {
+      // A DM is only theirs. Questions others sent them, and their claims in the feed, go too.
+      db.prepare("DELETE FROM qas WHERE login = ? AND visibility = 'private'").run(login);
+      db.prepare("DELETE FROM questions WHERE target = ?").run(login);
+      db.prepare("DELETE FROM feed WHERE json_extract(claim, '$.login') = ?").run(login);
+      for (const table of tablesWith("login")) {
+        if (KEPT_AFTER_DELETE.includes(table))
+          db.prepare(`UPDATE OR IGNORE ${table} SET login = ? WHERE login = ?`).run(stand, login);
+        db.prepare(`DELETE FROM ${table} WHERE login = ?`).run(login);
+      }
+      db.prepare("UPDATE seats SET proxy = ? WHERE proxy = ?").run(stand, login);
+      db.prepare("UPDATE debates SET chooser = ? WHERE chooser = ?").run(stand, login);
+      // The login inside JSON: an alert's works, and a decision's deciders and absentees. Written by JSON.stringify, so the quoted forms match exactly.
+      db.prepare("UPDATE alerts SET works = replace(works, ?, ?)").run(
+        `"login":${JSON.stringify(login)}`,
+        `"login":${JSON.stringify(stand)}`,
+      );
+      for (const column of ["deciders", "absent"])
+        db.prepare(`UPDATE decisions SET ${column} = replace(${column}, ?, ?)`).run(
+          JSON.stringify(login),
+          JSON.stringify(stand),
+        );
+    });
+    for (const repo of repos) reconcile(repo);
+    shareSituation();
+    shareMembers();
+    return {};
   });
 
   mount(app, api.accounts, () => ({ accounts: [...accounts].sort() }));

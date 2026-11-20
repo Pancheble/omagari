@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** Contract version. Sent in every envelope; a different one is rejected. Bump it on every breaking change. */
-export const CONTRACT_VERSION = 65;
+export const CONTRACT_VERSION = 66;
 
 /**
  * The server's limits (ADR-0052). Each is a setting, and unset means no limit. `requests` is per person a minute, `repos` and `storage` (megabytes)
@@ -171,6 +171,12 @@ export type WorkView = z.infer<typeof WorkView>;
 
 /** Max length of the status line an agent writes. Newlines and repeated spaces fold into one space. */
 export const MAX_STATUS_CHARS = 200;
+
+/**
+ * A member who deleted their account (ADR-0054). Their messages, Q&As, and decisions stay under a stand-in login that starts with `~`,
+ * which a GitHub login can't, one per deleted person. The web shows it as a deleted member.
+ */
+export const isDeletedMember = (login: string) => login.startsWith("~");
 
 /** The executor that runs agent sessions. An agent is an owner-executor pair, so there is one per executor (ADR-0015). */
 export const ExecutorId = z.enum(["claude-code", "codex"]);
@@ -1908,7 +1914,10 @@ export const api = {
       install: z.string().optional(),
     }),
   },
-  /** Removes a repo from the workspace. Like adding, only that repo's GitHub Admin can do it. Its data isn't deleted and comes back if you add it again. */
+  /**
+   * Removes a repo from the workspace and deletes its data (ADR-0054): works, alerts, posts and their messages, labels, decisions, check commands, and repo channels.
+   * Like adding, only that repo's GitHub Admin can do it. Adding it again starts empty.
+   */
   removeRepo: {
     method: "POST",
     path: "/api/repos/remove",
@@ -1933,6 +1942,25 @@ export const api = {
     path: "/api/share",
     body: z.strictObject({ on: z.boolean() }),
     response: z.strictObject({ repo: z.string(), shared: z.boolean() }),
+  },
+  /**
+   * Deletes the workspace `id` and everything in it (ADR-0054): every repo's data as in `removeRepo`, workspace channels and forums, and metrics.
+   * Only a GitHub Admin of every repo in it can (`forbidden`). A workspace the caller isn't in is `not_found`.
+   */
+  deleteWorkspace: {
+    method: "POST",
+    path: "/api/workspaces/delete",
+    body: z.strictObject({ workspace: z.string() }),
+    response: z.strictObject({}),
+  },
+  /**
+   * Deletes the caller's account (ADR-0054): every session and GitHub token, profile, presence, works, claims, settings, and private DMs.
+   * Messages, public Q&As, and decisions stay under a stand-in login (`isDeletedMember`). Every runner and web of this person drops.
+   */
+  deleteAccount: {
+    method: "POST",
+    path: "/api/account/delete",
+    response: z.strictObject({}),
   },
   /** Ends this session. Other sessions of the same member (other browsers, the CLI, and the runner) stay as they are. */
   logout: {

@@ -55,6 +55,11 @@ function App() {
           call(server(session), api.me),
           call(server(session), api.workspaces),
         ]);
+        // No workspace left (the last one was deleted): back to the sign-in screen.
+        if (!workspaces.length) {
+          saveSession(undefined);
+          return setState({ kind: "out" });
+        }
         saveSession(session);
         // Enter the workspace seen last time. If it's gone, the first one.
         const saved = remembered(WORKSPACE_KEY);
@@ -133,6 +138,7 @@ function App() {
       }
       onLogout={logout}
       onSignedOut={expire}
+      onReload={() => void enter(session)}
     />
   );
 }

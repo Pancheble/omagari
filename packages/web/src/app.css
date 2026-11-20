@@ -6484,3 +6484,21 @@ button.person {
     margin-left: auto;
   }
 }
+
+/* Delete confirmation (ADR-0054): "Delete" sits at the right, after Cancel. */
+.confirm-delete .dialog-actions .button.danger {
+  margin-right: 0;
+}
+
+.confirm-delete .field code {
+  font-weight: 600;
+}
+
+.confirm-delete .button.danger:disabled {
+  background: var(--chip);
+  color: var(--text-secondary);
+}
+
+.confirm-delete .dialog-lead {
+  margin-top: 12px;
+}
