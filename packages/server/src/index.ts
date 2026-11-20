@@ -1,5 +1,6 @@
-import { createHash, randomBytes, randomInt } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomInt } from "node:crypto";
 import { once } from "node:events";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { relative } from "node:path";
 import { basename } from "node:path/posix";
@@ -145,6 +146,41 @@ const dropContent = (file: ObservedFile): ObservedFile =>
       ? { path: file.path, deleted: true }
       : file;
 const hash = (session: string) => createHash("sha256").update(session).digest("hex");
+
+const TOKEN_PREFIX = "enc1:";
+const isEncrypted = (text: string) => text.startsWith(TOKEN_PREFIX);
+/** The key that encrypts GitHub tokens: the setting, else a key file next to the database (made on first start), else a throwaway one for a memory database. */
+const tokenKeyFor = (setting: string | undefined, database: string | undefined) => {
+  if (setting) return createHash("sha256").update(setting).digest();
+  if (!database || database === ":memory:") return randomBytes(32);
+  const file = `${database}.key`;
+  if (!existsSync(file)) {
+    writeFileSync(file, randomBytes(32).toString("hex"), { mode: 0o600 });
+    console.log(
+      `Made ${file}, the key that encrypts GitHub tokens. Keep it with the database. Set OMAGARI_TOKEN_KEY to use your own`,
+    );
+  }
+  return createHash("sha256").update(readFileSync(file, "utf8").trim()).digest();
+};
+/** AES-256-GCM. The stored text is the prefix, then nonce, tag, and ciphertext (base64). */
+const encryptToken = (key: Buffer, plain: string) => {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const body = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
+  return TOKEN_PREFIX + Buffer.concat([iv, cipher.getAuthTag(), body]).toString("base64");
+};
+/** The plain token, or null if it isn't encrypted text or the key is wrong. */
+const decryptToken = (key: Buffer, text: string) => {
+  if (!isEncrypted(text)) return null;
+  try {
+    const raw = Buffer.from(text.slice(TOKEN_PREFIX.length), "base64");
+    const decipher = createDecipheriv("aes-256-gcm", key, raw.subarray(0, 12));
+    decipher.setAuthTag(raw.subarray(12, 28));
+    return Buffer.concat([decipher.update(raw.subarray(28)), decipher.final()]).toString("utf8");
+  } catch {
+    return null;
+  }
+};
 const bearer = (authorization?: string) => authorization?.match(/^Bearer (\S+)$/)?.[1];
 
 /** Reads Q&As. Append WHERE and ORDER BY. */
@@ -543,6 +579,11 @@ export async function startServer(options: {
   giphy?: Giphy;
   /** SQLite file. If not given, it lives in memory and is lost when the server stops. */
   database?: string;
+  /**
+   * Secret that encrypts GitHub tokens in the database (`OMAGARI_TOKEN_KEY`, ADR-0053). Any long random string.
+   * If not given, the key lives in a file next to the database (made on first start), or in memory for a memory database.
+   */
+  tokenKey?: string;
   port?: number;
   /** Address to listen on. By default it listens only on this machine. Give something like "0.0.0.0" only to open it outside. */
   hostname?: string;
@@ -592,11 +633,12 @@ export async function startServer(options: {
    * If GitHub rejects the refresh token, the session ends and the person signs in again. If the refresh fails, the old token goes on,
    * and GitHub's answer to it is what callers already handle for a token that stopped working.
    */
-  // ponytail: looks the session up by the plain token. When tokens are encrypted (#382), look it up by a hash of the token instead.
   const fresh = (token: string) => {
     const row = db
-      .prepare("SELECT hash, refresh_token, expires_at FROM sessions WHERE github_token = ?")
-      .get(token) as
+      .prepare(
+        "SELECT hash, dec(refresh_token) AS refresh_token, expires_at FROM sessions WHERE token_hash = ?",
+      )
+      .get(hash(token)) as
       | { hash: string; refresh_token: string | null; expires_at: number | null }
       | undefined;
     if (!row?.refresh_token || (row.expires_at ?? 0) > Date.now() + REFRESH_AHEAD_MS) return token;
@@ -617,8 +659,14 @@ export async function startServer(options: {
           return token;
         }
         db.prepare(
-          "UPDATE sessions SET github_token = ?, refresh_token = ?, expires_at = ? WHERE hash = ?",
-        ).run(got.token, got.refreshToken, Date.now() + got.expiresInMs, session);
+          "UPDATE sessions SET github_token = ?, token_hash = ?, refresh_token = ?, expires_at = ? WHERE hash = ?",
+        ).run(
+          enc(got.token),
+          hash(got.token),
+          enc(got.refreshToken),
+          Date.now() + got.expiresInMs,
+          session,
+        );
         return got.token;
       })().finally(() => refreshing.delete(session));
       refreshing.set(session, pending);
@@ -654,6 +702,34 @@ export async function startServer(options: {
   if (!db.prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'refresh_token'").get())
     db.exec(`ALTER TABLE sessions ADD COLUMN refresh_token TEXT;
       ALTER TABLE sessions ADD COLUMN expires_at INTEGER`);
+  // GitHub tokens are encrypted at rest (ADR-0053). `token_hash` finds a session by its token, since the encrypted text differs each time.
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'token_hash'").get())
+    db.exec("ALTER TABLE sessions ADD COLUMN token_hash TEXT");
+  db.exec("CREATE INDEX IF NOT EXISTS sessions_token ON sessions (token_hash)");
+  const tokenKey = tokenKeyFor(options.tokenKey, options.database);
+  const enc = (plain: string) => encryptToken(tokenKey, plain);
+  const dec = (text: unknown) => decryptToken(tokenKey, String(text));
+  db.function("dec", { deterministic: true }, (text) => (text === null ? null : dec(text)));
+  // Encrypt tokens an older server left in plain text. A token that doesn't open with this key (the key changed) ends its session: the person signs in again.
+  for (const row of db.prepare("SELECT hash, github_token, refresh_token FROM sessions").all() as {
+    hash: string;
+    github_token: string;
+    refresh_token: string | null;
+  }[]) {
+    if (isEncrypted(row.github_token)) {
+      if (decryptToken(tokenKey, row.github_token) === null)
+        db.prepare("DELETE FROM sessions WHERE hash = ?").run(row.hash);
+      continue;
+    }
+    db.prepare(
+      "UPDATE sessions SET github_token = ?, token_hash = ?, refresh_token = ? WHERE hash = ?",
+    ).run(
+      enc(row.github_token),
+      hash(row.github_token),
+      row.refresh_token === null ? null : enc(row.refresh_token),
+      row.hash,
+    );
+  }
   // Each member's GitHub profile name. Rewritten at every login.
   db.exec(`CREATE TABLE IF NOT EXISTS people (
     login TEXT PRIMARY KEY,
@@ -3248,12 +3324,13 @@ export async function startServer(options: {
     }
     const session = randomBytes(32).toString("hex");
     db.prepare(
-      "INSERT INTO sessions (hash, login, github_token, refresh_token, expires_at) VALUES (?, ?, ?, ?, ?)",
+      "INSERT INTO sessions (hash, login, github_token, token_hash, refresh_token, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
     ).run(
       hash(session),
       login,
-      polled.token,
-      polled.refreshToken ?? null,
+      enc(polled.token),
+      hash(polled.token),
+      polled.refreshToken === undefined ? null : enc(polled.refreshToken),
       polled.expiresInMs === undefined ? null : Date.now() + polled.expiresInMs,
     );
     db.prepare(
@@ -3360,7 +3437,7 @@ export async function startServer(options: {
     await Promise.all(
       (
         db
-          .prepare("SELECT login, MAX(github_token) AS token FROM sessions GROUP BY login")
+          .prepare("SELECT login, dec(MAX(github_token)) AS token FROM sessions GROUP BY login")
           .all() as {
           login: string;
           token: string;
@@ -4177,7 +4254,9 @@ export async function startServer(options: {
     merging.add(id);
     try {
       const session = db
-        .prepare("SELECT github_token FROM sessions WHERE login = ? ORDER BY rowid DESC")
+        .prepare(
+          "SELECT dec(github_token) AS github_token FROM sessions WHERE login = ? ORDER BY rowid DESC",
+        )
         .get(decision.login) as { github_token: string } | undefined;
       const merged = session
         ? await github
@@ -4239,7 +4318,7 @@ export async function startServer(options: {
   const callerToken = (c: { req: { header(name: string): string | undefined } }) =>
     (
       db
-        .prepare("SELECT github_token FROM sessions WHERE hash = ?")
+        .prepare("SELECT dec(github_token) AS github_token FROM sessions WHERE hash = ?")
         .get(hash(bearer(c.req.header("authorization")) as string)) as { github_token: string }
     ).github_token;
 
@@ -5376,7 +5455,9 @@ export async function startServer(options: {
     if (checking) return;
     checking = true;
     try {
-      const rows = db.prepare("SELECT hash, login, github_token FROM sessions").all() as {
+      const rows = db
+        .prepare("SELECT hash, login, dec(github_token) AS github_token FROM sessions")
+        .all() as {
         hash: string;
         login: string;
         github_token: string;
@@ -5446,7 +5527,7 @@ export async function startServer(options: {
     (
       db
         .prepare(
-          "SELECT github_token FROM sessions WHERE login IN (SELECT login FROM access WHERE repo = ?) ORDER BY rowid DESC",
+          "SELECT dec(github_token) AS github_token FROM sessions WHERE login IN (SELECT login FROM access WHERE repo = ?) ORDER BY rowid DESC",
         )
         .all(repo) as { github_token: string }[]
     ).map((session) => session.github_token);
@@ -5454,7 +5535,9 @@ export async function startServer(options: {
   const tokenOf = (login: string) =>
     (
       db
-        .prepare("SELECT github_token FROM sessions WHERE login = ? ORDER BY rowid DESC")
+        .prepare(
+          "SELECT dec(github_token) AS github_token FROM sessions WHERE login = ? ORDER BY rowid DESC",
+        )
         .get(login) as { github_token: string } | undefined
     )?.github_token;
 
@@ -6101,7 +6184,7 @@ export async function startServer(options: {
 
       const branches = db
         .prepare(
-          `SELECT w.repo, w.branch, MAX(s.github_token) AS token
+          `SELECT w.repo, w.branch, dec(MAX(s.github_token)) AS token
            FROM (SELECT repo, login, branch FROM works UNION SELECT repo, login, branch FROM claims) w
            JOIN sessions s ON s.login = w.login
            JOIN access a ON a.login = w.login AND a.repo = w.repo
@@ -6141,8 +6224,8 @@ export async function startServer(options: {
       const open = db
         .prepare(
           `SELECT d.id, d.pull, c.repo, COALESCE(
-             (SELECT github_token FROM sessions WHERE login = d.login),
-             (SELECT github_token FROM sessions WHERE login IN (SELECT login FROM access WHERE repo = c.repo))) AS token
+             (SELECT dec(github_token) AS github_token FROM sessions WHERE login = d.login),
+             (SELECT dec(github_token) AS github_token FROM sessions WHERE login IN (SELECT login FROM access WHERE repo = c.repo))) AS token
            FROM decisions d JOIN channels c ON c.id = d.post
            WHERE d.state = 'proposed' AND c.repo IN (SELECT name FROM repos)`,
         )
