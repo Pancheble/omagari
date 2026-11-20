@@ -10,20 +10,20 @@ Running example used in every question: Jisu's team of three works in the privat
 
 @Pancheble decided Q1–Q12 on 2026-11-20. The PRD is the body of #342.
 
-| #   | Decided                                                                                                                                       | Recorded in        |
-| --- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
-| Q1  | The hosted server signs in through a GitHub App, installed on chosen repos. Tokens are encrypted at rest. Self-hosted servers can keep an OAuth app | ADR-0053           |
-| Q2  | Teams request access in the web, and the operator approves them. No redeploy                                                                  | ADR-0052           |
-| Q3  | During the beta the hosted server is the dogfood server (Fly, follows `dev`, runners on npm `next`)                                           | ADR-0052           |
-| Q4  | The default share level stays `full`, and sharing a repo says plainly where the content goes                                                  | ADR-0054           |
-| Q5  | An agent drafts the privacy policy and terms (English and Korean); @Pancheble reads, edits, and publishes them                                | ADR-0054           |
-| Q6  | Self-serve deletion for repos, workspaces, and accounts; changed-file content and patches are dropped by themselves                           | ADR-0054           |
-| Q7  | Free, with GitHub Sponsors. No paid plans or payments in stage 7                                                                              | ADR-0052           |
-| Q8  | Buy a domain                                                                                                                                  | ADR-0052           |
-| Q9  | Apply for a GIPHY production key; limits per person and per workspace, which a self-hosted server can leave off                               | ADR-0052           |
-| Q10 | Continuous backup with Litestream, a monthly restore drill in CI, an Upptime status page, and a written incident plan                         | ADR-0055           |
-| Q11 | The privacy policy names the operator by real name, with a contact address on the domain                                                      | ADR-0054           |
-| Q12 | The domain is `omagari.org` (@Pancheble's pick)                                                                                               | ADR-0052           |
+| #   | Decided                                                                                                                                             | Recorded in |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| Q1  | The hosted server signs in through a GitHub App, installed on chosen repos. Tokens are encrypted at rest. Self-hosted servers can keep an OAuth app | ADR-0053    |
+| Q2  | Teams request access in the web, and the operator approves them. No redeploy                                                                        | ADR-0052    |
+| Q3  | During the beta the hosted server is the dogfood server (Fly, follows `dev`, runners on npm `next`)                                                 | ADR-0052    |
+| Q4  | The default share level stays `full`, and sharing a repo says plainly where the content goes                                                        | ADR-0054    |
+| Q5  | An agent drafts the privacy policy and terms (English and Korean); @Pancheble reads, edits, and publishes them                                      | ADR-0054    |
+| Q6  | Self-serve deletion for repos, workspaces, and accounts; changed-file content and patches are dropped by themselves                                 | ADR-0054    |
+| Q7  | Free, with GitHub Sponsors. No paid plans or payments in stage 7                                                                                    | ADR-0052    |
+| Q8  | Buy a domain                                                                                                                                        | ADR-0052    |
+| Q9  | Apply for a GIPHY production key; limits per person and per workspace, which a self-hosted server can leave off                                     | ADR-0052    |
+| Q10 | Continuous backup with Litestream, a monthly restore drill in CI, an Upptime status page, and a written incident plan                               | ADR-0055    |
+| Q11 | The privacy policy names the operator by real name, with a contact address on the domain                                                            | ADR-0054    |
+| Q12 | The domain is `omagari.org` (@Pancheble's pick)                                                                                                     | ADR-0052    |
 
 ## 1. What we asked
 
