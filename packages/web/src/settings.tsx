@@ -1,5 +1,6 @@
 import {
   ANSWERED_DAYS,
+  Appearance,
   api,
   ContractFailure,
   call,
@@ -29,6 +30,7 @@ import { type PostItem, settled } from "./forum.tsx";
 import { LANGUAGE_NAMES, language, setLanguage, t } from "./i18n.ts";
 import { ImportanceBadge, LabelDot, useLabels } from "./labels.tsx";
 import { Mark } from "./members.tsx";
+import { appearance, setAppearance, systemLook, useLook } from "./theme.ts";
 import { Avatar, personName } from "./workspace.tsx";
 
 type Reply = Awaited<ReturnType<typeof call<typeof api.settings>>>;
@@ -116,6 +118,20 @@ export function Settings({
     }
   };
 
+  /** Same as the language: switch first, go back if the server doesn't take it. */
+  const pickAppearance = async (next: Appearance) => {
+    const before = appearance;
+    setAppearance(next);
+    setSaveError(undefined);
+    try {
+      await call(server(session), api.setPrefs, { appearance: next });
+    } catch (error) {
+      check(error);
+      setAppearance(before);
+      setSaveError(t.settings.saveFailed);
+    }
+  };
+
   const items: [Page, string, ReactNode][] = [
     ["agent", t.settings.pages.agent, <Bot key="agent" size={18} aria-hidden />],
     ["language", t.settings.pages.language, <Languages key="language" size={18} aria-hidden />],
@@ -150,8 +166,11 @@ export function Settings({
   } else if (page === "language") {
     // Comes with `api.me`, not the settings read, so it works even when that fails.
     body = <LanguagePage onPick={pickLanguage} />;
-  } else if (page === "appearance" || page === "notifications") {
-    // Placeholders: #312 (dark theme) and #313 (browser notifications) fill them.
+  } else if (page === "appearance") {
+    // Comes with `api.me` too, like the language.
+    body = <AppearancePage onPick={pickAppearance} />;
+  } else if (page === "notifications") {
+    // Placeholder: #313 (browser notifications) fills it.
     body = (
       <div className="settings-section">
         <p>{t.settings[page].soon}</p>
@@ -334,6 +353,57 @@ function LanguagePage({ onPick }: { onPick: (language: Language) => void }) {
         </select>
       </Row>
     </Group>
+  );
+}
+
+/** A small picture of the app in one look: a list panel and a conversation panel drawn with bars. */
+const LookApp = ({ look }: { look: "light" | "dark" }) => (
+  <span className="look-app" data-look={look}>
+    <span className="look-list">
+      <i />
+      <i />
+      <i />
+    </span>
+    <span className="look-talk">
+      <i />
+      <i />
+      <i />
+    </span>
+  </span>
+);
+
+/** Appearance (draft 107-A): three picture cards. "Match system" is cut diagonally, light top left and dark bottom right. */
+function AppearancePage({ onPick }: { onPick: (next: Appearance) => void }) {
+  useLook();
+  const words = t.settings.appearance;
+  return (
+    <div className="settings-section">
+      <h3>{words.title}</h3>
+      <div className="radio-cards look-cards" role="radiogroup" aria-label={words.title}>
+        {Appearance.options.map((id) => (
+          <label key={id} className="radio-card look-card">
+            <span className="look-pic" aria-hidden>
+              {id === "system" ? (
+                <>
+                  <LookApp look="light" />
+                  <LookApp look="dark" />
+                </>
+              ) : (
+                <LookApp look={id} />
+              )}
+            </span>
+            <input
+              type="radio"
+              name="appearance"
+              checked={appearance === id}
+              onChange={() => onPick(id)}
+            />
+            <strong>{words.looks[id]}</strong>
+          </label>
+        ))}
+      </div>
+      <p>{words.note(systemLook())}</p>
+    </div>
   );
 }
 
@@ -677,7 +747,7 @@ function LabelsPage({
           <div className="field">
             <label htmlFor={ids.color}>{words.color}</label>
             <div className="labels-color">
-              <LabelDot color={colorOk ? fields.color : undefined} size={20} />
+              <LabelDot color={colorOk ? fields.color : undefined} size={20} asSet />
               <span className="labels-hex">
                 #
                 <input

@@ -20,6 +20,8 @@ import {
 import { repoName } from "./api.ts";
 import { useMenu } from "./dm.tsx";
 import { t } from "./i18n.ts";
+import { onDark } from "./label-color.ts";
+import { look, useLook } from "./theme.ts";
 
 /** All labels in the repo (ADR-0039). The app shell reads and live-swaps them. Badges read them to find a color. */
 export const LabelsContext = createContext<Label[]>([]);
@@ -27,14 +29,29 @@ export const useLabels = () => useContext(LabelsContext);
 
 const IMPORTANCES: Importance[] = ["discuss", "reference"];
 
-/** A label's color dot (GitHub label color). Unknown labels are gray. */
-export const LabelDot = ({ color, size = 8 }: { color?: string; size?: 8 | 10 | 20 }) => (
-  <span
-    className="label-dot"
-    style={{ width: size, height: size, background: `#${color ?? "c7c7cc"}` }}
-    aria-hidden
-  />
-);
+/**
+ * A label's color dot (GitHub label color). Unknown labels are gray. On the dark screen it gets lighter until it
+ * stands out (`onDark`), except with `asSet`: the label editor's color field shows the color the person set.
+ */
+export function LabelDot({
+  color = "c7c7cc",
+  size = 8,
+  asSet = false,
+}: {
+  color?: string;
+  size?: 8 | 10 | 20;
+  asSet?: boolean;
+}) {
+  useLook();
+  const shown = look() === "dark" && !asSet ? onDark(color) : color;
+  return (
+    <span
+      className="label-dot"
+      style={{ width: size, height: size, background: `#${shown}` }}
+      aria-hidden
+    />
+  );
+}
 
 /** Label badge (app-label-badge): an 8px color dot and the name. */
 export function LabelBadge({ name }: { name: string }) {

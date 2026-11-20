@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** Contract version. Sent in every envelope; a different one is rejected. Bump it on every breaking change. */
-export const CONTRACT_VERSION = 57;
+export const CONTRACT_VERSION = 58;
 
 /** Error shape. Shared by the runner/server `error` message and the HTTP error body (`{ error }`). */
 export const ContractError = z.strictObject({
@@ -484,9 +484,12 @@ export type Language = z.infer<typeof Language>;
  * A member's personal settings, stored on the server so they follow the person across tabs and devices.
  * Language comes first; more keys get added here later.
  */
-export const Prefs = z.strictObject({ language: Language });
+/** Web look (#312). `system` follows the computer's light or dark setting. */
+export const Appearance = z.enum(["light", "dark", "system"]);
+export type Appearance = z.infer<typeof Appearance>;
+export const Prefs = z.strictObject({ language: Language, appearance: Appearance });
 export type Prefs = z.infer<typeof Prefs>;
-export const DEFAULT_PREFS: Prefs = { language: "en" };
+export const DEFAULT_PREFS: Prefs = { language: "en", appearance: "system" };
 export const IMPORTANCE_LABELS = {
   reference: "FYI",
   discuss: "Discuss",
