@@ -25,6 +25,7 @@
 // - A person's name is "name (login)", and only me, Minsu Park, and Seoyeon Lee have a profile photo (a drawn picture) (#288).
 // - DEMO_AS=minsu: logs the browser in as Minsu Park, who is not an Admin (push access only to space in omagari-test, and to code in other-team). There is no add or remove repo.
 //   Going to other's channel address (printed in the console) shows "You can't see this repo". In other-team Minsu Park is alone, so the alone case (mockup 100-A) shows.
+// - DEMO_AS=newcomer: logs the browser in as someone with no workspace, so you see the access request screen (ADR-0052).
 // - GIPHY_API_KEY=<key>: turns on GIFs with the real GIPHY (ADR-0044). If not given, the input has no GIF button.
 //   DEMO_GIPHY=fake: look at the GIF area without a key. Regardless of the search words it gives eight public GIPHY GIFs (the pictures are fetched from GIPHY).
 // - When you quit (Ctrl+C) it deletes the temporary repo and DB. It isn't named *.test.ts so npm test and CI don't run it.
@@ -141,7 +142,25 @@ const executors = {
 };
 // To show merge stalled, delete one member's GitHub token. Delay the permission re-check so it doesn't drop that member.
 // A post's issue (ADR-0032) is read from GitHub every cycle. In the demo, every 2 seconds.
+/** Set once everything is seeded: from then on a device auth is the browser's, approved by itself. */
+let browserLogins = false;
 const world = await startWorld({
+  // The server takes the fake GitHub's functions when it starts, so the auto-approval is plugged in before that.
+  setup: (github) => {
+    const startDevice = github.github.startDevice.bind(github.github);
+    github.github.startDevice = async () => {
+      const device = await startDevice();
+      if (browserLogins)
+        setTimeout(() => {
+          try {
+            github.approve(device.userCode, process.env.DEMO_AS ?? "owner");
+          } catch {
+            // That auth expired in the meantime or has already ended.
+          }
+        }, 1500);
+      return device;
+    };
+  },
   executors,
   observeMs: 200,
   recheckMs: FOREVER,
@@ -153,6 +172,10 @@ const world = await startWorld({
   quietMs: FOREVER,
   // Two workspaces: REPO's account and REPO3's account (ADR-0043).
   accept: [REPO, REPO3],
+  // "me" is the operator, so settings show Server → Access requests (ADR-0052). A request from "jiwoo" is waiting there.
+  operators: ["owner"],
+  terms: "https://omagari-dev.github.io/omagari/terms",
+  privacy: "https://omagari-dev.github.io/omagari/privacy",
   giphy: process.env.GIPHY_API_KEY
     ? realGiphy(process.env.GIPHY_API_KEY)
     : process.env.DEMO_GIPHY === "fake"
@@ -1090,19 +1113,14 @@ if (process.env.DEMO_SETUP === "new") {
   fresh.close();
 }
 
-// Once everything pre-seeded is in, a device auth opened in the browser is approved here as "me" instead of entering the code on GitHub.
-const startDevice = fake.github.startDevice.bind(fake.github);
-fake.github.startDevice = async () => {
-  const device = await startDevice();
-  setTimeout(() => {
-    try {
-      fake.approve(device.userCode, process.env.DEMO_AS ?? "owner");
-    } catch {
-      // That auth expired in the meantime or has already ended.
-    }
-  }, 1500);
-  return device;
-};
+{
+  fake.names.set("jiwoo", "Jiwoo Kang");
+  const jiwoo = await world.login("jiwoo");
+  await call(jiwoo, api.requestAccess, { account: "kang-studio", agree: true });
+}
+
+// Once everything pre-seeded is in, a device auth opened in the browser is approved as "me" instead of entering the code on GitHub (`setup` above).
+browserLogins = true;
 
 const PORT = process.env.DEMO_PORT ?? process.env.PORT ?? "5180";
 const web = spawn("npx", ["vite", "--port", PORT, "--strictPort"], {

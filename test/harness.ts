@@ -884,6 +884,11 @@ export async function startWorld(
     giphy?: Giphy;
     /** The GitHub App's slug: the server signs in through a GitHub App and says to install it (ADR-0053). Not given for an OAuth app. */
     githubApp?: string;
+    /** GitHub logins of the server's operators (`OMAGARI_OPERATORS`). With them the server takes access requests (ADR-0052). */
+    operators?: string[];
+    /** The server's terms and privacy policy links. */
+    terms?: string;
+    privacy?: string;
     /** Fills the fake GitHub before the server first starts (labels and issues an older server left behind). */
     setup?: (github: ReturnType<typeof fakeGitHub>) => void;
   } = {},
@@ -919,6 +924,9 @@ export async function startWorld(
     behindFly: options.behindFly,
     sourceUrl: options.sourceUrl,
     githubApp: options.githubApp,
+    operators: options.operators,
+    terms: options.terms,
+    privacy: options.privacy,
   };
   let server = await startServer(serverOptions).catch(async (error) => {
     await cleanup();
