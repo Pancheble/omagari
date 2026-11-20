@@ -17,7 +17,7 @@
 Omagari is a self-hosted web workspace where people and their AI agents work together. Each teammate's agent (Claude Code or Codex) shows up next to them. You see who's on which branch, and when two pieces of work might break each other, you hear about it before the merge. Then you talk it out right there.
 
 > [!NOTE]
-> Omagari hasn't had its first release yet. Run `main`, and expect things to change. Tell us what you hit in [Issues](https://github.com/omagari-dev/omagari/issues).
+> Omagari hasn't had its first release yet. Until then `npm i -g omagari@next` installs the latest `dev` build, and expect things to change. Tell us what you hit in [Issues](https://github.com/omagari-dev/omagari/issues).
 
 ## Why Omagari
 
@@ -55,37 +55,20 @@ Omagari's way of watching the repo follows Room's behavior. Room is under a nonc
 
 ## Quick start
 
-You need Node.js 24.12 or later, git, Claude Code or Codex signed in on this machine, a GitHub account with push access to the workspace repo, and the address of your team's Omagari server. Nobody has one yet? [Run a server](docs/server.md) first.
+You need Node.js 24.12 or later, Claude Code or Codex signed in on this machine, a GitHub account with push access to the workspace repo, and the address of your team's Omagari server. Nobody has one yet? [Run a server](docs/server.md) first.
 
 ```bash
-git clone --branch main https://github.com/omagari-dev/omagari.git ~/omagari
-cd ~/omagari
-npm ci
-```
-
-Put `omagari` on your PATH and tell it where your server is:
-
-```bash
-mkdir -p ~/.local/bin
-ln -sf "$PWD/packages/cli/src/main.ts" ~/.local/bin/omagari
-export OMAGARI_SERVER=https://<your-team-server>   # also put this in your shell config
-omagari --version
-```
-
-Sign in with GitHub, save the server address, and install the hooks into this machine's agents. Run it once per machine. For Codex, open `/hooks` in Codex and trust the two hooks, or they won't run.
-
-```bash
+npm i -g omagari
 omagari setup https://<your-team-server>
 ```
 
-Start the runner once in the folder where you cloned the workspace repo. That also shares the repo with your team (`omagari share on` does the same without starting a runner). After that, the background runner that `setup` registered starts it at login and whenever an agent session opens there, so you can close the terminal. It never sends anything about repos outside your team's GitHub accounts.
+`setup` signs you in with GitHub, saves the server address, puts the hooks into this machine's agents, and starts a background runner at login. It's once per machine. Using Codex? Open `/hooks` in Codex and trust the two Omagari hooks, or they won't run.
 
-```bash
-cd <your workspace repo folder>
-omagari runner
-```
+Then open an agent session in your workspace repo and share the repo once, with the Share button on the web or `omagari share on` in the repo folder. Until you do, your teammates can't see your work there. After that you don't start anything yourself. The runner watches every repo you've shared. It never sends anything about repos outside your team's GitHub accounts.
 
-Got `command not found`, or need merge runs, updates, or Windows? See [Set up a machine](docs/setup.md).
+The web shows these two lines with your address filled in ("Connect your computer"). You can also paste them to your agent and ask it to run them.
+
+Need merge runs, updates, or Windows (WSL2)? See [Set up a machine](docs/setup.md).
 
 ## How it works
 
@@ -138,7 +121,7 @@ Claude Code and Codex, each on the owner's own login and usage.
 With the default share level (`full`), the content of the files you changed goes to your team's server, so teammates' runners can merge and check it. Pick `declared` (paths only) or `intent` (just your status line) with `omagari runner --share`. The choice is remembered per repo.
 
 **Does it work on Windows?**
-Run the runner inside WSL2 and keep the repo in WSL2 too. See [Set up a machine](docs/setup.md).
+Run it inside WSL2, `omagari setup` included, and keep the repo in WSL2 too. See [Set up a machine](docs/setup.md).
 
 **Can I use it without a team?**
 You can look around the UI with the [demo server](CONTRIBUTING.md#try-the-ui-without-a-team). Omagari is for 2 to 10 people, so alone there isn't much to see.
