@@ -1,0 +1,10 @@
+# 버킷 설정이 있을 때만 docker-entrypoint.sh가 쓴다. ${...}는 Litestream이 환경 변수로 채운다.
+# 키는 LITESTREAM_ACCESS_KEY_ID / LITESTREAM_SECRET_ACCESS_KEY를 Litestream이 직접 읽는다.
+dbs:
+  - path: ${OMAGARI_DB}
+    replica:
+      type: s3
+      bucket: ${LITESTREAM_BUCKET}
+      path: ${LITESTREAM_PATH}
+      endpoint: ${LITESTREAM_ENDPOINT}
+      region: ${LITESTREAM_REGION}

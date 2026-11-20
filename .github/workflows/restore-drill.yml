@@ -1,0 +1,62 @@
+name: Restore drill
+# 한 달에 한 번, 버킷의 최신 복제본을 되살려 서버가 그 위에서 뜨는지 본다(ADR-0055). 실패하면 잡이 실패하고 GitHub가 @Pancheble에게 알린다.
+on:
+  schedule:
+    - cron: "17 3 1 * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # 버킷 키는 dogfood Environment의 비밀값이다(deploy.yml과 같다).
+    environment: dogfood
+    env:
+      LITESTREAM_BUCKET: ${{ secrets.LITESTREAM_BUCKET }}
+      LITESTREAM_ACCESS_KEY_ID: ${{ secrets.LITESTREAM_ACCESS_KEY_ID }}
+      LITESTREAM_SECRET_ACCESS_KEY: ${{ secrets.LITESTREAM_SECRET_ACCESS_KEY }}
+      LITESTREAM_ENDPOINT: ${{ vars.LITESTREAM_ENDPOINT }}
+      LITESTREAM_REGION: ${{ vars.LITESTREAM_REGION || 'auto' }}
+      LITESTREAM_PATH: ${{ vars.LITESTREAM_PATH || 'omagari' }}
+    steps:
+      - name: 돌릴지 정한다
+        run: |
+          if [ -z "$LITESTREAM_BUCKET" ] || [ -z "$LITESTREAM_ACCESS_KEY_ID" ] || [ -z "$LITESTREAM_SECRET_ACCESS_KEY" ]; then
+            echo "LITESTREAM_BUCKET, LITESTREAM_ACCESS_KEY_ID, LITESTREAM_SECRET_ACCESS_KEY 중 없는 것이 있어 복원 연습을 건너뛴다"
+            exit 0
+          fi
+          echo "DRILL=1" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v7
+        if: env.DRILL == '1'
+      - uses: actions/setup-node@v7
+        if: env.DRILL == '1'
+        with:
+          node-version: 24
+      - run: npm ci
+        if: env.DRILL == '1'
+      - name: 최신 복제본을 되살린다
+        if: env.DRILL == '1'
+        run: |
+          # Dockerfile과 같은 버전이다.
+          curl -fsSL https://github.com/benbjohnson/litestream/releases/download/v0.5.18/litestream-0.5.18-linux-x86_64.tar.gz | sudo tar -xz -C /usr/local/bin litestream
+          export OMAGARI_DB="$RUNNER_TEMP/drill.db"
+          # 복제본이 없으면 -if-replica-exists를 주지 않았으니 여기서 실패한다.
+          litestream restore -config litestream.yml -o "$OMAGARI_DB" "$OMAGARI_DB"
+          node -e 'const {DatabaseSync}=require("node:sqlite");const r=new DatabaseSync(process.argv[1]).prepare("PRAGMA integrity_check").get();if(r.integrity_check!=="ok"){console.error(r);process.exit(1)}console.log("integrity_check ok")' "$OMAGARI_DB"
+          echo "OMAGARI_DB=$OMAGARI_DB" >> "$GITHUB_ENV"
+      - name: 그 위에서 서버를 띄워 health를 본다
+        if: env.DRILL == '1'
+        env:
+          OMAGARI_REPO: ${{ vars.OMAGARI_REPO }}
+          GITHUB_CLIENT_ID: drill # 시작에만 필요하고 GitHub에는 닿지 않는다
+          PORT: "18080"
+        run: |
+          node packages/server/src/main.ts &
+          pid=$!
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18080/api/health; then echo; kill $pid; exit 0; fi
+            kill -0 $pid 2>/dev/null || { echo "서버가 죽었다"; exit 1; }
+            sleep 1
+          done
+          echo "health가 30초 안에 답하지 않았다"; kill $pid; exit 1

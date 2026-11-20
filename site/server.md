@@ -39,7 +39,34 @@ fly deploy -a "$FLY_APP" -e OMAGARI_REPO="$OMAGARI_REPO"
 ```
 
 - Secrets only go in through `fly secrets`, never in the repo. `OMAGARI_REPO` isn't secret, so it's passed with `-e` at deploy time. It stays out of `fly.toml` along with the app name so that `fly.toml` only holds values that are the same no matter who deploys (`app` is passed with `-a`, since toml can't read environment variables). On Fly, the server sets `OMAGARI_URL` to `https://<app name>.fly.dev` itself.
-- The database lives on a volume (`/data/omagari.db`), so it survives new versions. Backups are the volume's daily snapshots (`fly volumes snapshots list`, kept 5 days by default).
+- The database lives on a volume (`/data/omagari.db`), so it survives new versions. The volume's daily snapshots (`fly volumes snapshots list`, kept 5 days by default) are one backup; [Litestream](#back-up-with-litestream) is the other.
 - A new version only replaces the old one if it passes the health check (`/api/health`). If it doesn't, the old version stays.
 - Auto deploy: `.github/workflows/deploy.yml` runs `fly deploy` once CI passes on `dev`. It needs a GitHub Environment named `dogfood` that only `dev` can use (Settings → Environments, deployment branches limited to `dev`), with the secret `FLY_API_TOKEN` (`fly tokens create deploy`) and the variables `FLY_APP` and `OMAGARI_REPO`. If any is missing, the deploy step is skipped. It also doesn't deploy when the commit CI ran on is no longer the tip of `dev` (a re-run of an old run).
 - To check the image on your machine: `docker build -t omagari .`, then `docker run -p 8080:8080 -v omagari-data:/data -e OMAGARI_REPO=<owner/name> -e GITHUB_CLIENT_ID=<app> omagari`.
+
+## Back up with Litestream
+
+With bucket settings, the image runs [Litestream](https://litestream.io/) beside the server ([ADR-0055](https://github.com/omagari-dev/omagari/blob/dev/docs/adr/0055-hosted-operations-litestream-upptime-incident-plan.md)). It streams the database to an S3-compatible bucket (Tigris and Cloudflare R2 have free tiers). Without them, the image starts the server exactly as before, so self-hosting needs nothing.
+
+| Setting | Meaning |
+| --- | --- |
+| `LITESTREAM_BUCKET` | Bucket name. Backup turns on only when this and both keys are set. |
+| `LITESTREAM_ACCESS_KEY_ID`, `LITESTREAM_SECRET_ACCESS_KEY` | Bucket keys. Secrets: `fly secrets set ... -a "$FLY_APP"`. |
+| `LITESTREAM_ENDPOINT` | The provider's S3 address. Leave empty for AWS S3. |
+| `LITESTREAM_REGION` | Default `auto`. |
+| `LITESTREAM_PATH` | Folder in the bucket. Default `omagari`. |
+
+On start, if `/data/omagari.db` doesn't exist (a new machine or volume), the image first restores the latest replica. If there's no replica yet, it starts empty.
+
+A monthly job (`.github/workflows/restore-drill.yml`) restores the latest replica, runs an integrity check, starts a server on it, and checks `/api/health`. It runs in the `dogfood` environment with the secrets `LITESTREAM_BUCKET`, `LITESTREAM_ACCESS_KEY_ID`, `LITESTREAM_SECRET_ACCESS_KEY` and the optional variables `LITESTREAM_ENDPOINT`, `LITESTREAM_REGION`, `LITESTREAM_PATH`. If a secret is missing it skips, and if the restore or the check fails the job fails. You can also run it from the Actions tab.
+
+To restore by hand, stop the server, then run [`litestream restore`](https://litestream.io/reference/restore/) with the same settings (`-config litestream.yml` reads them from the environment):
+
+```bash
+export LITESTREAM_BUCKET=... LITESTREAM_ACCESS_KEY_ID=... LITESTREAM_SECRET_ACCESS_KEY=... LITESTREAM_ENDPOINT=... LITESTREAM_REGION=auto LITESTREAM_PATH=omagari
+export OMAGARI_DB=/data/omagari.db
+mv "$OMAGARI_DB" "$OMAGARI_DB.old"          # keep the broken file until the restore works
+litestream restore -config litestream.yml "$OMAGARI_DB"
+```
+
+On Fly, run it in the machine with `fly ssh console -a "$FLY_APP"` (the image has `litestream` and `/app/litestream.yml`; use `-config /etc/litestream.yml`), then restart the machine. To restore to a point in time, add `-timestamp <RFC3339>`.
