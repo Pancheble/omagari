@@ -3659,6 +3659,8 @@ export async function startServer(options: {
     "objections",
     "seats",
     "debate_requests",
+    // An approved request is the operator accepting the account, not the person: it keeps the account accepted after a restart.
+    "access_requests",
   ];
 
   mount(app, api.deleteAccount, (_, c) => {
@@ -3673,6 +3675,7 @@ export async function startServer(options: {
       // A DM is only theirs. Questions others sent them, and their claims in the feed, go too.
       db.prepare("DELETE FROM qas WHERE login = ? AND visibility = 'private'").run(login);
       db.prepare("DELETE FROM questions WHERE target = ?").run(login);
+      db.prepare("DELETE FROM access_requests WHERE login = ? AND state != 'approved'").run(login);
       db.prepare("DELETE FROM feed WHERE json_extract(claim, '$.login') = ?").run(login);
       for (const table of tablesWith("login")) {
         if (KEPT_AFTER_DELETE.includes(table))

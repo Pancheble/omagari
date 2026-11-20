@@ -101,6 +101,26 @@ test("an approved account stays accepted after a restart", async (t) => {
   assert.deepEqual(await call(carol, api.addRepo, { repo: REPO3 }), { repos: [REPO3] });
 });
 
+test("an approved account stays accepted after the person who asked for it deletes their account", async (t) => {
+  const world = await startWorld({ operators: ["owner"] });
+  t.after(world.stop);
+  world.github.grant("carol", REPO3);
+  world.github.admin("frank", REPO3);
+  world.github.grant("frank", REPO3);
+  const carol = await world.login("carol");
+  const { requests } = await call(carol, api.requestAccess, {
+    account: "other-team",
+    agree: false,
+  });
+  await call(world.owner, api.decideAccess, { id: requests[0]?.id as number, approve: true });
+  await call(carol, api.deleteAccount);
+
+  await world.restartServer();
+  // The connection to the stopped server stays broken, so the first request may fail.
+  const frank = await eventually(() => world.login("frank"));
+  assert.deepEqual(await call(frank, api.addRepo, { repo: REPO3 }), { repos: [REPO3] });
+});
+
 test("a denied request shows denied, and asking about an accepted account reveals nothing about it", async (t) => {
   const world = await startWorld({ operators: ["owner"] });
   t.after(world.stop);
