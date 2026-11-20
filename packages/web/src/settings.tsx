@@ -15,6 +15,7 @@ import {
   Bell,
   Bot,
   CircleMinus,
+  ExternalLink,
   GitMerge,
   Info,
   Languages,
@@ -217,7 +218,14 @@ export function Settings({
       />
     );
   } else if (page === "info") {
-    body = <InfoPage workspace={workspace ?? ""} repo={me.repo} version={settings.version} />;
+    body = (
+      <InfoPage
+        workspace={workspace ?? ""}
+        repo={me.repo}
+        version={settings.version}
+        sourceUrl={settings.sourceUrl}
+      />
+    );
   } else {
     body = (
       <MergeCheckGroup
@@ -423,10 +431,12 @@ function InfoPage({
   workspace,
   repo,
   version,
+  sourceUrl,
 }: {
   workspace: string;
   repo: string;
   version: string;
+  sourceUrl: string;
 }) {
   const words = t.settings.info;
   return (
@@ -442,6 +452,12 @@ function InfoPage({
       <Group title={words.server}>
         <Row name={words.version}>
           <code className="settings-value">{version}</code>
+        </Row>
+        <Row name={words.source}>
+          <a className="settings-link" href={sourceUrl} target="_blank" rel="noreferrer">
+            <code className="settings-value">{sourceUrl}</code>{" "}
+            <ExternalLink size={14} aria-hidden />
+          </a>
         </Row>
       </Group>
     </>
