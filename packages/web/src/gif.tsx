@@ -1,7 +1,6 @@
-import type { Gif } from "@omagari/contract";
-import { Search } from "lucide-react";
+import { Play, Search } from "lucide-react";
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
-import { giphyUrl } from "./giphy.ts";
+import type { Gif } from "./giphy.ts";
 import { t } from "./i18n.ts";
 
 /** Search once typing pauses this long. */
@@ -21,7 +20,7 @@ function columns(gifs: Gif[]) {
 
 /**
  * The GIF picker (DESIGN.md "GIF", mockup 102-A): a search field, a two-column staggered grid, and a "Powered by GIPHY" line.
- * Search goes through the server (`search`). Empty means trending GIFs. Picking calls `onPick`, and Esc calls `onClose`.
+ * Search asks GIPHY from the browser (`search`). Empty means trending GIFs. Picking calls `onPick`, and Esc calls `onClose`.
  */
 export function GifPicker({
   search,
@@ -120,7 +119,7 @@ export function GifPicker({
                   onClick={() => onPick(gif)}
                   onKeyDown={(event) => onGridKey(event, c, r)}
                 >
-                  <img src={gif.url} alt="" loading="lazy" referrerPolicy="no-referrer" />
+                  <img src={gif.preview} alt="" loading="lazy" referrerPolicy="no-referrer" />
                 </button>
               ))}
             </div>
@@ -199,29 +198,30 @@ export function GifButton({
 }
 
 /**
- * A GIF in a message: a picture instead of the URL. The browser fetches it straight from GIPHY (the sender's URL isn't included).
- * For people with reduced motion on, it shows the still first frame, and pressing it plays.
+ * A GIF in a message: a picture instead of the URL. The browser fetches `src` straight from GIPHY, exactly as written (ADR-0056; the sender's URL isn't included).
+ * For people with reduced motion on, nothing loads until they press play: a still frame would mean changing GIPHY's URL.
  */
-export function MessageGif({ id }: { id: string }) {
+export function MessageGif({ src }: { src: string }) {
   const [play, setPlay] = useState(() => !matchMedia("(prefers-reduced-motion: reduce)").matches);
-  const image = (
-    <>
-      <img src={giphyUrl(id, !play)} alt="GIF" referrerPolicy="no-referrer" />
-      <span className="gif-tag" aria-hidden>
-        GIF
-      </span>
-    </>
+  const tag = (
+    <span className="gif-tag" aria-hidden>
+      GIF
+    </span>
   );
   return play ? (
-    <span className="message-gif">{image}</span>
+    <span className="message-gif">
+      <img src={src} alt="GIF" referrerPolicy="no-referrer" />
+      {tag}
+    </span>
   ) : (
     <button
       type="button"
-      className="message-gif"
+      className="message-gif message-gif-paused"
       aria-label={t.profile.gif.play}
       onClick={() => setPlay(true)}
     >
-      {image}
+      <Play size={24} aria-hidden />
+      {tag}
     </button>
   );
 }

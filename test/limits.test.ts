@@ -1,10 +1,9 @@
-// The server's limits (ADR-0052): requests per person a minute, repos, stored size, and GIF searches an hour per workspace.
+// The server's limits (ADR-0052): requests per person a minute, repos, and stored size per workspace.
 // Each hit is one error shape (`limited` with the limit's name and number) that the web and CLI turn into a sentence.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { api, type ContractFailure, call } from "@omagari/contract";
-import { realGiphy } from "@omagari/server";
-import { fakeGiphy, REPO, REPO2, REPO3, startWorld } from "./harness.ts";
+import { REPO, REPO2, REPO3, startWorld } from "./harness.ts";
 
 const A = "omagari-test";
 const B = "other-team";
@@ -12,14 +11,12 @@ const hit = (name: string, max: number) => (error: ContractFailure) =>
   error.code === "limited" && error.limit?.name === name && error.limit.max === max;
 
 test("with no limit settings, nothing is limited", async (t) => {
-  const giphy = await fakeGiphy(t);
-  const world = await startWorld({ giphy: realGiphy("key", { base: giphy.url }) });
+  const world = await startWorld();
   t.after(world.stop);
   world.github.admin("owner", REPO2);
   world.github.grant("owner", REPO2);
 
   for (let i = 0; i < 30; i++) await call(world.owner, api.me);
-  for (let i = 0; i < 5; i++) await call(world.owner, api.gifs, { query: `${i}` });
   await call(world.owner, api.addRepo, { repo: REPO2 });
   const { channel } = await call(world.owner, api.createChannel, { name: "general" });
   await call(world.owner, api.send, { channel: channel.id, text: "x".repeat(4000) });
@@ -74,24 +71,4 @@ test("a workspace over its stored size can't write more, and another workspace s
   await call(inA, api.send, { channel: a, text: "가".repeat(4000) }); // 12 KB: the size is in bytes
   await assert.rejects(call(inA, api.send, { channel: a, text: "hi" }), hit("storage", 0.01));
   await call(inB, api.send, { channel: b, text: "hi" });
-});
-
-test("one workspace's GIF searches don't use up another's", async (t) => {
-  const giphy = await fakeGiphy(t);
-  const world = await startWorld({
-    accept: [REPO, REPO3],
-    giphy: realGiphy("key", { base: giphy.url }),
-    limits: { gifs: 2 },
-  });
-  t.after(world.stop);
-  world.github.grant("owner", REPO3);
-  const owner = await world.login("owner"); // signs in again so the server reads the new access
-  const inA = { ...owner, workspace: A };
-  const inB = { ...owner, workspace: B };
-
-  await call(inA, api.gifs, { query: "a" });
-  await call(inA, api.gifs, { query: "b" });
-  await assert.rejects(call(inA, api.gifs, { query: "c" }), hit("gifs", 2));
-  await call(inB, api.gifs, { query: "d" });
-  assert.equal(giphy.asked.length, 3); // the refused one never reached GIPHY
 });

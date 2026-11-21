@@ -26,9 +26,7 @@
 // - DEMO_AS=minsu: logs the browser in as Minsu Park, who is not an Admin (push access only to space in omagari-test, and to code in other-team). There is no add or remove repo.
 //   Going to other's channel address (printed in the console) shows "You can't see this repo". In other-team Minsu Park is alone, so the alone case (mockup 100-A) shows.
 // - DEMO_AS=newcomer: logs the browser in as someone with no workspace, so you see the access request screen (ADR-0052).
-// - GIPHY_API_KEY=<key>: turns on GIFs with the real GIPHY (ADR-0044). If not given, the input has no GIF button.
-//   DEMO_LIMIT_GIFS=<n>: n GIF searches per workspace an hour, to see the limit banner (ADR-0052).
-//   DEMO_GIPHY=fake: look at the GIF area without a key. Regardless of the search words it gives eight public GIPHY GIFs (the pictures are fetched from GIPHY).
+// - GIPHY_API_KEY=<key>: turns on GIFs; the browser asks the real GIPHY with it (ADR-0056). If not given, the input has no GIF button.
 // - When you quit (Ctrl+C) it deletes the temporary repo and DB. It isn't named *.test.ts so npm test and CI don't run it.
 // - A fake GitHub issue is opened for each post and the text goes there as comments. The post "Minsu Park · Hajun Choi" receives comments made on GitHub and the changed title and labels.
 // - It ends with GitHub merging blocked (to show "merge blocked"). After that every merge Omagari does is blocked.
@@ -50,7 +48,6 @@ import {
   serverToRunner,
 } from "@omagari/contract";
 import { claudeCode, codex, codexReady, type Executor } from "@omagari/runner";
-import { realGiphy } from "@omagari/server";
 import {
   eventually,
   fakeExecutor,
@@ -63,26 +60,6 @@ import {
 } from "./harness.ts";
 
 type As = { url: string; session: string; login: string };
-
-/** The GIFs for `DEMO_GIPHY=fake`. Public GIFs found on giphy.com with "celebrate" (2026-11-19). The size only matches the area's ratio. */
-const DEMO_GIFS = (
-  [
-    ["s2qXK8wAvkHTO", "party birthday", 112],
-    ["c1AfqKTvATepFDTpnY", "celebrate birthday", 200],
-    ["BlVnrxJgTGsUw", "dancing happy", 150],
-    ["1PMVNNKVIL8Ig", "80s excited", 160],
-    ["geslvCFM31sFW", "dancing", 110],
-    ["Na33dsU2umStO", "happy excited", 180],
-    ["lsJCkIKV6AT28", "celebrate", 140],
-    ["ePaw7nwYmSI1t389Sy", "confetti", 200],
-  ] as const
-).map(([id, title, height]) => ({
-  id,
-  title,
-  url: `https://media.giphy.com/media/${id}/200w.gif`,
-  width: 200,
-  height,
-}));
 
 /** Answers for pre-seeded questions (Q&A or other people's questions). If the question text contains one of these, this is the answer. */
 const CANNED: [string, string][] = [
@@ -161,13 +138,7 @@ const world = await startWorld({
   operators: ["owner"],
   terms: "https://omagari-dev.github.io/omagari/terms",
   privacy: "https://omagari-dev.github.io/omagari/privacy",
-  giphy: process.env.GIPHY_API_KEY
-    ? realGiphy(process.env.GIPHY_API_KEY)
-    : process.env.DEMO_GIPHY === "fake"
-      ? { search: async () => DEMO_GIFS }
-      : undefined,
-  // DEMO_LIMIT_GIFS=2: a workspace gets 2 GIF searches an hour, so the third shows the limit banner (ADR-0052).
-  limits: process.env.DEMO_LIMIT_GIFS ? { gifs: Number(process.env.DEMO_LIMIT_GIFS) } : undefined,
+  giphy: process.env.GIPHY_API_KEY || undefined,
   // Once everything pre-seeded is in, a device auth opened in the browser is approved as "me" instead of entering the code on GitHub.
   // Wrapped before the server starts, since the server keeps the GitHub calls it was given.
   setup: (github) => {

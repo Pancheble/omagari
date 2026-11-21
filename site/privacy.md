@@ -4,7 +4,7 @@
 
 This policy is for the **hosted Omagari server** at `app.omagari.org`. If your team runs its own server, your team's operator decides what's stored there, and this policy doesn't apply.
 
-Last updated: 2026-11-21 · In force from: 2026-11-21
+Last updated: 2026-11-22 · In force from: 2026-11-21
 
 ## 1. Who we are
 
@@ -24,7 +24,6 @@ We store what the server needs to show your team who's working on what and to le
 | One-line status, presence, status message and emoji, your settings | Showing it to your team, and your settings across devices |
 | Chat messages, Q&A, forum posts, reactions, and the debate patches (diffs up to 64 KB) | The conversation and decisions in the workspace |
 | Which day you opened the app, per workspace (login and date) | Counting active use |
-| GIF search words | Searching GIPHY for you (see section 5) |
 
 We don't ask for your email, phone number, or payment details. The server sets no tracking cookies: the web app keeps your sign-in and a few picks in the browser's local storage.
 
@@ -55,8 +54,8 @@ The server and these services are outside Korea, so personal information moves a
 
 | | Fly.io | GitHub | GIPHY |
 | --- | --- | --- | --- |
-| Items sent | Everything the server stores (section 2) | GitHub login, tokens, repo names, and the decision PRs, issues, and labels the server writes to GitHub | Your computer's connection details (IP address, browser info). GIF search words are sent by our server with our key and aren't tied to your login or account, so we judge them not to be personal information |
-| Country, when, how | Japan (the server is in Tokyo; the company is in the USA). Over the network, all the time you use the service | USA and others. Over the network, whenever you sign in or use a GitHub feature | USA. Over the network, whenever you search or view a GIF |
+| Items sent | Everything the server stores (section 2) | GitHub login, tokens, repo names, and the decision PRs, issues, and labels the server writes to GitHub | When you use GIFs, your browser connects to GIPHY directly, so GIPHY gets your IP address, browser info, and the words you search for. We don't see or store your search words. |
+| Country, when, how | Japan (the server is in Tokyo; the company is in the USA). Over the network, all the time you use the service | USA and others. Over the network, whenever you sign in or use a GitHub feature | USA. Over the network, straight from your browser, whenever you search or view a GIF |
 | Recipient and contact | Fly.io, Inc. · compliance@fly.io | GitHub, Inc. · privacy contact form (linked from GitHub's privacy statement) | GIPHY, Inc. · support@giphy.com |
 | Their purpose and retention | Running the server and disk. Until we delete it; disk snapshots 5 days | Sign-in and repo access. Under GitHub's own policy | GIF search and images. Under GIPHY's own policy |
 | How to refuse, and what happens | Don't use the hosted server; you can run your own. If you refuse, you can't use the hosted server | Same. You can't sign in without GitHub | Just don't use GIFs. Everything else works the same |

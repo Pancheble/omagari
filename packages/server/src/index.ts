@@ -93,12 +93,10 @@ import { checkoutVersion } from "@omagari/contract/version";
 import type { Context } from "hono";
 import type { WSContext } from "hono/ws";
 import { type WebSocket, WebSocketServer } from "ws";
-import type { Giphy } from "./giphy.ts";
 import type { GitHub, RepoLabel } from "./github.ts";
 import { createApp, type Env, mount } from "./http.ts";
 import { labelsFor } from "./labeler.ts";
 
-export { type Giphy, realGiphy } from "./giphy.ts";
 export { type Account, type GitHub, type Pull, type RepoLabel, realGitHub } from "./github.ts";
 
 /** How often push access is rechecked. Starts from Room's 10 minutes (ADR-0011). */
@@ -578,8 +576,8 @@ export async function startServer(options: {
    * Not given for an OAuth app.
    */
   githubApp?: string;
-  /** GIF search (ADR-0044). Given only when the server config has a GIPHY key. Without it the web has no GIF button. */
-  giphy?: Giphy;
+  /** The GIPHY key (ADR-0056). The server only hands it to signed-in members, and their browsers ask GIPHY directly. Without it the web has no GIF button. */
+  giphy?: string;
   /** GitHub logins of the server's operators (`OMAGARI_OPERATORS`, ADR-0052). They approve access requests. Without any, the server takes no requests. */
   operators?: string[];
   /** Links to the server's terms and privacy policy. When either is set, an access request needs agreeing to them (ADR-0052). */
@@ -622,7 +620,7 @@ export async function startServer(options: {
   /** Time to finish hello. Default 10 seconds. Tests shorten it. */
   helloMs?: number;
   /**
-   * Limits (ADR-0052): requests per person a minute, repos and stored megabytes per workspace, and GIF searches per workspace an hour.
+   * Limits (ADR-0052): requests per person a minute, and repos and stored megabytes per workspace.
    * An unset one is no limit, so a server with none works as before.
    */
   limits?: Partial<Record<(typeof LIMITS)[number], number>>;
@@ -3195,16 +3193,14 @@ export async function startServer(options: {
     repos: (max: number) => `This workspace can have up to ${max} repos. Remove one to add another`,
     storage: (max: number) =>
       `This workspace is over its ${max} MB of storage. Ask the server's operators`,
-    gifs: (max: number) =>
-      `This workspace used its ${max} GIF searches for this hour. Try again later`,
   } satisfies Record<(typeof LIMITS)[number], (max: number) => string>;
   /** The one error shape for a hit limit. The web and CLI name the limit from it. */
   const limited = (name: keyof typeof LIMITED, max: number) =>
     new ContractFailure({ code: "limited", message: LIMITED[name](max), limit: { name, max } });
-  /** When each person's requests and each workspace's GIF searches happened, within their window. Not kept across restarts. */
+  /** When each person's requests happened, within their window. Not kept across restarts. */
   const spent = new Map<string, number[]>();
   /** Counts one use of `name` by `key` within `windowMs`. `limited` once the setting's number is reached in that window. */
-  const spend = (name: "requests" | "gifs", key: string, windowMs: number) => {
+  const spend = (name: "requests", key: string, windowMs: number) => {
     const max = limits[name];
     if (max === undefined) return;
     const now = Date.now();
@@ -3454,21 +3450,12 @@ export async function startServer(options: {
       avatar: person?.avatar ?? null,
       repo: repos[0] ?? "",
       repos,
-      gif: !!options.giphy,
+      giphy: options.giphy ?? null,
       prefs: prefsOf(login),
       connected: !!db.prepare("SELECT 1 FROM runner_seen WHERE login = ?").get(login),
       shared: repos.filter((r) => shared(r, login)),
       operator: isOperator(login),
     };
-  });
-
-  // The server adds the key and asks GIPHY instead of the browser. The key never leaves the server, and results aren't stored (ADR-0044).
-  mount(app, api.gifs, ({ query }, c) => {
-    if (!options.giphy) {
-      throw new ContractFailure({ code: "not_found", message: "This server has no GIPHY key" });
-    }
-    spend("gifs", workspaceOf(c), 3_600_000);
-    return options.giphy.search(query).then((gifs) => ({ gifs }));
   });
 
   mount(app, api.workspaces, (_, c) => {

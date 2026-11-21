@@ -31,14 +31,7 @@ import {
   webToServer,
 } from "@omagari/contract";
 import { type Executor, type Sandbox, type SandboxInput, startRunner } from "@omagari/runner";
-import {
-  type Account,
-  type Giphy,
-  type GitHub,
-  type Pull,
-  type RepoLabel,
-  startServer,
-} from "@omagari/server";
+import { type Account, type GitHub, type Pull, type RepoLabel, startServer } from "@omagari/server";
 
 const executable = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 const CLI = executable("../packages/cli/src/main.ts");
@@ -690,34 +683,6 @@ type ExecutorInput = Parameters<Executor>[0];
  * Fake sandbox. Records the received command, folder, environment variables, and blocking settings in `calls`, and runs the command as is without confining it (`sh -c`).
  * Putting a reason in `unavailable` makes it a machine where the sandbox can't be used. The real sandbox may not run in CI, so it is checked by hand (ADR-0033).
  */
-/**
- * Fake GIPHY (ADR-0044): an HTTP server the real `realGiphy` asks. Piles the requested URLs in `asked` and returns the GIF list from `answer` in GIPHY's shape.
- * The real GIPHY is checked by hand.
- */
-export async function fakeGiphy(t: { after: (fn: () => Promise<void>) => void }) {
-  const asked: URL[] = [];
-  const fake = {
-    asked,
-    url: "",
-    /** The GIPHY `data` to give for a request. Overwrite it. */
-    answer: (_url: URL): unknown[] => [],
-  };
-  const server = createServer((request, response) => {
-    const url = new URL(request.url ?? "/", "http://giphy.test");
-    asked.push(url);
-    response.setHeader("content-type", "application/json");
-    response.end(JSON.stringify({ data: fake.answer(url), meta: { status: 200 } }));
-  });
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  fake.url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  t.after(async () => {
-    server.close();
-    await once(server, "close");
-  });
-  return fake;
-}
-
 export function fakeSandbox() {
   const fake: {
     calls: SandboxInput[];
@@ -891,8 +856,8 @@ export async function startWorld(
     behindFly?: boolean;
     /** Accounts the server accepts and repos to put in at startup (`OMAGARI_REPO`). If not given, just `REPO`. */
     accept?: string[];
-    /** GIF search. If not given, a server with no GIPHY key. Tests plug the real `realGiphy` in against the fake GIPHY (`fakeGiphy`). */
-    giphy?: Giphy;
+    /** The GIPHY key the server hands to browsers (ADR-0056). If not given, a server with no GIPHY key. */
+    giphy?: string;
     /** The GitHub App's slug: the server signs in through a GitHub App and says to install it (ADR-0053). Not given for an OAuth app. */
     githubApp?: string;
     /** GitHub logins of the server's operators (`OMAGARI_OPERATORS`). With them the server takes access requests (ADR-0052). */

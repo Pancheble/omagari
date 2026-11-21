@@ -5,7 +5,6 @@ import {
   type Decision,
   EXECUTOR_NAMES,
   type ExecutorId,
-  type Gif,
   MAX_MESSAGE_CHARS,
   type MemberView,
   type Qa,
@@ -31,7 +30,7 @@ import { QaLine } from "./dm.tsx";
 import { useEmojiInput } from "./emoji-input.tsx";
 import { AlertLine } from "./forum.tsx";
 import { GifButton, MessageGif } from "./gif.tsx";
-import { giphyId, giphyUrl } from "./giphy.ts";
+import { type Gif, giphyImage } from "./giphy.ts";
 import { language, t } from "./i18n.ts";
 import type { LiveState } from "./live.ts";
 import { Person } from "./profile-card.tsx";
@@ -191,7 +190,7 @@ export function Conversation({
   onPost: (qa: Qa, text: string) => Promise<void>;
   onRetry: () => void;
   onOlder: () => void;
-  /** GIF search (goes through the server). Absent without a GIPHY key on the server, and the composer has no GIF button. */
+  /** GIF search (the browser asks GIPHY, ADR-0056). Absent without a GIPHY key on the server, and the composer has no GIF button. */
   searchGifs?: (query: string) => Promise<Gif[]>;
   /** Adds (`on`) or removes a reaction on a message (`message`, its id). */
   onReact: (message: number, emoji: string, on: boolean) => Promise<void>;
@@ -415,9 +414,7 @@ export function Conversation({
           attached={attached}
           onDetach={() => onAttach(undefined)}
           onSubmit={() => void send()}
-          gifs={
-            searchGifs && { search: searchGifs, onPick: (gif) => void sendGif(giphyUrl(gif.id)) }
-          }
+          gifs={searchGifs && { search: searchGifs, onPick: (gif) => void sendGif(gif.url) }}
         />
       )}
       {channel && thread && (
@@ -623,7 +620,7 @@ function Message({
   compact?: boolean;
 }) {
   // A message that is just one GIPHY URL shows as a picture. A note written with a Q&A stays as text.
-  const gif = message.kind === "text" ? giphyId(message.text) : undefined;
+  const gif = message.kind === "text" ? giphyImage(message.text) : undefined;
   /** While the action bar's palette is open, keep the bar even if the mouse leaves. */
   const [picking, setPicking] = useState(false);
   /** The long-press menu on narrow screens. */
@@ -765,7 +762,7 @@ function Message({
           </p>
         )}
         {message.text &&
-          (gif ? <MessageGif id={gif} /> : <MessageText text={message.text} nameOf={nameOf} />)}
+          (gif ? <MessageGif src={gif} /> : <MessageText text={message.text} nameOf={nameOf} />)}
         {message.kind === "qa" && <QaLine message={message} state={state ?? "offline"} />}
         <Reactions reactions={message.reactions} me={me} onReact={onReact} />
         {message.thread && onThread && (
