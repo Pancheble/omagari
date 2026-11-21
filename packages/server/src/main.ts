@@ -25,7 +25,7 @@ const server = await startServer({
   // Links to the terms and privacy policy. When set, an access request needs agreeing to them.
   terms: process.env.OMAGARI_TERMS_URL || undefined,
   privacy: process.env.OMAGARI_PRIVACY_URL || undefined,
-  github: realGitHub(GITHUB_CLIENT_ID),
+  github: realGitHub(GITHUB_CLIENT_ID, { app: Boolean(process.env.GITHUB_APP_SLUG) }),
   // With a GitHub App (ADR-0053), its slug (github.com/apps/<slug>). "No access" then says to install the App, with the link. Not set for an OAuth app.
   githubApp: process.env.GITHUB_APP_SLUG || undefined,
   // GIF search (ADR-0044). Without a key there's no GIF button. With a production key, raise the hourly limit with GIPHY_PER_HOUR (beta keys get 100).

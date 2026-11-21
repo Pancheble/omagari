@@ -82,6 +82,34 @@ test("a repo hidden because the GitHub App isn't installed on its account says t
   assert.ok(result.stderr.includes(INSTALL), result.stderr);
 });
 
+test("a public repo the GitHub App isn't installed on isn't reachable: it's left out of the add-repo list instead of failing it, and nobody counts as push or Admin there", async (t) => {
+  const world = await startWorld({ githubApp: "omagari-test" });
+  t.after(world.stop);
+  world.github.admin("owner");
+  world.github.create("omagari-test/profile");
+  world.github.admin("owner", "omagari-test/profile");
+  world.github.grant("alice", "omagari-test/profile");
+  world.github.uninstallPublic("omagari-test/profile");
+
+  const listed = await call(world.owner, api.adminRepos);
+  assert.deepEqual(
+    listed.repos.map((repo) => repo.name),
+    [REPO],
+  );
+  assert.equal(listed.install, INSTALL); // the link to install it is still there
+  await assert.rejects(call(world.owner, api.addRepo, { repo: "omagari-test/profile" }), {
+    code: "forbidden",
+  });
+  // The same repo with the App installed adds fine.
+  world.github.create("omagari-test/ok");
+  world.github.admin("owner", "omagari-test/ok");
+  assert.deepEqual(
+    (await call(world.owner, api.adminRepos)).repos.map((repo) => repo.name),
+    ["omagari-test/ok", REPO].sort(),
+  );
+  await call(world.owner, api.addRepo, { repo: "omagari-test/ok" });
+});
+
 test("an OAuth app's token, which doesn't expire, works as before: no refresh and no install hint", async (t) => {
   const world = await startWorld({ recheckMs: 50 });
   t.after(world.stop);

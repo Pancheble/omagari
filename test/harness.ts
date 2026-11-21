@@ -219,6 +219,7 @@ export async function tempRepo(repo = REPO) {
  * `app(lifetimeMs)` makes it act like a GitHub App (ADR-0053): tokens it hands out expire after `lifetimeMs` and come with a refresh token in `refreshTokens`.
  * A refresh token works once. To make GitHub reject it, remove it from `refreshTokens`.
  * `uninstall(account)` takes the App off an account: its repos are hidden from every token, like a repo that doesn't exist.
+ * `uninstallPublic(repo)` is a public repo the App isn't installed on: GitHub still shows it, but as a GitHub App server reads it, nobody has push or Admin there and the add-repo list leaves it out.
  */
 export function fakeGitHub() {
   /** Push access and Admin. `repo login`. */
@@ -232,6 +233,8 @@ export function fakeGitHub() {
   /** Accounts the GitHub App isn't installed on. GitHub hides their repos from the App's tokens. */
   const uninstalled = new Set<string>();
   const hidden = (repo: string) => uninstalled.has(repo.split("/")[0] as string);
+  /** Public repos the App isn't installed on. Visible, but never reachable for Omagari. */
+  const bare = new Set<string>();
   /** GitHub numeric ids of repos and people. Assigned when first seen, and they follow a move or rename (`move`, `rename`). */
   const ids = new Map<string, number>();
   let nextId = 1;
@@ -357,14 +360,15 @@ export function fakeGitHub() {
       if (!known.has(repo) || hidden(repo)) return { push: false, name: asked };
       const owner = repo.split("/")[0] as string;
       return {
-        push: pushers.has(`${repo} ${tokens.get(token)}`),
+        push: !bare.has(repo) && pushers.has(`${repo} ${tokens.get(token)}`),
         name: repo,
         id: idOf(`repo ${repo}`),
         account: accounts.get(owner) ?? { kind: "organization", avatar: null },
       };
     },
     async canAdmin(token, repo) {
-      return admins.has(`${moves.get(repo) ?? repo} ${tokens.get(token)}`);
+      const name = moves.get(repo) ?? repo;
+      return !bare.has(name) && admins.has(`${name} ${tokens.get(token)}`);
     },
     async adminRepos(token, owner) {
       const login = tokens.get(token);
@@ -374,7 +378,8 @@ export function fakeGitHub() {
           ([repo, who]) =>
             who === login &&
             repo.split("/")[0]?.toLowerCase() === owner.toLowerCase() &&
-            !hidden(repo),
+            !hidden(repo) &&
+            !bare.has(repo),
         )
         .map(([name]) => ({
           name,
@@ -575,6 +580,8 @@ export function fakeGitHub() {
     },
     /** The GitHub App is taken off (or was never installed on) account `account`. */
     uninstall: (account: string) => uninstalled.add(account),
+    /** A public repo the App isn't installed on (the account's install is "selected" without it). */
+    uninstallPublic: (repo: string) => bare.add(repo),
     names,
     avatars,
     /** A person entered `userCode` in the browser and approved it with the `login` account. */
