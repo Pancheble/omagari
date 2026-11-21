@@ -55,14 +55,14 @@ Omagari가 레포를 지켜보는 방식은 Room의 동작을 따라요. Room은
 
 ## 빠른 시작
 
-Node.js 24.12 이상, 이 기기에서 로그인한 Claude Code나 Codex, 워크스페이스 레포에 push 권한이 있는 GitHub 계정, 팀이 띄운 Omagari 서버의 주소가 필요해요. 아직 서버가 없다면 [서버 띄우기](https://omagari-dev.github.io/omagari/server)부터 해요.
+Node.js 24.12 이상, 이 기기에서 로그인한 Claude Code나 Codex, 워크스페이스 레포에 push 권한이 있는 GitHub 계정이 필요해요. 베타 서버는 `https://app.omagari.org`예요. 직접 띄운 서버를 쓰려면 [서버 띄우기](https://omagari-dev.github.io/omagari/server)를 하고 그 주소를 `setup`에 넘겨요.
 
 ```bash
 npm i -g omagari
-omagari setup https://<팀의 서버>
+omagari setup
 ```
 
-`setup`이 GitHub로 로그인하고, 서버 주소를 저장하고, 이 기기의 에이전트에 훅을 깔고, 로그인할 때 켜지는 백그라운드 러너를 등록해요. 기기마다 한 번이에요. Codex는 Codex에서 `/hooks`를 열어 Omagari 훅 둘을 신뢰해야 돌아요.
+`setup`이 GitHub로 로그인하고, 서버 주소를 저장하고(다른 주소를 넘기지 않으면 베타 서버예요: `omagari setup https://<팀의 서버>`), 이 기기의 에이전트에 훅을 깔고, 로그인할 때 켜지는 백그라운드 러너를 등록해요. 기기마다 한 번이에요. Codex는 Codex에서 `/hooks`를 열어 Omagari 훅 둘을 신뢰해야 돌아요.
 
 그다음 워크스페이스 레포에서 에이전트 세션을 열고, 그 레포를 한 번 공유해요. 웹의 공유 버튼이나 레포 폴더에서 `omagari share on`이면 돼요. 공유하기 전엔 팀원이 거기서 한 일을 볼 수 없어요. 그다음부터는 직접 켤 게 없어요. 러너가 공유한 레포를 알아서 봐요. 팀의 GitHub 계정 밖에 있는 레포는 아무것도 보내지 않아요.
 

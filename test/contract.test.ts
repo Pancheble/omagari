@@ -496,3 +496,26 @@ test("a connection that didn't finish hello is dropped in time, and one that sen
   await setTimeout(400);
   assert.deepEqual(await world.agents(world.owner), { owner: "online" });
 });
+
+test("the server sends HSTS only when a Fly front end says the request came over HTTPS (ADR-0052)", async (t) => {
+  const world = await startWorld({ behindFly: true });
+  t.after(world.stop);
+
+  const plain = await fetch(world.server.url + api.health.path);
+  assert.equal(plain.headers.get("strict-transport-security"), null);
+
+  const secure = await fetch(world.server.url + api.health.path, {
+    headers: { "x-forwarded-proto": "https" },
+  });
+  assert.equal(secure.headers.get("strict-transport-security"), "max-age=31536000");
+});
+
+test("off Fly, X-Forwarded-Proto can't turn HSTS on, since the server can't tell who set it", async (t) => {
+  const world = await startWorld();
+  t.after(world.stop);
+
+  const response = await fetch(world.server.url + api.health.path, {
+    headers: { "x-forwarded-proto": "https" },
+  });
+  assert.equal(response.headers.get("strict-transport-security"), null);
+});

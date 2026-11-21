@@ -274,6 +274,41 @@ test("hooks run in every repo on this machine, but in a Git repo that never ran 
   await assert.rejects(access(join(other.folder, ".git", "omagari")));
 });
 
+test("omagari setup with no address signs in to the default server", async (t) => {
+  const world = await startWorld();
+  t.after(world.stop);
+  world.github.grant("alice");
+  // Tests must not reach the hosted server, so the default is this test's server.
+  process.env.OMAGARI_DEFAULT_SERVER = world.server.url;
+  t.after(() => delete process.env.OMAGARI_DEFAULT_SERVER);
+
+  const bare = world.launchBare("setup");
+  t.after(() => bare.stop("SIGKILL"));
+  const [, code] = await bare.output(/enter code (\S+)/);
+  world.github.approve(code, "alice");
+  const done = await bare.exited;
+  assert.equal(done.code, 0, done.stderr);
+  assert.match(done.stdout, /Logged in as alice/);
+  assert.ok(done.stdout.includes(`\nServer: ${world.server.url}\n`), done.stdout);
+});
+
+test("omagari setup with an address signs in to that address, not the default", async (t) => {
+  const world = await startWorld();
+  t.after(world.stop);
+  world.github.grant("alice");
+  // A closed port as the default: if setup used it, the sign-in would fail.
+  process.env.OMAGARI_DEFAULT_SERVER = "http://127.0.0.1:1";
+  t.after(() => delete process.env.OMAGARI_DEFAULT_SERVER);
+
+  const bare = world.launchBare("setup", world.server.url);
+  t.after(() => bare.stop("SIGKILL"));
+  const [, code] = await bare.output(/enter code (\S+)/);
+  world.github.approve(code, "alice");
+  const done = await bare.exited;
+  assert.equal(done.code, 0, done.stderr);
+  assert.ok(done.stdout.includes(`\nServer: ${world.server.url}\n`), done.stdout);
+});
+
 test("omagari setup <address> logs in on a clean home, installs the hooks and keeps the address, so status reaches that server even without OMAGARI_SERVER", async (t) => {
   const world = await startWorld();
   t.after(world.stop);
