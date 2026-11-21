@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { CONTRACT_VERSION } from "@omagari/contract";
-import { realGiphy, realGitHub, startServer } from "./index.ts";
+import { realGitHub, startServer } from "./index.ts";
 
 const WEB_DIST = fileURLToPath(new URL("../../web/dist", import.meta.url));
 
@@ -28,12 +28,8 @@ const server = await startServer({
   github: realGitHub(GITHUB_CLIENT_ID, { app: Boolean(process.env.GITHUB_APP_SLUG) }),
   // With a GitHub App (ADR-0053), its slug (github.com/apps/<slug>). "No access" then says to install the App, with the link. Not set for an OAuth app.
   githubApp: process.env.GITHUB_APP_SLUG || undefined,
-  // GIF search (ADR-0044). Without a key there's no GIF button. With a production key, raise the hourly limit with GIPHY_PER_HOUR (beta keys get 100).
-  giphy: process.env.GIPHY_API_KEY
-    ? realGiphy(process.env.GIPHY_API_KEY, {
-        perHour: process.env.GIPHY_PER_HOUR ? Number(process.env.GIPHY_PER_HOUR) : undefined,
-      })
-    : undefined,
+  // GIFs (ADR-0056). Signed-in browsers get this key and ask GIPHY directly. Without a key there's no GIF button.
+  giphy: process.env.GIPHY_API_KEY || undefined,
   database: process.env.OMAGARI_DB ?? "omagari.db",
   // Encrypts GitHub tokens in the database (ADR-0053). Without it, a key file is made next to the database.
   tokenKey: process.env.OMAGARI_TOKEN_KEY || undefined,
@@ -56,7 +52,6 @@ const server = await startServer({
       requests: process.env.OMAGARI_LIMIT_REQUESTS,
       repos: process.env.OMAGARI_LIMIT_REPOS,
       storage: process.env.OMAGARI_LIMIT_STORAGE_MB,
-      gifs: process.env.OMAGARI_LIMIT_GIFS,
     }).flatMap(([name, value]) => (value ? [[name, Number(value)]] : [])),
   ),
   // The number of debate rounds. Three if not set.

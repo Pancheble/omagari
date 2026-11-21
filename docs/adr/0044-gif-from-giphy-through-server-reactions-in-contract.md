@@ -4,6 +4,8 @@ status: accepted
 
 # GIF는 서버를 거쳐 GIPHY에서 찾고, 반응은 계약에 둔다
 
+> 2026-11-22: "찾기는 Omagari 서버가 대신 묻는다"와 서버 한도는 ADR-0056으로 바뀌었다. 브라우저가 GIPHY에 바로 묻고, GIPHY가 준 주소를 그대로 쓴다.
+
 @Pancheble이 채팅에서 GIF와 이모지를 쓰자고 했다(#291). 시안 전에 정한 것(2026-11-19 @Pancheble, #291 댓글):
 
 - **GIF는 GIPHY 하나로 찾는다.** Tenor API는 2026-01-13에 새 키를 받지 않았고 2026-06-30에 꺼졌다. KLIPY도 있지만 둘을 맞추는 일은 쓸지 모를 일이라 미룬다. Slack, Mattermost, 인스타그램이 GIPHY를 쓴다.

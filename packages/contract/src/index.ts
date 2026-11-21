@@ -3,13 +3,13 @@
 import * as z from "zod";
 
 /** Contract version. Sent in every envelope; a different one is rejected. Bump it on every breaking change. */
-export const CONTRACT_VERSION = 68;
+export const CONTRACT_VERSION = 69;
 
 /**
  * The server's limits (ADR-0052). Each is a setting, and unset means no limit. `requests` is per person a minute, `repos` and `storage` (megabytes)
- * are per workspace, and `gifs` is GIF searches per workspace an hour.
+ * are per workspace.
  */
-export const LIMITS = ["requests", "repos", "storage", "gifs"] as const;
+export const LIMITS = ["requests", "repos", "storage"] as const;
 
 /** Error shape. Shared by the runner/server `error` message and the HTTP error body (`{ error }`). */
 export const ContractError = z.strictObject({
@@ -1824,19 +1824,6 @@ export const Workspace = z.strictObject({
 });
 export type Workspace = z.output<typeof Workspace>;
 
-/**
- * One GIF found on GIPHY (ADR-0044). The server passes on only this part of the GIPHY response and doesn't store it.
- * `url` is the address of the small picture (200px wide) shown in the search box, and the browser gets it from GIPHY directly.
- */
-export const Gif = z.strictObject({
-  id: z.string().regex(/^[A-Za-z0-9]+$/),
-  title: z.string(),
-  url: z.string(),
-  width: z.number(),
-  height: z.number(),
-});
-export type Gif = z.output<typeof Gif>;
-
 /** The API the web uses. Later issues add their own paths here. */
 export const api = {
   health: {
@@ -1887,8 +1874,8 @@ export const api = {
       repo: z.string(),
       /** The workspace repos this member seems to have push permission on, in the order they were added. Read again at login and every 10 minutes. */
       repos: z.array(z.string()),
-      /** The server config has a GIPHY key, so `api.gifs` can be used. If not, the web doesn't show a GIF button (ADR-0044). */
-      gif: z.boolean(),
+      /** The server's GIPHY key. The browser asks GIPHY with it directly (ADR-0056). null without a key, and the web shows no GIF button. */
+      giphy: z.string().nullable(),
       /** My personal settings (`api.setPrefs`). `DEFAULT_PREFS` until I change one. */
       prefs: Prefs,
       /** A runner of this member has connected to this server at least once. If not, the web shows how to connect a computer (#354). */
@@ -2509,16 +2496,6 @@ export const api = {
       ...Replying.shape,
     }),
     response: z.strictObject({ message: ChannelMessage }),
-  },
-  /**
-   * Searches GIPHY for GIFs (ADR-0044). The server adds the key and asks on the caller's behalf, and the rating goes up to R. If `query` is empty, it's GIPHY's popular GIFs.
-   * If the server has no GIPHY key, `not_found`; if GIPHY doesn't answer or the server's hourly limit is exceeded, `internal`.
-   */
-  gifs: {
-    method: "POST",
-    path: "/api/gifs",
-    body: z.strictObject({ query: z.string().trim().max(50) }),
-    response: z.strictObject({ gifs: z.array(Gif) }),
   },
   /**
    * Adds a reaction to a message written by a person (text or a public Q&A) (`on: true`) or removes it (ADR-0044). Adding one already added or removing one not added isn't an error.

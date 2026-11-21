@@ -11,7 +11,7 @@ status: accepted
 - **Free, with GitHub Sponsors.** No paid features and no payments in stage 7. Payments in Korea usually need a business registration first.
 - **The address is `app.omagari.org`.** `omagari setup` with no address uses it. A domain keeps the address when the server moves. `.org` isn't on the HSTS preload list by itself, so the server sends HSTS.
 - **Limits are settings.** Per person (requests) and per workspace (repos, stored size, GIF searches an hour). When a limit is hit, the web and CLI say which one. Unset means no limit, so a self-hosted server works as before. The hosted server sets them.
-- **GIFs need a GIPHY production key.** Until it comes, the hosted server splits the beta key's hourly budget across workspaces.
+- **GIFs need a GIPHY production key.** Until it comes, the hosted server splits the beta key's hourly budget across workspaces. (Replaced by ADR-0056: browsers ask GIPHY directly, so GIPHY counts the key's limit and the server can't split it.)
 
 ## Considered Options
 

@@ -55,7 +55,7 @@ GitHub tokens (access and refresh) are stored encrypted ([ADR-0053](https://gith
 
 `OMAGARI_SOURCE_URL` sets the "Source code" link in the settings window (Info). It defaults to `https://github.com/omagari-dev/omagari`. If you change the server's code and let people use it over the network, point this at your fork (AGPL-3.0 section 13).
 
-GIFs in chat ([ADR-0044](https://github.com/omagari-dev/omagari/blob/dev/docs/adr/0044-gif-from-giphy-through-server-reactions-in-contract.md)) turn on when `GIPHY_API_KEY` holds a [GIPHY developer key](https://developers.giphy.com/dashboard/). Without it, the composer has no GIF button. The server adds the key and searches GIPHY on the browser's behalf, so the key never reaches the web UI. The server stays under the beta key's 100 requests an hour. With a production key, raise the limit with `GIPHY_PER_HOUR`. On Fly, set it with `fly secrets set GIPHY_API_KEY=<key> -a "$FLY_APP"`.
+GIFs in chat ([ADR-0056](https://github.com/omagari-dev/omagari/blob/dev/docs/adr/0056-gif-search-from-the-browser-straight-to-giphy.md)) turn on when `GIPHY_API_KEY` holds a [GIPHY developer key](https://developers.giphy.com/dashboard/). Without it, the composer has no GIF button. GIPHY wants search to come from the browser, so the server hands the key to signed-in members and their browsers ask GIPHY directly: GIPHY sees their IP address and search words, and the key is visible in the browser. GIPHY counts the hourly limit per key, across everyone on the server: a beta key gets 100 calls an hour, and more needs a production key from GIPHY. On Fly, set it with `fly secrets set GIPHY_API_KEY=<key> -a "$FLY_APP"`.
 
 If a web build exists (`npm run build -w @omagari/web` creates `packages/web/dist`), the server serves it at the same address and sends unknown paths to its first file. While developing, use `npm run web` (Vite). The health check is `GET /api/health`.
 
@@ -68,9 +68,8 @@ Limits ([ADR-0052](https://github.com/omagari-dev/omagari/blob/dev/docs/adr/0052
 | `OMAGARI_LIMIT_REQUESTS` | API requests per person a minute | 120 |
 | `OMAGARI_LIMIT_REPOS` | Repos per workspace. Adding one more is refused | 20 |
 | `OMAGARI_LIMIT_STORAGE_MB` | Megabytes a workspace keeps: messages and Q&A, plus the file content and conflict snapshots its runners shared. Past it, new messages, post replies, and Q&A are refused; runners keep sharing, and their content drops after 30 days | 100 |
-| `OMAGARI_LIMIT_GIFS` | GIF searches per workspace an hour, inside the server-wide `GIPHY_PER_HOUR` | 20 |
 
-The hosted numbers come from the dogfood server on 2026-11-21: at most 2 repos in a workspace and under 50 KB stored per workspace (1.5 MB database). They leave lots of room above that, and five full workspaces still fit the 1 GB volume. 20 GIF searches an hour lets five workspaces share the beta key's 100. On Fly: `fly secrets set OMAGARI_LIMIT_REQUESTS=120 OMAGARI_LIMIT_REPOS=20 OMAGARI_LIMIT_STORAGE_MB=100 OMAGARI_LIMIT_GIFS=20 -a "$FLY_APP"`.
+The hosted numbers come from the dogfood server on 2026-11-21: at most 2 repos in a workspace and under 50 KB stored per workspace (1.5 MB database). They leave lots of room above that, and five full workspaces still fit the 1 GB volume. On Fly: `fly secrets set OMAGARI_LIMIT_REQUESTS=120 OMAGARI_LIMIT_REPOS=20 OMAGARI_LIMIT_STORAGE_MB=100 -a "$FLY_APP"`.
 
 Request counts live in memory, so a restart starts them over. Only signed-in HTTP requests count; the live connections of the web and runners don't.
 

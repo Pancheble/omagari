@@ -1,7 +1,7 @@
 import type { ReplyTo } from "@omagari/contract";
 import { TextQuote, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { giphyId } from "./giphy.ts";
+import { giphyImage } from "./giphy.ts";
 import { t } from "./i18n.ts";
 import { Avatar } from "./workspace.tsx";
 
@@ -55,7 +55,7 @@ export function ReplyLine({ replyTo }: { replyTo: ReplyTo }) {
         <Avatar name={original.name} login={original.login} size={16} />
         <strong>{original.name}</strong>
         <span className="reply-text">
-          {giphyId(original.line) ? t.conversation.reply.gif : original.line}
+          {giphyImage(original.line) ? t.conversation.reply.gif : original.line}
         </span>
       </button>
     </p>

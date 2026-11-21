@@ -85,6 +85,7 @@ import {
   postTitle,
   settled,
 } from "./forum.tsx";
+import { searchGiphy } from "./giphy.ts";
 import { setLanguage, t } from "./i18n.ts";
 import { type CreateKind, ForumDialog, LabelsContext, PostLabels } from "./labels.tsx";
 import { useLive } from "./live.ts";
@@ -857,9 +858,9 @@ export function Workspace({
     }
   };
 
-  /** GIF search. The server asks GIPHY on our behalf with the key attached (ADR-0044). */
-  const searchGifs = async (query: string) =>
-    (await call(server(session), api.gifs, { query })).gifs;
+  /** GIF search: the browser asks GIPHY directly with the server's key (ADR-0056). */
+  const giphy = me.giphy;
+  const searchGifs = giphy ? (query: string) => searchGiphy(giphy, query) : undefined;
 
   /** A chat channel is created in the place being viewed. For an account with only one repo, it is that repo's channel. */
   const create = async (name: string) => {
@@ -1138,7 +1139,7 @@ export function Workspace({
         attached={attached?.channel === active.id ? attached : undefined}
         onAttach={setAttached}
         onSend={(text, reply) => send(active.id, text, reply)}
-        searchGifs={me.gif ? searchGifs : undefined}
+        searchGifs={searchGifs}
         onCall={(executor, question, reply) => ask(active.id, executor, question, "public", reply)}
         onPost={post}
         onThread={openPost ? undefined : (id) => void openThread(active.id, id)}
@@ -1460,7 +1461,7 @@ export function Workspace({
                     me={me.login}
                     onAttach={() => {}}
                     onSend={(text, reply) => send(active.id, text, reply)}
-                    searchGifs={me.gif ? searchGifs : undefined}
+                    searchGifs={searchGifs}
                     onCall={(executor, question, reply) =>
                       ask(active.id, executor, question, "public", reply)
                     }

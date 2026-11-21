@@ -17,8 +17,6 @@ export const connectEn = {
       `This workspace can have up to ${max} repos. Remove one to add another.`,
     storage: (max: number) =>
       `This workspace is over its ${max} MB of storage. Ask the server's operators.`,
-    gifs: (max: number) =>
-      `This workspace used its ${max} GIF searches for this hour. Try again later?`,
   },
   closeLimit: "Close",
 };

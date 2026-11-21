@@ -2085,6 +2085,15 @@ button.message-gif {
   cursor: pointer;
 }
 
+/* Reduced motion: nothing loads until play is pressed, since a still frame would mean changing GIPHY's URL (ADR-0056). */
+.message-gif-paused {
+  display: grid;
+  place-items: center;
+  width: 200px;
+  aspect-ratio: 4 / 3;
+  color: var(--text-secondary);
+}
+
 .message-gif img {
   display: block;
   max-width: 260px;

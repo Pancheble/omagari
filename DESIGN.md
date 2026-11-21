@@ -1607,16 +1607,16 @@ When you call an AI and say something, it's kept under the name of whoever calle
 
 #### GIF
 
-We use only GIPHY (ADR-0044). The Tenor API shut down on 2026-06-30.
+We use only GIPHY (ADR-0044). The Tenor API shut down on 2026-06-30. The browser asks GIPHY directly, and GIPHY's URLs are used exactly as given (ADR-0056).
 
 - **GIF box**: pressing the GIF button in the composer opens a floating layer 424px wide right above the composer (4px outside the line), with its right edge lined up (draft 102-A). From the top:
   - Search field: the same as the emoji palette's search field, with the placeholder "Search GIPHY" (GIPHY에서 찾기). Focus lands here when it opens. When it's empty, it shows GIPHY's popular GIFs. If you stop typing (0.4 seconds), it searches.
   - Results: a two-column staggered grid (300px tall, scrolling inside the box), 6px apart, `{rounded.sm}`. Each cell carries the title GIPHY gave as its `aria-label`. On hover, a 2px accent border. Keyboard is arrows and Enter.
   - Bottom row (above a 1px `{colors.divider}`, 12px secondary): "**Powered by GIPHY** · Your search goes to GIPHY" (찾는 말은 GIPHY로 가요). It's the attribution GIPHY's terms require and also a notice that the search term goes outside.
   - If nothing matches, "No GIFs found" (찾는 GIF가 없어요), and if GIPHY is blocked or over its limit, "Can't search GIFs right now" (지금은 GIF를 찾을 수 없어요) (13px secondary, centered).
-- Picking sends right away. The message holds one line with the GIPHY address, and whatever you were writing in the composer stays as it was.
+- Picking sends right away. The message holds one line: the GIF's address exactly as GIPHY gave it, query and all. Whatever you were writing in the composer stays as it was.
 - **GIF in a message**: a message whose text is only one GIPHY address (`giphy.com/gifs/…`, `media*.giphy.com/media/…`) shows as a picture instead of the address. Up to 260px wide, the aspect ratio kept, `{rounded.md}`. A 11px/600 "GIF" strip at the bottom left (70% black background, white text). A pasted GIPHY address is the same. Other image addresses stay as links only (so the viewer's IP doesn't leak). The browser fetches the picture straight from GIPHY.
-- For people who turned on reduced motion (`prefers-reduced-motion`), it shows a still first frame and plays when pressed.
+- For people who turned on reduced motion (`prefers-reduced-motion`), the picture doesn't load: a 200×150 `{colors.selected}` box with a 24px secondary Lucide `play` in the middle and the "GIF" strip. Pressing it loads and plays the GIF. (A still frame would mean changing GIPHY's address, ADR-0056.)
 - All ratings up to R show (2026-11-19 @Pancheble). There's no setting for it.
 
 #### Reply, thread, and quote
