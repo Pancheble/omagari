@@ -118,6 +118,8 @@ export const en = {
       server: "This server",
       version: "Version",
       source: "Source code",
+      terms: "Terms",
+      privacy: "Privacy policy",
     },
     agent: {
       whenAsked: "When others ask",

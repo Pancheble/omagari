@@ -42,6 +42,15 @@ export default defineConfig({
           { text: "FAQ", link: "/faq" },
         ],
       },
+      {
+        text: "Hosted server",
+        items: [
+          { text: "Terms of use", link: "/terms" },
+          { text: "Privacy policy", link: "/privacy" },
+          { text: "이용약관 (한국어)", link: "/ko/terms" },
+          { text: "개인정보 처리방침 (한국어)", link: "/ko/privacy" },
+        ],
+      },
     ],
     socialLinks: [{ icon: "github", link: repo }],
     editLink: { pattern: `${repo}/edit/dev/site/:path`, text: "Edit this page on GitHub" },

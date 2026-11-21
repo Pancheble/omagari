@@ -264,6 +264,8 @@ export function Settings({
         repo={me.repo}
         version={settings.version}
         sourceUrl={settings.sourceUrl}
+        terms={settings.terms}
+        privacy={settings.privacy}
         onDelete={adminAll ? () => setAsking("workspace") : undefined}
       />
     );
@@ -498,12 +500,17 @@ function InfoPage({
   repo,
   version,
   sourceUrl,
+  terms,
+  privacy,
   onDelete,
 }: {
   workspace: string;
   repo: string;
   version: string;
   sourceUrl: string;
+  /** The hosted server's legal pages. Missing if the server sets none. */
+  terms?: string;
+  privacy?: string;
   /** Asks to delete the workspace. Missing unless I'm a GitHub Admin of every repo in it. */
   onDelete?: () => void;
 }) {
@@ -528,6 +535,22 @@ function InfoPage({
             <ExternalLink size={14} aria-hidden />
           </a>
         </Row>
+        {(
+          [
+            [words.terms, terms],
+            [words.privacy, privacy],
+          ] as const
+        ).map(
+          ([name, url]) =>
+            url !== undefined && (
+              <Row key={name} name={name}>
+                <a className="settings-link" href={url} target="_blank" rel="noreferrer">
+                  <code className="settings-value">{url}</code>{" "}
+                  <ExternalLink size={14} aria-hidden />
+                </a>
+              </Row>
+            ),
+        )}
       </Group>
       {onDelete && (
         <Group note={t.deletion.workspace.note}>

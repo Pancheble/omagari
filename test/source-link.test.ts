@@ -19,3 +19,19 @@ test("the settings window gets the fork URL the server operator configured", asy
   t.after(world.stop);
   assert.equal((await call(world.owner, api.settings)).sourceUrl, fork);
 });
+
+test("the settings window gets the terms and privacy links the server sets, and none otherwise", async (t) => {
+  const plain = await startWorld();
+  t.after(plain.stop);
+  const none = await call(plain.owner, api.settings);
+  assert.equal(none.terms, undefined);
+  assert.equal(none.privacy, undefined);
+  const world = await startWorld({
+    terms: "https://example.com/t",
+    privacy: "https://example.com/p",
+  });
+  t.after(world.stop);
+  const got = await call(world.owner, api.settings);
+  assert.equal(got.terms, "https://example.com/t");
+  assert.equal(got.privacy, "https://example.com/p");
+});

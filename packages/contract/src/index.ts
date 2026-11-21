@@ -3,7 +3,7 @@
 import * as z from "zod";
 
 /** Contract version. Sent in every envelope; a different one is rejected. Bump it on every breaking change. */
-export const CONTRACT_VERSION = 67;
+export const CONTRACT_VERSION = 68;
 
 /**
  * The server's limits (ADR-0052). Each is a setting, and unset means no limit. `requests` is per person a minute, `repos` and `storage` (megabytes)
@@ -2344,6 +2344,9 @@ export const api = {
       version: z.string(),
       /** Where the server's source is (AGPL section 13). `OMAGARI_SOURCE_URL`, or Omagari's GitHub repo if unset. Shown under Info as "Source code". */
       sourceUrl: z.string(),
+      /** The server's terms and privacy policy (`OMAGARI_TERMS_URL`, `OMAGARI_PRIVACY_URL`). Absent if unset. Shown under Info. */
+      terms: z.string().optional(),
+      privacy: z.string().optional(),
       askSwitch: z.boolean(),
       answered: z.strictObject({
         count: z.number(),
