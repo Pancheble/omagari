@@ -96,6 +96,8 @@ fly deploy -a "$FLY_APP" -e OMAGARI_REPO="$OMAGARI_REPO"
 
 With bucket settings, the image runs [Litestream](https://litestream.io/) beside the server ([ADR-0055](https://github.com/omagari-dev/omagari/blob/dev/docs/adr/0055-hosted-operations-litestream-upptime-incident-plan.md)). It streams the database to an S3-compatible bucket (Tigris and Cloudflare R2 have free tiers). Without them, the image starts the server exactly as before, so self-hosting needs nothing.
 
+Litestream uploads every 10 seconds, so a total loss of the volume can lose the last 10 seconds of writes. That keeps the hosted backup inside the free request limit. The volume's daily snapshots are the second copy.
+
 | Setting | Meaning |
 | --- | --- |
 | `LITESTREAM_BUCKET` | Bucket name. Backup turns on only when this and both keys are set. |
