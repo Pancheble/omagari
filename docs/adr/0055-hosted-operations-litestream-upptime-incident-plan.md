@@ -22,6 +22,7 @@ The dogfood server is one Fly machine with one SQLite file, backed up by the vol
 
 - A person signs up for the bucket and puts its keys in Fly secrets and in the `dogfood` GitHub environment.
 - A person creates the status repo; Upptime needs a token secret.
+- Litestream syncs every 10s (`sync-interval`, on the replica) and checks L0 retention every 1m (`l0-retention-check-interval`, top level). The default 1s sync makes about 2.6 million PUTs a month under steady writes, past R2's free 1 million Class A requests (PutObject and ListObjects are Class A). At 10s, the worst case if every interval uploads or lists is about 259k L0 PUTs, 86k L1, 9k L2, 1k L3, 43k retention lists, and up to 96k compaction lists: about 494k a month, under the limit. The trade-off: if the volume is lost, up to 10 seconds of writes are gone from the replica. The volume snapshots stay as the second copy.
 
 ## Sources
 

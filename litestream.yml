@@ -1,5 +1,7 @@
 # 버킷 설정이 있을 때만 docker-entrypoint.sh가 쓴다. ${...}는 Litestream이 환경 변수로 채운다.
 # 키는 LITESTREAM_ACCESS_KEY_ID / LITESTREAM_SECRET_ACCESS_KEY를 Litestream이 직접 읽는다.
+# R2 무료 한도(Class A 요청 월 100만 건)를 넘지 않도록 동기화를 10초마다, L0 보존 점검을 1분마다 한다(ADR-0055).
+l0-retention-check-interval: 1m
 dbs:
   - path: ${OMAGARI_DB}
     replica:
@@ -8,3 +10,4 @@ dbs:
       path: ${LITESTREAM_PATH}
       endpoint: ${LITESTREAM_ENDPOINT}
       region: ${LITESTREAM_REGION}
+      sync-interval: 10s
