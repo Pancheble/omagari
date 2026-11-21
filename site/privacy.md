@@ -47,19 +47,21 @@ You don't need to email us to delete.
 
 Deleted rows are overwritten in the database file, not just marked free. To uninstall the GitHub App, use your GitHub settings; that stops new data coming in.
 
-## 5. Who else handles it
+## 5. Who else handles it, and moving data abroad
 
-We use these services to run Omagari. They handle data on our behalf or receive it because you use the feature.
+We use these services to run Omagari. We give your data to no one else unless the law requires it. The people in your workspace see what you share with them: that's the point of the service.
 
-| Who | What for | What they get | Where |
+The server and these services are outside Korea, so personal information moves abroad. This is storage and handling needed to carry out our agreement with you, so under PIPA Article 28-8(1)3(a) we tell you the following here instead of asking for separate consent.
+
+| | Fly.io | GitHub | GIPHY |
 | --- | --- | --- | --- |
-| Fly.io | Runs the server and its disk | Everything the server stores | Tokyo, Japan (`nrt`) |
-| GitHub | Sign-in and repos | What the server asks it for; GitHub knows what you do there | USA and others |
-| GIPHY | GIF search and GIF images | Your search words (sent by our server, with our key); your browser loads the images from GIPHY, so GIPHY sees that request like any web site | USA |
+| Items sent | Everything the server stores (section 2) | GitHub login, tokens, repo names, and the decision PRs, issues, and labels the server writes to GitHub | Your computer's connection details (IP address, browser info). GIF search words are sent by our server with our key and aren't tied to your login or account, so we judge them not to be personal information |
+| Country, when, how | Japan (the server is in Tokyo; the company is in the USA). Over the network, all the time you use the service | USA and others. Over the network, whenever you sign in or use a GitHub feature | USA. Over the network, whenever you search or view a GIF |
+| Recipient and contact | Fly.io, Inc. · compliance@fly.io | GitHub, Inc. · privacy contact form (linked from GitHub's privacy statement) | GIPHY, Inc. · support@giphy.com |
+| Their purpose and retention | Running the server and disk. Until we delete it; disk snapshots 5 days | Sign-in and repo access. Under GitHub's own policy | GIF search and images. Under GIPHY's own policy |
+| How to refuse, and what happens | Don't use the hosted server; you can run your own. If you refuse, you can't use the hosted server | Same. You can't sign in without GitHub | Just don't use GIFs. Everything else works the same |
 
-We give your data to no one else unless the law requires it. The people in your workspace see what you share with them: that's the point of the service.
-
-**Moving data abroad.** The server and its backups are in Japan; GitHub and GIPHY are in the USA and elsewhere. By using the hosted server you agree to this. If you don't want it, don't use the hosted server: you can run your own.
+Contacts and retention come from each company's own policy: [Fly.io privacy statement](https://fly.io/legal/privacy-policy/), [GitHub privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement), GIPHY's [consent document](https://support.giphy.com/hc/en-us/articles/360032520632).
 
 ## 6. Your rights
 
