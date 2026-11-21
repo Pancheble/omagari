@@ -3,7 +3,6 @@ import { execFile } from "node:child_process";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
-import { createInterface } from "node:readline/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs, promisify } from "node:util";
 import {
@@ -105,7 +104,7 @@ const USAGE = `Usage:
   omagari setup [<server address>]
                                 Sign in with GitHub, save the server address, install the session-start hook, pre-edit hook, and status line skill into this machine's agents (Claude Code, Codex),
                                 and register the background runner to start at login (launchd on macOS, systemd on Linux and WSL2)
-                                Asks for the address if none is saved. Running it again changes nothing; a new address switches to it
+                                Without an address, uses the saved one, else https://app.omagari.org. Running it again changes nothing; a new address switches to it
   omagari uninstall [--sign-out]
                                 Remove the hooks, the status line skill, and the background runner. The saved session stays unless --sign-out
 
@@ -117,6 +116,8 @@ const configDir = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config")
 const sessionsFile = join(configDir, "sessions.json");
 /** The address `omagari setup` saved. */
 const configFile = join(configDir, "config.json");
+/** Where `setup` points when there's no address. The env var is for tests, which must not reach the hosted server. */
+const DEFAULT_SERVER = process.env.OMAGARI_DEFAULT_SERVER ?? "https://app.omagari.org";
 const savedServer: string | undefined = JSON.parse(
   await readFile(configFile, "utf8").catch(() => "{}"),
 ).server;
@@ -207,7 +208,8 @@ async function mailbox() {
 /** Saves the server address, signs in if this server has no session yet (or it ended), installs the hooks, and says what's left. */
 async function setup(address: string | undefined) {
   if (process.platform === "win32") throw new Error(await unsupported());
-  const chosen = address ?? process.env.OMAGARI_SERVER ?? savedServer ?? (await askAddress());
+  // A saved address wins over the default, so running `setup` again on a self-hosted machine doesn't switch it to the hosted server.
+  const chosen = address ?? process.env.OMAGARI_SERVER ?? savedServer ?? DEFAULT_SERVER;
   server = chosen.replace(/\/+$/, "");
   const saved = (await readSessions())[server];
   // A saved session can end on the server (logged out, or GitHub sign-in expired, ADR-0053). Then sign in again.
@@ -225,14 +227,6 @@ async function setup(address: string | undefined) {
   console.log(
     `\nServer: ${server}\nOne step is left: Open /hooks in Codex and trust the two Omagari hooks (Codex has no way to trust them in advance).`,
   );
-}
-
-async function askAddress() {
-  const lines = createInterface({ input: process.stdin, output: process.stdout });
-  const answer = (await lines.question("Server address? ").catch(() => "")).trim();
-  lines.close();
-  if (!answer) throw new Error("No server address. Run: omagari setup https://<your-team-server>");
-  return answer;
 }
 
 /** Removes the hooks and skill. With `signOut`, also ends this server's session and forgets it. */

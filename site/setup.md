@@ -16,8 +16,10 @@ If you get `command not found`, the folder where npm puts global programs isn't 
 ## Set up this machine
 
 ```bash
-omagari setup https://<your-team-server>
+omagari setup
 ```
+
+That signs in to the hosted beta, `https://app.omagari.org`. To use your own server, pass its address: `omagari setup https://<your-team-server>`.
 
 This does four things:
 
@@ -26,7 +28,7 @@ This does four things:
 - puts the session-start hook, the pre-edit hook, and the status line skill into this machine's agents (Claude Code and Codex),
 - registers the background runner to start at login.
 
-Leave the address out and it asks for one (`Server address?`). `OMAGARI_SERVER` still wins when it's set. Without either, the CLI connects to `http://127.0.0.1:3000`.
+Without an address, `setup` uses the one already saved on this machine, or `OMAGARI_SERVER` when it's set, and only then `https://app.omagari.org`. So running `setup` again on a self-hosted machine keeps its server. Before any `setup`, the CLI connects to `http://127.0.0.1:3000` unless `OMAGARI_SERVER` is set.
 
 Running `setup` again is safe: with the same address and session nothing changes, and a new address switches to it (signing in again if that server has no session yet). For Codex, open `/hooks` in Codex and trust the two Omagari hooks, or they won't run. Codex has no way to trust them in advance, so `setup` ends by saying so.
 

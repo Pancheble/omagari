@@ -3182,6 +3182,13 @@ export async function startServer(options: {
     return session && sessionLogin(session);
   });
 
+  // HSTS (ADR-0052). Fly ends TLS at its front end and sets X-Forwarded-Proto, so trust it only on Fly, the same as Fly-Client-IP. Elsewhere the server only sees plain HTTP.
+  app.use(async (c, next) => {
+    if (options.behindFly && c.req.header("x-forwarded-proto") === "https")
+      c.header("Strict-Transport-Security", "max-age=31536000");
+    await next();
+  });
+
   const limits = options.limits ?? {};
   const LIMITED = {
     requests: (max: number) => `Hit the limit of ${max} requests a minute. Try again in a minute`,

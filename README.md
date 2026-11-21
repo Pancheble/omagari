@@ -55,14 +55,14 @@ Omagari's way of watching the repo follows Room's behavior. Room is under a nonc
 
 ## Quick start
 
-You need Node.js 24.12 or later, Claude Code or Codex signed in on this machine, a GitHub account with push access to the workspace repo, and the address of your team's Omagari server. Nobody has one yet? [Run a server](https://omagari-dev.github.io/omagari/server) first.
+You need Node.js 24.12 or later, Claude Code or Codex signed in on this machine, and a GitHub account with push access to the workspace repo. The hosted beta is at `https://app.omagari.org`. To use your own server, [run one](https://omagari-dev.github.io/omagari/server) and pass its address to `setup`.
 
 ```bash
 npm i -g omagari
-omagari setup https://<your-team-server>
+omagari setup
 ```
 
-`setup` signs you in with GitHub, saves the server address, puts the hooks into this machine's agents, and starts a background runner at login. It's once per machine. Using Codex? Open `/hooks` in Codex and trust the two Omagari hooks, or they won't run.
+`setup` signs you in with GitHub, saves the server address (the hosted one unless you pass another: `omagari setup https://<your-team-server>`), puts the hooks into this machine's agents, and starts a background runner at login. It's once per machine. Using Codex? Open `/hooks` in Codex and trust the two Omagari hooks, or they won't run.
 
 Then open an agent session in your workspace repo and share the repo once, with the Share button on the web or `omagari share on` in the repo folder. Until you do, your teammates can't see your work there. After that you don't start anything yourself. The runner watches every repo you've shared. It never sends anything about repos outside your team's GitHub accounts.
 
