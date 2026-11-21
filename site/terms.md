@@ -1,12 +1,10 @@
 # Terms of use
 
-<!-- DRAFT for @Pancheble to read, edit, and approve. Not legal advice. Remove this comment and fill every [PLACEHOLDER] before publishing. -->
-
 [한국어](/ko/terms)
 
-These terms are for the **hosted Omagari server** at `app.omagari.org`, run by [OPERATOR REAL NAME — placeholder] ("we"). If your team runs its own server, these terms don't apply: your team is its own operator. Our [privacy policy](/privacy) says what we do with your data.
+These terms are for the **hosted Omagari server** at `app.omagari.org`, run by Chan Baek ("we"). If your team runs its own server, these terms don't apply: your team is its own operator. Our [privacy policy](/privacy) says what we do with your data.
 
-Last updated: [DATE — set when published]
+Last updated: 2026-11-21
 
 ## 1. What this is
 
@@ -44,6 +42,6 @@ We may change these terms. We'll put the new version here with a new date and, f
 
 ## 8. Law and contact
 
-These terms follow the law of the Republic of Korea. [COURT / DISPUTE PLACE — placeholder, @Pancheble to decide or remove.] Questions: `privacy@omagari.org` (mail forwarding isn't set up yet, #391).
+These terms follow the law of the Republic of Korea. A dispute goes to the court that has jurisdiction under the Civil Procedure Act. Questions: `privacy@omagari.org`.
 
 The Omagari software is licensed under AGPL-3.0. These terms are about the hosted service, not the software license.

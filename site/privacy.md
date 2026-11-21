@@ -1,16 +1,14 @@
 # Privacy policy
 
-<!-- DRAFT for @Pancheble to read, edit, and approve. Not legal advice. Remove this comment and fill every [PLACEHOLDER] before publishing. Follows the item order of the Korean PIPA Article 30 and Enforcement Decree Article 31. -->
-
 [한국어](/ko/privacy)
 
 This policy is for the **hosted Omagari server** at `app.omagari.org`. If your team runs its own server, your team's operator decides what's stored there, and this policy doesn't apply.
 
-Last updated: [DATE — set when published] · In force from: [DATE]
+Last updated: 2026-11-21 · In force from: 2026-11-21
 
 ## 1. Who we are
 
-The operator of the hosted server, and the person responsible for personal information, is [OPERATOR REAL NAME — placeholder]. Contact: `privacy@omagari.org` (mail forwarding isn't set up yet, #391).
+The operator of the hosted server, and the person responsible for personal information, is Chan Baek. Contact: `privacy@omagari.org`.
 
 ## 2. What we store and why
 
@@ -35,8 +33,8 @@ We don't ask for your email, phone number, or payment details. The server sets n
 - **Changed-file content and debate patches**: deleted once their branch is gone or hasn't changed for **30 days**.
 - **Chat, Q&A, and posts**: until they're deleted or the workspace, repo, or account is deleted.
 - **Tokens and sessions**: until you sign out or delete your account. GitHub's own tokens expire after 8 hours and are refreshed; the refresh token lasts up to 6 months.
-- **Daily visit records and access requests**: until the workspace or account is deleted. [CONFIRM: is a limit wanted, e.g. 12 months?]
-- **Backups**: the database is copied continuously to a backup bucket, and the host's volume keeps daily snapshots for 5 days. Deleted data leaves backups after [BACKUP RETENTION — placeholder: not decided yet; set from the Litestream retention in #399/#391]. We don't restore a backup to bring back deleted data, except to recover from an outage; if we do, we delete again what was deleted.
+- **Daily visit records and access requests**: for 12 months, or until the workspace or account is deleted if that comes first.
+- **Backups**: the host's disk keeps daily snapshots for 5 days. Deleted data leaves the backups within 5 days. We'll update this policy before we add a backup outside the host. We don't restore a backup to bring back deleted data, except to recover from an outage; if we do, we delete again what was deleted.
 
 ## <a id="delete"></a>4. Deleting your data
 
@@ -56,13 +54,12 @@ We use these services to run Omagari. They handle data on our behalf or receive 
 | Who | What for | What they get | Where |
 | --- | --- | --- | --- |
 | Fly.io | Runs the server and its disk | Everything the server stores | Tokyo, Japan (`nrt`) |
-| [BACKUP BUCKET PROVIDER — placeholder: Tigris or Cloudflare R2, #391] | Backups of the database | A copy of the whole database | [REGION] |
 | GitHub | Sign-in and repos | What the server asks it for; GitHub knows what you do there | USA and others |
 | GIPHY | GIF search and GIF images | Your search words (sent by our server, with our key); your browser loads the images from GIPHY, so GIPHY sees that request like any web site | USA |
 
 We give your data to no one else unless the law requires it. The people in your workspace see what you share with them: that's the point of the service.
 
-**Moving data abroad.** The server is in Japan, backups and the services above may be elsewhere. By using the hosted server you agree to this. If you don't want it, don't use the hosted server: you can run your own.
+**Moving data abroad.** The server and its backups are in Japan; GitHub and GIPHY are in the USA and elsewhere. By using the hosted server you agree to this. If you don't want it, don't use the hosted server: you can run your own.
 
 ## 6. Your rights
 
