@@ -33,7 +33,7 @@ We don't ask for your email, phone number, or payment details. The server sets n
 - **Changed-file content and debate patches**: deleted once their branch is gone or hasn't changed for **30 days**.
 - **Chat, Q&A, and posts**: until they're deleted or the workspace, repo, or account is deleted.
 - **Tokens and sessions**: until you sign out or delete your account. GitHub's own tokens expire after 8 hours and are refreshed; the refresh token lasts up to 6 months.
-- **Daily visit records and access requests**: for 12 months, or until the workspace or account is deleted if that comes first.
+- **Daily visit records, and pending or denied access requests**: for 12 months, or until the workspace or account is deleted if that comes first. Approved access requests are kept while the account stays accepted, so it stays accepted after a restart.
 - **Backups**: the host's disk keeps daily snapshots for 5 days. Deleted data leaves the backups within 5 days. We'll update this policy before we add a backup outside the host. We don't restore a backup to bring back deleted data, except to recover from an outage; if we do, we delete again what was deleted.
 
 ## <a id="delete"></a>4. Deleting your data
