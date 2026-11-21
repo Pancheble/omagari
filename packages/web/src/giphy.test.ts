@@ -28,7 +28,7 @@ test("GIF search asks GIPHY from the browser and passes its URLs through untouch
     return Response.json({ data: [found("aaa"), { id: "broken" }, found("bbb")] });
   });
 
-  const gifs = await searchGiphy("web-key", "고양이");
+  const gifs = await searchGiphy("web-key", "cat");
   assert.deepEqual(
     gifs.map((gif) => gif.id),
     ["aaa", "bbb"],
@@ -47,7 +47,7 @@ test("GIF search asks GIPHY from the browser and passes its URLs through untouch
     api_key: "web-key",
     limit: "24",
     rating: "r",
-    q: "고양이",
+    q: "cat",
     lang: "ko",
   });
 
