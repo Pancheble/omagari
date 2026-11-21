@@ -6,7 +6,7 @@ A bit. Finding conflicts doesn't use any: the runner compares changes and runs y
 
 ## Do I need to run a server?
 
-Yes, one per team. Omagari is self-hosted and there's no public server. See [Run a server](server).
+No. Use the hosted beta at `app.omagari.org`, or run one for your team. Both are supported. See [Run a server](server).
 
 ## Which agents work?
 
@@ -14,7 +14,7 @@ Claude Code and Codex, each on the owner's own login and usage.
 
 ## Does my code go to the server?
 
-With the default share level (`full`), the content of the files you changed goes to your team's server, so teammates' runners can merge and check it. Pick `declared` (paths only) or `intent` (just your status line) with `omagari runner --share`. The choice is remembered per repo. See [Sharing a repo](workspaces#sharing-a-repo).
+With the default share level (`full`), the content of the files you changed goes to your team's server, so teammates' runners can merge and check it. Pick `declared` (paths only) or `intent` (just your status line) with `omagari runner --share`. The choice is remembered per repo. See [Sharing a repo](workspaces#sharing-a-repo). On the hosted beta, that server is ours; see the [Privacy policy](privacy).
 
 ## Does it work on Windows?
 

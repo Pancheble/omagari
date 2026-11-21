@@ -14,7 +14,7 @@
   <b>English</b> · <a href="README.ko.md">한국어</a>
 </p>
 
-Omagari is a self-hosted web workspace where people and their AI agents work together. Each teammate's agent (Claude Code or Codex) shows up next to them. You see who's on which branch, and when two pieces of work might break each other, you hear about it before the merge. Then you talk it out right there.
+Omagari is a web workspace where people and their AI agents work together. Use the free hosted beta, or run it yourself. Each teammate's agent (Claude Code or Codex) shows up next to them. You see who's on which branch, and when two pieces of work might break each other, you hear about it before the merge. Then you talk it out right there.
 
 > [!NOTE]
 > Omagari hasn't had its first release yet. Until then `npm i -g omagari@next` installs the latest `dev` build, and expect things to change. Tell us what you hit in [Issues](https://github.com/omagari-dev/omagari/issues).
@@ -53,9 +53,23 @@ Omagari's way of watching the repo follows Room's behavior. Room is under a nonc
 
 <sub>Checked against each project's README and docs on 2026-11-19. If something is wrong, tell us in Issues.</sub>
 
+## Hosted or self-hosted
+
+| | Hosted beta | Self-hosted |
+|---|---|---|
+| Where | `https://app.omagari.org` | A server your team runs |
+| Cost and access | Free while it's a beta. Ask for access and an operator approves it | Free. No one to ask |
+| Your data | Your team's records (posts, status, and the changed files at the default share level) are stored on our server. See the [Terms](https://omagari-dev.github.io/omagari/terms) and the [Privacy policy](https://omagari-dev.github.io/omagari/privacy) | Stays on your team's server, and no one else sees it. You write your own terms and privacy policy |
+| What to expect | It can change, stop, or lose data, so don't treat it as a backup. Is it down? Check the [status page](https://status.omagari.org) | You update it and back it up |
+
+Self-hosting is just as supported. See [Run a server](https://omagari-dev.github.io/omagari/server).
+
 ## Quick start
 
-You need Node.js 24.12 or later, Claude Code or Codex signed in on this machine, and a GitHub account with push access to the workspace repo. The hosted beta is at `https://app.omagari.org`. To use your own server, [run one](https://omagari-dev.github.io/omagari/server) and pass its address to `setup`.
+You need Node.js 24.12 or later, Claude Code or Codex signed in on this machine, and a GitHub account with push access to the workspace repo.
+
+- **Hosted beta**: ask for access at `https://app.omagari.org` and wait for approval, then run the two lines below.
+- **Self-hosted**: [run a server](https://omagari-dev.github.io/omagari/server), then pass its address to `setup`: `omagari setup https://<your-team-server>`.
 
 ```bash
 npm i -g omagari
@@ -112,13 +126,13 @@ The full idea is in [docs/omagari-v3.md](docs/omagari-v3.md). How it's built is 
 A bit. Finding conflicts doesn't use any: the runner compares changes and runs your check command, and the server has no AI. The extra tokens come from two places. Hooks add a short note to your agent's context (a team summary when a session starts, and nearby work right before it edits a file, only when it changed). And when you @call your agent, or a teammate asks it a question, it answers on your usage; you can turn off answering teammates. We haven't measured whether this saves more than it costs, so we don't promise that.
 
 **Do I need to run a server?**
-Yes, one per team. Omagari is self-hosted and there's no public server. See [Run a server](https://omagari-dev.github.io/omagari/server).
+No. Use the hosted beta, or run one for your team. Both are supported. See [Run a server](https://omagari-dev.github.io/omagari/server).
 
 **Which agents work?**
 Claude Code and Codex, each on the owner's own login and usage.
 
 **Does my code go to the server?**
-With the default share level (`full`), the content of the files you changed goes to your team's server, so teammates' runners can merge and check it. Pick `declared` (paths only) or `intent` (just your status line) with `omagari runner --share`. The choice is remembered per repo.
+With the default share level (`full`), the content of the files you changed goes to your team's server, so teammates' runners can merge and check it. Pick `declared` (paths only) or `intent` (just your status line) with `omagari runner --share`. The choice is remembered per repo. On the hosted beta, that server is ours; see the [Privacy policy](https://omagari-dev.github.io/omagari/privacy).
 
 **Does it work on Windows?**
 Run it inside WSL2, `omagari setup` included, and keep the repo in WSL2 too. See [Set up a machine](https://omagari-dev.github.io/omagari/setup).
@@ -136,6 +150,10 @@ You can look around the UI with the [demo server](CONTRIBUTING.md#try-the-ui-wit
 - [DESIGN.md](DESIGN.md): how screens look and read
 
 Some of these are still in Korean while the docs move to English ([ADR-0045](docs/adr/0045-english-by-default-korean-as-a-choice.md)).
+
+## Support Omagari
+
+Omagari is free. If it helps your team, you can sponsor it on [GitHub Sponsors](https://github.com/sponsors/Pancheble).
 
 ## Contributing
 
