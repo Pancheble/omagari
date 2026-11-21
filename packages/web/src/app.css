@@ -100,6 +100,11 @@ body,
   height: 100%;
 }
 
+/* A scroll that no list takes (over a header, a panel, or the empty window) must not reach the page and bounce the whole window (macOS elastic scroll). */
+html {
+  overscroll-behavior: none;
+}
+
 body {
   margin: 0;
   background: var(--canvas);
@@ -354,6 +359,8 @@ svg.lucide {
   gap: 8px;
   height: 100%;
   padding: 8px;
+  /* The window never scrolls as a page; only the panels' own lists do (DESIGN.md "Window"). `clip` also blocks scrollIntoView and focus from moving it. */
+  overflow: clip;
 }
 
 .side-panel {
