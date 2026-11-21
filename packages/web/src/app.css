@@ -6101,6 +6101,11 @@ button.person {
   gap: 6px;
 }
 
+/* The avatar stays at the top of a message row, beside the name. Without this the grid stretches the button and centers a tall message's avatar (#422). */
+.message > .person {
+  align-self: start;
+}
+
 /* Profile card (app-profile-card): a 320px card that floats beside where it was pressed. At 833px and below it is a bottom sheet. */
 .profile-card {
   --mark-ring: var(--canvas);
