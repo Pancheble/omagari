@@ -1314,26 +1314,21 @@ export function Workspace({
                       {shown === "agent" && <span>{t.channels.frame.myAgent}</span>}
                     </button>
                   )}
-                  {/* Alone, a member list makes no sense, so there is no button (mock 100-A). */}
-                  {!solo && (
-                    <button
-                      ref={membersButton}
-                      type="button"
-                      className="header-button"
-                      aria-label={
-                        shown === "profile" ? t.channels.frame.profile : t.channels.frame.members
-                      }
-                      aria-expanded={shown === "members" || shown === "profile"}
-                      aria-controls={
-                        shown === "members" || shown === "profile" ? rightId : undefined
-                      }
-                      onClick={() => toggleRight(shown === "profile" ? "profile" : "members")}
-                    >
-                      <Users size={18} aria-hidden />
-                      {shown === "members" && <span>{t.channels.frame.members}</span>}
-                      {shown === "profile" && <span>{t.channels.frame.profile}</span>}
-                    </button>
-                  )}
+                  <button
+                    ref={membersButton}
+                    type="button"
+                    className="header-button"
+                    aria-label={
+                      shown === "profile" ? t.channels.frame.profile : t.channels.frame.members
+                    }
+                    aria-expanded={shown === "members" || shown === "profile"}
+                    aria-controls={shown === "members" || shown === "profile" ? rightId : undefined}
+                    onClick={() => toggleRight(shown === "profile" ? "profile" : "members")}
+                  >
+                    <Users size={18} aria-hidden />
+                    {shown === "members" && <span>{t.channels.frame.members}</span>}
+                    {shown === "profile" && <span>{t.channels.frame.profile}</span>}
+                  </button>
                 </div>
               </header>
               <LimitNotice />
@@ -1490,7 +1485,7 @@ export function Workspace({
                 </div>
               </RightPanel>
             )}
-            {shown === "members" && !solo && (
+            {shown === "members" && (
               <RightPanel
                 id={rightId}
                 title={t.channels.frame.members}
