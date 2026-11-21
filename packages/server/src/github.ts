@@ -158,7 +158,11 @@ export type Pull = {
 // Push permission: `permissions.push` of GET /repos/{owner}/{repo} (same method as Room).
 // A branch's PRs: GET /repos/{owner}/{repo}/pulls?state=all&head={owner}:{branch}
 // (https://docs.github.com/en/rest/pulls/pulls#list-pull-requests). Members can push, so they put branches in the same repo.
-export function realGitHub(clientId: string): GitHub {
+//
+// On a GitHub App server (`app`), a repo is reachable only if the App is installed on it (ADR-0053). A GitHub App user token still sees public repos
+// the App isn't on: GET /user/repos lists them and GET /repos/{repo} gives the person's own push/admin, but anything through the installation is
+// 403 "Resource not accessible by integration". So we ask which repos the person's installations cover, and treat the rest as no access.
+export function realGitHub(clientId: string, options: { app?: boolean } = {}): GitHub {
   const post = async (url: string, body: object) => {
     const response = await fetch(url, {
       method: "POST",
@@ -200,6 +204,27 @@ export function realGitHub(clientId: string): GitHub {
     if (!response.ok) throw new Error(`HTTP ${response.status} ${json?.message ?? ""}`.trim());
     return json;
   };
+  /**
+   * The repos (lowercase `owner/name`) the GitHub App is installed on, among the installations the token owner can use
+   * (https://docs.github.com/en/rest/apps/installations#list-app-installations-accessible-to-the-user-access-token,
+   * https://docs.github.com/en/rest/apps/installations#list-repositories-accessible-to-the-user-access-token). undefined if GitHub can't answer.
+   * ponytail: reads only the first 100 installations and 100 repos of each, and runs on every access check. Page and cache if that gets slow or large.
+   */
+  const installed = async (token: string) => {
+    const list = await get("/user/installations?per_page=100", token).catch(() => undefined);
+    if (!list?.ok) return undefined;
+    const { installations } = (await list.json()) as { installations?: { id: number }[] };
+    const names = new Set<string>();
+    for (const { id } of installations ?? []) {
+      const page = await get(`/user/installations/${id}/repositories?per_page=100`, token).catch(
+        () => undefined,
+      );
+      if (!page?.ok) return undefined;
+      const { repositories } = (await page.json()) as { repositories?: { full_name: string }[] };
+      for (const repo of repositories ?? []) names.add(repo.full_name.toLowerCase());
+    }
+    return names;
+  };
   /** One of the token owner's permissions on a repo (what GitHub returns includes what they get through teams, ADR-0043). */
   // Asking for a moved or renamed repo by its old name gets a 301 to the new repo (`/repositories/{id}`), and fetch follows it, so `full_name` is the new name
   // (https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#follow-redirects).
@@ -209,8 +234,14 @@ export function realGitHub(clientId: string): GitHub {
     if (response?.status === 401 || response?.status === 404) return { can: false, name: repo };
     if (!response?.ok) return undefined;
     const json = await response.json();
-    const can = json.permissions?.[kind];
+    let can = json.permissions?.[kind];
     if (typeof can !== "boolean") return undefined;
+    // A public repo the App isn't installed on is visible and shows the person's own permission, but Omagari's writes there would be 403.
+    if (can && options.app) {
+      const names = await installed(token);
+      if (!names) return undefined;
+      can = names.has(String(json.full_name ?? repo).toLowerCase());
+    }
     // The repo's owner is an account (org or person): `type` is "Organization" or "User", `avatar_url` is the avatar.
     const owner = json.owner as { type?: unknown; avatar_url?: unknown } | undefined;
     const account: Account | undefined = owner && {
@@ -295,6 +326,8 @@ export function realGitHub(clientId: string): GitHub {
         () => undefined,
       );
       if (!response?.ok) return undefined;
+      const names = options.app ? await installed(token) : undefined;
+      if (options.app && !names) return undefined;
       const mine = (
         (await response.json()) as {
           full_name: string;
@@ -303,7 +336,10 @@ export function realGitHub(clientId: string): GitHub {
           permissions?: { admin?: boolean };
         }[]
       ).filter(
-        (repo) => repo.owner.login.toLowerCase() === owner.toLowerCase() && repo.permissions?.admin,
+        (repo) =>
+          repo.owner.login.toLowerCase() === owner.toLowerCase() &&
+          repo.permissions?.admin &&
+          (!names || names.has(repo.full_name.toLowerCase())),
       );
       const counted = await Promise.all(
         mine.map(async (repo) => {
