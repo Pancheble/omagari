@@ -121,6 +121,8 @@ export const ko: Words = {
       server: "이 서버",
       version: "버전",
       source: "소스 코드",
+      terms: "이용약관",
+      privacy: "개인정보 처리방침",
     },
     agent: {
       whenAsked: "남이 물을 때",

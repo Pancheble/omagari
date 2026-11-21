@@ -8,7 +8,7 @@ Omagari had no user docs, only the README and two long pages (`docs/setup.md`, `
 
 - **VitePress**, from `site/` in the repo. It has the sidebar, the on-page outline, and search (MiniSearch, in the browser) built in, with no outside service. Its pages are plain Markdown. It has its own `package.json` and lockfile in `site/`, outside the npm workspaces, so the app's build and dependencies don't change.
 - **GitHub Pages at `omagari-dev.github.io/omagari`**, deployed by `.github/workflows/docs.yml`. Pull requests only build it.
-- **English only.** ADR-0045 stays: only the README has a Korean copy.
+- **English only.** ADR-0045 stays: only the README has a Korean copy. The one exception is the hosted server's terms and privacy policy, which also have Korean copies under `site/ko/` (ADR-0054, #392).
 - **It follows `dev` until the first release.** Before then, `main` and npm `latest` don't hold the install that the docs describe (ADR-0048), so the docs say `npm i -g omagari@next`. At the first release, the workflow and the `github-pages` environment switch to `main`.
 - **`docs/setup.md` and `docs/server.md` moved to the site** (`site/setup.md`, `site/server.md`), and the old paths point there. `docs/` keeps the internal docs: the product and implementation docs, ADRs, and the stage logs. The in-app help links open the site.
 

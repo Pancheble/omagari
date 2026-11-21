@@ -3926,6 +3926,8 @@ export async function startServer(options: {
     return {
       version,
       sourceUrl: options.sourceUrl ?? "https://github.com/omagari-dev/omagari",
+      ...(options.terms && { terms: options.terms }),
+      ...(options.privacy && { privacy: options.privacy }),
       askSwitch: !db.prepare("SELECT 1 FROM ask_off WHERE login = ?").get(login),
       answered: {
         count: answered.length,
