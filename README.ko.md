@@ -14,7 +14,7 @@
   <a href="README.md">English</a> · <b>한국어</b>
 </p>
 
-Omagari는 사람과 각자의 AI 에이전트가 함께 일하는, 직접 띄워 쓰는 웹 협업 공간이에요. 팀원 옆에 그 사람의 에이전트(Claude Code, Codex)가 보여요. 누가 어느 브랜치에서 일하는지 보이고, 두 작업이 서로 깨뜨릴 것 같으면 머지하기 전에 알려 줘요. 그리고 알림이 뜬 그 자리에서 바로 이야기해요.
+Omagari는 사람과 각자의 AI 에이전트가 함께 일하는 웹 협업 공간이에요. 무료 베타 서버를 쓰거나, 직접 띄워 쓸 수 있어요. 팀원 옆에 그 사람의 에이전트(Claude Code, Codex)가 보여요. 누가 어느 브랜치에서 일하는지 보이고, 두 작업이 서로 깨뜨릴 것 같으면 머지하기 전에 알려 줘요. 그리고 알림이 뜬 그 자리에서 바로 이야기해요.
 
 > [!NOTE]
 > Omagari는 아직 첫 릴리즈 전이에요. 그 전엔 `npm i -g omagari@next`로 최신 `dev` 빌드를 깔 수 있고, 바뀔 수 있다는 점을 알아 둬요. 겪은 일은 [Issues](https://github.com/omagari-dev/omagari/issues)에 알려 줘요.
@@ -53,9 +53,23 @@ Omagari가 레포를 지켜보는 방식은 Room의 동작을 따라요. Room은
 
 <sub>2026-11-19에 각 프로젝트의 README와 문서로 확인했어요. 틀린 곳이 있으면 Issues에 알려 줘요.</sub>
 
+## 베타 서버 vs 직접 띄우기
+
+| | 베타 서버 | 직접 띄우기 |
+|---|---|---|
+| 어디 | `https://app.omagari.org` | 팀이 띄운 서버 |
+| 비용과 접근 | 베타 동안 무료예요. 접근을 요청하면 운영자가 승인해요 | 무료예요. 승인받을 곳이 없어요 |
+| 내 데이터 | 팀의 기록(글, 상태, 기본 공유 수준이면 바뀐 파일 내용)이 저희 서버에 저장돼요. [이용약관](https://omagari-dev.github.io/omagari/ko/terms)과 [개인정보 처리방침](https://omagari-dev.github.io/omagari/ko/privacy)을 봐요 | 팀의 서버에만 있고 다른 사람은 못 봐요. 약관과 개인정보 처리방침은 직접 써요 |
+| 알아 둘 것 | 바뀌거나 멈추거나 데이터를 잃을 수 있으니 백업으로 믿지 마요. 안 될 땐 [상태 페이지](https://status.omagari.org)를 봐요 | 업데이트와 백업은 직접 해요 |
+
+직접 띄우는 것도 똑같이 지원해요. [서버 띄우기](https://omagari-dev.github.io/omagari/server)를 봐요.
+
 ## 빠른 시작
 
-Node.js 24.12 이상, 이 기기에서 로그인한 Claude Code나 Codex, 워크스페이스 레포에 push 권한이 있는 GitHub 계정이 필요해요. 베타 서버는 `https://app.omagari.org`예요. 직접 띄운 서버를 쓰려면 [서버 띄우기](https://omagari-dev.github.io/omagari/server)를 하고 그 주소를 `setup`에 넘겨요.
+Node.js 24.12 이상, 이 기기에서 로그인한 Claude Code나 Codex, 워크스페이스 레포에 push 권한이 있는 GitHub 계정이 필요해요.
+
+- **베타 서버**: `https://app.omagari.org`에서 접근을 요청하고 승인을 기다린 다음, 아래 두 줄을 실행해요.
+- **직접 띄우기**: [서버를 띄우고](https://omagari-dev.github.io/omagari/server) 그 주소를 `setup`에 넘겨요: `omagari setup https://<팀의 서버>`.
 
 ```bash
 npm i -g omagari
@@ -112,13 +126,13 @@ omagari setup
 조금 써요. 부딪힘을 찾는 데는 안 써요. 러너가 바뀐 것을 비교하고 검사 명령을 돌릴 뿐이고, 서버에는 AI가 없어요. 늘어나는 곳은 두 군데예요. 훅이 에이전트의 맥락에 짧은 글을 넣어요(세션을 시작할 때 팀 요약, 파일을 고치기 직전에 근처 작업. 달라졌을 때만 넣어요). 그리고 내가 내 에이전트를 @호출하거나 팀원이 내 에이전트에게 물으면 내 사용량으로 답해요. 팀원 질문에 답하는 것은 끌 수 있어요. 아끼는 양이 쓰는 양보다 큰지는 아직 재 보지 않았어서, 아낀다고는 말하지 않아요.
 
 **서버를 꼭 띄워야 하나요?**
-네, 팀마다 하나요. Omagari는 직접 띄워 쓰고, 공개 서버는 없어요. [서버 띄우기](https://omagari-dev.github.io/omagari/server)를 봐요.
+아니요. 베타 서버를 쓰거나, 팀이 직접 띄워요. 둘 다 지원해요. [서버 띄우기](https://omagari-dev.github.io/omagari/server)를 봐요.
 
 **어떤 에이전트가 돼요?**
 Claude Code와 Codex예요. 각자 주인의 로그인과 사용량으로 돌아요.
 
 **내 코드가 서버로 가나요?**
-기본 공유 수준(`full`)에서는 내가 바꾼 파일의 내용이 팀 서버로 올라가요. 팀원의 러너가 합쳐서 검사할 수 있게요. `omagari runner --share`로 `declared`(경로만)나 `intent`(상태 한 줄만)를 고를 수 있고, 고른 것은 그 레포에 남아요.
+기본 공유 수준(`full`)에서는 내가 바꾼 파일의 내용이 팀 서버로 올라가요. 팀원의 러너가 합쳐서 검사할 수 있게요. `omagari runner --share`로 `declared`(경로만)나 `intent`(상태 한 줄만)를 고를 수 있고, 고른 것은 그 레포에 남아요. 베타 서버에서는 그 서버가 저희 서버예요. [개인정보 처리방침](https://omagari-dev.github.io/omagari/ko/privacy)을 봐요.
 
 **Windows에서 돼요?**
 WSL2 안에서 `omagari setup`부터 하고, 레포도 WSL2 안에 둬요. [기기 설정](https://omagari-dev.github.io/omagari/setup)을 봐요.
@@ -136,6 +150,10 @@ WSL2 안에서 `omagari setup`부터 하고, 레포도 WSL2 안에 둬요. [기�
 - [DESIGN.md](DESIGN.md): 화면의 모양과 글
 
 문서를 영어로 옮기는 중이라 일부는 아직 한국어예요([ADR-0045](docs/adr/0045-english-by-default-korean-as-a-choice.md)).
+
+## 후원
+
+Omagari는 무료예요. 팀에 도움이 되면 [GitHub Sponsors](https://github.com/sponsors/Pancheble)로 후원할 수 있어요.
 
 ## 기여
 

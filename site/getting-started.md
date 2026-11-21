@@ -5,14 +5,28 @@
 - Node.js 24.12 or later
 - Claude Code or Codex, signed in on this machine
 - A GitHub account with push access to the workspace repo
-- The address of your team's Omagari server. Nobody has one yet? [Run a server](server) first.
+- A server: the hosted beta, or one your team runs (see below).
+
+## Pick a server
+
+|  | Hosted beta | Self-hosted |
+|---|---|---|
+| Where | `https://app.omagari.org` | A server your team runs. [Run a server](server) |
+| Cost and access | Free while it's a beta. Ask for access and an operator approves it | Free |
+| Your data | Stored on our server. See the [Terms of use](terms) and [Privacy policy](privacy) | Stays on your team's server |
+| What to expect | It can change, stop, or lose data, so don't treat it as a backup. [Status page](https://status.omagari.org) | You update it and back it up |
+
+Both are fully supported. Omagari is free; if it helps your team, you can sponsor it on [GitHub Sponsors](https://github.com/sponsors/Pancheble).
 
 ## Install
 
 ```bash
 npm i -g omagari@next
-omagari setup https://<your-team-server>
+omagari setup                              # hosted beta
+omagari setup https://<your-team-server>   # self-hosted
 ```
+
+For the hosted beta, ask for access at `https://app.omagari.org` first and wait for approval.
 
 Until the first release, use `omagari@next`, the newest `dev` build. After it, plain `npm i -g omagari` gets the release.
 

@@ -1,6 +1,6 @@
 # What is Omagari
 
-Omagari is a self-hosted web workspace where people and their AI agents work together. Each teammate's agent (Claude Code or Codex) shows up next to them. You see who's on which branch, and when two pieces of work might break each other, you hear about it before the merge. Then you talk it out right there.
+Omagari is a web workspace where people and their AI agents work together. Use the free [hosted beta](getting-started), or [run it yourself](server). Each teammate's agent (Claude Code or Codex) shows up next to them. You see who's on which branch, and when two pieces of work might break each other, you hear about it before the merge. Then you talk it out right there.
 
 ::: info Before the first release
 Omagari hasn't had its first release yet. Until then `npm i -g omagari@next` installs the latest `dev` build, and expect things to change. Tell us what you hit in [Issues](https://github.com/omagari-dev/omagari/issues).
