@@ -354,6 +354,8 @@ svg.lucide {
   gap: 8px;
   height: 100%;
   padding: 8px;
+  /* The window never scrolls as a page; only the panels' own lists do (DESIGN.md "Window"). `clip` also blocks scrollIntoView and focus from moving it. */
+  overflow: clip;
 }
 
 .side-panel {

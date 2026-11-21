@@ -2,13 +2,14 @@ import type { Reaction } from "@omagari/contract";
 import { SmilePlus } from "lucide-react";
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { EmojiPalette } from "./emoji.tsx";
+import { placePopover } from "./floating.ts";
 import { t } from "./i18n.ts";
 
-/** The palette height on wide screens (search row, list, category bar). If there isn't room below the button, it opens upward. */
-const PALETTE_HEIGHT = 420;
+/** The palette size on wide screens (DESIGN.md "Emoji palette": 474px wide; search row, list, and category bar make it about 410px tall). */
+const PALETTE = { width: 474, height: 420 };
 
 /**
- * The "Add reaction" button and its palette (DESIGN.md "Reactions"). The palette opens below the button, right-aligned.
+ * The "Add reaction" button and its palette (DESIGN.md "Reactions"). The palette opens below the button, right-aligned, and is moved to stay inside the window.
  * The conversation list scrolls inside its pane, so the palette is fixed to the screen to avoid being clipped. On narrow screens it's a sheet that slides up from the bottom (CSS).
  */
 export function ReactButton({
@@ -42,11 +43,9 @@ export function ReactButton({
   const open = () => {
     const rect = button.current?.getBoundingClientRect();
     if (!rect) return;
-    const below = rect.bottom + 4 + PALETTE_HEIGHT <= innerHeight;
-    toggle({
-      right: innerWidth - rect.right,
-      ...(below ? { top: rect.bottom + 4 } : { bottom: innerHeight - rect.top + 4 }),
-    });
+    // clientWidth leaves out a classic scrollbar, which `position: fixed` also leaves out.
+    const { clientWidth: width, clientHeight: height } = document.documentElement;
+    toggle(placePopover(rect, PALETTE, { width, height }));
   };
 
   return (
