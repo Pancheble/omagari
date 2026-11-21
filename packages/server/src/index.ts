@@ -127,6 +127,8 @@ const FOLLOW_MS = 60_000;
 const FORGET_MS = 7 * 24 * 60 * 60_000;
 /** How long changed-file content and debate patches are kept once unchanged (ADR-0054). */
 const CONTENT_MS = 30 * 24 * 60 * 60_000;
+/** How long daily visits and pending or denied access requests are kept (ADR-0054, privacy policy: 12 months). Approved requests stay: they keep the account accepted after a restart. */
+const HISTORY_MS = 365 * 24 * 60 * 60_000;
 /** Time zone that cuts the metrics day. The building team's day (ADR-0018). Seoul has no daylight saving, so a day is always 24 hours. */
 const TIME_ZONE = "Asia/Seoul";
 const DAY_MS = 24 * 60 * 60_000;
@@ -599,6 +601,8 @@ export async function startServer(options: {
   forgetMs?: number;
   /** How long changed-file content and debate patches stay once unchanged. Default 30 days (`CONTENT_MS`). Tests shorten it. Swept every `followMs`. */
   contentMs?: number;
+  /** How long daily visits and pending or denied access requests are kept. Default 12 months (`HISTORY_MS`). Tests shorten it. Swept every `followMs`. */
+  historyMs?: number;
   /** How long inbox items are kept. Default 14 days (`INBOX_MS`). Tests shorten it. Expiry is swept every `followMs`. */
   inboxMs?: number;
   /** Time for a chosen presence to go back to online. Tests shorten it. If not given, it's the contract's time. */
@@ -6476,6 +6480,12 @@ export async function startServer(options: {
       db.prepare("DELETE FROM offline WHERE since < ?").run(cutoff);
       db.prepare("DELETE FROM claims WHERE stale < ?").run(now - (options.forgetMs ?? FORGET_MS));
       dropStaleContent(now);
+      // Visits and requests older than the history window go (ADR-0054). Approved requests stay, so the account stays accepted (#383).
+      const history = options.historyMs ?? HISTORY_MS;
+      db.prepare("DELETE FROM visits WHERE day < ?").run(dayOf(now - history));
+      db.prepare("DELETE FROM access_requests WHERE state != 'approved' AND at < ?").run(
+        now - history,
+      );
       db.prepare("DELETE FROM inbox WHERE at <= ?").run(now - inboxMs);
       db.prepare("DELETE FROM feed WHERE at <= ?").run(now - inboxMs);
       db.prepare("DELETE FROM questions WHERE at <= ?").run(now - inboxMs); // Expire if unanswered

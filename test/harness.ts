@@ -850,6 +850,8 @@ export async function startWorld(
     forgetMs?: number;
     /** Shortens the 30 days that changed-file content and debate patches are kept. */
     contentMs?: number;
+    /** Shortens the 12 months that daily visits and pending or denied access requests are kept. */
+    historyMs?: number;
     /** How long to keep inbox news. Shorten it to see expiry. Expiry is cleared every `followMs`. */
     inboxMs?: number;
     /** Time until a chosen presence returns to online. Shorten it to see expiry. */
@@ -919,6 +921,7 @@ export async function startWorld(
     followMs: options.followMs,
     forgetMs: options.forgetMs,
     contentMs: options.contentMs,
+    historyMs: options.historyMs,
     inboxMs: options.inboxMs,
     presenceDurations: options.presenceDurations,
     hourMs: options.hourMs,
@@ -1139,7 +1142,9 @@ export async function startWorld(
       await server.stop();
     },
     /** Shuts down the server and restarts it on the same port with the same DB. Same as the server restarting on a deploy. */
-    async restartServer(override: { contentMs?: number; tokenKey?: string } = {}) {
+    async restartServer(
+      override: { contentMs?: number; historyMs?: number; tokenKey?: string } = {},
+    ) {
       const { port } = new URL(server.url);
       if (!serverDown) await server.stop();
       server = await startServer({ ...serverOptions, ...override, port: Number(port) });
