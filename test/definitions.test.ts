@@ -182,6 +182,23 @@ test("omagari impact shows where my copy uses that symbol, and the work of other
   };
   // owner's main uses pay, so an indirect conflict (estimated) with alice lands in owner's inbox. That news arrives one observation later,
   // and is attached only once at the end of the response to the first omagari command after that. Wait until it is attached so the output below doesn't wobble.
+  // Before polling the CLI (each call starts a process, which slows the runners down on a busy machine), wait until the server has what the news is built from:
+  // alice's changed definition line and bob's finished files. The news itself waits for owner's runner to see that in its next observation.
+  await eventually(async () => {
+    const files = Object.fromEntries(
+      (await world.works(world.owner)).map((w) => [w.login, w.files]),
+    );
+    const pay = files.alice?.find((f) => f.path === "src/pay.ts");
+    assert.ok(
+      pay && "definitions" in pay && pay.definitions?.some((d) => d.change === "changed"),
+      "the server doesn't have alice's definition change yet",
+    );
+    assert.ok(
+      files.bob?.some((f) => f.path === "src/other.py") &&
+        files.bob?.some((f) => f.path === "src/pay.ts"),
+      "the server doesn't have bob's files yet",
+    );
+  });
   let delivered = false;
   await eventually(async () => {
     const out = await impact("pay");
